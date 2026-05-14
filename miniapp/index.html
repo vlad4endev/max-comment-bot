@@ -296,6 +296,48 @@
       font-size: 12px;
       min-height: 1em;
     }
+    .test-user-fallback {
+      display: none;
+      margin-top: 10px;
+      padding: 12px;
+      border-radius: 14px;
+      background: var(--surface);
+      border: 1px solid var(--surface-border);
+    }
+    .test-user-fallback.show { display: block; }
+    .test-user-fallback .hint {
+      font-size: 13px;
+      color: var(--muted);
+      margin-bottom: 10px;
+      line-height: 1.45;
+    }
+    .test-user-row {
+      display: flex;
+      gap: 8px;
+      align-items: stretch;
+    }
+    .test-user-row input {
+      flex: 1;
+      min-width: 0;
+      height: 44px;
+      border-radius: 12px;
+      border: 1px solid var(--surface-border);
+      padding: 0 12px;
+      font-size: 15px;
+      background: rgba(0, 0, 0, 0.25);
+      color: var(--text);
+    }
+    .test-user-row button {
+      flex-shrink: 0;
+      padding: 0 16px;
+      border-radius: 12px;
+      border: none;
+      background: var(--accent);
+      color: #fff;
+      font-weight: 600;
+      font-size: 14px;
+      cursor: pointer;
+    }
     .overlay {
       position: fixed;
       inset: 0;
@@ -690,6 +732,13 @@
         <span class="badge-active">Активен</span>
       </div>
       <div class="home-err" id="homeErr"></div>
+      <div id="testUserFallback" class="test-user-fallback" aria-live="polite">
+        <div class="hint">Открыто вне MAX (или нет user в Bridge). Для теста API укажите <code style="color:var(--teal)">user_id</code> в URL (<code style="color:var(--teal)">?user_id=122099994</code>) или введите ниже и нажмите «Применить».</div>
+        <div class="test-user-row">
+          <input type="text" id="testUserIdInput" inputmode="numeric" placeholder="например 122099994" autocomplete="off" />
+          <button type="button" id="testUserIdApply">Применить</button>
+        </div>
+      </div>
       <div class="stats-row">
         <div class="stat-cell"><div class="n" id="statCh">0</div><div class="l">каналы</div></div>
         <div class="stat-cell"><div class="n" id="statPosts">0</div><div class="l">посты</div></div>
@@ -776,13 +825,6 @@
   </div>
 
   <script>
-    const tg = window.WebApp || {};
-    const user = tg.initDataUnsafe && tg.initDataUnsafe.user ? tg.initDataUnsafe.user : {};
-    const startParam =
-      (tg.initDataUnsafe && tg.initDataUnsafe.start_param) ||
-      new URLSearchParams(location.search).get('startapp') ||
-      '';
-
     function decodeStartParam(raw) {
       if (!raw || raw === 'start') return null
       var m = String(raw).trim().match(/^pid_([a-fA-F0-9]+)_cid_(\d+)(_admin)?$/)
@@ -792,12 +834,29 @@
       return { post_id: uuid, chat_id: '-' + m[2], admin: m[3] === '_admin' }
     }
 
-    function buildMergedSearchParams() {
+    /** MAX Bridge docs: user id is `user.id`; tolerate legacy `user_id`. */
+    function getBridgeNumericUserId(bridgeUser) {
+      if (!bridgeUser || typeof bridgeUser !== 'object') return null
+      var a = bridgeUser.id
+      var b = bridgeUser.user_id
+      if (typeof a === 'number' && a > 0) return a
+      if (typeof b === 'number' && b > 0) return b
+      if (typeof a === 'string' && /^\d+$/.test(a)) {
+        var x = parseInt(a, 10)
+        if (Number.isFinite(x) && x > 0) return x
+      }
+      if (typeof b === 'string' && /^\d+$/.test(b)) {
+        var y = parseInt(b, 10)
+        if (Number.isFinite(y) && y > 0) return y
+      }
+      return null
+    }
+
+    function buildMergedSearchParams(user, startParam) {
       var sp = new URLSearchParams(location.search);
       var bridgeUser = user;
-      if (bridgeUser && typeof bridgeUser.user_id === 'number' && bridgeUser.user_id > 0) {
-        if (!sp.get('user_id')) sp.set('user_id', String(bridgeUser.user_id));
-      }
+      var bid = getBridgeNumericUserId(bridgeUser);
+      if (bid != null && !sp.get('user_id')) sp.set('user_id', String(bid));
       var uname =
         (bridgeUser.username && String(bridgeUser.username).trim()) ||
         (bridgeUser.first_name && String(bridgeUser.first_name).trim()) ||
@@ -823,26 +882,37 @@
       return sp;
     }
 
-    var mergedParams = buildMergedSearchParams();
-    var postId = mergedParams.get('post_id');
-    var chatId = mergedParams.get('chat_id');
-    var hasPostContext = !!(postId && chatId);
-    var adminParam = mergedParams.get('admin') === '1';
+    function initApp() {
+      var tg = window.WebApp || {};
+      try {
+        if (window.WebApp && typeof window.WebApp.expand === 'function') {
+          window.WebApp.expand();
+        }
+      } catch (e) {}
 
-    var viewHome = document.getElementById('view-home');
-    var viewComments = document.getElementById('view-comments');
+      var unsafe = tg.initDataUnsafe || {};
+      var user = unsafe.user || {};
+      var startParam =
+        unsafe.start_param ||
+        new URLSearchParams(location.search).get('startapp') ||
+        '';
 
-    if (hasPostContext) {
-      viewComments.classList.remove('hidden');
-      viewHome.classList.add('hidden');
-    } else {
-      viewHome.classList.remove('hidden');
-      viewComments.classList.add('hidden');
-    }
+      var mergedParams = buildMergedSearchParams(user, startParam);
+      var postId = mergedParams.get('post_id');
+      var chatId = mergedParams.get('chat_id');
+      var hasPostContext = !!(postId && chatId);
+      var adminParam = mergedParams.get('admin') === '1';
 
-    try {
-      if (tg.expand) tg.expand();
-    } catch (e) {}
+      var viewHome = document.getElementById('view-home');
+      var viewComments = document.getElementById('view-comments');
+
+      if (hasPostContext) {
+        viewComments.classList.remove('hidden');
+        viewHome.classList.add('hidden');
+      } else {
+        viewHome.classList.remove('hidden');
+        viewComments.classList.add('hidden');
+      }
 
     /* ——— HOME ——— */
     function bootHome() {
@@ -878,20 +948,40 @@
         (user.username && String(user.username)) ||
         'Гость';
       document.getElementById('homeUserName').textContent = displayName;
-      var uid = typeof user.user_id === 'number' ? user.user_id : null;
+      var uid = getBridgeNumericUserId(user);
       var uidFromQuery = mergedParams.get('user_id');
       if (uid == null && uidFromQuery) {
         var parsed = parseInt(uidFromQuery, 10);
         if (Number.isFinite(parsed) && parsed > 0) uid = parsed;
       }
       document.getElementById('homeUserId').textContent =
-        uid != null ? 'user_id: ' + uid : 'user_id: — (откройте из MAX)';
+        uid != null ? 'user_id: ' + uid : 'user_id: — (откройте из MAX или задайте в URL)';
 
       var avEl = document.getElementById('homeUserAv');
       if (user.photo_url) {
         avEl.innerHTML = '<img src="' + esc(user.photo_url) + '" alt="" />';
       } else {
         avEl.textContent = initials(displayName);
+      }
+
+      var testFb = document.getElementById('testUserFallback');
+      var testIn = document.getElementById('testUserIdInput');
+      var testBtn = document.getElementById('testUserIdApply');
+      function wireTestUserApply() {
+        if (!testBtn || testBtn.dataset.wired === '1') return;
+        testBtn.dataset.wired = '1';
+        testBtn.addEventListener('click', function () {
+          var raw = testIn && testIn.value ? String(testIn.value).trim() : '';
+          var parsed = parseInt(raw, 10);
+          if (!Number.isFinite(parsed) || parsed <= 0) {
+            setHomeErr('Введите положительный user_id');
+            return;
+          }
+          var sp = new URLSearchParams(location.search);
+          sp.set('user_id', String(parsed));
+          var q = sp.toString();
+          location.search = q ? '?' + q : '';
+        });
       }
 
       function syncSwitch(feature, enabled) {
@@ -941,10 +1031,14 @@
       }
 
       if (uid == null) {
-        setHomeErr('Откройте мини-приложение из MAX, чтобы подставился профиль.');
+        if (testFb) testFb.classList.add('show');
+        wireTestUserApply();
+        setHomeErr('Откройте мини-приложение из MAX или укажите user_id для теста.');
         wireFeatureToggles(null);
         return;
       }
+
+      if (testFb) testFb.classList.remove('show');
 
       wireFeatureToggles(uid);
 
@@ -1070,9 +1164,6 @@
       });
     }
 
-    bootHome();
-
-    /* ——— COMMENTS ——— */
     function bootComments() {
       if (!hasPostContext) return;
 
@@ -1080,7 +1171,17 @@
       var postId = params.get('post_id');
       var chatId = params.get('chat_id');
       var userId = params.get('user_id');
-      var username = params.get('username') || 'Гость';
+      if (!userId) {
+        var bid = getBridgeNumericUserId(user);
+        if (bid != null) userId = String(bid);
+      }
+      var username = params.get('username');
+      if (!username || !String(username).trim()) {
+        username =
+          [user.first_name, user.last_name].filter(Boolean).join(' ').trim() ||
+          (user.username && String(user.username).trim()) ||
+          'Гость';
+      }
       var isAdmin = params.get('admin') === '1';
       var subscribersOverride = params.get('subscribers');
 
@@ -1521,7 +1622,21 @@
       }, 15000);
     }
 
+    bootHome();
     bootComments();
+    }
+
+    function startAppWhenReady() {
+      if (window.WebApp) {
+        initApp();
+        return;
+      }
+      window.addEventListener('load', function () {
+        setTimeout(initApp, 100);
+      });
+    }
+
+    startAppWhenReady();
   </script>
 </body>
 </html>
