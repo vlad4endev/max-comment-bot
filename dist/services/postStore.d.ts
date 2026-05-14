@@ -1,5 +1,5 @@
 import type { Bot } from '@maxhub/max-bot-api';
-import type { InlineKeyboardAttachmentRequest } from '@maxhub/max-bot-api/types';
+import type { Attachment, AttachmentRequest, InlineKeyboardAttachmentRequest } from '@maxhub/max-bot-api/types';
 /**
  * Channel post tracked for Mini App comments (MAX message id is {@link Post.message_mid}).
  */
@@ -13,6 +13,11 @@ export interface Post {
     sender_name?: string;
     text: string;
     photo_url?: string;
+    /**
+     * Non-keyboard attachments from the channel post (from {@link Message.body.attachments}).
+     * Used so {@link Bot.api.editMessage} can merge media with the inline keyboard instead of replacing all attachments.
+     */
+    media_attachments?: AttachmentRequest[];
     comment_count: number;
     timestamp: string;
 }
@@ -55,6 +60,11 @@ export declare class PostStore {
     private queuePersist;
     private persist;
 }
+/**
+ * Non-keyboard parts of {@link Message.body.attachments} for merging into {@link Bot.api.editMessage}.
+ * Incoming {@link Attachment} shapes (e.g. image `payload.url` / `token` / `photo_id`) are accepted by the edit API as {@link AttachmentRequest}.
+ */
+export declare function mediaAttachmentRequestsFromMessageBody(attachments: Attachment[] | null | undefined): AttachmentRequest[];
 /**
  * Option A: {@link Bot.api.editMessage} on the original post (`message_id` + body with `attachments`).
  * Option B (fallback): {@link Bot.api.sendMessageToChat} with `link: { type: 'reply', mid }` — bot-owned message with the keyboard, because channel admins' posts are often not editable by the bot.

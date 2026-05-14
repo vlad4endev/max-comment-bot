@@ -7,6 +7,7 @@ import {
   attachCommentButtonToChannelPost,
   buildMiniAppUrl,
   isMiniAppOpenUrlConfigured,
+  mediaAttachmentRequestsFromMessageBody,
   postStore,
   type Post,
 } from './postStore'
@@ -154,6 +155,7 @@ export async function tryAttachCommentsToChannelPost(
   const postId = uuidv4()
   const text = message.body.text?.trim() ?? ''
   const photoUrl = firstImageUrlFromMessage(message)
+  const media_attachments = mediaAttachmentRequestsFromMessageBody(message.body.attachments)
   const post: Post = {
     post_id: postId,
     chat_id: chatId,
@@ -161,6 +163,7 @@ export async function tryAttachCommentsToChannelPost(
     sender_name: user?.name ?? 'Канал',
     text,
     photo_url: photoUrl,
+    media_attachments,
     comment_count: 0,
     timestamp: new Date().toISOString(),
   }

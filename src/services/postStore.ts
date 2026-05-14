@@ -3,7 +3,12 @@ import { dirname, join } from 'node:path'
 
 import type { Bot } from '@maxhub/max-bot-api'
 import { Keyboard } from '@maxhub/max-bot-api'
-import type { InlineKeyboardAttachmentRequest } from '@maxhub/max-bot-api/types'
+import type {
+  Attachment,
+  AttachmentRequest,
+  InlineKeyboardAttachmentRequest,
+  Message,
+} from '@maxhub/max-bot-api/types'
 
 import { config } from '../config'
 import { logger } from '../utils/logger'
@@ -21,6 +26,11 @@ export interface Post {
   sender_name?: string
   text: string
   photo_url?: string
+  /**
+   * Non-keyboard attachments from the channel post (from {@link Message.body.attachments}).
+   * Used so {@link Bot.api.editMessage} can merge media with the inline keyboard instead of replacing all attachments.
+   */
+  media_attachments?: AttachmentRequest[]
   comment_count: number
   timestamp: string
 }
@@ -45,6 +55,15 @@ function isPost(value: unknown): value is Post {
     (o.sender_name === undefined || typeof o.sender_name === 'string') &&
     typeof o.text === 'string' &&
     (o.photo_url === undefined || typeof o.photo_url === 'string') &&
+    (o.media_attachments === undefined ||
+      (Array.isArray(o.media_attachments) &&
+        o.media_attachments.every(
+          (x) =>
+            typeof x === 'object' &&
+            x !== null &&
+            'type' in x &&
+            typeof (x as { type: unknown }).type === 'string',
+        ))) &&
     typeof o.comment_count === 'number' &&
     Number.isInteger(o.comment_count) &&
     o.comment_count >= 0 &&
@@ -165,10 +184,14 @@ export class PostStore {
         : post.text.trim() === ''
           ? '\u00a0'
           : post.text
+    const usesReplyUi = post.comments_ui_message_mid !== undefined
+    const { media } = usesReplyUi ? { media: [] as AttachmentRequest[] } : await resolveChannelPostMediaForEdit(bot, post)
+    const attachments: AttachmentRequest[] =
+      usesReplyUi || media.length === 0 ? [kb] : [...media, kb]
     try {
       await bot.api.editMessage(targetMid, {
         text,
-        attachments: [kb],
+        attachments,
       })
     } catch (err: unknown) {
       logger.warn('postStore.updateButtonCaption: editMessage failed', {
@@ -198,6 +221,57 @@ export class PostStore {
 }
 
 /**
+ * Non-keyboard parts of {@link Message.body.attachments} for merging into {@link Bot.api.editMessage}.
+ * Incoming {@link Attachment} shapes (e.g. image `payload.url` / `token` / `photo_id`) are accepted by the edit API as {@link AttachmentRequest}.
+ */
+export function mediaAttachmentRequestsFromMessageBody(
+  attachments: Attachment[] | null | undefined,
+): AttachmentRequest[] {
+  if (!attachments?.length) {
+    return []
+  }
+  return attachments
+    .filter((att) => att.type !== 'inline_keyboard')
+    .map((a) => a as unknown as AttachmentRequest)
+}
+
+/**
+ * Resolves media to send with `editMessage` on the original channel post: prefers {@link Post.media_attachments},
+ * otherwise loads the message via {@link Bot.api.getMessage} or {@link Bot.api.getMessages}.
+ *
+ * @returns `warnMissingSnapshot` true when the post had no cached media and the API did not yield a usable attachment list (fetch failure or empty `body.attachments`).
+ */
+async function resolveChannelPostMediaForEdit(
+  bot: Bot,
+  post: Post,
+): Promise<{ media: AttachmentRequest[]; warnMissingSnapshot: boolean }> {
+  if (post.media_attachments !== undefined) {
+    return { media: [...post.media_attachments], warnMissingSnapshot: false }
+  }
+  let original: Message | undefined
+  try {
+    original = await bot.api.getMessage(post.message_mid)
+  } catch {
+    try {
+      const { messages } = await bot.api.getMessages(post.chat_id, {
+        message_ids: [post.message_mid],
+      })
+      original = messages[0]
+    } catch {
+      return { media: [], warnMissingSnapshot: true }
+    }
+  }
+  if (!original) {
+    return { media: [], warnMissingSnapshot: true }
+  }
+  const raw = original.body.attachments
+  if (!raw || raw.length === 0) {
+    return { media: [], warnMissingSnapshot: true }
+  }
+  return { media: mediaAttachmentRequestsFromMessageBody(raw), warnMissingSnapshot: false }
+}
+
+/**
  * Option A: {@link Bot.api.editMessage} on the original post (`message_id` + body with `attachments`).
  * Option B (fallback): {@link Bot.api.sendMessageToChat} with `link: { type: 'reply', mid }` — bot-owned message with the keyboard, because channel admins' posts are often not editable by the bot.
  */
@@ -207,10 +281,19 @@ export async function attachCommentButtonToChannelPost(
   editText: string,
   keyboard: InlineKeyboardAttachmentRequest,
 ): Promise<void> {
+  const { media, warnMissingSnapshot } = await resolveChannelPostMediaForEdit(bot, post)
+  const attachments: AttachmentRequest[] =
+    media.length > 0 ? [...media, keyboard] : [keyboard]
+  if (warnMissingSnapshot) {
+    logger.warn(
+      'attachCommentButton: could not load original message attachments; editing with keyboard only (media may be dropped if present)',
+      { postId: post.post_id, messageMid: post.message_mid, chatId: post.chat_id },
+    )
+  }
   try {
     await bot.api.editMessage(post.message_mid, {
       text: editText,
-      attachments: [keyboard],
+      attachments,
     })
     logger.info('attachCommentButton: edited original channel post', {
       postId: post.post_id,
