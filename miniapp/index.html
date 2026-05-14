@@ -382,349 +382,401 @@
       font-size: 15px;
       cursor: pointer;
     }
-    /* Comments view (existing) */
+    /* Comments view */
     #view-comments {
       display: flex;
       flex-direction: column;
       height: 100vh;
       height: 100dvh;
+      overflow: hidden;
+      background: var(--bg);
     }
-    #app {
+    #view-comments #app {
       display: flex;
       flex-direction: column;
-      height: 100%;
-      max-width: 100%;
+      flex: 1;
+      min-height: 0;
+      width: 100%;
+      max-width: 375px;
       margin: 0 auto;
     }
-    .header-wrap {
+    #view-comments .header-wrap {
       flex: 0 0 auto;
-      padding: 10px 12px 12px;
-      padding-top: calc(10px + env(safe-area-inset-top));
-      background: var(--bg);
-      border-bottom: 1px solid var(--surface-border);
+      background: #0d0d18;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+      padding: 14px 16px 12px;
+      padding-top: calc(14px + env(safe-area-inset-top));
     }
-    .channel-row {
+    #view-comments .channel-row {
       display: flex;
       align-items: center;
       gap: 10px;
       margin-bottom: 10px;
     }
-    .channel-avatar {
-      width: 40px;
-      height: 40px;
+    #view-comments .channel-avatar {
+      width: 36px;
+      height: 36px;
       border-radius: 50%;
       flex-shrink: 0;
-      background: var(--accent);
+      background: linear-gradient(135deg, #7f77dd 0%, #5dcaa5 100%);
       color: #fff;
       font-weight: 700;
-      font-size: 15px;
+      font-size: 13px;
       display: flex;
       align-items: center;
       justify-content: center;
       overflow: hidden;
     }
-    .channel-avatar img {
+    #view-comments .channel-avatar img {
       width: 100%;
       height: 100%;
       object-fit: cover;
     }
-    .channel-meta {
+    #view-comments .channel-meta {
       flex: 1;
       min-width: 0;
     }
-    .channel-name {
-      font-size: 15px;
+    #view-comments .channel-name {
+      font-size: 14px;
       font-weight: 600;
       line-height: 1.2;
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
     }
-    .channel-subs {
-      font-size: 12px;
-      color: var(--muted);
+    #view-comments .channel-subs {
+      font-size: 11px;
+      color: rgba(255, 255, 255, 0.45);
       margin-top: 2px;
     }
-    .count-badge {
+    #view-comments .count-badge {
       flex-shrink: 0;
-      min-width: 28px;
-      height: 28px;
-      padding: 0 8px;
-      border-radius: 14px;
-      background: var(--accent);
+      min-width: 26px;
+      height: 26px;
+      padding: 0 9px;
+      border-radius: 999px;
+      background: rgba(127, 119, 221, 0.35);
       color: #fff;
-      font-size: 12px;
+      font-size: 11px;
       font-weight: 700;
       display: flex;
       align-items: center;
       justify-content: center;
+      border: 1px solid rgba(127, 119, 221, 0.45);
     }
-    .post-preview {
+    #view-comments .post-preview {
       display: flex;
+      flex-direction: row;
+      align-items: center;
       gap: 10px;
-      align-items: stretch;
-      padding: 10px;
-      background: var(--surface);
-      border: 1px solid var(--surface-border);
+      padding: 10px 12px;
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid rgba(255, 255, 255, 0.07);
       border-radius: 12px;
     }
-    .post-preview-text {
+    #view-comments .post-preview-text {
       flex: 1;
       min-width: 0;
+      order: 0;
       font-size: 13px;
       line-height: 1.45;
-      color: var(--muted);
+      color: rgba(255, 255, 255, 0.6);
       display: -webkit-box;
       -webkit-box-orient: vertical;
-      -webkit-line-clamp: 3;
+      -webkit-line-clamp: 2;
       overflow: hidden;
     }
-    .post-thumb {
-      width: 56px;
-      height: 56px;
+    #view-comments .post-thumb {
+      order: 1;
+      width: 44px;
+      height: 44px;
       border-radius: 8px;
       object-fit: cover;
       flex-shrink: 0;
       background: rgba(255, 255, 255, 0.06);
-      border: 1px solid var(--surface-border);
       display: none;
     }
-    .post-thumb.show { display: block; }
-    #feed {
+    #view-comments .post-thumb.show {
+      display: block;
+    }
+    #view-comments #err {
+      flex: 0 0 auto;
+      color: var(--danger);
+      font-size: 12px;
+      padding: 6px 16px 4px;
+      min-height: 1em;
+    }
+    #view-comments #feed {
       flex: 1 1 auto;
+      min-height: 0;
       overflow-y: auto;
-      padding: 12px;
+      -webkit-overflow-scrolling: touch;
+      padding: 14px;
+      padding-bottom: calc(78px + env(safe-area-inset-bottom));
       display: flex;
       flex-direction: column;
-      gap: 10px;
-      padding-bottom: calc(88px + env(safe-area-inset-bottom));
+      gap: 16px;
     }
-    .feed-empty {
+    #view-comments .feed-empty {
       text-align: center;
-      color: var(--muted);
+      color: rgba(255, 255, 255, 0.45);
       font-size: 14px;
       padding: 28px 12px;
     }
-    .row-user {
+    #view-comments .date-divider {
       display: flex;
-      flex-direction: row;
-      align-items: flex-end;
       gap: 8px;
-      align-self: flex-start;
+      align-items: center;
+      flex-shrink: 0;
+    }
+    #view-comments .date-divider::before,
+    #view-comments .date-divider::after {
+      content: '';
+      flex: 1;
+      height: 1px;
+      background: rgba(255, 255, 255, 0.07);
+    }
+    #view-comments .date-divider span {
+      font-size: 11px;
+      color: rgba(255, 255, 255, 0.3);
+      white-space: nowrap;
+    }
+    #view-comments .comment-group {
+      display: flex;
+      flex-direction: column;
+      align-items: stretch;
       max-width: 100%;
     }
-    .user-av {
-      width: 36px;
-      height: 36px;
+    #view-comments .msg-user {
+      display: flex;
+      flex-direction: row;
+      align-items: flex-start;
+      gap: 8px;
+      max-width: 100%;
+    }
+    #view-comments .msg-user .av {
+      width: 30px;
+      height: 30px;
       border-radius: 50%;
       flex-shrink: 0;
-      background: var(--accent);
-      color: #fff;
-      font-size: 13px;
+      font-size: 11px;
       font-weight: 700;
       display: flex;
       align-items: center;
       justify-content: center;
-      overflow: hidden;
+      line-height: 1;
     }
-    .user-av img {
-      width: 100%;
-      height: 100%;
-      object-fit: cover;
+    #view-comments .msg-user .av-u {
+      background: rgba(93, 202, 165, 0.25);
+      color: #5dcaa5;
     }
-    .bubble-user {
-      max-width: min(268px, calc(100% - 44px));
-      padding: 10px 12px;
-      border-radius: 14px 14px 14px 4px;
-      background: var(--user-bubble);
-      border: 1px solid var(--surface-border);
+    #view-comments .bubble-u {
+      flex: 1;
+      min-width: 0;
+      max-width: calc(100% - 60px);
+      padding: 10px 13px;
+      border-radius: 4px 16px 16px 16px;
+      background: rgba(255, 255, 255, 0.06);
+      border: 1px solid rgba(255, 255, 255, 0.08);
     }
-    .bubble-user .name {
-      font-size: 13px;
+    #view-comments .bubble-u .uname {
+      font-size: 12px;
       font-weight: 600;
-      color: var(--teal);
+      color: #5dcaa5;
+      margin-bottom: 2px;
+    }
+    #view-comments .bubble-u .utext {
+      font-size: 14px;
+      line-height: 1.45;
+      color: rgba(255, 255, 255, 0.88);
+      word-break: break-word;
+      white-space: pre-wrap;
+    }
+    #view-comments .bubble-u .utime {
+      font-size: 10px;
+      color: rgba(255, 255, 255, 0.28);
+      margin-top: 6px;
+    }
+    #view-comments .reply-block {
+      margin-left: 38px;
+      margin-top: 6px;
+      max-width: calc(100% - 38px);
+    }
+    #view-comments .reply-inner {
+      position: relative;
+      background: rgba(127, 119, 221, 0.1);
+      border: 1px solid rgba(127, 119, 221, 0.2);
+      border-radius: 4px 16px 16px 16px;
+      padding: 10px 13px;
+    }
+    #view-comments .reply-inner::before {
+      content: '';
+      position: absolute;
+      left: -1px;
+      top: 0;
+      bottom: 0;
+      width: 3px;
+      background: #7f77dd;
+      border-radius: 2px 0 0 2px;
+    }
+    #view-comments .reply-tag {
+      display: flex;
+      align-items: center;
+      gap: 6px;
       margin-bottom: 4px;
     }
-    .bubble-user .text {
-      font-size: 14px;
-      line-height: 1.4;
-      word-break: break-word;
-      white-space: pre-wrap;
+    #view-comments .reply-dot {
+      width: 5px;
+      height: 5px;
+      border-radius: 50%;
+      background: #7f77dd;
+      flex-shrink: 0;
     }
-    .bubble-user .time {
-      font-size: 11px;
-      color: var(--muted);
-      margin-top: 6px;
-    }
-    .row-admin {
-      align-self: flex-start;
-      max-width: min(300px, 100%);
-      display: flex;
-      flex-direction: column;
-      align-items: flex-start;
-    }
-    .bubble-admin {
-      padding: 10px 12px;
-      border-radius: 14px 14px 14px 4px;
-      background: var(--admin-bubble);
-      border: 1px solid rgba(127, 119, 221, 0.35);
-    }
-    .bubble-admin .tag {
-      display: inline-block;
+    #view-comments .reply-tag span {
       font-size: 11px;
       font-weight: 700;
-      color: var(--accent);
-      letter-spacing: 0.02em;
-      margin-bottom: 6px;
+      color: #afa9ec;
     }
-    .bubble-admin .quote {
+    #view-comments .reply-quote {
       font-size: 12px;
-      color: var(--muted);
-      padding: 8px 10px;
-      margin-bottom: 8px;
-      border-left: 3px solid var(--accent);
-      background: rgba(0, 0, 0, 0.2);
-      border-radius: 0 8px 8px 0;
-      max-height: 4.2em;
-      overflow: hidden;
+      font-style: italic;
+      color: rgba(255, 255, 255, 0.35);
+      line-height: 1.4;
+      margin-bottom: 6px;
       display: -webkit-box;
       -webkit-box-orient: vertical;
-      -webkit-line-clamp: 3;
+      -webkit-line-clamp: 2;
+      overflow: hidden;
+      word-break: break-word;
     }
-    .bubble-admin .text {
+    #view-comments .reply-text {
       font-size: 14px;
-      line-height: 1.4;
+      line-height: 1.45;
+      color: rgba(255, 255, 255, 0.88);
       word-break: break-word;
       white-space: pre-wrap;
     }
-    .bubble-admin .time {
-      font-size: 11px;
-      color: var(--muted);
+    #view-comments .reply-time {
+      font-size: 10px;
+      color: rgba(255, 255, 255, 0.28);
       margin-top: 6px;
-      text-align: left;
     }
-    .admin-reply-wrap {
+    #view-comments .admin-reply-wrap {
       width: 100%;
-      margin-top: 8px;
     }
-    .reply-btn {
-      margin-top: 8px;
+    #view-comments .reply-btn {
+      display: block;
+      margin: 6px 0 0 38px;
       font-size: 12px;
-      padding: 6px 10px;
+      padding: 5px 12px;
       border-radius: 8px;
-      border: 1px solid var(--surface-border);
-      background: rgba(255, 255, 255, 0.06);
-      color: var(--text);
+      border: 1px solid rgba(127, 119, 221, 0.3);
+      background: rgba(127, 119, 221, 0.08);
+      color: #afa9ec;
       cursor: pointer;
     }
-    .reply-inline {
-      margin-top: 8px;
+    #view-comments .reply-inline {
       display: none;
       flex-direction: column;
       gap: 6px;
+      margin: 6px 0 0 38px;
     }
-    .reply-inline.open { display: flex; }
-    .reply-inline textarea {
+    #view-comments .reply-inline.open {
+      display: flex;
+    }
+    #view-comments .reply-inline textarea {
       width: 100%;
-      min-height: 44px;
-      max-height: 100px;
-      resize: vertical;
-      border-radius: 10px;
-      border: 1px solid var(--surface-border);
-      padding: 8px 10px;
+      border-radius: 12px;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      background: rgba(255, 255, 255, 0.05);
+      color: rgba(255, 255, 255, 0.85);
+      padding: 8px 12px;
       font-size: 13px;
-      background: rgba(0, 0, 0, 0.25);
-      color: var(--text);
+      resize: none;
+      min-height: 40px;
+      max-height: 120px;
+      font-family: inherit;
     }
-    .reply-inline .reply-send {
+    #view-comments .reply-inline .reply-send {
       align-self: flex-end;
-      padding: 8px 14px;
+      padding: 7px 16px;
       border-radius: 10px;
-      border: none;
-      background: var(--accent);
+      background: #7f77dd;
       color: #fff;
-      font-weight: 600;
+      border: none;
       font-size: 13px;
+      font-weight: 600;
       cursor: pointer;
     }
-    .reply-inline .reply-send:disabled {
+    #view-comments .reply-inline .reply-send:disabled {
       opacity: 0.45;
       cursor: not-allowed;
     }
-    .composer-wrap {
+    #view-comments .composer-wrap {
       position: fixed;
-      left: 0;
-      right: 0;
+      left: 50%;
+      transform: translateX(-50%);
       bottom: 0;
-      padding: 10px 12px calc(10px + env(safe-area-inset-bottom));
-      background: linear-gradient(180deg, transparent, var(--bg) 18px), var(--bg);
-      border-top: 1px solid var(--surface-border);
+      width: 100%;
       max-width: 375px;
-      margin: 0 auto;
+      background: #0d0d18;
+      border-top: 1px solid rgba(255, 255, 255, 0.06);
+      padding: 10px 14px calc(14px + env(safe-area-inset-bottom));
     }
-    .composer {
+    #view-comments .composer {
       display: flex;
-      gap: 10px;
+      flex-direction: row;
       align-items: center;
-      max-width: 375px;
-      margin: 0 auto;
+      gap: 10px;
     }
-    .composer input[type="text"] {
+    #view-comments .composer .av-composer {
+      width: 30px;
+      height: 30px;
+      border-radius: 50%;
+      flex-shrink: 0;
+      font-size: 11px;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: rgba(93, 202, 165, 0.25);
+      color: #5dcaa5;
+    }
+    #view-comments .composer input[type="text"] {
       flex: 1;
       min-width: 0;
-      height: 44px;
-      border-radius: 22px;
-      border: 1px solid var(--surface-border);
-      padding: 0 16px;
-      font-size: 15px;
-      background: var(--surface);
-      color: var(--text);
+      height: 40px;
+      border-radius: 20px;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      padding: 0 14px;
+      font-size: 14px;
+      background: rgba(255, 255, 255, 0.06);
+      color: rgba(255, 255, 255, 0.92);
     }
-    .composer input::placeholder {
-      color: var(--muted);
+    #view-comments .composer input::placeholder {
+      color: rgba(255, 255, 255, 0.4);
     }
-    .send-btn {
-      width: 44px;
-      height: 44px;
+    #view-comments .send-btn {
+      width: 40px;
+      height: 40px;
       border-radius: 50%;
       border: none;
       flex-shrink: 0;
-      background: var(--accent);
+      background: #7f77dd;
       color: #fff;
       cursor: pointer;
       display: flex;
       align-items: center;
       justify-content: center;
-      box-shadow: 0 2px 10px rgba(127, 119, 221, 0.35);
     }
-    .send-btn:disabled {
+    #view-comments .send-btn:disabled {
       opacity: 0.45;
       cursor: not-allowed;
-      box-shadow: none;
     }
-    .send-btn svg {
-      width: 20px;
-      height: 20px;
+    #view-comments .send-btn svg {
+      width: 18px;
+      height: 18px;
       display: block;
-    }
-    #err {
-      color: var(--danger);
-      font-size: 12px;
-      padding: 0 12px 8px;
-      min-height: 1em;
-    }
-    .bridge-debug-panel {
-      font-size: 10px;
-      font-family: ui-monospace, Menlo, monospace;
-      color: var(--muted);
-      padding: 8px 12px;
-      border-bottom: 1px dashed var(--surface-border);
-      white-space: pre-wrap;
-      word-break: break-all;
-      max-height: 140px;
-      overflow-y: auto;
-      background: rgba(0, 0, 0, 0.2);
-      line-height: 1.35;
     }
   </style>
 </head>
@@ -808,11 +860,11 @@
             <img class="post-thumb" id="postThumb" alt="" />
           </div>
         </div>
-        <div id="bridgeDebugPanel" class="bridge-debug-panel" aria-label="Отладка startapp"></div>
         <div id="err"></div>
         <div id="feed"></div>
         <div class="composer-wrap">
           <div class="composer">
+            <div class="av av-composer" id="composerAv" aria-hidden="true">?</div>
             <input type="text" id="input" placeholder="Написать комментарий…" autocomplete="off" />
             <button type="button" class="send-btn" id="sendBtn" aria-label="Отправить" disabled>
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -841,15 +893,12 @@
 
   <script>
     function decodeStartParam(raw) {
-      console.log('decodeStartParam input:', raw)
       if (!raw || raw === 'start') return null
       var s = String(raw).trim().toLowerCase()
       var m = s.match(/^pid_([a-f0-9]+)_cid_(\d+)(_admin)?$/)
-      console.log('regex match:', m)
       if (!m) return null
       var id = m[1]
       var uuid = [id.slice(0,8), id.slice(8,12), id.slice(12,16), id.slice(16,20), id.slice(20)].join('-')
-      console.log('decoded:', { post_id: uuid, chat_id: '-' + m[2] })
       return { post_id: uuid, chat_id: '-' + m[2], admin: !!m[3] }
     }
 
@@ -917,41 +966,6 @@
         '';
 
       var mergedParams = buildMergedSearchParams(user, startParam);
-      console.log('mergedParams:', {
-        post_id: mergedParams.get('post_id'),
-        chat_id: mergedParams.get('chat_id'),
-        user_id: mergedParams.get('user_id'),
-        startParam: startParam,
-        rawStartapp: new URLSearchParams(location.search).get('startapp')
-      })
-
-      var rawStartappQs = new URLSearchParams(location.search).get('startapp');
-      var bridgeStartParam =
-        unsafe.start_param != null && unsafe.start_param !== ''
-          ? String(unsafe.start_param)
-          : '(нет)';
-      var decodedForPanel = decodeStartParam(String(startParam || '').trim());
-      var mergedKeysLines = [];
-      mergedParams.forEach(function (v, k) {
-        mergedKeysLines.push(k + '=' + v);
-      });
-      var dbg = document.getElementById('bridgeDebugPanel');
-      if (dbg) {
-        dbg.textContent =
-          'raw startapp (URL): ' +
-          (rawStartappQs != null && rawStartappQs !== '' ? rawStartappQs : '(пусто)') +
-          '\nstart_param (Bridge): ' +
-          bridgeStartParam +
-          '\ndecoded post_id: ' +
-          (decodedForPanel && decodedForPanel.post_id ? decodedForPanel.post_id : '—') +
-          '\ndecoded chat_id: ' +
-          (decodedForPanel && decodedForPanel.chat_id ? decodedForPanel.chat_id : '—') +
-          '\nmergedParams (' +
-          mergedKeysLines.length +
-          '):\n' +
-          (mergedKeysLines.length ? mergedKeysLines.join('\n') : '(нет ключей)');
-      }
-
       var postId = mergedParams.get('post_id');
       var chatId = mergedParams.get('chat_id');
       var hasPostContext = !!(postId && chatId);
@@ -1251,6 +1265,7 @@
       var errEl = document.getElementById('err');
       var inputEl = document.getElementById('input');
       var sendBtn = document.getElementById('sendBtn');
+      var composerAvEl = document.getElementById('composerAv');
 
       var knownIds = new Set();
       var postCommentCount = null;
@@ -1302,6 +1317,8 @@
         return t.slice(0, 2).toUpperCase();
       }
 
+      if (composerAvEl) composerAvEl.textContent = initials(username);
+
       function updateBadgeFromCount(n) {
         var v = typeof n === 'number' && n >= 0 ? n : knownIds.size;
         countBadgeEl.textContent = String(v);
@@ -1328,61 +1345,70 @@
         return d.firstChild;
       }
 
+      function buildReplyBlockHtml(c) {
+        return (
+          '<div class="reply-block">' +
+          '<div class="reply-inner">' +
+          '<div class="reply-tag"><div class="reply-dot"></div><span>от канала</span></div>' +
+          '<div class="reply-quote">' +
+          esc(c.text) +
+          '</div>' +
+          '<div class="reply-text">' +
+          esc(c.reply.text) +
+          '</div>' +
+          '<div class="reply-time">' +
+          esc(c.reply.timestamp) +
+          '</div>' +
+          '</div></div>'
+        );
+      }
+
       function buildUserBlock(c) {
-        var av = '<div class="user-av">' + esc(initials(c.username)) + '</div>';
-        var adminPart = '';
+        var av = initials(c.username);
+        var replyHtml = '';
+        if (c.reply) {
+          replyHtml = buildReplyBlockHtml(c);
+        }
+        var adminHtml = '';
         if (isAdmin && !c.reply) {
-          adminPart =
+          adminHtml =
+            '<div class="admin-reply-wrap" data-admin-slot="' +
+            esc(c.comment_id) +
+            '">' +
             '<button type="button" class="reply-btn" data-toggle-reply="' +
             esc(c.comment_id) +
             '">Ответить</button>' +
             '<div class="reply-inline" data-reply-box="' +
             esc(c.comment_id) +
             '">' +
-            '<textarea rows="2" placeholder="Ответ от канала…" data-reply-input="' +
+            '<textarea placeholder="Ответ от канала…" data-reply-input="' +
             esc(c.comment_id) +
             '"></textarea>' +
             '<button type="button" class="reply-send" data-reply-send="' +
             esc(c.comment_id) +
-            '">Отправить ответ</button>' +
-            '</div>';
-        }
-        var adminBubble = '';
-        if (c.reply) {
-          adminBubble =
-            '<div class="row-admin">' +
-            '<div class="bubble-admin">' +
-            '<span class="tag">от канала</span>' +
-            '<div class="quote">' +
-            esc(c.text) +
-            '</div>' +
-            '<div class="text">' +
-            esc(c.reply.text) +
-            '</div>' +
-            '<div class="time">' +
-            esc(c.reply.timestamp) +
-            '</div>' +
+            '">Отправить</button>' +
             '</div></div>';
         }
         return (
-          '<div class="comment-block" data-comment-id="' +
+          '<div class="comment-group" data-comment-id="' +
           esc(c.comment_id) +
           '">' +
-          '<div class="row-user">' +
-          av +
-          '<div class="bubble-user">' +
-          '<div class="name">' +
+          '<div class="msg-user">' +
+          '<div class="av av-u">' +
+          esc(av) +
+          '</div>' +
+          '<div class="bubble-u">' +
+          '<div class="uname">' +
           esc(c.username) +
           '</div>' +
-          '<div class="text">' +
+          '<div class="utext">' +
           esc(c.text) +
           '</div>' +
-          '<div class="time">' +
+          '<div class="utime">' +
           esc(c.timestamp) +
           '</div>' +
           '</div></div>' +
-          adminPart +
-          (c.reply ? adminBubble : '<div class="admin-reply-wrap" data-admin-slot="' + esc(c.comment_id) + '"></div>') +
+          (c.reply ? replyHtml : adminHtml) +
           '</div>'
         );
       }
@@ -1452,7 +1478,7 @@
 
       function mergeOrUpdateComment(c) {
         var existing = feedEl.querySelector(
-          '.comment-block[data-comment-id="' + cssEsc(c.comment_id) + '"]'
+          '.comment-group[data-comment-id="' + cssEsc(c.comment_id) + '"]'
         );
         if (!existing) {
           var node = elFromHTML(buildUserBlock(c));
@@ -1461,27 +1487,18 @@
           knownIds.add(c.comment_id);
           return;
         }
-        if (c.reply) {
+        if (c.reply && !existing.querySelector('.reply-block')) {
+          var btn = existing.querySelector('.reply-btn');
+          var ibox = existing.querySelector('.reply-inline');
+          if (btn) btn.remove();
+          if (ibox) ibox.remove();
           var slot = existing.querySelector('[data-admin-slot]');
-          if (slot && !existing.querySelector('.row-admin')) {
-            var btn = existing.querySelector('.reply-btn');
-            var ibox = existing.querySelector('.reply-inline');
-            if (btn) btn.remove();
-            if (ibox) ibox.remove();
-            slot.outerHTML =
-              '<div class="row-admin">' +
-              '<div class="bubble-admin">' +
-              '<span class="tag">от канала</span>' +
-              '<div class="quote">' +
-              esc(c.text) +
-              '</div>' +
-              '<div class="text">' +
-              esc(c.reply.text) +
-              '</div>' +
-              '<div class="time">' +
-              esc(c.reply.timestamp) +
-              '</div>' +
-              '</div></div>';
+          var replyOuter = buildReplyBlockHtml(c);
+          if (slot) {
+            slot.outerHTML = replyOuter;
+          } else {
+            var msgUser = existing.querySelector('.msg-user');
+            if (msgUser) msgUser.insertAdjacentHTML('afterend', replyOuter);
           }
         }
       }
@@ -1649,7 +1666,7 @@
             knownIds.delete(tempId);
             node.setAttribute('data-comment-id', res.comment_id);
             knownIds.add(res.comment_id);
-            var tEl = node.querySelector('.bubble-user .time');
+            var tEl = node.querySelector('.bubble-u .utime');
             if (tEl && res.timestamp) tEl.textContent = res.timestamp;
             if (isAdmin) {
               var rep = node.querySelector('.reply-btn');
