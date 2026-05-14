@@ -55,11 +55,14 @@ function createCommentApiRouter(deps) {
             res.status(404).json({ error: 'post not found' });
             return;
         }
+        const channel = channelRegistry_1.channelRegistry.getChannel(post.chat_id);
         res.json({
             post_id: post.post_id,
             text: post.text,
             photo_url: post.photo_url ?? null,
             chat_id: post.chat_id,
+            comment_count: post.comment_count,
+            channel_title: channel?.title ?? null,
         });
     });
     router.get('/comments/:postId', (req, res) => {
