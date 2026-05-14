@@ -28,7 +28,8 @@ interface ChannelsFileShape {
   channels: ChannelRecord[]
 }
 
-const DEFAULT_CHANNELS_PATH = join(process.cwd(), 'channels.json')
+/** Same volume as posts/comments: `./data` → `/app/data` in Docker. */
+const DEFAULT_CHANNELS_PATH = join(process.cwd(), 'data', 'channels.json')
 
 function isChatType(value: unknown): value is ChatType {
   return value === 'dialog' || value === 'chat' || value === 'channel'

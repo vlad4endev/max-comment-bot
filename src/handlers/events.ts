@@ -165,7 +165,39 @@ type ChannelActivationOutcome =
   | { status: 'pending'; shouldNotifyMissingAdmin: boolean }
 
 /**
- * Verifies admin/owner rights, registers the channel when allowed, and maintains pending state otherwise.
+ * In-memory: we already sent the "bot joined with admin rights" admin notification for this chat.
+ * Cleared on {@link unregisterChannelOnBotLeave}. Survives pending→admin transitions without duplicate notify.
+ */
+const channelsAdminJoinNotified = new Set<number>()
+
+/**
+ * Persists channel metadata to the registry as soon as the bot is in the chat.
+ * Admin rights only gate processing/notifications elsewhere, not whether the row exists on disk.
+ */
+async function ensureChannelPersisted(ctx: Context, chatId: number, isChannel: boolean): Promise<void> {
+  try {
+    const chat = await ctx.getChat(chatId)
+    const chatData = { title: chat.title, type: chat.type }
+    logger.info('DEBUG: calling saveChannel', { chatId, chatData })
+    channelRegistry.saveChannel(chatId, chatData)
+    logger.info('DEBUG: saveChannel done, file should exist now')
+  } catch (e) {
+    logger.error('ensureChannelPersisted: не удалось получить чат через API', e)
+    const chatData = { title: null, type: fallbackChatType(isChannel) }
+    logger.info('DEBUG: calling saveChannel', { chatId, chatData })
+    channelRegistry.saveChannel(chatId, chatData)
+    logger.info('DEBUG: saveChannel done, file should exist now')
+  }
+}
+
+async function notifyAdminsChannelJoined(bot: Bot, channelChatId: number): Promise<void> {
+  const reg = channelRegistry.getChannel(channelChatId)
+  const title = reg?.title ?? '—'
+  await notifyAllAdmins(bot, channelChatId, `✅ Bot added to channel: ${title} (ID: ${channelChatId})`)
+}
+
+/**
+ * Verifies admin/owner rights, persists channel metadata up front, sends admin join notify once when admin is OK.
  */
 async function tryActivateChannelRegistration(
   ctx: Context,
@@ -173,6 +205,8 @@ async function tryActivateChannelRegistration(
   channelChatId: number,
   isChannel: boolean,
 ): Promise<ChannelActivationOutcome> {
+  await ensureChannelPersisted(ctx, channelChatId, isChannel)
+
   const member = await fetchBotChatMember(bot, channelChatId)
   if (!member) {
     stateManager.markChannelPendingAdminRights(channelChatId)
@@ -184,11 +218,12 @@ async function tryActivateChannelRegistration(
   }
 
   stateManager.clearChannelPendingAdminRights(channelChatId)
-  if (channelRegistry.getChannel(channelChatId) !== null) {
+  if (channelsAdminJoinNotified.has(channelChatId)) {
     return { status: 'already_registered' }
   }
 
-  await registerChannelOnBotJoin(ctx, bot, channelChatId, isChannel)
+  await notifyAdminsChannelJoined(bot, channelChatId)
+  channelsAdminJoinNotified.add(channelChatId)
   return { status: 'registered' }
 }
 
@@ -214,38 +249,11 @@ If nothing happens, open this chat and send: /connect ${channelChatId}`
 }
 
 /**
- * Регистрирует чат при появлении бота и шлёт уведомление администратору.
- */
-async function registerChannelOnBotJoin(
-  ctx: Context,
-  bot: Bot,
-  chatId: number,
-  isChannel: boolean,
-): Promise<void> {
-  stateManager.clearChannelPendingAdminRights(chatId)
-  try {
-    const chat = await ctx.getChat(chatId)
-    channelRegistry.saveChannel(chatId, { title: chat.title, type: chat.type })
-    await notifyAllAdmins(
-      bot,
-      chatId,
-      `✅ Bot added to channel: ${chat.title ?? '—'} (ID: ${chatId})`,
-    )
-  } catch (e) {
-    logger.error('registerChannelOnBotJoin: не удалось получить чат через API', e)
-    channelRegistry.saveChannel(chatId, {
-      title: null,
-      type: fallbackChatType(isChannel),
-    })
-    await notifyAllAdmins(bot, chatId, `✅ Bot added to channel: — (ID: ${chatId})`)
-  }
-}
-
-/**
  * Удаляет чат из реестра и уведомляет администратора (один раз, если запись была).
  */
 async function unregisterChannelOnBotLeave(bot: Bot, chatId: number): Promise<void> {
   stateManager.clearChannelPendingAdminRights(chatId)
+  channelsAdminJoinNotified.delete(chatId)
   const removed = channelRegistry.removeChannel(chatId)
   if (!removed) {
     return

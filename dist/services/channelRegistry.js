@@ -4,7 +4,8 @@ exports.channelRegistry = exports.ChannelRegistry = void 0;
 const promises_1 = require("node:fs/promises");
 const node_path_1 = require("node:path");
 const logger_1 = require("../utils/logger");
-const DEFAULT_CHANNELS_PATH = (0, node_path_1.join)(process.cwd(), 'channels.json');
+/** Same volume as posts/comments: `./data` → `/app/data` in Docker. */
+const DEFAULT_CHANNELS_PATH = (0, node_path_1.join)(process.cwd(), 'data', 'channels.json');
 function isChatType(value) {
     return value === 'dialog' || value === 'chat' || value === 'channel';
 }

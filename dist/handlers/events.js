@@ -132,9 +132,40 @@ function parseAddButtonInput(raw) {
     return { kind: 'mid_only', mid: t };
 }
 /**
- * Verifies admin/owner rights, registers the channel when allowed, and maintains pending state otherwise.
+ * In-memory: we already sent the "bot joined with admin rights" admin notification for this chat.
+ * Cleared on {@link unregisterChannelOnBotLeave}. Survives pending→admin transitions without duplicate notify.
+ */
+const channelsAdminJoinNotified = new Set();
+/**
+ * Persists channel metadata to the registry as soon as the bot is in the chat.
+ * Admin rights only gate processing/notifications elsewhere, not whether the row exists on disk.
+ */
+async function ensureChannelPersisted(ctx, chatId, isChannel) {
+    try {
+        const chat = await ctx.getChat(chatId);
+        const chatData = { title: chat.title, type: chat.type };
+        logger_1.logger.info('DEBUG: calling saveChannel', { chatId, chatData });
+        channelRegistry_1.channelRegistry.saveChannel(chatId, chatData);
+        logger_1.logger.info('DEBUG: saveChannel done, file should exist now');
+    }
+    catch (e) {
+        logger_1.logger.error('ensureChannelPersisted: не удалось получить чат через API', e);
+        const chatData = { title: null, type: fallbackChatType(isChannel) };
+        logger_1.logger.info('DEBUG: calling saveChannel', { chatId, chatData });
+        channelRegistry_1.channelRegistry.saveChannel(chatId, chatData);
+        logger_1.logger.info('DEBUG: saveChannel done, file should exist now');
+    }
+}
+async function notifyAdminsChannelJoined(bot, channelChatId) {
+    const reg = channelRegistry_1.channelRegistry.getChannel(channelChatId);
+    const title = reg?.title ?? '—';
+    await (0, notificationService_1.notifyAllAdmins)(bot, channelChatId, `✅ Bot added to channel: ${title} (ID: ${channelChatId})`);
+}
+/**
+ * Verifies admin/owner rights, persists channel metadata up front, sends admin join notify once when admin is OK.
  */
 async function tryActivateChannelRegistration(ctx, bot, channelChatId, isChannel) {
+    await ensureChannelPersisted(ctx, channelChatId, isChannel);
     const member = await fetchBotChatMember(bot, channelChatId);
     if (!member) {
         stateManager_1.stateManager.markChannelPendingAdminRights(channelChatId);
@@ -145,10 +176,11 @@ async function tryActivateChannelRegistration(ctx, bot, channelChatId, isChannel
         return { status: 'pending', shouldNotifyMissingAdmin: true };
     }
     stateManager_1.stateManager.clearChannelPendingAdminRights(channelChatId);
-    if (channelRegistry_1.channelRegistry.getChannel(channelChatId) !== null) {
+    if (channelsAdminJoinNotified.has(channelChatId)) {
         return { status: 'already_registered' };
     }
-    await registerChannelOnBotJoin(ctx, bot, channelChatId, isChannel);
+    await notifyAdminsChannelJoined(bot, channelChatId);
+    channelsAdminJoinNotified.add(channelChatId);
     return { status: 'registered' };
 }
 async function dmInviterAboutMissingAdmin(bot, inviterUserId, channelChatId, channelTitle) {
@@ -165,29 +197,11 @@ If nothing happens, open this chat and send: /connect ${channelChatId}`;
     logger_1.logger.warn('dmInviterAboutMissingAdmin: no inviter user id; skipping DM', { channelChatId });
 }
 /**
- * Регистрирует чат при появлении бота и шлёт уведомление администратору.
- */
-async function registerChannelOnBotJoin(ctx, bot, chatId, isChannel) {
-    stateManager_1.stateManager.clearChannelPendingAdminRights(chatId);
-    try {
-        const chat = await ctx.getChat(chatId);
-        channelRegistry_1.channelRegistry.saveChannel(chatId, { title: chat.title, type: chat.type });
-        await (0, notificationService_1.notifyAllAdmins)(bot, chatId, `✅ Bot added to channel: ${chat.title ?? '—'} (ID: ${chatId})`);
-    }
-    catch (e) {
-        logger_1.logger.error('registerChannelOnBotJoin: не удалось получить чат через API', e);
-        channelRegistry_1.channelRegistry.saveChannel(chatId, {
-            title: null,
-            type: fallbackChatType(isChannel),
-        });
-        await (0, notificationService_1.notifyAllAdmins)(bot, chatId, `✅ Bot added to channel: — (ID: ${chatId})`);
-    }
-}
-/**
  * Удаляет чат из реестра и уведомляет администратора (один раз, если запись была).
  */
 async function unregisterChannelOnBotLeave(bot, chatId) {
     stateManager_1.stateManager.clearChannelPendingAdminRights(chatId);
+    channelsAdminJoinNotified.delete(chatId);
     const removed = channelRegistry_1.channelRegistry.removeChannel(chatId);
     if (!removed) {
         return;
