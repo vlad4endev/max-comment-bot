@@ -78,7 +78,13 @@ export type AttachChannelCommentsResult =
   | { ok: true }
   | {
       ok: false
-      reason: 'no_sender' | 'skip_bot' | 'no_miniapp' | 'not_admin' | 'already_exists'
+      reason:
+        | 'no_sender'
+        | 'no_mid'
+        | 'skip_bot'
+        | 'no_miniapp'
+        | 'not_admin'
+        | 'already_exists'
     }
 
 /**
@@ -117,7 +123,12 @@ export async function tryAttachCommentsToChannelPost(
     return { ok: false, reason: 'no_miniapp' }
   }
 
-  if (postStore.findPostByChannelMessage(chatId, message.body.mid)) {
+  const mid = message.body?.mid
+  if (typeof mid !== 'string' || mid.trim() === '') {
+    return { ok: false, reason: 'no_mid' }
+  }
+
+  if (postStore.findPostByChannelMessage(chatId, mid)) {
     return { ok: false, reason: 'already_exists' }
   }
 
@@ -135,7 +146,7 @@ export async function tryAttachCommentsToChannelPost(
   logger.info('tryAttachCommentsToChannelPost: attaching', {
     chatId,
     senderId: user.user_id,
-    messageMid: message.body.mid,
+    messageMid: mid,
     recipientChatType: message.recipient.chat_type,
   })
 
@@ -145,7 +156,7 @@ export async function tryAttachCommentsToChannelPost(
   const post: Post = {
     post_id: postId,
     chat_id: chatId,
-    message_mid: message.body.mid,
+    message_mid: mid,
     text,
     photo_url: photoUrl,
     comment_count: 0,

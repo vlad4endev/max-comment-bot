@@ -33,10 +33,23 @@ export async function runChannelPollerTick(bot: Bot): Promise<void> {
   for (const c of channels) {
     try {
       const { messages } = await bot.api.getMessages(c.chat_id, { count: FETCH_COUNT })
+      logger.info('channelPoller: getMessages result', {
+        chatId: c.chat_id,
+        messageCount: messages.length,
+        mids: messages.map((m) => m.body?.mid),
+      })
+      if (messages.length === 0) {
+        logger.info('channelPoller: no messages returned for channel', { chatId: c.chat_id })
+      }
       for (const message of messages) {
         const r = await tryAttachCommentsToChannelPost(bot, message, {
           botUserId: botUid,
           channelChatIdOverride: c.chat_id,
+        })
+        logger.info('channelPoller: tryAttach result', {
+          chatId: c.chat_id,
+          mid: message.body?.mid,
+          result: r,
         })
         if (r.ok) {
           logger.info('channelPoller: button attached to new post', {
