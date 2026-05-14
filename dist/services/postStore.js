@@ -19,6 +19,7 @@ function isPost(value) {
         Number.isInteger(o.chat_id) &&
         typeof o.message_mid === 'string' &&
         (o.comments_ui_message_mid === undefined || typeof o.comments_ui_message_mid === 'string') &&
+        (o.sender_name === undefined || typeof o.sender_name === 'string') &&
         typeof o.text === 'string' &&
         (o.photo_url === undefined || typeof o.photo_url === 'string') &&
         typeof o.comment_count === 'number' &&

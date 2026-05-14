@@ -17,6 +17,8 @@ export interface Post {
   message_mid: string
   /** If {@link attachCommentButtonToChannelPost} falls back to a reply, edits/updates target this bot message id. */
   comments_ui_message_mid?: string
+  /** Display name of the post author, or a placeholder for channel-as-author posts. */
+  sender_name?: string
   text: string
   photo_url?: string
   comment_count: number
@@ -40,6 +42,7 @@ function isPost(value: unknown): value is Post {
     Number.isInteger(o.chat_id) &&
     typeof o.message_mid === 'string' &&
     (o.comments_ui_message_mid === undefined || typeof o.comments_ui_message_mid === 'string') &&
+    (o.sender_name === undefined || typeof o.sender_name === 'string') &&
     typeof o.text === 'string' &&
     (o.photo_url === undefined || typeof o.photo_url === 'string') &&
     typeof o.comment_count === 'number' &&

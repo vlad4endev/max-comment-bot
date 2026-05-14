@@ -14,7 +14,7 @@ export type AttachChannelCommentsResult = {
     ok: true;
 } | {
     ok: false;
-    reason: 'no_sender' | 'skip_bot' | 'no_miniapp' | 'not_admin' | 'already_exists';
+    reason: 'no_chat_id' | 'no_mid' | 'skip_bot' | 'no_miniapp' | 'not_admin' | 'already_exists';
 };
 /**
  * Creates a {@link Post}, saves it, and attaches the Mini App inline button (edit or reply fallback).

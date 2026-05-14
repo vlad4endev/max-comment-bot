@@ -79,7 +79,7 @@ export type AttachChannelCommentsResult =
   | {
       ok: false
       reason:
-        | 'no_sender'
+        | 'no_chat_id'
         | 'no_mid'
         | 'skip_bot'
         | 'no_miniapp'
@@ -102,18 +102,19 @@ export async function tryAttachCommentsToChannelPost(
     skipAuthorAdminCheck?: boolean
   } = {},
 ): Promise<AttachChannelCommentsResult> {
-  const user = message.sender
-  if (!user) {
-    return { ok: false, reason: 'no_sender' }
+  const user = message.sender ?? undefined
+  const override = options.channelChatIdOverride
+  const overrideOk =
+    typeof override === 'number' && Number.isFinite(override) ? override : undefined
+  const rid = message.recipient?.chat_id
+  const recipientChatId = typeof rid === 'number' && Number.isFinite(rid) ? rid : undefined
+  const chatId = overrideOk ?? recipientChatId ?? null
+  if (chatId === null) {
+    return { ok: false, reason: 'no_chat_id' }
   }
 
-  const chatId =
-    typeof options.channelChatIdOverride === 'number' && Number.isFinite(options.channelChatIdOverride)
-      ? options.channelChatIdOverride
-      : resolveMessageChatId(message, user.user_id)
-
   const botUid = options.botUserId ?? bot.botInfo?.user_id
-  if (botUid !== undefined && user.user_id === botUid) {
+  if (user && botUid !== undefined && user.user_id === botUid) {
     return { ok: false, reason: 'skip_bot' }
   }
 
@@ -132,7 +133,8 @@ export async function tryAttachCommentsToChannelPost(
     return { ok: false, reason: 'already_exists' }
   }
 
-  if (!options.skipAuthorAdminCheck) {
+  const needsAdminCheck = Boolean(user) && !options.skipAuthorAdminCheck
+  if (needsAdminCheck && user) {
     const adminOk = await isUserChannelAdmin(bot, chatId, user.user_id)
     if (!adminOk) {
       logger.debug('tryAttachCommentsToChannelPost: skip (sender not channel admin)', {
@@ -145,7 +147,7 @@ export async function tryAttachCommentsToChannelPost(
 
   logger.info('tryAttachCommentsToChannelPost: attaching', {
     chatId,
-    senderId: user.user_id,
+    senderId: user?.user_id,
     messageMid: mid,
     recipientChatType: message.recipient.chat_type,
   })
@@ -157,6 +159,7 @@ export async function tryAttachCommentsToChannelPost(
     post_id: postId,
     chat_id: chatId,
     message_mid: mid,
+    sender_name: user?.name ?? 'Канал',
     text,
     photo_url: photoUrl,
     comment_count: 0,

@@ -73,15 +73,17 @@ async function isUserChannelAdmin(bot, channelChatId, userId) {
  * @param options.channelChatIdOverride — e.g. poller passes registered channel id when recipient metadata is thin.
  */
 async function tryAttachCommentsToChannelPost(bot, message, options = {}) {
-    const user = message.sender;
-    if (!user) {
-        return { ok: false, reason: 'no_sender' };
+    const user = message.sender ?? undefined;
+    const override = options.channelChatIdOverride;
+    const overrideOk = typeof override === 'number' && Number.isFinite(override) ? override : undefined;
+    const rid = message.recipient?.chat_id;
+    const recipientChatId = typeof rid === 'number' && Number.isFinite(rid) ? rid : undefined;
+    const chatId = overrideOk ?? recipientChatId ?? null;
+    if (chatId === null) {
+        return { ok: false, reason: 'no_chat_id' };
     }
-    const chatId = typeof options.channelChatIdOverride === 'number' && Number.isFinite(options.channelChatIdOverride)
-        ? options.channelChatIdOverride
-        : resolveMessageChatId(message, user.user_id);
     const botUid = options.botUserId ?? bot.botInfo?.user_id;
-    if (botUid !== undefined && user.user_id === botUid) {
+    if (user && botUid !== undefined && user.user_id === botUid) {
         return { ok: false, reason: 'skip_bot' };
     }
     const miniBase = config_1.config.miniAppUrl;
@@ -89,10 +91,15 @@ async function tryAttachCommentsToChannelPost(bot, message, options = {}) {
         logger_1.logger.debug('tryAttachCommentsToChannelPost: MINI_APP_URL not set');
         return { ok: false, reason: 'no_miniapp' };
     }
-    if (postStore_1.postStore.findPostByChannelMessage(chatId, message.body.mid)) {
+    const mid = message.body?.mid;
+    if (typeof mid !== 'string' || mid.trim() === '') {
+        return { ok: false, reason: 'no_mid' };
+    }
+    if (postStore_1.postStore.findPostByChannelMessage(chatId, mid)) {
         return { ok: false, reason: 'already_exists' };
     }
-    if (!options.skipAuthorAdminCheck) {
+    const needsAdminCheck = Boolean(user) && !options.skipAuthorAdminCheck;
+    if (needsAdminCheck && user) {
         const adminOk = await isUserChannelAdmin(bot, chatId, user.user_id);
         if (!adminOk) {
             logger_1.logger.debug('tryAttachCommentsToChannelPost: skip (sender not channel admin)', {
@@ -104,8 +111,8 @@ async function tryAttachCommentsToChannelPost(bot, message, options = {}) {
     }
     logger_1.logger.info('tryAttachCommentsToChannelPost: attaching', {
         chatId,
-        senderId: user.user_id,
-        messageMid: message.body.mid,
+        senderId: user?.user_id,
+        messageMid: mid,
         recipientChatType: message.recipient.chat_type,
     });
     const postId = (0, uuid_1.v4)();
@@ -114,7 +121,8 @@ async function tryAttachCommentsToChannelPost(bot, message, options = {}) {
     const post = {
         post_id: postId,
         chat_id: chatId,
-        message_mid: message.body.mid,
+        message_mid: mid,
+        sender_name: user?.name ?? 'Канал',
         text,
         photo_url: photoUrl,
         comment_count: 0,

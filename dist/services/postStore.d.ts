@@ -9,6 +9,8 @@ export interface Post {
     message_mid: string;
     /** If {@link attachCommentButtonToChannelPost} falls back to a reply, edits/updates target this bot message id. */
     comments_ui_message_mid?: string;
+    /** Display name of the post author, or a placeholder for channel-as-author posts. */
+    sender_name?: string;
     text: string;
     photo_url?: string;
     comment_count: number;
