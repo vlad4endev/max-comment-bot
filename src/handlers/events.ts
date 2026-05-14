@@ -448,7 +448,7 @@ export function registerEventHandlers(bot: Bot): void {
         return
       }
       if (r.reason === 'no_miniapp') {
-        await ctx.reply('MINI_APP_URL is not configured on the server.')
+        await ctx.reply('Mini App links are not configured (set BOT_NICKNAME or MINI_APP_URL).')
         return
       }
       if (r.reason === 'skip_bot') {

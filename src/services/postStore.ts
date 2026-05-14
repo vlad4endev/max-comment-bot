@@ -150,12 +150,11 @@ export class PostStore {
    * Updates the channel message inline keyboard to show the current comment count.
    */
   async updateButtonCaption(bot: Bot, post: Post): Promise<void> {
-    const base = config.miniAppUrl
-    if (!base) {
-      logger.warn('postStore.updateButtonCaption: MINI_APP_URL not set')
+    if (!isMiniAppOpenUrlConfigured()) {
+      logger.warn('postStore.updateButtonCaption: BOT_NICKNAME / MINI_APP_URL not usable for links')
       return
     }
-    const url = buildMiniAppUrl(base, post.post_id, post.chat_id)
+    const url = buildMiniAppUrl(post.post_id, post.chat_id)
     const kb = Keyboard.inlineKeyboard([
       [Keyboard.button.link(`💬 Комментарии (${post.comment_count})`, url)],
     ])
@@ -248,16 +247,32 @@ export async function attachCommentButtonToChannelPost(
   }
 }
 
+function maxStartappPayload(postId: string, chatId: number, extra?: Record<string, string>): string {
+  const compactId = postId.replace(/-/g, '')
+  const suffix = extra?.admin === '1' ? '_admin' : ''
+  return `pid_${compactId}_cid_${Math.abs(chatId)}${suffix}`
+}
+
+/** True if we can build a link that opens the Mini App (MAX deep link or legacy MINI_APP_URL). */
+export function isMiniAppOpenUrlConfigured(): boolean {
+  return config.botNickname.trim() !== '' || Boolean(config.miniAppUrl)
+}
+
 /**
- * Builds Mini App open URL with required query params (URL-encoded).
+ * MAX Mini App: `https://max.ru/<bot>?startapp=<payload>` (payload: A–Z, a–z, 0–9, _, -).
+ * Fallback: legacy {@link config.miniAppUrl} with `post_id` / `chat_id` query params.
  */
-export function buildMiniAppUrl(
-  miniAppBase: string,
-  postId: string,
-  chatId: number,
-  extra?: Record<string, string>,
-): string {
-  const u = new URL(miniAppBase.replace(/\/+$/, ''))
+export function buildMiniAppUrl(postId: string, chatId: number, extra?: Record<string, string>): string {
+  const payload = maxStartappPayload(postId, chatId, extra)
+  const nick = config.botNickname.trim()
+  if (nick) {
+    return `https://max.ru/${nick}?startapp=${payload}`
+  }
+  const base = config.miniAppUrl
+  if (!base) {
+    throw new Error('buildMiniAppUrl: задайте BOT_NICKNAME или MINI_APP_URL')
+  }
+  const u = new URL(base.replace(/\/+$/, ''))
   u.searchParams.set('post_id', postId)
   u.searchParams.set('chat_id', String(chatId))
   if (extra) {

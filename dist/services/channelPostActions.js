@@ -6,7 +6,6 @@ exports.isUserChannelAdmin = isUserChannelAdmin;
 exports.tryAttachCommentsToChannelPost = tryAttachCommentsToChannelPost;
 const max_bot_api_1 = require("@maxhub/max-bot-api");
 const uuid_1 = require("uuid");
-const config_1 = require("../config");
 const logger_1 = require("../utils/logger");
 const postStore_1 = require("./postStore");
 /**
@@ -86,9 +85,8 @@ async function tryAttachCommentsToChannelPost(bot, message, options = {}) {
     if (user && botUid !== undefined && user.user_id === botUid) {
         return { ok: false, reason: 'skip_bot' };
     }
-    const miniBase = config_1.config.miniAppUrl;
-    if (!miniBase) {
-        logger_1.logger.debug('tryAttachCommentsToChannelPost: MINI_APP_URL not set');
+    if (!(0, postStore_1.isMiniAppOpenUrlConfigured)()) {
+        logger_1.logger.debug('tryAttachCommentsToChannelPost: BOT_NICKNAME / MINI_APP_URL not set for Mini App links');
         return { ok: false, reason: 'no_miniapp' };
     }
     const mid = message.body?.mid;
@@ -129,7 +127,7 @@ async function tryAttachCommentsToChannelPost(bot, message, options = {}) {
         timestamp: new Date().toISOString(),
     };
     postStore_1.postStore.savePost(post);
-    const openUrl = (0, postStore_1.buildMiniAppUrl)(miniBase, postId, chatId);
+    const openUrl = (0, postStore_1.buildMiniAppUrl)(postId, chatId);
     const kb = max_bot_api_1.Keyboard.inlineKeyboard([[max_bot_api_1.Keyboard.button.link('💬 Комментарии (0)', openUrl)]]);
     const editText = text === '' ? '\u00a0' : text;
     await (0, postStore_1.attachCommentButtonToChannelPost)(bot, post, editText, kb);

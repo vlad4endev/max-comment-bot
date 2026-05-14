@@ -3,6 +3,10 @@ export interface Config {
     BOT_TOKEN: string;
     ADMIN_CHAT_ID: number;
     BOT_NICKNAME: string;
+    /**
+     * Никнейм без @ для deep link MAX: `https://max.ru/<botNickname>?startapp=…`.
+     */
+    botNickname: string;
     NODE_ENV: 'development' | 'production';
     PORT: number;
     /**
@@ -10,7 +14,7 @@ export interface Config {
      */
     listenPort: number;
     /**
-     * Базовый URL мини-приложения (кнопки «Комментарии»). Пусто — кнопки к постам не вешаются.
+     * Legacy: прямой URL мини-приложения с query (`post_id`, `chat_id`). Используется только если не удалось собрать ссылку через {@link Config.botNickname}.
      */
     miniAppUrl?: string;
     receiveMode: ReceiveMode;

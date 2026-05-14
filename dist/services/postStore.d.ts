@@ -60,8 +60,11 @@ export declare class PostStore {
  * Option B (fallback): {@link Bot.api.sendMessageToChat} with `link: { type: 'reply', mid }` — bot-owned message with the keyboard, because channel admins' posts are often not editable by the bot.
  */
 export declare function attachCommentButtonToChannelPost(bot: Bot, post: Post, editText: string, keyboard: InlineKeyboardAttachmentRequest): Promise<void>;
+/** True if we can build a link that opens the Mini App (MAX deep link or legacy MINI_APP_URL). */
+export declare function isMiniAppOpenUrlConfigured(): boolean;
 /**
- * Builds Mini App open URL with required query params (URL-encoded).
+ * MAX Mini App: `https://max.ru/<bot>?startapp=<payload>` (payload: A–Z, a–z, 0–9, _, -).
+ * Fallback: legacy {@link config.miniAppUrl} with `post_id` / `chat_id` query params.
  */
-export declare function buildMiniAppUrl(miniAppBase: string, postId: string, chatId: number, extra?: Record<string, string>): string;
+export declare function buildMiniAppUrl(postId: string, chatId: number, extra?: Record<string, string>): string;
 export declare const postStore: PostStore;

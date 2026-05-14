@@ -4,7 +4,7 @@ import type { Bot } from '@maxhub/max-bot-api';
  */
 export declare function runChannelPollerTick(bot: Bot): Promise<void>;
 /**
- * Starts periodic polling of registered channels. No-op if {@link config.miniAppUrl} is unset.
+ * Starts periodic polling of registered channels. No-op if Mini App open URL is not configured.
  */
 export declare function startChannelPostPoller(bot: Bot, intervalMs?: number): void;
 export declare function stopChannelPostPoller(): void;

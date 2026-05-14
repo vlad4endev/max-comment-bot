@@ -4,6 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>CommentBot</title>
+  <script src="https://static.max.ru/static/bridge/0.0.5/bridge.js"></script>
   <style>
     :root {
       --bg: #0f0f1a;
@@ -782,6 +783,15 @@
       new URLSearchParams(location.search).get('startapp') ||
       '';
 
+    function decodeStartParam(raw) {
+      if (!raw || raw === 'start') return null
+      var m = String(raw).trim().match(/^pid_([a-fA-F0-9]+)_cid_(\d+)(_admin)?$/)
+      if (!m) return null
+      var id = m[1].toLowerCase()
+      var uuid = [id.slice(0,8), id.slice(8,12), id.slice(12,16), id.slice(16,20), id.slice(20)].join('-')
+      return { post_id: uuid, chat_id: '-' + m[2], admin: m[3] === '_admin' }
+    }
+
     function buildMergedSearchParams() {
       var sp = new URLSearchParams(location.search);
       var bridgeUser = user;
@@ -794,6 +804,12 @@
         '';
       if (uname && !sp.get('username')) sp.set('username', uname);
       var raw = String(startParam || '').trim();
+      var fromStart = decodeStartParam(raw);
+      if (fromStart) {
+        if (fromStart.post_id && !sp.get('post_id')) sp.set('post_id', fromStart.post_id);
+        if (fromStart.chat_id && !sp.get('chat_id')) sp.set('chat_id', fromStart.chat_id);
+        if (fromStart.admin && !sp.get('admin')) sp.set('admin', '1');
+      }
       if (raw && raw !== 'start' && raw.indexOf('post_id=') !== -1) {
         var inner = raw.charAt(0) === '?' ? raw.slice(1) : raw;
         try {

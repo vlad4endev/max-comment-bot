@@ -75,12 +75,11 @@ async function notifyAllAdmins(bot, chatId, message, extra) {
  * Уведомляет админов канала о новом комментарии из Mini App (текст + ссылка на приложение с admin=1).
  */
 async function notifyAdminsNewMiniappComment(bot, input) {
-    const base = config_1.config.miniAppUrl;
-    if (!base) {
-        logger_1.logger.warn('notifyAdminsNewMiniappComment: MINI_APP_URL not set');
+    if (!(0, postStore_1.isMiniAppOpenUrlConfigured)()) {
+        logger_1.logger.warn('notifyAdminsNewMiniappComment: BOT_NICKNAME / MINI_APP_URL not set for Mini App links');
         return;
     }
-    const openUrl = (0, postStore_1.buildMiniAppUrl)(base, input.postId, input.channelChatId, { admin: '1' });
+    const openUrl = (0, postStore_1.buildMiniAppUrl)(input.postId, input.channelChatId, { admin: '1' });
     const keyboard = max_bot_api_1.Keyboard.inlineKeyboard([
         [max_bot_api_1.Keyboard.button.link('💬 Открыть комментарии', openUrl)],
     ]);
@@ -97,12 +96,11 @@ async function notifyAdminsNewMiniappComment(bot, input) {
  * Шлёт пользователю DM об ответе канала на комментарий (кнопка «Открыть»). Ошибки доставки логируются.
  */
 async function notifyUserAboutMiniappReply(bot, input) {
-    const base = config_1.config.miniAppUrl;
-    if (!base) {
-        logger_1.logger.warn('notifyUserAboutMiniappReply: MINI_APP_URL not set');
+    if (!(0, postStore_1.isMiniAppOpenUrlConfigured)()) {
+        logger_1.logger.warn('notifyUserAboutMiniappReply: BOT_NICKNAME / MINI_APP_URL not set for Mini App links');
         return;
     }
-    const openUrl = (0, postStore_1.buildMiniAppUrl)(base, input.postId, input.channelChatId);
+    const openUrl = (0, postStore_1.buildMiniAppUrl)(input.postId, input.channelChatId);
     const keyboard = max_bot_api_1.Keyboard.inlineKeyboard([[max_bot_api_1.Keyboard.button.link('Открыть', openUrl)]]);
     const postExcerpt = preview80(input.postText);
     const message = `💬 Вам ответили на комментарий

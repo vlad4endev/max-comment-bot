@@ -1,8 +1,8 @@
 import type { Bot } from '@maxhub/max-bot-api'
 
-import { config } from '../config'
 import { logger } from '../utils/logger'
 import { tryAttachCommentsToChannelPost } from './channelPostActions'
+import { isMiniAppOpenUrlConfigured } from './postStore'
 import { channelRegistry } from './channelRegistry'
 
 const DEFAULT_INTERVAL_MS = 30_000
@@ -23,7 +23,7 @@ function logTickFired(): void {
  * One sweep: for each registered channel, fetch recent messages and attach the comment button to new admin posts.
  */
 export async function runChannelPollerTick(bot: Bot): Promise<void> {
-  if (!config.miniAppUrl) {
+  if (!isMiniAppOpenUrlConfigured()) {
     return
   }
 
@@ -65,11 +65,11 @@ export async function runChannelPollerTick(bot: Bot): Promise<void> {
 }
 
 /**
- * Starts periodic polling of registered channels. No-op if {@link config.miniAppUrl} is unset.
+ * Starts periodic polling of registered channels. No-op if Mini App open URL is not configured.
  */
 export function startChannelPostPoller(bot: Bot, intervalMs: number = DEFAULT_INTERVAL_MS): void {
-  if (!config.miniAppUrl) {
-    logger.info('channelPoller: disabled (MINI_APP_URL not set)')
+  if (!isMiniAppOpenUrlConfigured()) {
+    logger.info('channelPoller: disabled (BOT_NICKNAME / MINI_APP_URL not set for Mini App links)')
     return
   }
 

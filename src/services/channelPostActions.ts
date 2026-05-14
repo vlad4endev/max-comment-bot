@@ -2,11 +2,11 @@ import { Bot, Keyboard } from '@maxhub/max-bot-api'
 import type { Message } from '@maxhub/max-bot-api/types'
 import { v4 as uuidv4 } from 'uuid'
 
-import { config } from '../config'
 import { logger } from '../utils/logger'
 import {
   attachCommentButtonToChannelPost,
   buildMiniAppUrl,
+  isMiniAppOpenUrlConfigured,
   postStore,
   type Post,
 } from './postStore'
@@ -118,9 +118,8 @@ export async function tryAttachCommentsToChannelPost(
     return { ok: false, reason: 'skip_bot' }
   }
 
-  const miniBase = config.miniAppUrl
-  if (!miniBase) {
-    logger.debug('tryAttachCommentsToChannelPost: MINI_APP_URL not set')
+  if (!isMiniAppOpenUrlConfigured()) {
+    logger.debug('tryAttachCommentsToChannelPost: BOT_NICKNAME / MINI_APP_URL not set for Mini App links')
     return { ok: false, reason: 'no_miniapp' }
   }
 
@@ -167,7 +166,7 @@ export async function tryAttachCommentsToChannelPost(
   }
   postStore.savePost(post)
 
-  const openUrl = buildMiniAppUrl(miniBase, postId, chatId)
+  const openUrl = buildMiniAppUrl(postId, chatId)
   const kb = Keyboard.inlineKeyboard([[Keyboard.button.link('💬 Комментарии (0)', openUrl)]])
   const editText = text === '' ? '\u00a0' : text
 

@@ -2,6 +2,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.postStore = exports.PostStore = void 0;
 exports.attachCommentButtonToChannelPost = attachCommentButtonToChannelPost;
+exports.isMiniAppOpenUrlConfigured = isMiniAppOpenUrlConfigured;
 exports.buildMiniAppUrl = buildMiniAppUrl;
 const promises_1 = require("node:fs/promises");
 const node_path_1 = require("node:path");
@@ -118,12 +119,11 @@ class PostStore {
      * Updates the channel message inline keyboard to show the current comment count.
      */
     async updateButtonCaption(bot, post) {
-        const base = config_1.config.miniAppUrl;
-        if (!base) {
-            logger_1.logger.warn('postStore.updateButtonCaption: MINI_APP_URL not set');
+        if (!isMiniAppOpenUrlConfigured()) {
+            logger_1.logger.warn('postStore.updateButtonCaption: BOT_NICKNAME / MINI_APP_URL not usable for links');
             return;
         }
-        const url = buildMiniAppUrl(base, post.post_id, post.chat_id);
+        const url = buildMiniAppUrl(post.post_id, post.chat_id);
         const kb = max_bot_api_1.Keyboard.inlineKeyboard([
             [max_bot_api_1.Keyboard.button.link(`💬 Комментарии (${post.comment_count})`, url)],
         ]);
@@ -210,11 +210,30 @@ async function attachCommentButtonToChannelPost(bot, post, editText, keyboard) {
         });
     }
 }
+function maxStartappPayload(postId, chatId, extra) {
+    const compactId = postId.replace(/-/g, '');
+    const suffix = extra?.admin === '1' ? '_admin' : '';
+    return `pid_${compactId}_cid_${Math.abs(chatId)}${suffix}`;
+}
+/** True if we can build a link that opens the Mini App (MAX deep link or legacy MINI_APP_URL). */
+function isMiniAppOpenUrlConfigured() {
+    return config_1.config.botNickname.trim() !== '' || Boolean(config_1.config.miniAppUrl);
+}
 /**
- * Builds Mini App open URL with required query params (URL-encoded).
+ * MAX Mini App: `https://max.ru/<bot>?startapp=<payload>` (payload: A–Z, a–z, 0–9, _, -).
+ * Fallback: legacy {@link config.miniAppUrl} with `post_id` / `chat_id` query params.
  */
-function buildMiniAppUrl(miniAppBase, postId, chatId, extra) {
-    const u = new URL(miniAppBase.replace(/\/+$/, ''));
+function buildMiniAppUrl(postId, chatId, extra) {
+    const payload = maxStartappPayload(postId, chatId, extra);
+    const nick = config_1.config.botNickname.trim();
+    if (nick) {
+        return `https://max.ru/${nick}?startapp=${payload}`;
+    }
+    const base = config_1.config.miniAppUrl;
+    if (!base) {
+        throw new Error('buildMiniAppUrl: задайте BOT_NICKNAME или MINI_APP_URL');
+    }
+    const u = new URL(base.replace(/\/+$/, ''));
     u.searchParams.set('post_id', postId);
     u.searchParams.set('chat_id', String(chatId));
     if (extra) {

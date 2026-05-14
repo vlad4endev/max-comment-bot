@@ -3,7 +3,7 @@ import { Keyboard } from '@maxhub/max-bot-api'
 import type { ChatMember } from '@maxhub/max-bot-api/types'
 
 import { config } from '../config'
-import { buildMiniAppUrl } from './postStore'
+import { buildMiniAppUrl, isMiniAppOpenUrlConfigured } from './postStore'
 import { logger } from '../utils/logger'
 
 /** Доп. параметры отправки сообщения (клавиатура и т.д.), как у `bot.api.sendMessageToUser`. */
@@ -94,12 +94,11 @@ export async function notifyAdminsNewMiniappComment(
     postId: string
   },
 ): Promise<void> {
-  const base = config.miniAppUrl
-  if (!base) {
-    logger.warn('notifyAdminsNewMiniappComment: MINI_APP_URL not set')
+  if (!isMiniAppOpenUrlConfigured()) {
+    logger.warn('notifyAdminsNewMiniappComment: BOT_NICKNAME / MINI_APP_URL not set for Mini App links')
     return
   }
-  const openUrl = buildMiniAppUrl(base, input.postId, input.channelChatId, { admin: '1' })
+  const openUrl = buildMiniAppUrl(input.postId, input.channelChatId, { admin: '1' })
   const keyboard = Keyboard.inlineKeyboard([
     [Keyboard.button.link('💬 Открыть комментарии', openUrl)],
   ])
@@ -128,12 +127,11 @@ export async function notifyUserAboutMiniappReply(
     channelChatId: number
   },
 ): Promise<void> {
-  const base = config.miniAppUrl
-  if (!base) {
-    logger.warn('notifyUserAboutMiniappReply: MINI_APP_URL not set')
+  if (!isMiniAppOpenUrlConfigured()) {
+    logger.warn('notifyUserAboutMiniappReply: BOT_NICKNAME / MINI_APP_URL not set for Mini App links')
     return
   }
-  const openUrl = buildMiniAppUrl(base, input.postId, input.channelChatId)
+  const openUrl = buildMiniAppUrl(input.postId, input.channelChatId)
   const keyboard = Keyboard.inlineKeyboard([[Keyboard.button.link('Открыть', openUrl)]])
   const postExcerpt = preview80(input.postText)
   const message = `💬 Вам ответили на комментарий

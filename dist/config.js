@@ -32,6 +32,7 @@ function getConfig() {
     if (!BOT_NICKNAME) {
         throw new Error('BOT_NICKNAME не установлен');
     }
+    const botNickname = BOT_NICKNAME.replace(/^@/, '').trim();
     const NODE_ENV = process.env.NODE_ENV === 'production' ? 'production' : 'development';
     const portRaw = process.env.PORT;
     let PORT = 3000;
@@ -56,6 +57,7 @@ function getConfig() {
         BOT_TOKEN,
         ADMIN_CHAT_ID: adminParsed,
         BOT_NICKNAME,
+        botNickname,
         NODE_ENV,
         PORT,
         listenPort,
