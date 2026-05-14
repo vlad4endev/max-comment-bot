@@ -11,6 +11,14 @@ const FETCH_COUNT = 10
 let intervalId: ReturnType<typeof setInterval> | undefined
 let tickInFlight = false
 
+function logTickFired(): void {
+  const channels = channelRegistry.getAllChannels()
+  logger.info('channelPoller: tick fired', {
+    channelCount: channels.length,
+    channels: channels.map((c) => c.chat_id),
+  })
+}
+
 /**
  * One sweep: for each registered channel, fetch recent messages and attach the comment button to new admin posts.
  */
@@ -53,21 +61,32 @@ export function startChannelPostPoller(bot: Bot, intervalMs: number = DEFAULT_IN
   }
 
   stopChannelPostPoller()
-  void runChannelPollerTick(bot)
+
+  logTickFired()
+  void (async () => {
+    try {
+      await runChannelPollerTick(bot)
+    } catch (err: unknown) {
+      logger.error('channelPoller: tick error', err)
+    }
+  })()
 
   intervalId = setInterval(() => {
+    logTickFired()
     if (tickInFlight) {
-      logger.debug('channelPoller: skipping tick (previous still running)')
+      logger.info('channelPoller: skipping tick (previous still running)')
       return
     }
     tickInFlight = true
-    void runChannelPollerTick(bot)
-      .catch((err: unknown) => {
+    void (async () => {
+      try {
+        await runChannelPollerTick(bot)
+      } catch (err: unknown) {
         logger.error('channelPoller: tick error', err)
-      })
-      .finally(() => {
+      } finally {
         tickInFlight = false
-      })
+      }
+    })()
   }, intervalMs)
 
   logger.info(`channelPoller: started (interval ${intervalMs / 1000}s, count=${FETCH_COUNT})`)
