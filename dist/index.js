@@ -8,6 +8,7 @@ const channelRegistry_1 = require("./services/channelRegistry");
 const commentStore_1 = require("./services/commentStore");
 const channelPoller_1 = require("./services/channelPoller");
 const postStore_1 = require("./services/postStore");
+const userMiniappSettingsStore_1 = require("./services/userMiniappSettingsStore");
 const logger_1 = require("./utils/logger");
 const createWebhookApp_1 = require("./webhook/createWebhookApp");
 async function main() {
@@ -15,6 +16,7 @@ async function main() {
     await channelRegistry_1.channelRegistry.loadFromDisk();
     await postStore_1.postStore.loadFromDisk();
     await commentStore_1.commentStore.loadFromDisk();
+    await userMiniappSettingsStore_1.userMiniappSettingsStore.loadFromDisk();
     await (0, bot_1.ensureBotProfile)(bot);
     (0, channelPoller_1.startChannelPostPoller)(bot);
     const listenPort = config_1.config.listenPort;

@@ -1,7 +1,9 @@
 import type { Bot } from '@maxhub/max-bot-api'
 import express from 'express'
 
+import { config } from '../config'
 import { channelRegistry } from '../services/channelRegistry'
+import { isUserChannelAdmin } from '../services/channelPostActions'
 import type { Comment } from '../services/commentStore'
 import { commentStore } from '../services/commentStore'
 import {
@@ -9,6 +11,11 @@ import {
   notifyUserAboutMiniappReply,
 } from '../services/notificationService'
 import { postStore } from '../services/postStore'
+import { stateManager } from '../services/stateManager'
+import {
+  parseMiniappFeatureKey,
+  userMiniappSettingsStore,
+} from '../services/userMiniappSettingsStore'
 import { logger } from '../utils/logger'
 
 export interface CommentApiRouterDeps {
@@ -40,6 +47,32 @@ function parseNonEmptyString(value: unknown): string | null {
   return t === '' ? null : t
 }
 
+function parseBoolean(value: unknown): boolean | null {
+  if (typeof value === 'boolean') {
+    return value
+  }
+  if (value === 'true' || value === '1') {
+    return true
+  }
+  if (value === 'false' || value === '0') {
+    return false
+  }
+  return null
+}
+
+async function listChannelChatIdsWhereUserIsAdmin(bot: Bot, userId: number): Promise<number[]> {
+  const registered = channelRegistry
+    .getAllChannels()
+    .filter((c) => c.type === 'channel')
+    .map((c) => c.chat_id)
+  const flags = await Promise.all(
+    registered.map(async (chatId) =>
+      (await isUserChannelAdmin(bot, chatId, userId)) ? chatId : null,
+    ),
+  )
+  return flags.filter((x): x is number => x !== null).sort((a, b) => a - b)
+}
+
 function toWireComment(c: Comment): {
   comment_id: string
   post_id: string
@@ -66,6 +99,99 @@ function toWireComment(c: Comment): {
 export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Router {
   const router = express.Router()
   router.use(express.json({ limit: '512kb' }))
+
+  router.get('/stats', async (req, res) => {
+    const userId = parsePositiveInt(req.query.user_id)
+    if (!userId) {
+      res.status(400).json({ error: 'missing or invalid user_id' })
+      return
+    }
+    try {
+      const adminChannelIds = await listChannelChatIdsWhereUserIsAdmin(deps.bot, userId)
+      let posts = 0
+      const postIds = new Set<string>()
+      for (const chatId of adminChannelIds) {
+        const list = postStore.getPostsByChatId(chatId)
+        posts += list.length
+        for (const p of list) {
+          postIds.add(p.post_id)
+        }
+      }
+      const comments = commentStore.countForPostIds(postIds)
+      res.json({
+        channels: adminChannelIds.length,
+        posts,
+        comments,
+        bot_nickname: config.BOT_NICKNAME,
+      })
+    } catch (err: unknown) {
+      logger.error('GET /api/stats failed', { err })
+      res.status(500).json({ error: 'internal error' })
+    }
+  })
+
+  router.get('/channels', async (req, res) => {
+    const userId = parsePositiveInt(req.query.user_id)
+    if (!userId) {
+      res.status(400).json({ error: 'missing or invalid user_id' })
+      return
+    }
+    try {
+      const adminChannelIds = await listChannelChatIdsWhereUserIsAdmin(deps.bot, userId)
+      const channels = await Promise.all(
+        adminChannelIds.map(async (chatId) => {
+          const reg = channelRegistry.getChannel(chatId)
+          let subscribers: number | null = null
+          try {
+            const chat = await deps.bot.api.getChat(chatId)
+            const raw = (chat as { participants_count?: unknown }).participants_count
+            if (typeof raw === 'number' && Number.isFinite(raw) && raw >= 0) {
+              subscribers = raw
+            }
+          } catch {
+            subscribers = null
+          }
+          const pending = stateManager.isChannelPendingAdminRights(chatId)
+          return {
+            chat_id: chatId,
+            title: reg?.title ?? null,
+            subscribers,
+            status: pending ? ('pending' as const) : ('active' as const),
+          }
+        }),
+      )
+      res.json({ channels, bot_nickname: config.BOT_NICKNAME })
+    } catch (err: unknown) {
+      logger.error('GET /api/channels failed', { err })
+      res.status(500).json({ error: 'internal error' })
+    }
+  })
+
+  router.get('/settings', (req, res) => {
+    const userId = parsePositiveInt(req.query.user_id)
+    if (!userId) {
+      res.status(400).json({ error: 'missing or invalid user_id' })
+      return
+    }
+    res.json(userMiniappSettingsStore.getMerged(userId))
+  })
+
+  router.post('/settings', (req, res) => {
+    const body = req.body
+    if (!isRecord(body)) {
+      res.status(400).json({ error: 'invalid body' })
+      return
+    }
+    const userId = parsePositiveInt(body.user_id)
+    const feature = parseMiniappFeatureKey(body.feature)
+    const enabled = parseBoolean(body.enabled)
+    if (!userId || !feature || enabled === null) {
+      res.status(400).json({ error: 'missing or invalid fields' })
+      return
+    }
+    const next = userMiniappSettingsStore.setFeature(userId, feature, enabled)
+    res.json(next)
+  })
 
   router.get('/post/:postId', (req, res) => {
     const post = postStore.getPost(req.params.postId)

@@ -15,6 +15,7 @@ import { channelRegistry } from './services/channelRegistry'
 import { commentStore } from './services/commentStore'
 import { startChannelPostPoller } from './services/channelPoller'
 import { postStore } from './services/postStore'
+import { userMiniappSettingsStore } from './services/userMiniappSettingsStore'
 import { logger } from './utils/logger'
 import { createHttpApp, createWebhookApp } from './webhook/createWebhookApp'
 
@@ -23,6 +24,7 @@ async function main(): Promise<void> {
   await channelRegistry.loadFromDisk()
   await postStore.loadFromDisk()
   await commentStore.loadFromDisk()
+  await userMiniappSettingsStore.loadFromDisk()
   await ensureBotProfile(bot)
   startChannelPostPoller(bot)
 

@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <title>Комментарии</title>
+  <title>CommentBot</title>
   <style>
     :root {
       --bg: #0f0f1a;
@@ -16,15 +16,334 @@
       --text: rgba(255, 255, 255, 0.92);
       --muted: rgba(255, 255, 255, 0.55);
       --danger: #ff8a80;
+      --yellow: #e6c229;
     }
     * { box-sizing: border-box; }
     html, body {
       margin: 0;
-      height: 100%;
+      min-height: 100%;
       font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
       background: var(--bg);
       color: var(--text);
       -webkit-tap-highlight-color: transparent;
+    }
+    .shell {
+      max-width: 375px;
+      margin: 0 auto;
+      min-height: 100vh;
+      min-height: 100dvh;
+    }
+    .view.hidden { display: none !important; }
+    #view-home {
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      padding: 12px;
+      padding-top: calc(12px + env(safe-area-inset-top));
+      padding-bottom: calc(16px + env(safe-area-inset-bottom));
+    }
+    .admin-banner {
+      display: none;
+      padding: 10px 12px;
+      border-radius: 12px;
+      background: rgba(127, 119, 221, 0.15);
+      border: 1px solid rgba(127, 119, 221, 0.4);
+      font-size: 13px;
+      color: var(--text);
+    }
+    .admin-banner.show { display: block; }
+    .hero {
+      text-align: center;
+      padding: 8px 0 4px;
+    }
+    .bot-avatar {
+      width: 72px;
+      height: 72px;
+      margin: 0 auto 12px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, var(--accent) 0%, var(--teal) 100%);
+      box-shadow: 0 8px 28px rgba(127, 119, 221, 0.35);
+    }
+    .bot-name {
+      font-size: 22px;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+    }
+    .bot-desc {
+      font-size: 13px;
+      color: var(--muted);
+      margin-top: 6px;
+      line-height: 1.45;
+      max-width: 320px;
+      margin-left: auto;
+      margin-right: auto;
+    }
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--surface-border);
+      border-radius: 14px;
+      padding: 12px;
+    }
+    .user-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .user-av-home {
+      width: 48px;
+      height: 48px;
+      border-radius: 50%;
+      flex-shrink: 0;
+      background: var(--accent);
+      color: #fff;
+      font-weight: 700;
+      font-size: 16px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+    }
+    .user-av-home img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+    .user-meta-home { flex: 1; min-width: 0; }
+    .user-meta-home .line1 {
+      font-size: 16px;
+      font-weight: 600;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .user-meta-home .line2 {
+      font-size: 12px;
+      color: var(--muted);
+      margin-top: 2px;
+    }
+    .badge-active {
+      flex-shrink: 0;
+      font-size: 11px;
+      font-weight: 700;
+      padding: 4px 8px;
+      border-radius: 999px;
+      background: rgba(93, 202, 165, 0.18);
+      color: var(--teal);
+      border: 1px solid rgba(93, 202, 165, 0.35);
+    }
+    .stats-row {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 8px;
+    }
+    .stat-cell {
+      text-align: center;
+      padding: 10px 6px;
+      border-radius: 12px;
+      background: var(--surface);
+      border: 1px solid var(--surface-border);
+    }
+    .stat-cell .n {
+      font-size: 20px;
+      font-weight: 700;
+      color: var(--accent);
+    }
+    .stat-cell .l {
+      font-size: 11px;
+      color: var(--muted);
+      margin-top: 4px;
+      text-transform: lowercase;
+    }
+    .section-title {
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      margin: 4px 0 0 2px;
+    }
+    .channel-list { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+    .channel-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px;
+      border-radius: 12px;
+      background: rgba(0, 0, 0, 0.2);
+      border: 1px solid var(--surface-border);
+    }
+    .ch-icon {
+      width: 40px;
+      height: 40px;
+      border-radius: 50%;
+      background: var(--accent);
+      color: #fff;
+      font-weight: 700;
+      font-size: 14px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+    .ch-body { flex: 1; min-width: 0; }
+    .ch-name { font-size: 14px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .ch-subs { font-size: 12px; color: var(--muted); margin-top: 2px; }
+    .status-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+    .status-dot.active { background: var(--teal); box-shadow: 0 0 0 3px rgba(93, 202, 165, 0.25); }
+    .status-dot.pending { background: var(--yellow); box-shadow: 0 0 0 3px rgba(230, 194, 41, 0.2); }
+    .btn-dashed {
+      width: 100%;
+      margin-top: 4px;
+      padding: 12px;
+      border-radius: 12px;
+      border: 2px dashed rgba(127, 119, 221, 0.45);
+      background: transparent;
+      color: var(--accent);
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .connect-hint {
+      display: none;
+      margin-top: 10px;
+      font-size: 13px;
+      color: var(--muted);
+      line-height: 1.45;
+      padding: 10px;
+      border-radius: 10px;
+      background: rgba(0, 0, 0, 0.25);
+    }
+    .connect-hint.show { display: block; }
+    .features-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      margin-top: 8px;
+    }
+    .feat-cell {
+      padding: 12px;
+      border-radius: 12px;
+      background: rgba(0, 0, 0, 0.2);
+      border: 1px solid var(--surface-border);
+    }
+    .feat-label { font-size: 13px; font-weight: 600; margin-bottom: 10px; }
+    .switch {
+      position: relative;
+      width: 44px;
+      height: 26px;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.12);
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    .switch.on { background: var(--accent); }
+    .switch::after {
+      content: '';
+      position: absolute;
+      top: 3px;
+      left: 3px;
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      background: #fff;
+      transition: transform 0.2s;
+      box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
+    }
+    .switch.on::after { transform: translateX(18px); }
+    .feat-cell.disabled .switch { opacity: 0.45; cursor: not-allowed; }
+    .cta-row {
+      display: flex;
+      gap: 10px;
+      margin-top: 4px;
+    }
+    .btn-primary, .btn-secondary {
+      flex: 1;
+      padding: 12px 10px;
+      border-radius: 12px;
+      font-size: 14px;
+      font-weight: 600;
+      border: none;
+      cursor: pointer;
+    }
+    .btn-primary {
+      background: var(--accent);
+      color: #fff;
+    }
+    .btn-secondary {
+      background: rgba(255, 255, 255, 0.08);
+      color: var(--text);
+      border: 1px solid var(--surface-border);
+    }
+    .channel-settings-panel {
+      display: none;
+      margin-top: 10px;
+      padding: 12px;
+      border-radius: 12px;
+      border: 1px solid var(--surface-border);
+      background: rgba(0, 0, 0, 0.22);
+      font-size: 13px;
+      color: var(--muted);
+    }
+    .channel-settings-panel.open { display: block; }
+    .home-err {
+      color: var(--danger);
+      font-size: 12px;
+      min-height: 1em;
+    }
+    .overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(8, 8, 14, 0.72);
+      z-index: 200;
+      display: flex;
+      align-items: flex-end;
+      justify-content: center;
+      padding: 12px;
+      padding-bottom: calc(12px + env(safe-area-inset-bottom));
+    }
+    .overlay.hidden { display: none !important; }
+    .overlay-card {
+      width: 100%;
+      max-width: 375px;
+      max-height: 85vh;
+      overflow-y: auto;
+      background: #14142a;
+      border: 1px solid var(--surface-border);
+      border-radius: 16px;
+      padding: 16px;
+    }
+    .overlay-card h2 { margin: 0 0 12px; font-size: 18px; }
+    .overlay-card ol {
+      margin: 0;
+      padding-left: 18px;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.55;
+    }
+    .overlay-card li { margin-bottom: 8px; }
+    .overlay-close {
+      margin-top: 14px;
+      width: 100%;
+      padding: 12px;
+      border-radius: 12px;
+      border: none;
+      background: var(--accent);
+      color: #fff;
+      font-weight: 600;
+      font-size: 15px;
+      cursor: pointer;
+    }
+    /* Comments view (existing) */
+    #view-comments {
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      height: 100dvh;
     }
     #app {
       display: flex;
@@ -296,6 +615,8 @@
       padding: 10px 12px calc(10px + env(safe-area-inset-bottom));
       background: linear-gradient(180deg, transparent, var(--bg) 18px), var(--bg);
       border-top: 1px solid var(--surface-border);
+      max-width: 375px;
+      margin: 0 auto;
     }
     .composer {
       display: flex;
@@ -351,38 +672,395 @@
   </style>
 </head>
 <body>
-  <div id="app">
-    <div class="header-wrap">
-      <div class="channel-row">
-        <div class="channel-avatar" id="chAvatar" aria-hidden="true">?</div>
-        <div class="channel-meta">
-          <div class="channel-name" id="chName">Канал</div>
-          <div class="channel-subs" id="chSubs">подписчики: —</div>
+  <div class="shell">
+    <div id="view-home" class="view hidden">
+      <div id="adminBanner" class="admin-banner">Режим администратора: вы вошли с параметром <code style="color:var(--teal)">admin=1</code>. Для ответов на комментарии откройте мини-приложение из уведомления по конкретному посту.</div>
+      <div class="hero">
+        <div class="bot-avatar" aria-hidden="true"></div>
+        <div class="bot-name">CommentBot</div>
+        <p class="bot-desc">Комментарии к постам канала прямо в MAX: собирайте обратную связь и отвечайте читателям из одного окна.</p>
+      </div>
+      <div class="card user-row">
+        <div class="user-av-home" id="homeUserAv">?</div>
+        <div class="user-meta-home">
+          <div class="line1" id="homeUserName">Гость</div>
+          <div class="line2" id="homeUserId">user_id: —</div>
         </div>
-        <div class="count-badge" id="countBadge" title="Комментариев">0</div>
+        <span class="badge-active">Активен</span>
       </div>
-      <div class="post-preview">
-        <div class="post-preview-text" id="postPreviewText">Загрузка…</div>
-        <img class="post-thumb" id="postThumb" alt="" />
+      <div class="home-err" id="homeErr"></div>
+      <div class="stats-row">
+        <div class="stat-cell"><div class="n" id="statCh">0</div><div class="l">каналы</div></div>
+        <div class="stat-cell"><div class="n" id="statPosts">0</div><div class="l">посты</div></div>
+        <div class="stat-cell"><div class="n" id="statComm">0</div><div class="l">комменты</div></div>
       </div>
+      <div>
+        <div class="section-title">Мои каналы</div>
+        <div class="channel-list" id="homeChannelList"></div>
+        <button type="button" class="btn-dashed" id="btnConnect">Подключить канал</button>
+        <div class="connect-hint" id="connectHint"></div>
+      </div>
+      <div>
+        <div class="section-title">Возможности</div>
+        <div class="features-grid">
+          <div class="feat-cell" data-feature="comments">
+            <div class="feat-label">Комментарии</div>
+            <div class="switch on" data-switch="comments" role="switch" aria-checked="true"></div>
+          </div>
+          <div class="feat-cell" data-feature="notifications">
+            <div class="feat-label">Уведомления</div>
+            <div class="switch on" data-switch="notifications" role="switch" aria-checked="true"></div>
+          </div>
+          <div class="feat-cell disabled" data-feature="moderation">
+            <div class="feat-label">Модерация</div>
+            <div class="switch" data-switch="moderation" role="switch" aria-checked="false"></div>
+          </div>
+          <div class="feat-cell disabled" data-feature="auto_replies">
+            <div class="feat-label">Авто-ответы</div>
+            <div class="switch" data-switch="auto_replies" role="switch" aria-checked="false"></div>
+          </div>
+        </div>
+      </div>
+      <div class="cta-row">
+        <button type="button" class="btn-primary" id="btnChannelSettings">Настройки канала</button>
+        <button type="button" class="btn-secondary" id="btnInstruction">Инструкция</button>
+      </div>
+      <div class="channel-settings-panel" id="channelSettingsPanel"></div>
     </div>
-    <div id="err"></div>
-    <div id="feed"></div>
-    <div class="composer-wrap">
-      <div class="composer">
-        <input type="text" id="input" placeholder="Написать комментарий…" autocomplete="off" />
-        <button type="button" class="send-btn" id="sendBtn" aria-label="Отправить" disabled>
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M22 2L11 13" />
-            <path d="M22 2L15 22L11 13L2 9L22 2Z" />
-          </svg>
-        </button>
+
+    <div id="view-comments" class="view hidden">
+      <div id="app">
+        <div class="header-wrap">
+          <div class="channel-row">
+            <div class="channel-avatar" id="chAvatar" aria-hidden="true">?</div>
+            <div class="channel-meta">
+              <div class="channel-name" id="chName">Канал</div>
+              <div class="channel-subs" id="chSubs">подписчики: —</div>
+            </div>
+            <div class="count-badge" id="countBadge" title="Комментариев">0</div>
+          </div>
+          <div class="post-preview">
+            <div class="post-preview-text" id="postPreviewText">Загрузка…</div>
+            <img class="post-thumb" id="postThumb" alt="" />
+          </div>
+        </div>
+        <div id="err"></div>
+        <div id="feed"></div>
+        <div class="composer-wrap">
+          <div class="composer">
+            <input type="text" id="input" placeholder="Написать комментарий…" autocomplete="off" />
+            <button type="button" class="send-btn" id="sendBtn" aria-label="Отправить" disabled>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M22 2L11 13" />
+                <path d="M22 2L15 22L11 13L2 9L22 2Z" />
+              </svg>
+            </button>
+          </div>
+        </div>
       </div>
     </div>
   </div>
+
+  <div id="instructionOverlay" class="overlay hidden" aria-hidden="true">
+    <div class="overlay-card">
+      <h2>Как подключить CommentBot</h2>
+      <ol>
+        <li>Добавьте бота в канал как участника.</li>
+        <li>Выдайте боту права администратора (нужно для кнопок и уведомлений).</li>
+        <li>Опубликуйте пост в канале — бот предложит кнопку «Комментарии».</li>
+        <li>Читатели открывают мини-приложение и пишут комментарии; ответы канала приходят в диалог.</li>
+      </ol>
+      <button type="button" class="overlay-close" id="instructionClose">Понятно</button>
+    </div>
+  </div>
+
   <script>
-    (function () {
-      var params = new URLSearchParams(window.location.search);
+    const tg = window.WebApp || {};
+    const user = tg.initDataUnsafe && tg.initDataUnsafe.user ? tg.initDataUnsafe.user : {};
+    const startParam =
+      (tg.initDataUnsafe && tg.initDataUnsafe.start_param) ||
+      new URLSearchParams(location.search).get('startapp') ||
+      '';
+
+    function buildMergedSearchParams() {
+      var sp = new URLSearchParams(location.search);
+      var bridgeUser = user;
+      if (bridgeUser && typeof bridgeUser.user_id === 'number' && bridgeUser.user_id > 0) {
+        if (!sp.get('user_id')) sp.set('user_id', String(bridgeUser.user_id));
+      }
+      var uname =
+        (bridgeUser.username && String(bridgeUser.username).trim()) ||
+        (bridgeUser.first_name && String(bridgeUser.first_name).trim()) ||
+        '';
+      if (uname && !sp.get('username')) sp.set('username', uname);
+      var raw = String(startParam || '').trim();
+      if (raw && raw !== 'start' && raw.indexOf('post_id=') !== -1) {
+        var inner = raw.charAt(0) === '?' ? raw.slice(1) : raw;
+        try {
+          var q2 = new URLSearchParams(inner);
+          ['post_id', 'chat_id', 'user_id', 'username', 'admin', 'subscribers'].forEach(function (k) {
+            var v = q2.get(k);
+            if (v && !sp.get(k)) sp.set(k, v);
+          });
+        } catch (e) {}
+      }
+      return sp;
+    }
+
+    var mergedParams = buildMergedSearchParams();
+    var postId = mergedParams.get('post_id');
+    var chatId = mergedParams.get('chat_id');
+    var hasPostContext = !!(postId && chatId);
+    var adminParam = mergedParams.get('admin') === '1';
+
+    var viewHome = document.getElementById('view-home');
+    var viewComments = document.getElementById('view-comments');
+
+    if (hasPostContext) {
+      viewComments.classList.remove('hidden');
+      viewHome.classList.add('hidden');
+    } else {
+      viewHome.classList.remove('hidden');
+      viewComments.classList.add('hidden');
+    }
+
+    try {
+      if (tg.expand) tg.expand();
+    } catch (e) {}
+
+    /* ——— HOME ——— */
+    function bootHome() {
+      if (hasPostContext) return;
+      var adminBanner = document.getElementById('adminBanner');
+      if (adminParam) adminBanner.classList.add('show');
+
+      var homeErr = document.getElementById('homeErr');
+      var botNick = '@bot';
+
+      function setHomeErr(t) {
+        homeErr.textContent = t || '';
+      }
+
+      function initials(name) {
+        var t = String(name || '').trim();
+        if (!t) return '?';
+        var parts = t.split(/\s+/);
+        if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
+        return t.slice(0, 2).toUpperCase();
+      }
+
+      function esc(s) {
+        return String(s)
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;');
+      }
+
+      var displayName =
+        [user.first_name, user.last_name].filter(Boolean).join(' ').trim() ||
+        (user.username && String(user.username)) ||
+        'Гость';
+      document.getElementById('homeUserName').textContent = displayName;
+      var uid = typeof user.user_id === 'number' ? user.user_id : null;
+      var uidFromQuery = mergedParams.get('user_id');
+      if (uid == null && uidFromQuery) {
+        var parsed = parseInt(uidFromQuery, 10);
+        if (Number.isFinite(parsed) && parsed > 0) uid = parsed;
+      }
+      document.getElementById('homeUserId').textContent =
+        uid != null ? 'user_id: ' + uid : 'user_id: — (откройте из MAX)';
+
+      var avEl = document.getElementById('homeUserAv');
+      if (user.photo_url) {
+        avEl.innerHTML = '<img src="' + esc(user.photo_url) + '" alt="" />';
+      } else {
+        avEl.textContent = initials(displayName);
+      }
+
+      function syncSwitch(feature, enabled) {
+        var sw = document.querySelector('[data-switch="' + feature + '"]');
+        if (!sw) return;
+        sw.classList.toggle('on', !!enabled);
+        sw.setAttribute('aria-checked', enabled ? 'true' : 'false');
+      }
+
+      function wireFeatureToggles(apiUid) {
+        document.querySelectorAll('.feat-cell').forEach(function (cell) {
+          var feature = cell.getAttribute('data-feature');
+          var disabled = cell.classList.contains('disabled');
+          var sw = cell.querySelector('.switch');
+          if (!feature || !sw) return;
+          sw.addEventListener('click', function () {
+            if (disabled || apiUid == null) {
+              setHomeErr(apiUid == null ? 'Нужен user_id из MAX для сохранения настроек' : 'Скоро');
+              return;
+            }
+            var next = !sw.classList.contains('on');
+            sw.classList.toggle('on', next);
+            sw.setAttribute('aria-checked', next ? 'true' : 'false');
+            fetch('/api/settings', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ user_id: apiUid, feature: feature, enabled: next }),
+            })
+              .then(function (r) {
+                if (!r.ok) return r.json().then(function (j) { throw new Error(j.error || String(r.status)); });
+                return r.json();
+              })
+              .then(function (data) {
+                syncSwitch('comments', data.comments);
+                syncSwitch('notifications', data.notifications);
+                syncSwitch('moderation', data.moderation);
+                syncSwitch('auto_replies', data.auto_replies);
+                setHomeErr('');
+              })
+              .catch(function (e) {
+                setHomeErr(e.message || String(e));
+                sw.classList.toggle('on', !next);
+                sw.setAttribute('aria-checked', !next ? 'true' : 'false');
+              });
+          });
+        });
+      }
+
+      if (uid == null) {
+        setHomeErr('Откройте мини-приложение из MAX, чтобы подставился профиль.');
+        wireFeatureToggles(null);
+        return;
+      }
+
+      wireFeatureToggles(uid);
+
+      fetch('/api/settings?user_id=' + encodeURIComponent(String(uid)))
+        .then(function (r) {
+          if (!r.ok) throw new Error('settings');
+          return r.json();
+        })
+        .then(function (data) {
+          syncSwitch('comments', data.comments);
+          syncSwitch('notifications', data.notifications);
+          syncSwitch('moderation', data.moderation);
+          syncSwitch('auto_replies', data.auto_replies);
+        })
+        .catch(function () {});
+
+      fetch('/api/stats?user_id=' + encodeURIComponent(String(uid)))
+        .then(function (r) {
+          if (!r.ok) throw new Error('stats');
+          return r.json();
+        })
+        .then(function (s) {
+          document.getElementById('statCh').textContent = String(s.channels ?? 0);
+          document.getElementById('statPosts').textContent = String(s.posts ?? 0);
+          document.getElementById('statComm').textContent = String(s.comments ?? 0);
+          if (s.bot_nickname) botNick = '@' + String(s.bot_nickname).replace(/^@/, '');
+        })
+        .catch(function () {
+          setHomeErr('Не удалось загрузить статистику');
+        });
+
+      fetch('/api/channels?user_id=' + encodeURIComponent(String(uid)))
+        .then(function (r) {
+          if (!r.ok) throw new Error('ch');
+          return r.json();
+        })
+        .then(function (data) {
+          var list = document.getElementById('homeChannelList');
+          list.innerHTML = '';
+          if (data.bot_nickname) botNick = '@' + String(data.bot_nickname).replace(/^@/, '');
+          var arr = data.channels || [];
+          if (!arr.length) {
+            list.innerHTML = '<div style="color:var(--muted);font-size:13px;padding:8px 4px;">Каналов пока нет. Подключите бота в свой канал.</div>';
+            return;
+          }
+          arr.forEach(function (ch) {
+            var title = (ch.title && String(ch.title).trim()) || 'Канал ' + ch.chat_id;
+            var subs =
+              typeof ch.subscribers === 'number'
+                ? 'подписчики: ' + ch.subscribers
+                : 'подписчики: —';
+            var dotClass = ch.status === 'pending' ? 'pending' : 'active';
+            var row =
+              '<div class="channel-item">' +
+              '<div class="ch-icon">' +
+              esc(initials(title)) +
+              '</div>' +
+              '<div class="ch-body"><div class="ch-name">' +
+              esc(title) +
+              '</div><div class="ch-subs">' +
+              esc(subs) +
+              '</div></div>' +
+              '<span class="status-dot ' +
+              dotClass +
+              '" title="' +
+              (ch.status === 'pending' ? 'Ожидает прав' : 'Активен') +
+              '"></span></div>';
+            list.insertAdjacentHTML('beforeend', row);
+          });
+        })
+        .catch(function () {});
+
+      var hint = document.getElementById('connectHint');
+      document.getElementById('btnConnect').addEventListener('click', function () {
+        hint.textContent = 'Добавь бота ' + botNick + ' в канал как администратора.';
+        hint.classList.toggle('show', !hint.classList.contains('show'));
+      });
+
+      var panel = document.getElementById('channelSettingsPanel');
+      document.getElementById('btnChannelSettings').addEventListener('click', function () {
+        var open = !panel.classList.contains('open');
+        panel.classList.toggle('open', open);
+        if (!open) return;
+        fetch('/api/channels?user_id=' + encodeURIComponent(String(uid)))
+          .then(function (r) {
+            return r.json();
+          })
+          .then(function (data) {
+            var arr = data.channels || [];
+            if (!arr.length) {
+              panel.textContent = 'Сначала подключите бота к каналу. Затем здесь появятся настройки для каждого канала.';
+              return;
+            }
+            panel.innerHTML =
+              '<strong style="color:var(--text)">Каналы</strong><ul style="margin:8px 0 0;padding-left:18px;">' +
+              arr
+                .map(function (ch) {
+                  var t = (ch.title && String(ch.title).trim()) || 'ID ' + ch.chat_id;
+                  return '<li style="margin-bottom:6px;">' + esc(t) + ' — скоро: расширенные настройки.</li>';
+                })
+                .join('') +
+              '</ul>';
+          })
+          .catch(function () {
+            panel.textContent = 'Не удалось загрузить список каналов.';
+          });
+      });
+
+      var overlay = document.getElementById('instructionOverlay');
+      document.getElementById('btnInstruction').addEventListener('click', function () {
+        overlay.classList.remove('hidden');
+        overlay.setAttribute('aria-hidden', 'false');
+      });
+      document.getElementById('instructionClose').addEventListener('click', function () {
+        overlay.classList.add('hidden');
+        overlay.setAttribute('aria-hidden', 'true');
+      });
+      overlay.addEventListener('click', function (e) {
+        if (e.target === overlay) {
+          overlay.classList.add('hidden');
+          overlay.setAttribute('aria-hidden', 'true');
+        }
+      });
+    }
+
+    bootHome();
+
+    /* ——— COMMENTS ——— */
+    function bootComments() {
+      if (!hasPostContext) return;
+
+      var params = mergedParams;
       var postId = params.get('post_id');
       var chatId = params.get('chat_id');
       var userId = params.get('user_id');
@@ -825,7 +1503,9 @@
       setInterval(function () {
         loadComments(false);
       }, 15000);
-    })();
+    }
+
+    bootComments();
   </script>
 </body>
 </html>
