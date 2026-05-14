@@ -17,10 +17,24 @@ class CommentService {
         logger_1.logger.info(`Комментарий создан: ${id}`);
         return comment;
     }
-    async getByPostId(postId) {
-        const list = this.comments.filter((c) => c.postId === postId);
+    async getByPostId(postId, sourceChatId) {
+        const list = this.comments.filter((c) => {
+            if (c.postId !== postId) {
+                return false;
+            }
+            if (sourceChatId === undefined) {
+                return true;
+            }
+            return c.sourceChatId === sourceChatId;
+        });
         logger_1.logger.debug(`${list.length} комментариев`);
         return list;
+    }
+    /**
+     * Количество комментариев, созданных в указанном чате.
+     */
+    countByChatId(sourceChatId) {
+        return this.comments.filter((c) => c.sourceChatId === sourceChatId).length;
     }
     async getById(id) {
         return this.comments.find((c) => c.id === id) ?? null;

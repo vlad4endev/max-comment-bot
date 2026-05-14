@@ -4,6 +4,8 @@ import { logger } from '../utils/logger'
 
 export interface Comment {
   id: string
+  /** Чат, из которого пришёл комментарий (изоляция между каналами) */
+  sourceChatId: number
   postId: string
   userId: number
   userName: string
@@ -32,10 +34,25 @@ export class CommentService {
     return comment
   }
 
-  async getByPostId(postId: string): Promise<Comment[]> {
-    const list = this.comments.filter((c) => c.postId === postId)
+  async getByPostId(postId: string, sourceChatId?: number): Promise<Comment[]> {
+    const list = this.comments.filter((c) => {
+      if (c.postId !== postId) {
+        return false
+      }
+      if (sourceChatId === undefined) {
+        return true
+      }
+      return c.sourceChatId === sourceChatId
+    })
     logger.debug(`${list.length} комментариев`)
     return list
+  }
+
+  /**
+   * Количество комментариев, созданных в указанном чате.
+   */
+  countByChatId(sourceChatId: number): number {
+    return this.comments.filter((c) => c.sourceChatId === sourceChatId).length
   }
 
   async getById(id: string): Promise<Comment | null> {

@@ -11,21 +11,34 @@ class NotificationService {
         this.bot = bot;
         this.adminChatId = adminChatId;
     }
+    /**
+     * Произвольное текстовое сообщение в админский чат (системные уведомления).
+     */
+    async notifyAdmin(text) {
+        try {
+            await this.bot.api.sendMessageToChat(this.adminChatId, text);
+            logger_1.logger.info('Админ-уведомление отправлено');
+        }
+        catch (err) {
+            logger_1.logger.error('Не удалось отправить админ-уведомление', err);
+        }
+    }
     async notifyNewComment(data) {
-        const { postId, userId, userName, text } = data;
-        const message = `📝 **Новый комментарий!**
+        const { postId, userId, userName, text, sourceChatId } = data;
+        const chatLine = sourceChatId !== undefined ? `\nЧат: ID ${sourceChatId}` : '';
+        const message = `📝 Новый комментарий
 Пост: #${postId}
-От: @${userName} (ID: ${userId})
-Текст: "${text}"`;
+От: ${userName} (ID: ${userId})${chatLine}
+Текст:
+${text}`;
         const keyboard = max_bot_api_1.Keyboard.inlineKeyboard([
             [max_bot_api_1.Keyboard.button.callback('✉️ Ответить', `reply_${userId}`)],
         ]);
         try {
             await this.bot.api.sendMessageToChat(this.adminChatId, message, {
-                format: 'markdown',
                 attachments: [keyboard],
             });
-            logger_1.logger.info('Уведомление отправлено админу', { postId, userId });
+            logger_1.logger.info('Уведомление отправлено админу', { postId, userId, sourceChatId });
         }
         catch (err) {
             logger_1.logger.error('Не удалось отправить уведомление админу о новом комментарии', err);

@@ -1,0 +1,20 @@
+# Скопируйте config/.env.example в .env в корне проекта и задайте переменные.
+# В production (NODE_ENV=production) по умолчанию режим webhook — нужны WEBHOOK_URL и WEBHOOK_SECRET
+# (см. https://dev.max.ru/docs-api/methods/POST/subscriptions). Прокси с TLS :443 → этот контейнер;
+# путь в WEBHOOK_URL должен совпадать с POST-маршрутом приложения.
+# Локально без HTTPS: MAX_RECEIVE_MODE=polling в .env
+# Сборка и запуск: docker compose up -d --build
+# Логи: docker compose logs -f bot
+services:
+  bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: max-comment-bot:latest
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+    ports:
+      - "${PORT:-3000}:${PORT:-3000}"

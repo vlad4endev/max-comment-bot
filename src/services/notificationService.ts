@@ -8,6 +8,8 @@ export interface NotificationData {
   userId: number
   userName: string
   text: string
+  /** Чат, откуда пришёл комментарий (для мульти-канального режима) */
+  sourceChatId?: number
 }
 
 export class NotificationService {
@@ -19,12 +21,27 @@ export class NotificationService {
     this.adminChatId = adminChatId
   }
 
+  /**
+   * Произвольное текстовое сообщение в админский чат (системные уведомления).
+   */
+  async notifyAdmin(text: string): Promise<void> {
+    try {
+      await this.bot.api.sendMessageToChat(this.adminChatId, text)
+      logger.info('Админ-уведомление отправлено')
+    } catch (err) {
+      logger.error('Не удалось отправить админ-уведомление', err)
+    }
+  }
+
   async notifyNewComment(data: NotificationData): Promise<void> {
-    const { postId, userId, userName, text } = data
-    const message = `📝 **Новый комментарий!**
+    const { postId, userId, userName, text, sourceChatId } = data
+    const chatLine =
+      sourceChatId !== undefined ? `\nЧат: ID ${sourceChatId}` : ''
+    const message = `📝 Новый комментарий
 Пост: #${postId}
-От: @${userName} (ID: ${userId})
-Текст: "${text}"`
+От: ${userName} (ID: ${userId})${chatLine}
+Текст:
+${text}`
 
     const keyboard = Keyboard.inlineKeyboard([
       [Keyboard.button.callback('✉️ Ответить', `reply_${userId}`)],
@@ -32,10 +49,9 @@ export class NotificationService {
 
     try {
       await this.bot.api.sendMessageToChat(this.adminChatId, message, {
-        format: 'markdown',
         attachments: [keyboard],
       })
-      logger.info('Уведомление отправлено админу', { postId, userId })
+      logger.info('Уведомление отправлено админу', { postId, userId, sourceChatId })
     } catch (err) {
       logger.error('Не удалось отправить уведомление админу о новом комментарии', err)
     }

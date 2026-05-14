@@ -1,0 +1,1 @@
+{"version":3,"file":"dispatchUpdate.js","sourceRoot":"","sources":["../../src/webhook/dispatchUpdate.ts"],"names":[],"mappings":";;AAGA,8CAIC;AAJM,KAAK,UAAU,iBAAiB,CAAC,GAAQ,EAAE,MAAc;IAC9D,MAAM,MAAM,GAAI,GAAiE;SAC9E,YAAY,CAAA;IACf,MAAM,MAAM,CAAC,IAAI,CAAC,GAAG,EAAE,MAAM,CAAC,CAAA;AAChC,CAAC"}

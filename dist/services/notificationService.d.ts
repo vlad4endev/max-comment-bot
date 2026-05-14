@@ -4,11 +4,17 @@ export interface NotificationData {
     userId: number;
     userName: string;
     text: string;
+    /** Чат, откуда пришёл комментарий (для мульти-канального режима) */
+    sourceChatId?: number;
 }
 export declare class NotificationService {
     private readonly bot;
     private readonly adminChatId;
     constructor(bot: Bot, adminChatId: number);
+    /**
+     * Произвольное текстовое сообщение в админский чат (системные уведомления).
+     */
+    notifyAdmin(text: string): Promise<void>;
     notifyNewComment(data: NotificationData): Promise<void>;
     notifyUserAboutReply(userId: number, replyText: string): Promise<void>;
 }
