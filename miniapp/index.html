@@ -713,6 +713,19 @@
       padding: 0 12px 8px;
       min-height: 1em;
     }
+    .bridge-debug-panel {
+      font-size: 10px;
+      font-family: ui-monospace, Menlo, monospace;
+      color: var(--muted);
+      padding: 8px 12px;
+      border-bottom: 1px dashed var(--surface-border);
+      white-space: pre-wrap;
+      word-break: break-all;
+      max-height: 140px;
+      overflow-y: auto;
+      background: rgba(0, 0, 0, 0.2);
+      line-height: 1.35;
+    }
   </style>
 </head>
 <body>
@@ -795,6 +808,7 @@
             <img class="post-thumb" id="postThumb" alt="" />
           </div>
         </div>
+        <div id="bridgeDebugPanel" class="bridge-debug-panel" aria-label="Отладка startapp"></div>
         <div id="err"></div>
         <div id="feed"></div>
         <div class="composer-wrap">
@@ -827,12 +841,16 @@
 
   <script>
     function decodeStartParam(raw) {
+      console.log('decodeStartParam input:', raw)
       if (!raw || raw === 'start') return null
-      var m = String(raw).trim().match(/^pid_([a-fA-F0-9]+)_cid_(\d+)(_admin)?$/)
+      var s = String(raw).trim().toLowerCase()
+      var m = s.match(/^pid_([a-f0-9]+)_cid_(\d+)(_admin)?$/)
+      console.log('regex match:', m)
       if (!m) return null
-      var id = m[1].toLowerCase()
+      var id = m[1]
       var uuid = [id.slice(0,8), id.slice(8,12), id.slice(12,16), id.slice(16,20), id.slice(20)].join('-')
-      return { post_id: uuid, chat_id: '-' + m[2], admin: m[3] === '_admin' }
+      console.log('decoded:', { post_id: uuid, chat_id: '-' + m[2] })
+      return { post_id: uuid, chat_id: '-' + m[2], admin: !!m[3] }
     }
 
     /** MAX Bridge docs: user id is `user.id`; tolerate legacy `user_id`. */
@@ -899,6 +917,41 @@
         '';
 
       var mergedParams = buildMergedSearchParams(user, startParam);
+      console.log('mergedParams:', {
+        post_id: mergedParams.get('post_id'),
+        chat_id: mergedParams.get('chat_id'),
+        user_id: mergedParams.get('user_id'),
+        startParam: startParam,
+        rawStartapp: new URLSearchParams(location.search).get('startapp')
+      })
+
+      var rawStartappQs = new URLSearchParams(location.search).get('startapp');
+      var bridgeStartParam =
+        unsafe.start_param != null && unsafe.start_param !== ''
+          ? String(unsafe.start_param)
+          : '(нет)';
+      var decodedForPanel = decodeStartParam(String(startParam || '').trim());
+      var mergedKeysLines = [];
+      mergedParams.forEach(function (v, k) {
+        mergedKeysLines.push(k + '=' + v);
+      });
+      var dbg = document.getElementById('bridgeDebugPanel');
+      if (dbg) {
+        dbg.textContent =
+          'raw startapp (URL): ' +
+          (rawStartappQs != null && rawStartappQs !== '' ? rawStartappQs : '(пусто)') +
+          '\nstart_param (Bridge): ' +
+          bridgeStartParam +
+          '\ndecoded post_id: ' +
+          (decodedForPanel && decodedForPanel.post_id ? decodedForPanel.post_id : '—') +
+          '\ndecoded chat_id: ' +
+          (decodedForPanel && decodedForPanel.chat_id ? decodedForPanel.chat_id : '—') +
+          '\nmergedParams (' +
+          mergedKeysLines.length +
+          '):\n' +
+          (mergedKeysLines.length ? mergedKeysLines.join('\n') : '(нет ключей)');
+      }
+
       var postId = mergedParams.get('post_id');
       var chatId = mergedParams.get('chat_id');
       var hasPostContext = !!(postId && chatId);
@@ -1171,10 +1224,12 @@
       var params = mergedParams;
       var postId = params.get('post_id');
       var chatId = params.get('chat_id');
-      var userId = params.get('user_id');
+      var userIdRaw = params.get('user_id');
+      var userId =
+        userIdRaw && String(userIdRaw).trim() ? String(userIdRaw).trim() : '';
       if (!userId) {
-        var bid = getBridgeNumericUserId(user);
-        if (bid != null) userId = String(bid);
+        var bidComments = getBridgeNumericUserId(user);
+        if (bidComments != null) userId = String(bidComments);
       }
       var username = params.get('username');
       if (!username || !String(username).trim()) {
@@ -1202,6 +1257,19 @@
 
       function setErr(msg) {
         errEl.textContent = msg || '';
+      }
+
+      if (!postId) {
+        setErr('Нет post_id');
+        return;
+      }
+      if (!chatId) {
+        setErr('Нет chat_id');
+        return;
+      }
+      if (!userId || !String(userId).trim()) {
+        setErr('Нет user_id — войдите через MAX');
+        return;
       }
 
       function scrollFeedToBottom() {
@@ -1460,7 +1528,7 @@
 
       function loadPost() {
         if (!postId) {
-          setErr('Не указан post_id');
+          setErr('Нет post_id');
           postPreviewTextEl.textContent = '';
           return Promise.resolve();
         }
@@ -1524,8 +1592,16 @@
       }
 
       function submitComment() {
-        if (!postId || !chatId || !userId) {
-          setErr('Нужны параметры post_id, chat_id и user_id в ссылке');
+        if (!postId) {
+          setErr('Нет post_id');
+          return;
+        }
+        if (!chatId) {
+          setErr('Нет chat_id');
+          return;
+        }
+        if (!userId || !String(userId).trim()) {
+          setErr('Нет user_id — войдите через MAX');
           return;
         }
         var text = inputEl.value.trim();

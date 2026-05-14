@@ -39,6 +39,20 @@ function parsePositiveInt(value: unknown): number | null {
   return null
 }
 
+/** Channel / group chat ids are negative (e.g. -100…); reject 0 only. */
+function parseNonZeroInt(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isInteger(value) && value !== 0) {
+    return value
+  }
+  if (typeof value === 'string' && value.trim() !== '') {
+    const n = Number.parseInt(value, 10)
+    if (Number.isInteger(n) && n !== 0) {
+      return n
+    }
+  }
+  return null
+}
+
 function parseNonEmptyString(value: unknown): string | null {
   if (typeof value !== 'string') {
     return null
@@ -222,7 +236,7 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
       return
     }
     const postId = parseNonEmptyString(body.post_id)
-    const chatId = parsePositiveInt(body.chat_id)
+    const chatId = parseNonZeroInt(body.chat_id)
     const userId = parsePositiveInt(body.user_id)
     const username = parseNonEmptyString(body.username)
     const text = parseNonEmptyString(body.text)
@@ -279,7 +293,7 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
     }
     const commentId = parseNonEmptyString(body.comment_id)
     const postId = parseNonEmptyString(body.post_id)
-    const chatId = parsePositiveInt(body.chat_id)
+    const chatId = parseNonZeroInt(body.chat_id)
     const adminText = parseNonEmptyString(body.admin_text)
     if (!commentId || !postId || !chatId || !adminText) {
       res.status(400).json({ error: 'missing or invalid fields' })
