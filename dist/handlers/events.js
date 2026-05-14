@@ -2,8 +2,8 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.registerEventHandlers = registerEventHandlers;
 const max_bot_api_1 = require("@maxhub/max-bot-api");
-const uuid_1 = require("uuid");
 const config_1 = require("../config");
+const channelPostActions_1 = require("../services/channelPostActions");
 const channelRegistry_1 = require("../services/channelRegistry");
 const commentStore_1 = require("../services/commentStore");
 const notificationService_1 = require("../services/notificationService");
@@ -21,42 +21,10 @@ const ONBOARDING_WELCOME_KEYBOARD = max_bot_api_1.Keyboard.inlineKeyboard([
     [max_bot_api_1.Keyboard.button.link('📖 How to add bot to channel', 'https://help.max.ru')],
 ]);
 /**
- * Определяет идентификатор чата для входящего сообщения (группа/канал/диалог).
- * Если `recipient.chat_id` отсутствует, используется id пользователя как запасной ключ для 1:1.
- */
-function resolveMessageChatId(message, fallbackUserId) {
-    const rid = message.recipient.chat_id;
-    if (typeof rid === 'number' && Number.isFinite(rid)) {
-        return rid;
-    }
-    return fallbackUserId;
-}
-/**
  * Подтягивает тип чата из флага `is_channel`, если запрос метаданных чата не удался.
  */
 function fallbackChatType(isChannel) {
     return isChannel ? 'channel' : 'chat';
-}
-/**
- * Channel posts should have `recipient.chat_type === 'channel'`, but if MAX sends another value,
- * we confirm via {@link Bot.api.getChat} so posts are not skipped.
- */
-async function isLikelyChannelPost(bot, message) {
-    if (message.recipient.chat_type === 'channel') {
-        return true;
-    }
-    const rid = message.recipient.chat_id;
-    if (typeof rid !== 'number' || !Number.isFinite(rid)) {
-        return false;
-    }
-    try {
-        const chat = await bot.api.getChat(rid);
-        return chat.type === 'channel';
-    }
-    catch (err) {
-        logger_1.logger.debug('isLikelyChannelPost: getChat failed', { rid, err });
-        return false;
-    }
 }
 /**
  * Sends a DM by user id; logs and ignores failures (user blocked the bot or never pressed Start).
@@ -103,82 +71,6 @@ async function fetchChatType(bot, channelChatId) {
         return null;
     }
 }
-function firstImageUrlFromMessage(message) {
-    const list = message.body.attachments;
-    if (!list || list.length === 0) {
-        return undefined;
-    }
-    for (const att of list) {
-        if (att.type === 'image' && typeof att.payload.url === 'string' && att.payload.url.length > 0) {
-            return att.payload.url;
-        }
-    }
-    return undefined;
-}
-/**
- * Проверяет, что пользователь — админ или владелец канала (не бот).
- */
-async function isUserChannelAdmin(bot, channelChatId, userId) {
-    try {
-        const { members } = await bot.api.getChatMembers(channelChatId, { user_ids: [userId] });
-        const m = members[0];
-        if (!m) {
-            return false;
-        }
-        return !m.is_bot && (m.is_admin || m.is_owner);
-    }
-    catch (err) {
-        logger_1.logger.warn('isUserChannelAdmin: API error', { channelChatId, userId, err });
-        return false;
-    }
-}
-/**
- * Обрабатывает новый пост в канале: сохраняет пост и вешает кнопку Mini App.
- */
-async function handleChannelAdminPost(bot, ctx, message, user) {
-    const chatId = resolveMessageChatId(message, user.user_id);
-    logger_1.logger.info('handleChannelAdminPost: start', {
-        chatId,
-        senderId: user.user_id,
-        recipientChatType: message.recipient.chat_type,
-        messageMid: message.body.mid,
-    });
-    const botNumericId = ctx.myId;
-    if (botNumericId !== undefined && user.user_id === botNumericId) {
-        logger_1.logger.debug('handleChannelAdminPost: skip (sender is bot)');
-        return;
-    }
-    const miniBase = config_1.config.miniAppUrl;
-    if (!miniBase) {
-        logger_1.logger.debug('handleChannelAdminPost: MINI_APP_URL не задан, пропуск');
-        return;
-    }
-    const adminOk = await isUserChannelAdmin(bot, chatId, user.user_id);
-    if (!adminOk) {
-        logger_1.logger.info('handleChannelAdminPost: skip (user is not channel admin/owner)', {
-            chatId,
-            userId: user.user_id,
-        });
-        return;
-    }
-    const postId = (0, uuid_1.v4)();
-    const text = message.body.text?.trim() ?? '';
-    const photoUrl = firstImageUrlFromMessage(message);
-    const post = {
-        post_id: postId,
-        chat_id: chatId,
-        message_mid: message.body.mid,
-        text,
-        photo_url: photoUrl,
-        comment_count: 0,
-        timestamp: new Date().toISOString(),
-    };
-    postStore_1.postStore.savePost(post);
-    const openUrl = (0, postStore_1.buildMiniAppUrl)(miniBase, postId, chatId);
-    const kb = max_bot_api_1.Keyboard.inlineKeyboard([[max_bot_api_1.Keyboard.button.link('💬 Комментарии (0)', openUrl)]]);
-    const editText = text === '' ? '\u00a0' : text;
-    await (0, postStore_1.attachCommentButtonToChannelPost)(bot, post, editText, kb);
-}
 /**
  * Resolves who should receive onboarding DMs: for `bot_added` this is `ctx.user` (who added the bot);
  * for `user_added` (self) use `inviter_id` only — `ctx.user` is the bot, not a human recipient.
@@ -217,6 +109,27 @@ function parseConnectCommand(text) {
         return undefined;
     }
     return { mode: 'one', channelId };
+}
+/**
+ * Parses `/addbutton` arguments: `mid`, or `channel_chat_id mid`.
+ */
+function parseAddButtonInput(raw) {
+    const t = raw.trim();
+    if (t === '') {
+        return undefined;
+    }
+    const two = /^(-?\d+)\s+(\S+)$/.exec(t);
+    if (two) {
+        const channelChatId = Number(two[1]);
+        if (!Number.isFinite(channelChatId)) {
+            return undefined;
+        }
+        return { kind: 'channel_and_mid', channelChatId, mid: two[2] };
+    }
+    if (/\s/.test(t)) {
+        return undefined;
+    }
+    return { kind: 'mid_only', mid: t };
 }
 /**
  * Verifies admin/owner rights, registers the channel when allowed, and maintains pending state otherwise.
@@ -361,20 +274,112 @@ function registerEventHandlers(bot) {
         if (!user) {
             return;
         }
-        const chatId = resolveMessageChatId(message, user.user_id);
+        const chatId = (0, channelPostActions_1.resolveMessageChatId)(message, user.user_id);
         logger_1.logger.info(`message_created: от ${user.user_id} в чате ${chatId}`);
-        const channelLikely = await isLikelyChannelPost(bot, message);
+        const text = message.body.text?.trim() ?? '';
+        if (/^\/addbutton\b/i.test(text)) {
+            const rawArgs = text.replace(/^\/addbutton\b/i, '').trim();
+            const parsedAb = parseAddButtonInput(rawArgs);
+            if (parsedAb === undefined) {
+                await ctx.reply('Usage:\n' +
+                    '/addbutton <message_mid>\n' +
+                    'or\n' +
+                    '/addbutton <channel_chat_id> <message_mid>\n\n' +
+                    'Use /channels (admin chat) to see channel_chat_id if needed.');
+                return;
+            }
+            let currentChat;
+            try {
+                currentChat = await ctx.api.getChat(chatId);
+            }
+            catch (err) {
+                logger_1.logger.warn('message_created /addbutton: getChat failed', { chatId, err });
+                await ctx.reply('Could not load this chat. Try again later.');
+                return;
+            }
+            if (currentChat.type !== 'dialog') {
+                await ctx.reply('/addbutton works only in a private chat with the bot.');
+                return;
+            }
+            let loaded;
+            let channelChatId;
+            try {
+                if (parsedAb.kind === 'channel_and_mid') {
+                    channelChatId = parsedAb.channelChatId;
+                    loaded = await bot.api.getMessage(parsedAb.mid);
+                    const rid = loaded.recipient.chat_id;
+                    if (typeof rid === 'number' && Number.isFinite(rid) && rid !== channelChatId) {
+                        await ctx.reply(`That message belongs to chat ${rid}, not ${channelChatId}. Check the channel id.`);
+                        return;
+                    }
+                }
+                else {
+                    loaded = await bot.api.getMessage(parsedAb.mid);
+                    const rid = loaded.recipient.chat_id;
+                    if (typeof rid === 'number' && Number.isFinite(rid)) {
+                        channelChatId = rid;
+                    }
+                    else {
+                        const onlyChannels = channelRegistry_1.channelRegistry.getAllChannels().filter((c) => c.type === 'channel');
+                        if (onlyChannels.length === 1) {
+                            channelChatId = onlyChannels[0].chat_id;
+                        }
+                        else {
+                            await ctx.reply('Could not detect channel from the message. Use:\n' +
+                                '/addbutton <channel_chat_id> <message_mid>');
+                            return;
+                        }
+                    }
+                }
+            }
+            catch (err) {
+                logger_1.logger.warn('message_created /addbutton: getMessage failed', { err });
+                await ctx.reply('Could not load the message by mid. Check the id and bot access to the channel.');
+                return;
+            }
+            if (!(await (0, channelPostActions_1.isUserChannelAdmin)(bot, channelChatId, user.user_id))) {
+                await ctx.reply('You must be a channel admin to add the button.');
+                return;
+            }
+            const r = await (0, channelPostActions_1.tryAttachCommentsToChannelPost)(bot, loaded, {
+                botUserId: ctx.myId,
+                channelChatIdOverride: channelChatId,
+                skipAuthorAdminCheck: true,
+            });
+            if (r.ok) {
+                await ctx.reply('Button added to post.');
+                return;
+            }
+            if (r.reason === 'already_exists') {
+                await ctx.reply('This post already has the comments button.');
+                return;
+            }
+            if (r.reason === 'no_miniapp') {
+                await ctx.reply('MINI_APP_URL is not configured on the server.');
+                return;
+            }
+            if (r.reason === 'skip_bot') {
+                await ctx.reply('Cannot attach to a message sent by the bot.');
+                return;
+            }
+            await ctx.reply(`Could not add the button (${r.reason}).`);
+            return;
+        }
+        const channelLikely = await (0, channelPostActions_1.isLikelyChannelPost)(bot, message);
         if (channelLikely) {
-            logger_1.logger.info('message_created: treating as channel post', {
+            logger_1.logger.info('message_created: channel-shaped message', {
                 chatId,
                 recipientChatType: message.recipient.chat_type,
                 messageMid: message.body.mid,
             });
-            logger_1.logger.info('message_created: full message JSON', { json: JSON.stringify(message) });
-            await handleChannelAdminPost(bot, ctx, message, user);
+            const r = await (0, channelPostActions_1.tryAttachCommentsToChannelPost)(bot, message, { botUserId: ctx.myId });
+            if (r.ok) {
+                logger_1.logger.info('message_created: comment button attached (push path)', {
+                    messageMid: message.body.mid,
+                });
+            }
             return;
         }
-        const text = message.body.text?.trim() ?? '';
         const parsedConnect = parseConnectCommand(text);
         if (parsedConnect === undefined) {
             await ctx.reply('Usage: /connect  or  /connect <channel_id>');

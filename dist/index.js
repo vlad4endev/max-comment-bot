@@ -6,6 +6,7 @@ const config_1 = require("./config");
 const subscriptions_1 = require("./maxPlatform/subscriptions");
 const channelRegistry_1 = require("./services/channelRegistry");
 const commentStore_1 = require("./services/commentStore");
+const channelPoller_1 = require("./services/channelPoller");
 const postStore_1 = require("./services/postStore");
 const logger_1 = require("./utils/logger");
 const createWebhookApp_1 = require("./webhook/createWebhookApp");
@@ -15,6 +16,7 @@ async function main() {
     await postStore_1.postStore.loadFromDisk();
     await commentStore_1.commentStore.loadFromDisk();
     await (0, bot_1.ensureBotProfile)(bot);
+    (0, channelPoller_1.startChannelPostPoller)(bot);
     const listenPort = config_1.config.listenPort;
     if (config_1.config.receiveMode === 'webhook') {
         const webhookPath = config_1.config.webhookPath;

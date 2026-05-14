@@ -118,6 +118,18 @@ export class PostStore {
   }
 
   /**
+   * Whether we already track this channel message (same {@link Post.message_mid}).
+   */
+  findPostByChannelMessage(chatId: number, messageMid: string): Post | null {
+    for (const p of this.byId.values()) {
+      if (p.chat_id === chatId && p.message_mid === messageMid) {
+        return p
+      }
+    }
+    return null
+  }
+
+  /**
    * Increments {@link Post.comment_count} and persists. Returns new count or `null` if unknown post.
    */
   incrementCommentCount(postId: string): number | null {

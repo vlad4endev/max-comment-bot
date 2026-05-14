@@ -39,6 +39,10 @@ export declare class PostStore {
      */
     getPostsByChatId(chatId: number): Post[];
     /**
+     * Whether we already track this channel message (same {@link Post.message_mid}).
+     */
+    findPostByChannelMessage(chatId: number, messageMid: string): Post | null;
+    /**
      * Increments {@link Post.comment_count} and persists. Returns new count or `null` if unknown post.
      */
     incrementCommentCount(postId: string): number | null;
