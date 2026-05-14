@@ -12,6 +12,14 @@ export interface Config {
   BOT_NICKNAME: string;
   NODE_ENV: 'development' | 'production';
   PORT: number;
+  /**
+   * Порт HTTP (webhook + /api + /static). Если задан API_PORT — используется он, иначе PORT.
+   */
+  listenPort: number;
+  /**
+   * Базовый URL мини-приложения (кнопки «Комментарии»). Пусто — кнопки к постам не вешаются.
+   */
+  miniAppUrl?: string;
   receiveMode: ReceiveMode;
   /** Только для webhook-режима */
   webhookUrl?: string;
@@ -68,12 +76,26 @@ function getConfig(): Config {
 
   const receiveMode = parseReceiveMode(process.env.MAX_RECEIVE_MODE, NODE_ENV);
 
+  const miniAppUrlRaw = (process.env.MINI_APP_URL ?? '').trim();
+  const miniAppUrl = miniAppUrlRaw === '' ? undefined : miniAppUrlRaw.replace(/\/+$/, '');
+
+  const apiPortRaw = (process.env.API_PORT ?? '').trim();
+  let listenPort = PORT;
+  if (apiPortRaw !== '') {
+    const apiParsed = Number.parseInt(apiPortRaw, 10);
+    if (Number.isFinite(apiParsed) && apiParsed > 0) {
+      listenPort = apiParsed;
+    }
+  }
+
   const base: Config = {
     BOT_TOKEN,
     ADMIN_CHAT_ID: adminParsed,
     BOT_NICKNAME,
     NODE_ENV,
     PORT,
+    listenPort,
+    miniAppUrl,
     receiveMode,
   };
 

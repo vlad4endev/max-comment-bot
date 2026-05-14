@@ -3,8 +3,11 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.createHttpApp = createHttpApp;
 exports.createWebhookApp = createWebhookApp;
+const node_path_1 = require("node:path");
 const express_1 = __importDefault(require("express"));
+const routes_1 = require("../api/routes");
 const logger_1 = require("../utils/logger");
 const dispatchUpdate_1 = require("./dispatchUpdate");
 const MAX_SECRET_HEADER = 'x-max-bot-api-secret';
@@ -18,35 +21,50 @@ function looksLikeUpdate(body) {
     const type = body.update_type;
     return typeof type === 'string' && type.length > 0;
 }
-function createWebhookApp(options) {
+/**
+ * Express-приложение: GET /health, статика Mini App (`/miniapp`), REST `/api`, опционально POST webhook.
+ */
+function createHttpApp(options) {
     const app = (0, express_1.default)();
     app.disable('x-powered-by');
     app.get('/health', (_req, res) => {
         res.status(200).type('text/plain').send('ok');
     });
-    app.post(options.webhookPath, express_1.default.json({ limit: '512kb' }), async (req, res) => {
-        if (options.webhookSecret) {
-            const got = req.get(MAX_SECRET_HEADER);
-            if (got !== options.webhookSecret) {
-                logger_1.logger.warn('Webhook: отклонён запрос с неверным или пустым секретом');
-                res.status(403).end();
+    app.use('/api', (0, routes_1.createCommentApiRouter)({ bot: options.bot }));
+    const miniappRoot = (0, node_path_1.join)(process.cwd(), 'miniapp');
+    app.use('/miniapp', express_1.default.static(miniappRoot));
+    if (options.webhook) {
+        const { path: webhookPath, secret: webhookSecret } = options.webhook;
+        app.post(webhookPath, express_1.default.json({ limit: '512kb' }), async (req, res) => {
+            if (webhookSecret) {
+                const got = req.get(MAX_SECRET_HEADER);
+                if (got !== webhookSecret) {
+                    logger_1.logger.warn('Webhook: отклонён запрос с неверным или пустым секретом');
+                    res.status(403).end();
+                    return;
+                }
+            }
+            if (!looksLikeUpdate(req.body)) {
+                logger_1.logger.warn('Webhook: тело запроса не похоже на Update');
+                res.status(400).json({ error: 'invalid update payload' });
                 return;
             }
-        }
-        if (!looksLikeUpdate(req.body)) {
-            logger_1.logger.warn('Webhook: тело запроса не похоже на Update');
-            res.status(400).json({ error: 'invalid update payload' });
-            return;
-        }
-        try {
-            await (0, dispatchUpdate_1.dispatchBotUpdate)(options.bot, req.body);
-            res.status(200).end();
-        }
-        catch (err) {
-            logger_1.logger.error('Webhook: ошибка обработки update', err);
-            res.status(200).end();
-        }
-    });
+            try {
+                await (0, dispatchUpdate_1.dispatchBotUpdate)(options.bot, req.body);
+                res.status(200).end();
+            }
+            catch (err) {
+                logger_1.logger.error('Webhook: ошибка обработки update', err);
+                res.status(200).end();
+            }
+        });
+    }
     return app;
+}
+function createWebhookApp(options) {
+    return createHttpApp({
+        bot: options.bot,
+        webhook: { path: options.webhookPath, secret: options.webhookSecret },
+    });
 }
 //# sourceMappingURL=createWebhookApp.js.map

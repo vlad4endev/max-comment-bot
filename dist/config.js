@@ -42,12 +42,24 @@ function getConfig() {
         }
     }
     const receiveMode = parseReceiveMode(process.env.MAX_RECEIVE_MODE, NODE_ENV);
+    const miniAppUrlRaw = (process.env.MINI_APP_URL ?? '').trim();
+    const miniAppUrl = miniAppUrlRaw === '' ? undefined : miniAppUrlRaw.replace(/\/+$/, '');
+    const apiPortRaw = (process.env.API_PORT ?? '').trim();
+    let listenPort = PORT;
+    if (apiPortRaw !== '') {
+        const apiParsed = Number.parseInt(apiPortRaw, 10);
+        if (Number.isFinite(apiParsed) && apiParsed > 0) {
+            listenPort = apiParsed;
+        }
+    }
     const base = {
         BOT_TOKEN,
         ADMIN_CHAT_ID: adminParsed,
         BOT_NICKNAME,
         NODE_ENV,
         PORT,
+        listenPort,
+        miniAppUrl,
         receiveMode,
     };
     if (receiveMode === 'polling') {

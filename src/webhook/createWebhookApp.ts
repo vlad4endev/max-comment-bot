@@ -1,16 +1,28 @@
+import { join } from 'node:path'
+
 import type { Bot } from '@maxhub/max-bot-api'
 import type { Update } from '@maxhub/max-bot-api/types'
 import express from 'express'
 
+import { createCommentApiRouter } from '../api/routes'
 import { logger } from '../utils/logger'
 import { dispatchBotUpdate } from './dispatchUpdate'
 
 const MAX_SECRET_HEADER = 'x-max-bot-api-secret'
 
+export interface HttpAppOptions {
+  bot: Bot
+  /** Если задан — регистрируется POST webhook для MAX */
+  webhook?: {
+    path: string
+    secret?: string
+  }
+}
+
+/** @deprecated Используйте {@link HttpAppOptions} + {@link createHttpApp} */
 export interface WebhookAppOptions {
   bot: Bot
   webhookPath: string
-  /** Если задан — отклонять запросы без совпадающего заголовка `X-Max-Bot-Api-Secret` */
   webhookSecret?: string
 }
 
@@ -26,7 +38,10 @@ function looksLikeUpdate(body: unknown): body is Update {
   return typeof type === 'string' && type.length > 0
 }
 
-export function createWebhookApp(options: WebhookAppOptions): express.Express {
+/**
+ * Express-приложение: GET /health, статика Mini App (`/miniapp`), REST `/api`, опционально POST webhook.
+ */
+export function createHttpApp(options: HttpAppOptions): express.Express {
   const app = express()
   app.disable('x-powered-by')
 
@@ -34,34 +49,49 @@ export function createWebhookApp(options: WebhookAppOptions): express.Express {
     res.status(200).type('text/plain').send('ok')
   })
 
-  app.post(
-    options.webhookPath,
-    express.json({ limit: '512kb' }),
-    async (req, res) => {
-      if (options.webhookSecret) {
-        const got = req.get(MAX_SECRET_HEADER)
-        if (got !== options.webhookSecret) {
-          logger.warn('Webhook: отклонён запрос с неверным или пустым секретом')
-          res.status(403).end()
+  app.use('/api', createCommentApiRouter({ bot: options.bot }))
+
+  const miniappRoot = join(process.cwd(), 'miniapp')
+  app.use('/miniapp', express.static(miniappRoot))
+
+  if (options.webhook) {
+    const { path: webhookPath, secret: webhookSecret } = options.webhook
+    app.post(
+      webhookPath,
+      express.json({ limit: '512kb' }),
+      async (req, res) => {
+        if (webhookSecret) {
+          const got = req.get(MAX_SECRET_HEADER)
+          if (got !== webhookSecret) {
+            logger.warn('Webhook: отклонён запрос с неверным или пустым секретом')
+            res.status(403).end()
+            return
+          }
+        }
+
+        if (!looksLikeUpdate(req.body)) {
+          logger.warn('Webhook: тело запроса не похоже на Update')
+          res.status(400).json({ error: 'invalid update payload' })
           return
         }
-      }
 
-      if (!looksLikeUpdate(req.body)) {
-        logger.warn('Webhook: тело запроса не похоже на Update')
-        res.status(400).json({ error: 'invalid update payload' })
-        return
-      }
-
-      try {
-        await dispatchBotUpdate(options.bot, req.body)
-        res.status(200).end()
-      } catch (err) {
-        logger.error('Webhook: ошибка обработки update', err)
-        res.status(200).end()
-      }
-    },
-  )
+        try {
+          await dispatchBotUpdate(options.bot, req.body)
+          res.status(200).end()
+        } catch (err) {
+          logger.error('Webhook: ошибка обработки update', err)
+          res.status(200).end()
+        }
+      },
+    )
+  }
 
   return app
+}
+
+export function createWebhookApp(options: WebhookAppOptions): express.Express {
+  return createHttpApp({
+    bot: options.bot,
+    webhook: { path: options.webhookPath, secret: options.webhookSecret },
+  })
 }

@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Комментарии</title>
+  <style>
+    :root {
+      --bg: #0f1115;
+      --panel: #1a1d24;
+      --text: #e8eaed;
+      --muted: #9aa0a6;
+      --accent: #5c9ded;
+      --reply: #3ddc84;
+      --border: #2d323c;
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      height: 100%;
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+    }
+    #app {
+      display: flex;
+      flex-direction: column;
+      height: 100%;
+      max-width: 560px;
+      margin: 0 auto;
+    }
+    header {
+      flex: 0 0 auto;
+      display: flex;
+      gap: 10px;
+      padding: 12px;
+      border-bottom: 1px solid var(--border);
+      background: var(--panel);
+    }
+    header img {
+      width: 72px;
+      height: 72px;
+      object-fit: cover;
+      border-radius: 8px;
+      flex-shrink: 0;
+      display: none;
+    }
+    header img.show { display: block; }
+    .header-text {
+      font-size: 14px;
+      line-height: 1.35;
+      max-height: 4.05em;
+      overflow: hidden;
+      color: var(--text);
+    }
+    #comments {
+      flex: 1 1 auto;
+      overflow-y: auto;
+      padding: 12px;
+      padding-bottom: 88px;
+    }
+    .comment {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 10px 12px;
+      margin-bottom: 10px;
+    }
+    .comment .who {
+      font-weight: 600;
+      font-size: 13px;
+      margin-bottom: 4px;
+      color: var(--accent);
+    }
+    .comment .body {
+      font-size: 14px;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .reply-block {
+      margin-top: 10px;
+      padding-top: 8px;
+      border-top: 1px dashed var(--border);
+    }
+    .reply-block .label {
+      font-size: 12px;
+      color: var(--reply);
+      font-weight: 600;
+      margin-bottom: 4px;
+    }
+    .meta {
+      font-size: 11px;
+      color: var(--muted);
+      margin-top: 6px;
+    }
+    .admin-actions {
+      margin-top: 8px;
+    }
+    .admin-actions button {
+      font-size: 12px;
+      padding: 6px 10px;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      background: #2a3140;
+      color: var(--text);
+      cursor: pointer;
+    }
+    footer {
+      position: fixed;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      max-width: 560px;
+      margin: 0 auto;
+      padding: 10px 12px calc(10px + env(safe-area-inset-bottom));
+      background: linear-gradient(180deg, transparent, var(--bg) 12px);
+      border-top: 1px solid var(--border);
+      background-color: var(--panel);
+    }
+    .composer {
+      display: flex;
+      gap: 8px;
+      align-items: flex-end;
+    }
+    .composer textarea {
+      flex: 1;
+      min-height: 40px;
+      max-height: 120px;
+      resize: vertical;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      padding: 8px 10px;
+      font-size: 14px;
+      background: #12151c;
+      color: var(--text);
+    }
+    .composer button {
+      flex-shrink: 0;
+      padding: 10px 14px;
+      border-radius: 8px;
+      border: none;
+      background: var(--accent);
+      color: #0b0d10;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .composer button:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+    #err {
+      color: #ff8a80;
+      font-size: 13px;
+      margin: 8px 12px;
+      min-height: 1.2em;
+    }
+    .empty {
+      text-align: center;
+      color: var(--muted);
+      font-size: 14px;
+      padding: 24px 8px;
+    }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <header>
+      <img id="postPhoto" alt="" />
+      <div class="header-text" id="postText">Загрузка…</div>
+    </header>
+    <div id="err"></div>
+    <div id="comments"></div>
+    <footer>
+      <div class="composer">
+        <textarea id="input" rows="2" placeholder="Написать комментарий"></textarea>
+        <button type="button" id="sendBtn">Отправить</button>
+      </div>
+    </footer>
+  </div>
+  <script>
+    (function () {
+      var params = new URLSearchParams(window.location.search);
+      var postId = params.get('post_id');
+      var chatId = params.get('chat_id');
+      var userId = params.get('user_id');
+      var username = params.get('username') || 'Гость';
+      var isAdmin = params.get('admin') === '1';
+
+      var postPhotoEl = document.getElementById('postPhoto');
+      var postTextEl = document.getElementById('postText');
+      var commentsEl = document.getElementById('comments');
+      var errEl = document.getElementById('err');
+      var inputEl = document.getElementById('input');
+      var sendBtn = document.getElementById('sendBtn');
+
+      function setErr(msg) {
+        errEl.textContent = msg || '';
+      }
+
+      function scrollCommentsToBottom() {
+        commentsEl.scrollTop = commentsEl.scrollHeight;
+      }
+
+      function esc(s) {
+        return String(s)
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;');
+      }
+
+      function renderComments(list) {
+        if (!list.length) {
+          commentsEl.innerHTML = '<div class="empty">Пока нет комментариев</div>';
+          return;
+        }
+        var html = list.map(function (c) {
+          var replyHtml = '';
+          if (c.reply) {
+            replyHtml =
+              '<div class="reply-block"><div class="label">Канал (ответ)</div><div class="body">' +
+              esc(c.reply.text) +
+              '</div><div class="meta">' +
+              esc(c.reply.timestamp) +
+              '</div></div>';
+          }
+          var adminBtn = '';
+          if (isAdmin) {
+            adminBtn =
+              '<div class="admin-actions"><button type="button" data-reply="' +
+              esc(c.comment_id) +
+              '">Ответить от канала</button></div>';
+          }
+          return (
+            '<div class="comment" data-id="' +
+            esc(c.comment_id) +
+            '"><div class="who">' +
+            esc(c.username) +
+            '</div><div class="body">' +
+            esc(c.text) +
+            '</div>' +
+            replyHtml +
+            '<div class="meta">' +
+            esc(c.timestamp) +
+            '</div>' +
+            adminBtn +
+            '</div>'
+          );
+        }).join('');
+        commentsEl.innerHTML = html;
+
+        if (isAdmin) {
+          commentsEl.querySelectorAll('button[data-reply]').forEach(function (btn) {
+            btn.addEventListener('click', function () {
+              var cid = btn.getAttribute('data-reply');
+              var text = window.prompt('Текст ответа от канала:');
+              if (!text || !text.trim()) return;
+              submitReply(cid, text.trim());
+            });
+          });
+        }
+      }
+
+      function loadPost() {
+        if (!postId) {
+          setErr('Не указан post_id');
+          postTextEl.textContent = '';
+          return Promise.resolve();
+        }
+        return fetch('/api/post/' + encodeURIComponent(postId))
+          .then(function (r) {
+            if (!r.ok) throw new Error('Пост не найден');
+            return r.json();
+          })
+          .then(function (p) {
+            postTextEl.textContent = p.text && p.text.trim() ? p.text : '\u00a0';
+            if (p.photo_url) {
+              postPhotoEl.src = p.photo_url;
+              postPhotoEl.classList.add('show');
+            } else {
+              postPhotoEl.classList.remove('show');
+            }
+          })
+          .catch(function (e) {
+            setErr(e.message || String(e));
+            postTextEl.textContent = '';
+          });
+      }
+
+      function loadComments() {
+        if (!postId) return Promise.resolve();
+        return fetch('/api/comments/' + encodeURIComponent(postId))
+          .then(function (r) {
+            if (!r.ok) throw new Error('Не удалось загрузить комментарии');
+            return r.json();
+          })
+          .then(function (list) {
+            renderComments(Array.isArray(list) ? list : []);
+            scrollCommentsToBottom();
+          })
+          .catch(function (e) {
+            setErr(e.message || String(e));
+          });
+      }
+
+      function submitComment() {
+        if (!postId || !chatId || !userId) {
+          setErr('Нужны параметры post_id, chat_id и user_id в ссылке');
+          return;
+        }
+        var text = inputEl.value.trim();
+        if (!text) return;
+        sendBtn.disabled = true;
+        setErr('');
+        fetch('/api/comment', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            post_id: postId,
+            chat_id: Number(chatId),
+            user_id: Number(userId),
+            username: username,
+            text: text,
+          }),
+        })
+          .then(function (r) {
+            if (!r.ok) return r.json().then(function (j) { throw new Error(j.error || r.status); });
+            return r.json();
+          })
+          .then(function () {
+            inputEl.value = '';
+            return loadComments();
+          })
+          .catch(function (e) {
+            setErr(e.message || String(e));
+          })
+          .finally(function () {
+            sendBtn.disabled = false;
+            scrollCommentsToBottom();
+          });
+      }
+
+      function submitReply(commentId, adminText) {
+        if (!postId || !chatId) {
+          setErr('Нужны post_id и chat_id');
+          return;
+        }
+        setErr('');
+        fetch('/api/reply', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            comment_id: commentId,
+            post_id: postId,
+            chat_id: Number(chatId),
+            admin_text: adminText,
+          }),
+        })
+          .then(function (r) {
+            if (!r.ok) return r.json().then(function (j) { throw new Error(j.error || r.status); });
+            return r.json();
+          })
+          .then(function () {
+            return loadComments();
+          })
+          .catch(function (e) {
+            setErr(e.message || String(e));
+          });
+      }
+
+      sendBtn.addEventListener('click', submitComment);
+
+      loadPost().then(function () {
+        return loadComments();
+      }).then(function () {
+        scrollCommentsToBottom();
+      });
+
+      setInterval(function () {
+        loadComments();
+      }, 15000);
+    })();
+  </script>
+</body>
+</html>

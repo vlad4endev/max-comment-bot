@@ -5,12 +5,17 @@ const bot_1 = require("./bot");
 const config_1 = require("./config");
 const subscriptions_1 = require("./maxPlatform/subscriptions");
 const channelRegistry_1 = require("./services/channelRegistry");
+const commentStore_1 = require("./services/commentStore");
+const postStore_1 = require("./services/postStore");
 const logger_1 = require("./utils/logger");
 const createWebhookApp_1 = require("./webhook/createWebhookApp");
 async function main() {
     const bot = (0, bot_1.initializeBot)();
     await channelRegistry_1.channelRegistry.loadFromDisk();
+    await postStore_1.postStore.loadFromDisk();
+    await commentStore_1.commentStore.loadFromDisk();
     await (0, bot_1.ensureBotProfile)(bot);
+    const listenPort = config_1.config.listenPort;
     if (config_1.config.receiveMode === 'webhook') {
         const webhookPath = config_1.config.webhookPath;
         const webhookUrl = config_1.config.webhookUrl;
@@ -21,10 +26,10 @@ async function main() {
         });
         const server = (0, node_http_1.createServer)(app);
         await new Promise((resolve, reject) => {
-            server.listen(config_1.config.PORT, '0.0.0.0', () => resolve());
+            server.listen(listenPort, '0.0.0.0', () => resolve());
             server.once('error', reject);
         });
-        logger_1.logger.info(`HTTP слушает 0.0.0.0:${config_1.config.PORT}, endpoint webhook: POST ${webhookPath}`);
+        logger_1.logger.info(`HTTP слушает 0.0.0.0:${listenPort}, webhook: POST ${webhookPath}, /api, /miniapp`);
         try {
             await (0, subscriptions_1.setWebhookSubscription)({
                 token: config_1.config.BOT_TOKEN,
@@ -46,7 +51,17 @@ async function main() {
         });
     }
     else {
-        (0, bot_1.setupGracefulShutdown)(bot, { receiveMode: 'polling' });
+        const app = (0, createWebhookApp_1.createHttpApp)({ bot });
+        const server = (0, node_http_1.createServer)(app);
+        await new Promise((resolve, reject) => {
+            server.listen(listenPort, '0.0.0.0', () => resolve());
+            server.once('error', reject);
+        });
+        logger_1.logger.info(`HTTP слушает 0.0.0.0:${listenPort} (/api, /miniapp); long polling для updates`);
+        (0, bot_1.setupGracefulShutdown)(bot, {
+            receiveMode: 'polling',
+            httpServer: server,
+        });
         await (0, bot_1.startBotLongPolling)(bot);
     }
 }

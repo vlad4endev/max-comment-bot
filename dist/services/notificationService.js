@@ -1,62 +1,123 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.NotificationService = void 0;
-exports.createNotificationService = createNotificationService;
+exports.getChannelAdmins = getChannelAdmins;
+exports.notifyAllAdmins = notifyAllAdmins;
+exports.notifyAdminsNewMiniappComment = notifyAdminsNewMiniappComment;
+exports.notifyUserAboutMiniappReply = notifyUserAboutMiniappReply;
 const max_bot_api_1 = require("@maxhub/max-bot-api");
+const config_1 = require("../config");
+const postStore_1 = require("./postStore");
 const logger_1 = require("../utils/logger");
-class NotificationService {
-    bot;
-    adminChatId;
-    constructor(bot, adminChatId) {
-        this.bot = bot;
-        this.adminChatId = adminChatId;
+function preview80(text) {
+    const t = text.trim().replace(/\s+/g, ' ');
+    if (t.length <= 80) {
+        return t;
     }
-    /**
-     * Произвольное текстовое сообщение в админский чат (системные уведомления).
-     */
-    async notifyAdmin(text) {
-        try {
-            await this.bot.api.sendMessageToChat(this.adminChatId, text);
-            logger_1.logger.info('Админ-уведомление отправлено');
-        }
-        catch (err) {
-            logger_1.logger.error('Не удалось отправить админ-уведомление', err);
-        }
-    }
-    async notifyNewComment(data) {
-        const { postId, userId, userName, text, sourceChatId } = data;
-        const chatLine = sourceChatId !== undefined ? `\nЧат: ID ${sourceChatId}` : '';
-        const message = `📝 Новый комментарий
-Пост: #${postId}
-От: ${userName} (ID: ${userId})${chatLine}
-Текст:
-${text}`;
-        const keyboard = max_bot_api_1.Keyboard.inlineKeyboard([
-            [max_bot_api_1.Keyboard.button.callback('✉️ Ответить', `reply_${userId}`)],
-        ]);
-        try {
-            await this.bot.api.sendMessageToChat(this.adminChatId, message, {
-                attachments: [keyboard],
+    return `${t.slice(0, 80)}…`;
+}
+function isChannelAdminOrOwner(member) {
+    return !member.is_bot && (member.is_admin || member.is_owner);
+}
+/**
+ * Возвращает user_id админов и владельцев чата (роли в API: {@link ChatMember.is_admin} / {@link ChatMember.is_owner}).
+ * Вызывает {@link Bot.api.getChatAdmins} → `GET chats/{chat_id}/members/admins`.
+ */
+async function getChannelAdmins(bot, chatId) {
+    try {
+        const { members } = await bot.api.getChatAdmins(chatId);
+        const ids = members.filter(isChannelAdminOrOwner).map((m) => m.user_id);
+        const unique = [...new Set(ids)];
+        if (unique.length === 0) {
+            logger_1.logger.warn('getChannelAdmins: список админов пуст, используем ADMIN_CHAT_ID', {
+                chatId,
             });
-            logger_1.logger.info('Уведомление отправлено админу', { postId, userId, sourceChatId });
+            return [config_1.config.ADMIN_CHAT_ID];
         }
-        catch (err) {
-            logger_1.logger.error('Не удалось отправить уведомление админу о новом комментарии', err);
-        }
+        return unique;
     }
-    async notifyUserAboutReply(userId, replyText) {
-        const message = `💬 На ваш комментарий ответили:\n\n"${replyText}"`;
+    catch (err) {
+        logger_1.logger.warn('getChannelAdmins: не удалось получить админов, fallback на ADMIN_CHAT_ID', {
+            chatId,
+            err,
+        });
+        return [config_1.config.ADMIN_CHAT_ID];
+    }
+}
+function isFallbackAdminChatRecipient(recipientId) {
+    return recipientId === config_1.config.ADMIN_CHAT_ID;
+}
+/**
+ * Уведомляет всех админов канала личными сообщениями; для `ADMIN_CHAT_ID` используется `sendMessageToChat` (супер-админ / группа).
+ */
+async function notifyAllAdmins(bot, chatId, message, extra) {
+    const recipients = await getChannelAdmins(bot, chatId);
+    const unique = [...new Set(recipients)];
+    for (const recipientId of unique) {
         try {
-            await this.bot.api.sendMessageToUser(userId, message);
-            logger_1.logger.info('Пользователю отправлено уведомление об ответе', { userId });
+            if (isFallbackAdminChatRecipient(recipientId)) {
+                await bot.api.sendMessageToChat(config_1.config.ADMIN_CHAT_ID, message, extra);
+            }
+            else {
+                await bot.api.sendMessageToUser(recipientId, message, extra);
+            }
+            logger_1.logger.info('Уведомление админу доставлено', { recipientId, sourceChat: chatId });
         }
         catch (err) {
-            logger_1.logger.error('Не удалось отправить пользователю уведомление об ответе', err);
+            logger_1.logger.warn('Не удалось отправить уведомление админу (пропускаем и идём дальше)', {
+                recipientId,
+                sourceChat: chatId,
+                err,
+            });
         }
     }
 }
-exports.NotificationService = NotificationService;
-function createNotificationService(bot, adminChatId) {
-    return new NotificationService(bot, adminChatId);
+/**
+ * Уведомляет админов канала о новом комментарии из Mini App (текст + ссылка на приложение с admin=1).
+ */
+async function notifyAdminsNewMiniappComment(bot, input) {
+    const base = config_1.config.miniAppUrl;
+    if (!base) {
+        logger_1.logger.warn('notifyAdminsNewMiniappComment: MINI_APP_URL not set');
+        return;
+    }
+    const openUrl = (0, postStore_1.buildMiniAppUrl)(base, input.postId, input.channelChatId, { admin: '1' });
+    const keyboard = max_bot_api_1.Keyboard.inlineKeyboard([
+        [max_bot_api_1.Keyboard.button.link('💬 Открыть комментарии', openUrl)],
+    ]);
+    const postExcerpt = preview80(input.postText);
+    const message = `📌 Новый комментарий
+Пост: «${postExcerpt}»
+Канал: ${input.channelTitle}
+👤 ${input.username}: ${input.commentText}`;
+    await notifyAllAdmins(bot, input.channelChatId, message, {
+        attachments: [keyboard],
+    });
+}
+/**
+ * Шлёт пользователю DM об ответе канала на комментарий (кнопка «Открыть»). Ошибки доставки логируются.
+ */
+async function notifyUserAboutMiniappReply(bot, input) {
+    const base = config_1.config.miniAppUrl;
+    if (!base) {
+        logger_1.logger.warn('notifyUserAboutMiniappReply: MINI_APP_URL not set');
+        return;
+    }
+    const openUrl = (0, postStore_1.buildMiniAppUrl)(base, input.postId, input.channelChatId);
+    const keyboard = max_bot_api_1.Keyboard.inlineKeyboard([[max_bot_api_1.Keyboard.button.link('Открыть', openUrl)]]);
+    const postExcerpt = preview80(input.postText);
+    const message = `💬 Вам ответили на комментарий
+Пост: «${postExcerpt}»
+Ваш комментарий: ${input.userCommentText}
+Ответ канала: ${input.adminReplyText}`;
+    try {
+        await bot.api.sendMessageToUser(input.userId, message, { attachments: [keyboard] });
+        logger_1.logger.info('notifyUserAboutMiniappReply: delivered', { userId: input.userId });
+    }
+    catch (err) {
+        logger_1.logger.warn('notifyUserAboutMiniappReply: could not deliver', {
+            userId: input.userId,
+            err,
+        });
+    }
 }
 //# sourceMappingURL=notificationService.js.map
