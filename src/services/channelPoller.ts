@@ -5,7 +5,11 @@ import { tryAttachCommentsToChannelPost } from './channelPostActions'
 import { isMiniAppOpenUrlConfigured } from './postStore'
 import { channelRegistry } from './channelRegistry'
 
-const DEFAULT_INTERVAL_MS = 30_000
+const MIN_POLL_INTERVAL_MS = 3_000
+const DEFAULT_INTERVAL_MS = Math.max(
+  MIN_POLL_INTERVAL_MS,
+  parseInt(process.env.CHANNEL_POLL_INTERVAL_MS || '', 10) || 30_000,
+)
 const FETCH_COUNT = 10
 
 let intervalId: ReturnType<typeof setInterval> | undefined
@@ -73,6 +77,8 @@ export function startChannelPostPoller(bot: Bot, intervalMs: number = DEFAULT_IN
     return
   }
 
+  const ms = Math.max(MIN_POLL_INTERVAL_MS, intervalMs)
+
   stopChannelPostPoller()
 
   logTickFired()
@@ -100,9 +106,9 @@ export function startChannelPostPoller(bot: Bot, intervalMs: number = DEFAULT_IN
         tickInFlight = false
       }
     })()
-  }, intervalMs)
+  }, ms)
 
-  logger.info(`channelPoller: started (interval ${intervalMs / 1000}s, count=${FETCH_COUNT})`)
+  logger.info(`channelPoller: started (interval ${ms / 1000}s, count=${FETCH_COUNT})`)
 }
 
 export function stopChannelPostPoller(): void {
