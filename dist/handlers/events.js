@@ -38,6 +38,27 @@ function fallbackChatType(isChannel) {
     return isChannel ? 'channel' : 'chat';
 }
 /**
+ * Channel posts should have `recipient.chat_type === 'channel'`, but if MAX sends another value,
+ * we confirm via {@link Bot.api.getChat} so posts are not skipped.
+ */
+async function isLikelyChannelPost(bot, message) {
+    if (message.recipient.chat_type === 'channel') {
+        return true;
+    }
+    const rid = message.recipient.chat_id;
+    if (typeof rid !== 'number' || !Number.isFinite(rid)) {
+        return false;
+    }
+    try {
+        const chat = await bot.api.getChat(rid);
+        return chat.type === 'channel';
+    }
+    catch (err) {
+        logger_1.logger.debug('isLikelyChannelPost: getChat failed', { rid, err });
+        return false;
+    }
+}
+/**
  * Sends a DM by user id; logs and ignores failures (user blocked the bot or never pressed Start).
  */
 async function trySendDmToUser(bot, userId, text, extra) {
@@ -116,8 +137,15 @@ async function isUserChannelAdmin(bot, channelChatId, userId) {
  */
 async function handleChannelAdminPost(bot, ctx, message, user) {
     const chatId = resolveMessageChatId(message, user.user_id);
+    logger_1.logger.info('handleChannelAdminPost: start', {
+        chatId,
+        senderId: user.user_id,
+        recipientChatType: message.recipient.chat_type,
+        messageMid: message.body.mid,
+    });
     const botNumericId = ctx.myId;
     if (botNumericId !== undefined && user.user_id === botNumericId) {
+        logger_1.logger.debug('handleChannelAdminPost: skip (sender is bot)');
         return;
     }
     const miniBase = config_1.config.miniAppUrl;
@@ -127,6 +155,10 @@ async function handleChannelAdminPost(bot, ctx, message, user) {
     }
     const adminOk = await isUserChannelAdmin(bot, chatId, user.user_id);
     if (!adminOk) {
+        logger_1.logger.info('handleChannelAdminPost: skip (user is not channel admin/owner)', {
+            chatId,
+            userId: user.user_id,
+        });
         return;
     }
     const postId = (0, uuid_1.v4)();
@@ -145,16 +177,7 @@ async function handleChannelAdminPost(bot, ctx, message, user) {
     const openUrl = (0, postStore_1.buildMiniAppUrl)(miniBase, postId, chatId);
     const kb = max_bot_api_1.Keyboard.inlineKeyboard([[max_bot_api_1.Keyboard.button.link('💬 Комментарии (0)', openUrl)]]);
     const editText = text === '' ? '\u00a0' : text;
-    try {
-        await bot.api.editMessage(message.body.mid, {
-            text: editText,
-            attachments: [kb],
-        });
-        logger_1.logger.info('handleChannelAdminPost: кнопка комментариев добавлена', { postId, chatId });
-    }
-    catch (err) {
-        logger_1.logger.warn('handleChannelAdminPost: editMessage не удался', { postId, chatId, err });
-    }
+    await (0, postStore_1.attachCommentButtonToChannelPost)(bot, post, editText, kb);
 }
 /**
  * Resolves who should receive onboarding DMs: for `bot_added` this is `ctx.user` (who added the bot);
@@ -340,7 +363,14 @@ function registerEventHandlers(bot) {
         }
         const chatId = resolveMessageChatId(message, user.user_id);
         logger_1.logger.info(`message_created: от ${user.user_id} в чате ${chatId}`);
-        if (message.recipient.chat_type === 'channel') {
+        const channelLikely = await isLikelyChannelPost(bot, message);
+        if (channelLikely) {
+            logger_1.logger.info('message_created: treating as channel post', {
+                chatId,
+                recipientChatType: message.recipient.chat_type,
+                messageMid: message.body.mid,
+            });
+            logger_1.logger.info('message_created: full message JSON', { json: JSON.stringify(message) });
             await handleChannelAdminPost(bot, ctx, message, user);
             return;
         }

@@ -1,6 +1,7 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.postStore = exports.PostStore = void 0;
+exports.attachCommentButtonToChannelPost = attachCommentButtonToChannelPost;
 exports.buildMiniAppUrl = buildMiniAppUrl;
 const promises_1 = require("node:fs/promises");
 const node_path_1 = require("node:path");
@@ -17,6 +18,7 @@ function isPost(value) {
         typeof o.chat_id === 'number' &&
         Number.isInteger(o.chat_id) &&
         typeof o.message_mid === 'string' &&
+        (o.comments_ui_message_mid === undefined || typeof o.comments_ui_message_mid === 'string') &&
         typeof o.text === 'string' &&
         (o.photo_url === undefined || typeof o.photo_url === 'string') &&
         typeof o.comment_count === 'number' &&
@@ -113,9 +115,14 @@ class PostStore {
         const kb = max_bot_api_1.Keyboard.inlineKeyboard([
             [max_bot_api_1.Keyboard.button.link(`💬 Комментарии (${post.comment_count})`, url)],
         ]);
-        const text = post.text.trim() === '' ? '\u00a0' : post.text;
+        const targetMid = post.comments_ui_message_mid ?? post.message_mid;
+        const text = post.comments_ui_message_mid !== undefined
+            ? '\u00a0'
+            : post.text.trim() === ''
+                ? '\u00a0'
+                : post.text;
         try {
-            await bot.api.editMessage(post.message_mid, {
+            await bot.api.editMessage(targetMid, {
                 text,
                 attachments: [kb],
             });
@@ -123,6 +130,7 @@ class PostStore {
         catch (err) {
             logger_1.logger.warn('postStore.updateButtonCaption: editMessage failed', {
                 postId: post.post_id,
+                targetMid,
                 err,
             });
         }
@@ -144,6 +152,52 @@ class PostStore {
     }
 }
 exports.PostStore = PostStore;
+/**
+ * Option A: {@link Bot.api.editMessage} on the original post (`message_id` + body with `attachments`).
+ * Option B (fallback): {@link Bot.api.sendMessageToChat} with `link: { type: 'reply', mid }` — bot-owned message with the keyboard, because channel admins' posts are often not editable by the bot.
+ */
+async function attachCommentButtonToChannelPost(bot, post, editText, keyboard) {
+    try {
+        await bot.api.editMessage(post.message_mid, {
+            text: editText,
+            attachments: [keyboard],
+        });
+        logger_1.logger.info('attachCommentButton: edited original channel post', {
+            postId: post.post_id,
+            messageMid: post.message_mid,
+        });
+        return;
+    }
+    catch (err) {
+        logger_1.logger.warn('attachCommentButton: editMessage failed, trying reply fallback', {
+            postId: post.post_id,
+            chatId: post.chat_id,
+            messageMid: post.message_mid,
+            err,
+        });
+    }
+    try {
+        const replyStub = '\u00a0';
+        const sent = await bot.api.sendMessageToChat(post.chat_id, replyStub, {
+            attachments: [keyboard],
+            link: { type: 'reply', mid: post.message_mid },
+        });
+        const uiMid = sent.body.mid;
+        exports.postStore.savePost({ ...post, comments_ui_message_mid: uiMid });
+        logger_1.logger.info('attachCommentButton: sent reply message with keyboard', {
+            postId: post.post_id,
+            commentsUiMessageMid: uiMid,
+            replyToMid: post.message_mid,
+        });
+    }
+    catch (err) {
+        logger_1.logger.error('attachCommentButton: reply fallback failed', {
+            postId: post.post_id,
+            chatId: post.chat_id,
+            err,
+        });
+    }
+}
 /**
  * Builds Mini App open URL with required query params (URL-encoded).
  */

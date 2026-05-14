@@ -1,4 +1,5 @@
 import type { Bot } from '@maxhub/max-bot-api';
+import type { InlineKeyboardAttachmentRequest } from '@maxhub/max-bot-api/types';
 /**
  * Channel post tracked for Mini App comments (MAX message id is {@link Post.message_mid}).
  */
@@ -6,6 +7,8 @@ export interface Post {
     post_id: string;
     chat_id: number;
     message_mid: string;
+    /** If {@link attachCommentButtonToChannelPost} falls back to a reply, edits/updates target this bot message id. */
+    comments_ui_message_mid?: string;
     text: string;
     photo_url?: string;
     comment_count: number;
@@ -46,6 +49,11 @@ export declare class PostStore {
     private queuePersist;
     private persist;
 }
+/**
+ * Option A: {@link Bot.api.editMessage} on the original post (`message_id` + body with `attachments`).
+ * Option B (fallback): {@link Bot.api.sendMessageToChat} with `link: { type: 'reply', mid }` — bot-owned message with the keyboard, because channel admins' posts are often not editable by the bot.
+ */
+export declare function attachCommentButtonToChannelPost(bot: Bot, post: Post, editText: string, keyboard: InlineKeyboardAttachmentRequest): Promise<void>;
 /**
  * Builds Mini App open URL with required query params (URL-encoded).
  */

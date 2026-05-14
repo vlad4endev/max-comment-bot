@@ -7,7 +7,12 @@ import { config } from '../config'
 import { channelRegistry } from '../services/channelRegistry'
 import { commentStore } from '../services/commentStore'
 import { notifyAllAdmins, type SendMessageExtra } from '../services/notificationService'
-import { buildMiniAppUrl, postStore, type Post } from '../services/postStore'
+import {
+  attachCommentButtonToChannelPost,
+  buildMiniAppUrl,
+  postStore,
+  type Post,
+} from '../services/postStore'
 import { stateManager } from '../services/stateManager'
 import { logger } from '../utils/logger'
 
@@ -40,6 +45,27 @@ function resolveMessageChatId(message: Message, fallbackUserId: number): number 
  */
 function fallbackChatType(isChannel: boolean): ChatType {
   return isChannel ? 'channel' : 'chat'
+}
+
+/**
+ * Channel posts should have `recipient.chat_type === 'channel'`, but if MAX sends another value,
+ * we confirm via {@link Bot.api.getChat} so posts are not skipped.
+ */
+async function isLikelyChannelPost(bot: Bot, message: Message): Promise<boolean> {
+  if (message.recipient.chat_type === 'channel') {
+    return true
+  }
+  const rid = message.recipient.chat_id
+  if (typeof rid !== 'number' || !Number.isFinite(rid)) {
+    return false
+  }
+  try {
+    const chat = await bot.api.getChat(rid)
+    return chat.type === 'channel'
+  } catch (err: unknown) {
+    logger.debug('isLikelyChannelPost: getChat failed', { rid, err })
+    return false
+  }
 }
 
 /**
@@ -128,8 +154,15 @@ async function isUserChannelAdmin(bot: Bot, channelChatId: number, userId: numbe
  */
 async function handleChannelAdminPost(bot: Bot, ctx: Context, message: Message, user: User): Promise<void> {
   const chatId = resolveMessageChatId(message, user.user_id)
+  logger.info('handleChannelAdminPost: start', {
+    chatId,
+    senderId: user.user_id,
+    recipientChatType: message.recipient.chat_type,
+    messageMid: message.body.mid,
+  })
   const botNumericId = ctx.myId
   if (botNumericId !== undefined && user.user_id === botNumericId) {
+    logger.debug('handleChannelAdminPost: skip (sender is bot)')
     return
   }
   const miniBase = config.miniAppUrl
@@ -139,6 +172,10 @@ async function handleChannelAdminPost(bot: Bot, ctx: Context, message: Message, 
   }
   const adminOk = await isUserChannelAdmin(bot, chatId, user.user_id)
   if (!adminOk) {
+    logger.info('handleChannelAdminPost: skip (user is not channel admin/owner)', {
+      chatId,
+      userId: user.user_id,
+    })
     return
   }
 
@@ -160,15 +197,7 @@ async function handleChannelAdminPost(bot: Bot, ctx: Context, message: Message, 
   const kb = Keyboard.inlineKeyboard([[Keyboard.button.link('💬 Комментарии (0)', openUrl)]])
   const editText = text === '' ? '\u00a0' : text
 
-  try {
-    await bot.api.editMessage(message.body.mid, {
-      text: editText,
-      attachments: [kb],
-    })
-    logger.info('handleChannelAdminPost: кнопка комментариев добавлена', { postId, chatId })
-  } catch (err: unknown) {
-    logger.warn('handleChannelAdminPost: editMessage не удался', { postId, chatId, err })
-  }
+  await attachCommentButtonToChannelPost(bot, post, editText, kb)
 }
 
 /**
@@ -415,7 +444,14 @@ export function registerEventHandlers(bot: Bot): void {
     const chatId = resolveMessageChatId(message, user.user_id)
     logger.info(`message_created: от ${user.user_id} в чате ${chatId}`)
 
-    if (message.recipient.chat_type === 'channel') {
+    const channelLikely = await isLikelyChannelPost(bot, message)
+    if (channelLikely) {
+      logger.info('message_created: treating as channel post', {
+        chatId,
+        recipientChatType: message.recipient.chat_type,
+        messageMid: message.body.mid,
+      })
+      logger.info('message_created: full message JSON', { json: JSON.stringify(message) })
       await handleChannelAdminPost(bot, ctx, message, user)
       return
     }
