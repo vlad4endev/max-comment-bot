@@ -1985,19 +1985,44 @@
 
       if (window.visualViewport) {
         var shellEl = document.querySelector('.shell')
+        var commentsViewEl = document.getElementById('view-comments')
         var rootEl = document.documentElement
         var MIN_KEYBOARD_HEIGHT = 120
+        var keyboardFocused = false
+        var isTextField = function (el) {
+          if (!el || !el.tagName) return false
+          var tag = String(el.tagName).toLowerCase()
+          return tag === 'input' || tag === 'textarea'
+        }
         var syncViewportLayout = function () {
           var vv = window.visualViewport
           if (!vv) return
           if (shellEl) {
+            shellEl.style.top = vv.offsetTop + 'px'
+            shellEl.style.bottom = 'auto'
             shellEl.style.height = vv.height + 'px'
           }
-          var keyboardOpen = vv.height < window.innerHeight - MIN_KEYBOARD_HEIGHT
+          var layoutHeight = Math.max(window.innerHeight || 0, document.documentElement.clientHeight || 0)
+          var keyboardInset = layoutHeight - (vv.height + vv.offsetTop)
+          var keyboardOpen = keyboardFocused || keyboardInset > MIN_KEYBOARD_HEIGHT
           rootEl.style.setProperty(
             '--composer-safe-bottom',
             keyboardOpen ? '0px' : 'env(safe-area-inset-bottom)'
           )
+        }
+        if (commentsViewEl && commentsViewEl.dataset.keyboardBound !== '1') {
+          commentsViewEl.dataset.keyboardBound = '1'
+          commentsViewEl.addEventListener('focusin', function (e) {
+            if (!isTextField(e.target)) return
+            keyboardFocused = true
+            rootEl.style.setProperty('--composer-safe-bottom', '0px')
+            syncViewportLayout()
+          })
+          commentsViewEl.addEventListener('focusout', function (e) {
+            if (!isTextField(e.target)) return
+            keyboardFocused = false
+            window.setTimeout(syncViewportLayout, 80)
+          })
         }
         window.visualViewport.addEventListener('resize', syncViewportLayout)
         window.visualViewport.addEventListener('scroll', syncViewportLayout)
