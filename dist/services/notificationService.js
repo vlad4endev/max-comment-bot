@@ -1,6 +1,8 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.getChannelAdmins = getChannelAdmins;
+exports.deliverAdminNotifications = deliverAdminNotifications;
+exports.collectAdminNotifyRecipientIds = collectAdminNotifyRecipientIds;
 exports.notifyAllAdmins = notifyAllAdmins;
 exports.notifyAdminsNewMiniappComment = notifyAdminsNewMiniappComment;
 exports.notifyUserAboutMiniappReply = notifyUserAboutMiniappReply;

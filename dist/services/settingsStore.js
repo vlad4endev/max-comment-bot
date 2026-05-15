@@ -7,6 +7,10 @@ const logger_1 = require("../utils/logger");
  * Links a user to a channel for admin notifications (delegates to {@link channelNotifyLinkStore}).
  */
 exports.settingsStore = {
+    /** User ids linked to this channel for admin / comment notifications (from {@link channelNotifyLinkStore}). */
+    getUsersLinkedToChannel(channelChatId) {
+        return channelNotifyLinkStore_1.channelNotifyLinkStore.getUserIdsForChannel(channelChatId);
+    },
     linkUserToChannel(userId, channelChatId) {
         logger_1.logger.info('DEBUG linkUserToChannel', {
             userId,

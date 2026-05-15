@@ -97,7 +97,7 @@ function isFallbackAdminChatRecipient(recipientId: number): boolean {
   return recipientId === config.ADMIN_CHAT_ID
 }
 
-async function deliverAdminNotifications(
+export async function deliverAdminNotifications(
   bot: Bot,
   sourceChatId: number,
   recipientIds: number[],
@@ -128,7 +128,7 @@ async function deliverAdminNotifications(
 /**
  * Кто получает DM: сначала явно подключившиеся через invite, плюс админы/владельцы из API.
  */
-async function collectAdminNotifyRecipientIds(bot: Bot, channelChatId: number): Promise<number[]> {
+export async function collectAdminNotifyRecipientIds(bot: Bot, channelChatId: number): Promise<number[]> {
   const recipients = new Set<number>()
   const linked = channelNotifyLinkStore.getUserIdsForChannel(channelChatId)
   for (const userId of linked) {

@@ -10,6 +10,11 @@ export type SendMessageExtra = NonNullable<Parameters<Bot['api']['sendMessageToU
  * Вызывает {@link Bot.api.getChatAdmins} → `GET chats/{chat_id}/members/admins`.
  */
 export declare function getChannelAdmins(bot: Bot, chatId: number): Promise<number[]>;
+export declare function deliverAdminNotifications(bot: Bot, sourceChatId: number, recipientIds: number[], message: string, extra?: SendMessageExtra): Promise<AdminNotificationSendResult[]>;
+/**
+ * Кто получает DM: сначала явно подключившиеся через invite, плюс админы/владельцы из API.
+ */
+export declare function collectAdminNotifyRecipientIds(bot: Bot, channelChatId: number): Promise<number[]>;
 /**
  * Уведомляет всех админов канала личными сообщениями; для `ADMIN_CHAT_ID` используется `sendMessageToChat` (супер-админ / группа).
  * Возвращает пары `admin_id` / `message_mid` только для успешно отправленных сообщений.

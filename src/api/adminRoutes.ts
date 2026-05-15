@@ -6,8 +6,8 @@ import type { ChatMember } from '@maxhub/max-bot-api/types'
 import express from 'express'
 
 import { config } from '../config'
-import { clearAdminJoinNotifiedForChannel } from '../handlers/events'
 import { checkAdminAuth } from '../middleware/adminAuth'
+import { fullyDisconnectRegisteredChannel } from '../services/channelFullDisconnect'
 import { getRecentAdminActivity } from '../services/adminActivityStore'
 import { adminRuntimeSettingsStore } from '../services/adminRuntimeSettingsStore'
 import { channelNotifyLinkStore } from '../services/channelNotifyLinkStore'
@@ -377,19 +377,14 @@ export function createAdminRouter(deps: AdminRouterDeps): express.Router {
     }
   })
 
-  secured.post('/remove-channel', (req, res) => {
+  secured.post('/remove-channel', async (req, res) => {
     const body = req.body
     const chatId = isRecord(body) ? parseNonZeroInt(body.chat_id) : null
     if (chatId === null) {
       res.status(400).json({ error: 'invalid chat_id' })
       return
     }
-    stateManager.clearChannelPendingAdminRights(chatId)
-    clearAdminJoinNotifiedForChannel(chatId)
-    channelNotifyLinkStore.removeAllForChannel(chatId)
-    const postIds = postStore.removePostsForChatId(chatId)
-    commentStore.removeCommentsByPostIds(new Set(postIds))
-    channelRegistry.removeChannel(chatId)
+    await fullyDisconnectRegisteredChannel(deps.bot, chatId, 'manual_admin_panel')
     res.json({ ok: true })
   })
 

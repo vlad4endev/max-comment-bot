@@ -8,8 +8,8 @@ const promises_1 = require("node:fs/promises");
 const node_path_1 = require("node:path");
 const express_1 = __importDefault(require("express"));
 const config_1 = require("../config");
-const events_1 = require("../handlers/events");
 const adminAuth_1 = require("../middleware/adminAuth");
+const channelFullDisconnect_1 = require("../services/channelFullDisconnect");
 const adminActivityStore_1 = require("../services/adminActivityStore");
 const adminRuntimeSettingsStore_1 = require("../services/adminRuntimeSettingsStore");
 const channelNotifyLinkStore_1 = require("../services/channelNotifyLinkStore");
@@ -319,19 +319,14 @@ function createAdminRouter(deps) {
             res.status(500).json({ error: 'failed' });
         }
     });
-    secured.post('/remove-channel', (req, res) => {
+    secured.post('/remove-channel', async (req, res) => {
         const body = req.body;
         const chatId = isRecord(body) ? parseNonZeroInt(body.chat_id) : null;
         if (chatId === null) {
             res.status(400).json({ error: 'invalid chat_id' });
             return;
         }
-        stateManager_1.stateManager.clearChannelPendingAdminRights(chatId);
-        (0, events_1.clearAdminJoinNotifiedForChannel)(chatId);
-        channelNotifyLinkStore_1.channelNotifyLinkStore.removeAllForChannel(chatId);
-        const postIds = postStore_1.postStore.removePostsForChatId(chatId);
-        commentStore_1.commentStore.removeCommentsByPostIds(new Set(postIds));
-        channelRegistry_1.channelRegistry.removeChannel(chatId);
+        await (0, channelFullDisconnect_1.fullyDisconnectRegisteredChannel)(deps.bot, chatId, 'manual_admin_panel');
         res.json({ ok: true });
     });
     secured.post('/settings', async (req, res) => {

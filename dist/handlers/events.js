@@ -1,11 +1,12 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.clearAdminJoinNotifiedForChannel = clearAdminJoinNotifiedForChannel;
+exports.clearAdminJoinNotifiedForChannel = void 0;
 exports.registerEventHandlers = registerEventHandlers;
 const max_bot_api_1 = require("@maxhub/max-bot-api");
 const config_1 = require("../config");
+const botChannelMembership_1 = require("../services/botChannelMembership");
+const channelAdminJoinNotified_1 = require("../services/channelAdminJoinNotified");
 const channelPostActions_1 = require("../services/channelPostActions");
-const channelNotifyLinkStore_1 = require("../services/channelNotifyLinkStore");
 const channelRegistry_1 = require("../services/channelRegistry");
 const resolveChannelChatId_1 = require("../services/resolveChannelChatId");
 const commentStore_1 = require("../services/commentStore");
@@ -142,22 +143,6 @@ async function trySendDmToUser(bot, userId, text, extra) {
         logger_1.logger.warn('trySendDmToUser: could not deliver private message', { userId, err });
     }
 }
-/**
- * Loads the bot's own {@link ChatMember} row in a chat via `GET chats/{id}/members/me`.
- */
-async function fetchBotChatMember(bot, channelChatId) {
-    try {
-        return await bot.api.getChatMembership(channelChatId);
-    }
-    catch (err) {
-        logger_1.logger.warn('fetchBotChatMember: API error', { channelChatId, err });
-        return null;
-    }
-}
-/** Whether the bot is allowed to moderate the channel (admin or owner). */
-function isBotAdminOrOwner(member) {
-    return member.is_admin || member.is_owner;
-}
 async function fetchChatTitle(bot, channelChatId) {
     try {
         const chat = await bot.api.getChat(channelChatId);
@@ -273,11 +258,6 @@ function parseAddButtonInput(raw) {
     return { kind: 'mid_only', mid: t };
 }
 /**
- * In-memory: we already sent the "bot joined with admin rights" admin notification for this chat.
- * Cleared on {@link unregisterChannelOnBotLeave}. Survives pending→admin transitions without duplicate notify.
- */
-const channelsAdminJoinNotified = new Set();
-/**
  * Persists channel metadata to the registry as soon as the bot is in the chat.
  * Admin rights only gate processing/notifications elsewhere, not whether the row exists on disk.
  */
@@ -341,22 +321,22 @@ async function postChannelAdminInviteToChannel(bot, channelChatId) {
  */
 async function tryActivateChannelRegistration(ctx, bot, channelChatId, isChannel) {
     await ensureChannelPersisted(ctx, channelChatId, isChannel);
-    const member = await fetchBotChatMember(bot, channelChatId);
+    const member = await (0, botChannelMembership_1.fetchBotChatMember)(bot, channelChatId);
     if (!member) {
         stateManager_1.stateManager.markChannelPendingAdminRights(channelChatId);
         return { status: 'pending', shouldNotifyMissingAdmin: false };
     }
-    if (!isBotAdminOrOwner(member)) {
+    if (!(0, botChannelMembership_1.isBotAdminOrOwner)(member)) {
         stateManager_1.stateManager.markChannelPendingAdminRights(channelChatId);
         return { status: 'pending', shouldNotifyMissingAdmin: true };
     }
     stateManager_1.stateManager.clearChannelPendingAdminRights(channelChatId);
-    if (channelsAdminJoinNotified.has(channelChatId)) {
+    if ((0, channelAdminJoinNotified_1.hasChannelAdminJoinNotified)(channelChatId)) {
         return { status: 'already_registered' };
     }
     await notifyAdminsChannelJoined(bot, channelChatId);
     await postChannelAdminInviteToChannel(bot, channelChatId);
-    channelsAdminJoinNotified.add(channelChatId);
+    (0, channelAdminJoinNotified_1.markChannelAdminJoinNotified)(channelChatId);
     return { status: 'registered' };
 }
 async function dmInviterAboutMissingAdmin(bot, inviterUserId, channelChatId, channelTitle) {
@@ -376,24 +356,48 @@ async function dmInviterAboutMissingAdmin(bot, inviterUserId, channelChatId, cha
     logger_1.logger.warn('dmInviterAboutMissingAdmin: no inviter user id; skipping DM', { channelChatId });
 }
 /**
- * Сбрасывает in-memory флаги уведомления о подключении (при ручном «отключении» канала в админке).
+ * Bot left the channel or lost admin: drop registry entry only, notify linked users, log.
+ * Does not delete posts, comments, notify links, or subscribers.
  */
-function clearAdminJoinNotifiedForChannel(channelChatId) {
-    channelsAdminJoinNotified.delete(channelChatId);
-}
-/**
- * Удаляет чат из реестра и уведомляет администратора (один раз, если запись была).
- */
-async function unregisterChannelOnBotLeave(bot, chatId) {
-    stateManager_1.stateManager.clearChannelPendingAdminRights(chatId);
-    channelsAdminJoinNotified.delete(chatId);
-    channelNotifyLinkStore_1.channelNotifyLinkStore.removeAllForChannel(chatId);
-    const removed = channelRegistry_1.channelRegistry.removeChannel(chatId);
-    if (!removed) {
+async function handleBotDisconnected(bot, chatId, reason) {
+    const channel = channelRegistry_1.channelRegistry.getChannel(chatId);
+    if (!channel) {
+        logger_1.logger.info('handleBotDisconnected: channel not in registry', { chatId });
         return;
     }
-    await (0, notificationService_1.notifyAllAdmins)(bot, chatId, `❌ Бот удалён из канала «${removed.title ?? 'без названия'}» (номер чата: ${chatId}).`);
+    const channelTitle = channel.title ?? `ID ${chatId}`;
+    logger_1.logger.info('handleBotDisconnected: disconnecting', { chatId, channelTitle, reason });
+    const linkedAdmins = settingsStore_1.settingsStore.getUsersLinkedToChannel(chatId);
+    channelRegistry_1.channelRegistry.removeChannel(chatId);
+    logger_1.logger.info('handleBotDisconnected: removed from registry', { chatId });
+    const reasonText = reason === 'bot_removed' ? 'был удалён из канала' : 'потерял права администратора';
+    const message = `⚠️ Бот отключён от канала\n\n` +
+        `Канал: «${channelTitle}»\n` +
+        `Причина: бот ${reasonText}.\n\n` +
+        `Чтобы переподключить — добавьте бота снова как администратора.`;
+    for (const adminId of linkedAdmins) {
+        try {
+            await bot.api.sendMessageToUser(adminId, message);
+            logger_1.logger.info('handleBotDisconnected: notified admin', { adminId, chatId });
+        }
+        catch (err) {
+            logger_1.logger.warn('handleBotDisconnected: failed to notify admin', { adminId, chatId, err });
+        }
+    }
+    const ownerChatId = config_1.config.ADMIN_CHAT_ID;
+    if (ownerChatId && !linkedAdmins.includes(ownerChatId)) {
+        try {
+            await bot.api.sendMessageToChat(ownerChatId, message);
+            logger_1.logger.info('handleBotDisconnected: notified owner', { ownerChatId, chatId });
+        }
+        catch (err) {
+            logger_1.logger.warn('handleBotDisconnected: failed to notify owner', { err });
+        }
+    }
+    logger_1.logger.info('handleBotDisconnected: done', { chatId, channelTitle });
 }
+var channelAdminJoinNotified_2 = require("../services/channelAdminJoinNotified");
+Object.defineProperty(exports, "clearAdminJoinNotifiedForChannel", { enumerable: true, get: function () { return channelAdminJoinNotified_2.clearAdminJoinNotifiedForChannel; } });
 function registerEventHandlers(bot) {
     bot.on('bot_added', async (ctx) => {
         const { chat_id: channelChatId, is_channel: isChannel } = ctx.update;
@@ -406,9 +410,9 @@ function registerEventHandlers(bot) {
         }
     });
     bot.on('bot_removed', async (ctx) => {
-        const { chat_id } = ctx.update;
-        logger_1.logger.info(`bot_removed: chat_id=${chat_id}`);
-        await unregisterChannelOnBotLeave(bot, chat_id);
+        const { chat_id: channelChatId } = ctx.update;
+        logger_1.logger.info(`bot_removed: chat_id=${channelChatId}`);
+        await handleBotDisconnected(bot, channelChatId, 'bot_removed');
     });
     /**
      * MAX использует `user_added`, когда участник вступает в чат.
@@ -435,10 +439,11 @@ function registerEventHandlers(bot) {
         }
     });
     /**
-     * Аналогично `user_removed`: если удалили бота, дублируем логику `bot_removed`, если событие одно из двух.
+     * Бот снят с роли или удалён как участник: частичное отключение (только реестр + уведомления).
+     * Если придёт и `bot_removed`, второй вызов не сделает ничего — канала уже нет в реестре.
      */
     bot.on('user_removed', async (ctx) => {
-        const { chat_id } = ctx.update;
+        const { chat_id: channelChatId } = ctx.update;
         const removedUserId = ctx.user?.user_id;
         const botNumericId = ctx.myId;
         if (removedUserId === undefined ||
@@ -446,8 +451,8 @@ function registerEventHandlers(bot) {
             removedUserId !== botNumericId) {
             return;
         }
-        logger_1.logger.info(`user_removed (self): chat_id=${chat_id}`);
-        await unregisterChannelOnBotLeave(bot, chat_id);
+        logger_1.logger.info(`user_removed (bot): chat_id=${channelChatId}`);
+        await handleBotDisconnected(bot, channelChatId, 'admin_rights_removed');
     });
     bot.on('bot_started', async (ctx) => {
         try {
