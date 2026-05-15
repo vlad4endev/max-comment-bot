@@ -62,11 +62,12 @@ async function handlePrivateChatMessage(bot, message, user) {
         return;
     }
     const alreadyRegistered = subscriberStore_1.subscriberStore.hasSubscriber(userId);
-    if (!alreadyRegistered) {
-        subscriberStore_1.subscriberStore.addSubscriber(userId);
-        logger_1.logger.info('New subscriber registered', { userId });
-        await trySendBotActivationWelcome(bot, chatId);
+    if (alreadyRegistered) {
+        return;
     }
+    subscriberStore_1.subscriberStore.addSubscriber(userId);
+    logger_1.logger.info('New subscriber registered via private message', { userId, messageText });
+    await trySendBotActivationWelcome(bot, chatId);
 }
 function buildMiniAppHomeUrl() {
     return buildBotStartappUrl('start');

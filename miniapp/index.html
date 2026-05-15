@@ -1102,25 +1102,18 @@
           font-weight: 700;
           text-decoration: none;
           margin-bottom: 32px;
-        ">🚀 Запустить бота</a>
+        ">💬 Написать боту</a>
 
         <p id="gateLaunchHint" style="
           font-size: 13px;
           color: rgba(255,255,255,0.45);
           line-height: 1.5;
           max-width: 300px;
-          margin: 0 0 8px;
-        ">
-          Нажмите кнопку → откроется бот → бот автоматически активируется
-        </p>
-        <p style="
-          font-size: 12px;
-          color: rgba(255,255,255,0.3);
-          line-height: 1.45;
-          max-width: 300px;
           margin: 0 0 16px;
+          white-space: pre-line;
         ">
-          Если бот не активировался — напишите боту любое сообщение
+Напишите боту любое сообщение — например «привет»
+Затем вернитесь сюда
         </p>
 
         <button type="button" id="gateManualRegisterBtn" style="
@@ -1135,7 +1128,7 @@
           color: rgba(255,255,255,0.5);
           font-size: 14px;
           cursor: pointer;
-        ">✓ Я запустил бота</button>
+        ">✓ Я уже написал боту</button>
 
         <div style="
           background: rgba(255,255,255,0.04);
@@ -1853,7 +1846,7 @@
 
     var gateUid = null;
 
-    function manualRegister() {
+    function selfRegister() {
       var uid =
         gateUid ||
         getBridgeNumericUserId(user) ||
@@ -1918,10 +1911,8 @@
           return r.json();
         })
         .then(function (cfg) {
-          var startParam = uid ? 'sub_' + uid : 'start';
           var nick = String(cfg.bot_nickname || '').replace(/^@/, '');
-          // MAX bot deeplink: ?start= triggers bot_started (see dev.max.ru/docs/chatbots/bots-coding/prepare)
-          var url = 'https://max.ru/' + nick + '?startapp=' + startParam;
+          var url = 'https://max.ru/@' + nick;
           var btn = document.getElementById('gateLaunchBtn');
           if (btn) btn.href = url;
         })
@@ -1932,7 +1923,7 @@
       var gateBtn = document.getElementById('gateManualRegisterBtn');
       if (!gateBtn || gateBtn.dataset.bound === '1') return;
       gateBtn.dataset.bound = '1';
-      gateBtn.addEventListener('click', manualRegister);
+      gateBtn.addEventListener('click', selfRegister);
     })();
 
     function bootComments() {

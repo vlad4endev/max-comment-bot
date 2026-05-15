@@ -78,12 +78,13 @@ async function handlePrivateChatMessage(bot: Bot, message: Message, user: User):
   }
 
   const alreadyRegistered = subscriberStore.hasSubscriber(userId)
-
-  if (!alreadyRegistered) {
-    subscriberStore.addSubscriber(userId)
-    logger.info('New subscriber registered', { userId })
-    await trySendBotActivationWelcome(bot, chatId)
+  if (alreadyRegistered) {
+    return
   }
+
+  subscriberStore.addSubscriber(userId)
+  logger.info('New subscriber registered via private message', { userId, messageText })
+  await trySendBotActivationWelcome(bot, chatId)
 }
 
 function buildMiniAppHomeUrl(): string {
