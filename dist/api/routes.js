@@ -148,6 +148,29 @@ function toWireComment(c) {
 function createCommentApiRouter(deps) {
     const router = express_1.default.Router();
     router.use(express_1.default.json({ limit: '512kb' }));
+    router.get('/config', (_req, res) => {
+        res.json({ bot_nickname: config_1.config.botNickname });
+    });
+    router.get('/channel-info', async (req, res) => {
+        const chatId = parseNonZeroInt(req.query.chat_id);
+        if (chatId === null) {
+            res.status(400).json({ error: 'missing or invalid chat_id' });
+            return;
+        }
+        const cached = channelRegistry_1.channelRegistry.getChannel(chatId);
+        if (cached?.title) {
+            res.json({ title: cached.title });
+            return;
+        }
+        try {
+            const chat = await deps.bot.api.getChat(chatId);
+            res.json({ title: chat.title ?? null });
+        }
+        catch (err) {
+            logger_1.logger.warn('GET /channel-info: getChat failed', { chatId, err });
+            res.json({ title: cached?.title ?? null });
+        }
+    });
     router.get('/user-status', async (req, res) => {
         const userId = parsePositiveInt(req.query.user_id);
         if (!userId) {

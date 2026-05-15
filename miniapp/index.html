@@ -844,6 +844,62 @@
       opacity: 0.45;
       cursor: not-allowed;
     }
+    #view-comments .admin-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin: 6px 0 0 38px;
+    }
+    #view-comments .admin-actions.reply-actions {
+      margin-left: 38px;
+      margin-top: 4px;
+    }
+    #view-comments .admin-act-btn {
+      font-size: 11px;
+      padding: 4px 10px;
+      border-radius: 8px;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      background: rgba(255, 255, 255, 0.04);
+      color: rgba(255, 255, 255, 0.55);
+      cursor: pointer;
+    }
+    #view-comments .admin-act-btn.danger {
+      border-color: rgba(255, 100, 100, 0.35);
+      color: #e88;
+    }
+    #view-comments .admin-edit-inline {
+      display: none;
+      flex-direction: column;
+      gap: 6px;
+      margin: 6px 0 0 38px;
+    }
+    #view-comments .admin-edit-inline.open {
+      display: flex;
+    }
+    #view-comments .admin-edit-inline textarea {
+      width: 100%;
+      border-radius: 12px;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      background: rgba(255, 255, 255, 0.05);
+      color: rgba(255, 255, 255, 0.85);
+      padding: 8px 12px;
+      font-size: 13px;
+      resize: none;
+      min-height: 40px;
+      max-height: 120px;
+      font-family: inherit;
+    }
+    #view-comments .admin-edit-inline .admin-edit-save {
+      align-self: flex-end;
+      padding: 7px 16px;
+      border-radius: 10px;
+      background: #7f77dd;
+      color: #fff;
+      border: none;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+    }
     #view-comments .composer-wrap {
       position: fixed;
       left: 50%;
@@ -997,6 +1053,88 @@
       <button type="button" class="btn-primary" id="joinConfirmBtn" style="width:100%;margin-top:4px;">
         Подключить уведомления
       </button>
+    </div>
+
+    <div id="view-gate" class="view hidden">
+      <div style="
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        min-height: 100vh;
+        padding: 32px 24px;
+        text-align: center;
+        gap: 0;
+      ">
+        <div style="
+          width: 88px; height: 88px;
+          border-radius: 28px;
+          background: rgba(127,119,221,0.15);
+          border: 1px solid rgba(127,119,221,0.25);
+          display: flex; align-items: center; justify-content: center;
+          font-size: 40px;
+          margin-bottom: 24px;
+        ">💬</div>
+
+        <div style="font-size:22px;font-weight:700;color:#fff;margin-bottom:8px">
+          Комментарии канала
+        </div>
+        <div id="gateChannelName" style="
+          font-size:14px;color:rgba(255,255,255,0.4);margin-bottom:28px
+        "></div>
+
+        <div style="
+          font-size:15px;color:rgba(255,255,255,0.65);
+          line-height:1.6;margin-bottom:32px;max-width:280px
+        ">
+          Чтобы писать комментарии и получать ответы — запустите бота. Это займёт 5 секунд.
+        </div>
+
+        <a id="gateLaunchBtn" href="#" style="
+          display: block;
+          width: 100%;
+          max-width: 300px;
+          padding: 16px;
+          background: #7F77DD;
+          border-radius: 14px;
+          color: #fff;
+          font-size: 16px;
+          font-weight: 700;
+          text-decoration: none;
+          margin-bottom: 32px;
+        ">🚀 Запустить бота</a>
+
+        <div style="
+          background: rgba(255,255,255,0.04);
+          border: 1px solid rgba(255,255,255,0.07);
+          border-radius: 14px;
+          padding: 16px 20px;
+          max-width: 300px;
+          width: 100%;
+          text-align: left;
+        ">
+          <div style="font-size:12px;color:rgba(255,255,255,0.35);
+                      margin-bottom:10px;text-transform:uppercase;
+                      letter-spacing:.06em">После запуска вы сможете</div>
+          <div style="display:flex;flex-direction:column;gap:8px">
+            <div style="font-size:14px;color:rgba(255,255,255,0.7);
+                        display:flex;align-items:center;gap:10px">
+              <span style="color:#5DCAA5;font-size:16px">✓</span>
+              Писать комментарии к постам
+            </div>
+            <div style="font-size:14px;color:rgba(255,255,255,0.7);
+                        display:flex;align-items:center;gap:10px">
+              <span style="color:#5DCAA5;font-size:16px">✓</span>
+              Получать ответы от канала
+            </div>
+            <div style="font-size:14px;color:rgba(255,255,255,0.7);
+                        display:flex;align-items:center;gap:10px">
+              <span style="color:#5DCAA5;font-size:16px">✓</span>
+              Видеть все обсуждения поста
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
 
     <div id="view-comments" class="view hidden">
@@ -1171,6 +1309,7 @@
 
       var viewHome = document.getElementById('view-home');
       var viewComments = document.getElementById('view-comments');
+      var viewGate = document.getElementById('view-gate');
       var viewJoin = document.getElementById('view-join');
 
       ;(function bindAdminsInviteClicks() {
@@ -1216,14 +1355,17 @@
         viewJoin.classList.remove('hidden');
         viewHome.classList.add('hidden');
         viewComments.classList.add('hidden');
+        if (viewGate) viewGate.classList.add('hidden');
       } else if (hasPostContext) {
-        viewComments.classList.remove('hidden');
         viewHome.classList.add('hidden');
         viewJoin.classList.add('hidden');
+        viewComments.classList.add('hidden');
+        if (viewGate) viewGate.classList.add('hidden');
       } else {
         viewHome.classList.remove('hidden');
         viewComments.classList.add('hidden');
         viewJoin.classList.add('hidden');
+        if (viewGate) viewGate.classList.add('hidden');
       }
 
     /* ——— JOIN (admin invite) ——— */
@@ -1676,8 +1818,73 @@
       });
     }
 
+    function showGate(uid) {
+      if (viewGate) viewGate.classList.remove('hidden');
+      viewComments.classList.add('hidden');
+
+      var gateChannelEl = document.getElementById('gateChannelName');
+      if (chatId && gateChannelEl) {
+        fetch('/api/channel-info?chat_id=' + encodeURIComponent(chatId))
+          .then(function (r) {
+            return r.json();
+          })
+          .then(function (data) {
+            gateChannelEl.textContent = data.title ? '«' + data.title + '»' : '';
+          })
+          .catch(function () {});
+      }
+
+      fetch('/api/config')
+        .then(function (r) {
+          return r.json();
+        })
+        .then(function (cfg) {
+          var startParam = uid ? 'sub_' + uid : 'start';
+          var nick = String(cfg.bot_nickname || '').replace(/^@/, '');
+          var url = 'https://max.ru/' + nick + '?startapp=' + startParam;
+          var btn = document.getElementById('gateLaunchBtn');
+          if (btn) btn.href = url;
+        })
+        .catch(function () {});
+    }
+
     function bootComments() {
       if (!hasPostContext || joinChannelId) return;
+
+      var uid =
+        getBridgeNumericUserId(user) ||
+        parseInt(mergedParams.get('user_id') || '', 10) ||
+        null;
+
+      if (!uid) {
+        showGate(null);
+        return;
+      }
+
+      var statusUrl =
+        '/api/user-status?user_id=' +
+        encodeURIComponent(String(uid)) +
+        (chatId ? '&chat_id=' + encodeURIComponent(chatId) : '');
+
+      fetch(statusUrl)
+        .then(function (r) {
+          return r.json();
+        })
+        .then(function (data) {
+          if (!data.started && !data.is_admin) {
+            showGate(uid);
+          } else {
+            loadPostAndComments();
+          }
+        })
+        .catch(function () {
+          loadPostAndComments();
+        });
+    }
+
+    function loadPostAndComments() {
+      viewComments.classList.remove('hidden');
+      if (viewGate) viewGate.classList.add('hidden');
 
       var chatIdForReg = mergedParams.get('chat_id');
       var uid =
@@ -1817,11 +2024,54 @@
         return d.firstChild;
       }
 
+      function buildAdminActionsHtml(commentId, kind) {
+        if (!isAdmin) return '';
+        var labelEdit = kind === 'reply' ? 'Изменить ответ' : 'Изменить';
+        var labelDel = kind === 'reply' ? 'Удалить ответ' : 'Удалить';
+        var extraClass = kind === 'reply' ? ' reply-actions' : '';
+        var editAttr = kind === 'reply' ? 'data-edit-reply' : 'data-edit-comment';
+        var delAttr = kind === 'reply' ? 'data-delete-reply' : 'data-delete-comment';
+        return (
+          '<div class="admin-actions' +
+          extraClass +
+          '" data-admin-actions="' +
+          esc(commentId) +
+          '">' +
+          '<button type="button" class="admin-act-btn" ' +
+          editAttr +
+          '="' +
+          esc(commentId) +
+          '">' +
+          labelEdit +
+          '</button>' +
+          '<button type="button" class="admin-act-btn danger" ' +
+          delAttr +
+          '="' +
+          esc(commentId) +
+          '">' +
+          labelDel +
+          '</button>' +
+          '<div class="admin-edit-inline" data-admin-edit-box="' +
+          esc(commentId) +
+          '" data-edit-kind="' +
+          kind +
+          '">' +
+          '<textarea data-admin-edit-input="' +
+          esc(commentId) +
+          '"></textarea>' +
+          '<button type="button" class="admin-edit-save" data-admin-edit-save="' +
+          esc(commentId) +
+          '">Сохранить</button>' +
+          '</div></div>'
+        );
+      }
+
       function buildReplyBlockHtml(c) {
         var named =
           c.reply && c.reply.admin_name && String(c.reply.admin_name).trim();
         var replyLabel =
           named && named !== 'Админ' ? 'от ' + esc(named) : 'от канала';
+        var adminReplyActs = buildAdminActionsHtml(c.comment_id, 'reply');
         return (
           '<div class="reply-block">' +
           '<div class="reply-inner">' +
@@ -1886,8 +2136,9 @@
           esc(c.timestamp) +
           '</div>' +
           '</div></div>' +
+          commentAdminActs +
           (c.reply ? replyHtml : adminHtml) +
-          '</div>'
+          '</motion>'
         );
       }
 

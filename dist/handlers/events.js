@@ -375,6 +375,15 @@ function registerEventHandlers(bot) {
                 }
                 return;
             }
+            // Comments gate: user tapped «Запустить бота» in Mini App
+            if (/^sub_\d+$/i.test(startPayload)) {
+                const welcomeText = '✅ Отлично! Бот запущен.\n\n' +
+                    'Теперь когда администраторы канала ответят ' +
+                    'на ваш комментарий — я сразу пришлю вам сообщение.\n\n' +
+                    'Можете вернуться в канал и написать комментарий!';
+                await bot.api.sendMessageToUser(userId, welcomeText);
+                return;
+            }
             if (chatId === undefined) {
                 logger_1.logger.warn('bot_started: нет chat_id в контексте');
                 return;

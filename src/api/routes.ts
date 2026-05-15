@@ -185,6 +185,30 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
   const router = express.Router()
   router.use(express.json({ limit: '512kb' }))
 
+  router.get('/config', (_req, res) => {
+    res.json({ bot_nickname: config.botNickname })
+  })
+
+  router.get('/channel-info', async (req, res) => {
+    const chatId = parseNonZeroInt(req.query.chat_id)
+    if (chatId === null) {
+      res.status(400).json({ error: 'missing or invalid chat_id' })
+      return
+    }
+    const cached = channelRegistry.getChannel(chatId)
+    if (cached?.title) {
+      res.json({ title: cached.title })
+      return
+    }
+    try {
+      const chat = await deps.bot.api.getChat(chatId)
+      res.json({ title: chat.title ?? null })
+    } catch (err: unknown) {
+      logger.warn('GET /channel-info: getChat failed', { chatId, err })
+      res.json({ title: cached?.title ?? null })
+    }
+  })
+
   router.get('/user-status', async (req, res) => {
     const userId = parsePositiveInt(req.query.user_id)
     if (!userId) {
