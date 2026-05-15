@@ -4,21 +4,144 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>CommentBot — Панель управления</title>
+  <script>
+    (function() {
+      var STORAGE_KEY = 'commentbot_theme'
+
+      function getSystemTheme() {
+        return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+      }
+
+      function getEffectiveTheme(pref) {
+        if (pref === 'auto' || !pref) return getSystemTheme()
+        return pref
+      }
+
+      function getStoredPref() {
+        try { return localStorage.getItem(STORAGE_KEY) || 'auto' } catch (e) { return 'auto' }
+      }
+
+      function applyTheme(pref) {
+        var safePref = (pref === 'light' || pref === 'dark' || pref === 'auto') ? pref : 'auto'
+        var effective = getEffectiveTheme(safePref)
+        document.documentElement.setAttribute('data-theme', effective)
+        try { localStorage.setItem(STORAGE_KEY, safePref) } catch (e) {}
+      }
+
+      applyTheme(getStoredPref())
+
+      var media = window.matchMedia('(prefers-color-scheme: dark)')
+      if (typeof media.addEventListener === 'function') {
+        media.addEventListener('change', function() {
+          if (getStoredPref() === 'auto') applyTheme('auto')
+        })
+      } else if (typeof media.addListener === 'function') {
+        media.addListener(function() {
+          if (getStoredPref() === 'auto') applyTheme('auto')
+        })
+      }
+
+      window.ThemeManager = {
+        set: function(pref) { applyTheme(pref) },
+        get: function() { return getStoredPref() },
+        getEffective: function() { return getEffectiveTheme(getStoredPref()) }
+      }
+    })()
+  </script>
   <style>
     :root {
-      --bg: #0d0d18;
-      --bg2: #141428;
-      --surface: #1a1a32;
-      --border: rgba(127, 119, 221, 0.22);
-      --text: #e8e6ff;
-      --muted: #9b97b8;
-      --accent: #7f77dd;
-      --accent-dim: rgba(127, 119, 221, 0.15);
-      --danger: #e85d6f;
+      --bg-primary: #0d0d18;
+      --bg-secondary: #161625;
+      --bg-surface: rgba(255,255,255,0.04);
+      --bg-surface-hover: rgba(255,255,255,0.07);
+
+      --text-primary: rgba(255,255,255,0.92);
+      --text-secondary: rgba(255,255,255,0.55);
+      --text-muted: rgba(255,255,255,0.3);
+      --text-on-accent: #ffffff;
+
+      --border: rgba(255,255,255,0.08);
+      --border-strong: rgba(255,255,255,0.15);
+
+      --accent: #7F77DD;
+      --accent-bg: rgba(127,119,221,0.12);
+      --accent-border: rgba(127,119,221,0.25);
+      --teal: #5DCAA5;
+      --teal-bg: rgba(93,202,165,0.12);
+
+      --danger: #ff8a80;
+      --warning: #EF9F27;
+      --warning-bg: rgba(239,159,39,0.2);
+      --success: #5DCAA5;
+      --info: #5ecfff;
+      --info-bg: rgba(94,207,255,0.2);
+
+      --bubble-user: rgba(255,255,255,0.06);
+      --bubble-admin: rgba(127,119,221,0.10);
+      --bubble-admin-border: rgba(127,119,221,0.20);
+
+      --input-bg: rgba(255,255,255,0.06);
+      --input-border: rgba(255,255,255,0.10);
+
+      --send-bg: #7F77DD;
+      --accent-soft-text: #c4bfff;
+      --panel-danger-border: rgba(255,138,128,0.45);
+
+      --bg: var(--bg-primary);
+      --bg2: var(--bg-secondary);
+      --surface: var(--bg-surface);
+      --text: var(--text-primary);
+      --muted: var(--text-secondary);
+      --accent-dim: var(--accent-bg);
       --radius: 12px;
       --font: 'Inter', system-ui, -apple-system, Segoe UI, sans-serif;
     }
+    [data-theme="light"] {
+      --bg-primary: #f5f5f7;
+      --bg-secondary: #ffffff;
+      --bg-surface: rgba(0,0,0,0.04);
+      --bg-surface-hover: rgba(0,0,0,0.07);
+
+      --text-primary: rgba(0,0,0,0.88);
+      --text-secondary: rgba(0,0,0,0.55);
+      --text-muted: rgba(0,0,0,0.35);
+      --text-on-accent: #ffffff;
+
+      --border: rgba(0,0,0,0.08);
+      --border-strong: rgba(0,0,0,0.15);
+
+      --accent: #6C64CC;
+      --accent-bg: rgba(108,100,204,0.10);
+      --accent-border: rgba(108,100,204,0.25);
+      --teal: #1D9E75;
+      --teal-bg: rgba(29,158,117,0.10);
+
+      --danger: #E53935;
+      --warning: #F57C00;
+      --warning-bg: rgba(245,124,0,0.16);
+      --success: #1D9E75;
+      --info: #0277bd;
+      --info-bg: rgba(2,119,189,0.16);
+
+      --bubble-user: rgba(0,0,0,0.05);
+      --bubble-admin: rgba(108,100,204,0.08);
+      --bubble-admin-border: rgba(108,100,204,0.20);
+
+      --input-bg: rgba(0,0,0,0.05);
+      --input-border: rgba(0,0,0,0.12);
+      --send-bg: #6C64CC;
+      --accent-soft-text: #7e76cf;
+      --panel-danger-border: rgba(229,57,53,0.4);
+    }
+    [data-theme="dark"] {}
     * { box-sizing: border-box; }
+    *, *::before, *::after {
+      transition: background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease;
+    }
+    .no-transition,
+    input, textarea, button {
+      transition: none;
+    }
     body { margin: 0; font-family: var(--font); background: var(--bg); color: var(--text); min-height: 100vh; }
     a { color: var(--accent); }
 
@@ -41,10 +164,10 @@
       padding: 0.55rem 1rem; border-radius: 8px; border: none; font-weight: 600; font-size: 0.9rem;
       cursor: pointer; font-family: inherit;
     }
-    .btn-primary { background: var(--accent); color: #0d0d18; }
+    .btn-primary { background: var(--accent); color: var(--text-on-accent); }
     .btn-primary:hover { filter: brightness(1.08); }
     .btn-ghost { background: transparent; color: var(--muted); border: 1px solid var(--border); }
-    .btn-danger { background: var(--danger); color: #fff; }
+    .btn-danger { background: var(--danger); color: var(--text-on-accent); }
     .btn-sm { padding: 0.35rem 0.65rem; font-size: 0.8rem; }
     .login-error { color: var(--danger); font-size: 0.85rem; margin-top: 0.75rem; min-height: 1.2em; }
 
@@ -68,7 +191,7 @@
       display: flex; align-items: center; gap: 0.75rem;
     }
     .owner-avatar {
-      width: 40px; height: 40px; border-radius: 50%; background: var(--accent); color: #0d0d18;
+      width: 40px; height: 40px; border-radius: 50%; background: var(--accent); color: var(--text-on-accent);
       display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 0.85rem;
     }
     .owner-meta { font-size: 0.8rem; color: var(--muted); }
@@ -96,11 +219,11 @@
     tr:last-child td { border-bottom: none; }
 
     .badge { display: inline-block; padding: 0.2rem 0.5rem; border-radius: 6px; font-size: 0.72rem; font-weight: 600; }
-    .badge-active { background: rgba(72, 199, 142, 0.2); color: #5fd9a8; }
-    .badge-pending { background: rgba(230, 194, 41, 0.2); color: #e6bf3f; }
-    .badge-owner { background: rgba(127, 119, 221, 0.25); color: var(--accent); }
-    .badge-admin { background: rgba(56, 189, 248, 0.2); color: #5ecfff; }
-    .badge-sub { background: var(--accent-dim); color: #c4bfff; }
+    .badge-active { background: var(--teal-bg); color: var(--success); }
+    .badge-pending { background: var(--warning-bg); color: var(--warning); }
+    .badge-owner { background: var(--accent-border); color: var(--accent); }
+    .badge-admin { background: var(--info-bg); color: var(--info); }
+    .badge-sub { background: var(--accent-dim); color: var(--accent-soft-text); }
 
     .activity-item { padding: 0.65rem 0; border-bottom: 1px solid var(--border); font-size: 0.88rem; }
     .activity-item:last-child { border-bottom: none; }
@@ -118,10 +241,29 @@
       font-family: ui-monospace, monospace; font-size: 0.78rem; background: var(--bg); padding: 0.75rem;
       border-radius: 8px; max-height: 420px; overflow: auto; white-space: pre-wrap; word-break: break-all;
     }
-    .danger-zone { border-color: rgba(232, 93, 111, 0.45); }
+    .danger-zone { border-color: var(--panel-danger-border); }
     .muted { color: var(--muted); }
 
     .hidden { display: none !important; }
+    .main-header {
+      display: flex;
+      justify-content: flex-end;
+      align-items: center;
+      margin-bottom: 0.9rem;
+    }
+    .theme-toggle-btn {
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      padding: 6px 12px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      color: var(--text-secondary);
+      font-size: 12px;
+      font-weight: 500;
+    }
   </style>
 </head>
 <body>
@@ -149,6 +291,12 @@
       </div>
     </aside>
     <main class="main">
+      <div class="main-header">
+        <button id="themeToggle" class="theme-toggle-btn no-transition" type="button" onclick="cycleTheme()">
+          <span id="themeIcon">🌙</span>
+          <span id="themeLabel">Авто</span>
+        </button>
+      </div>
       <section id="page-overview" class="page">
         <h1 class="page-title">Обзор</h1>
         <div class="stats-grid" id="overviewStats"></div>
@@ -230,6 +378,24 @@
 
   <script>
 (function () {
+  function updateToggleUI() {
+    var pref = window.ThemeManager.get()
+    var icons = { auto: '✨', light: '☀️', dark: '🌙' }
+    var labels = { auto: 'Авто', light: 'Светлая', dark: 'Тёмная' }
+    document.getElementById('themeIcon').textContent = icons[pref] || '✨'
+    document.getElementById('themeLabel').textContent = labels[pref] || 'Авто'
+  }
+
+  window.cycleTheme = function cycleTheme() {
+    var order = ['auto', 'light', 'dark']
+    var current = window.ThemeManager.get()
+    var next = order[(order.indexOf(current) + 1) % order.length]
+    window.ThemeManager.set(next)
+    updateToggleUI()
+  }
+
+  updateToggleUI()
+
   function qs(sel) { return document.querySelector(sel) }
 
   function handleAuth(r) {
