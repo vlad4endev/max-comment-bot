@@ -2,6 +2,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.settingsStore = void 0;
 const channelNotifyLinkStore_1 = require("./channelNotifyLinkStore");
+const disabledAdminStore_1 = require("./disabledAdminStore");
 const logger_1 = require("../utils/logger");
 /**
  * Links a user to a channel for admin notifications (delegates to {@link channelNotifyLinkStore}).
@@ -24,6 +25,10 @@ exports.settingsStore = {
         return channels;
     },
     linkUserToChannel(userId, channelChatId) {
+        if (disabledAdminStore_1.disabledAdminStore.isDisabled(userId)) {
+            logger_1.logger.info('settingsStore.linkUserToChannel skipped for disabled admin', { userId, chatId: channelChatId });
+            return;
+        }
         const linkedChannelsBefore = this.getLinkedChannels(userId);
         const channelUsersBefore = this.getUsersLinkedToChannel(channelChatId);
         logger_1.logger.info('settingsStore.linkUserToChannel called', {

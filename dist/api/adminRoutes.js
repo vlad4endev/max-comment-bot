@@ -14,11 +14,13 @@ const adminActivityStore_1 = require("../services/adminActivityStore");
 const adminRuntimeSettingsStore_1 = require("../services/adminRuntimeSettingsStore");
 const channelNotifyLinkStore_1 = require("../services/channelNotifyLinkStore");
 const channelRegistry_1 = require("../services/channelRegistry");
+const disabledAdminStore_1 = require("../services/disabledAdminStore");
 const channelPoller_1 = require("../services/channelPoller");
 const commentStore_1 = require("../services/commentStore");
 const postStore_1 = require("../services/postStore");
 const stateManager_1 = require("../services/stateManager");
 const subscriberStore_1 = require("../services/subscriberStore");
+const userAccessCleanup_1 = require("../services/userAccessCleanup");
 const userMiniappSettingsStore_1 = require("../services/userMiniappSettingsStore");
 const adminPanelSession_1 = require("../utils/adminPanelSession");
 const logger_1 = require("../utils/logger");
@@ -490,9 +492,8 @@ function createAdminRouter(deps) {
             res.status(400).json({ error: 'cannot remove owner' });
             return;
         }
-        subscriberStore_1.subscriberStore.removeSubscriber(userId);
-        channelNotifyLinkStore_1.channelNotifyLinkStore.removeAllForUser(userId);
-        userMiniappSettingsStore_1.userMiniappSettingsStore.removeUser(userId);
+        disabledAdminStore_1.disabledAdminStore.disableUser(userId);
+        (0, userAccessCleanup_1.fullyRemoveUserFromBot)(userId);
         res.json({ ok: true });
     });
     router.use(secured);

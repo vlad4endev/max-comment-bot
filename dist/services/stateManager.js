@@ -79,6 +79,23 @@ class StateManager {
         return this.userPrivateChatIdByUserId.get(userId);
     }
     /**
+     * Removes remembered private dialog chat id for this user.
+     */
+    clearUserPrivateChatId(userId) {
+        this.userPrivateChatIdByUserId.delete(userId);
+    }
+    /**
+     * Deletes all transient conversation states for this user across every chat.
+     */
+    clearAllStatesForUser(userId) {
+        for (const [chatId, inner] of this.states) {
+            inner.delete(userId);
+            if (inner.size === 0) {
+                this.states.delete(chatId);
+            }
+        }
+    }
+    /**
      * Marks a channel as waiting for admin rights (or manual `/connect` after rights are granted).
      */
     markChannelPendingAdminRights(channelChatId) {

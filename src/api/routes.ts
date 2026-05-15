@@ -6,6 +6,7 @@ import express from 'express'
 import { config } from '../config'
 import { channelNotifyLinkStore } from '../services/channelNotifyLinkStore'
 import { channelRegistry } from '../services/channelRegistry'
+import { disabledAdminStore } from '../services/disabledAdminStore'
 import {
   resolveCanonicalChannelChatId,
   resolveChannelChatIdFromInviteParam,
@@ -25,6 +26,7 @@ import {
   parseMiniappFeatureKey,
   userMiniappSettingsStore,
 } from '../services/userMiniappSettingsStore'
+import { fullyRemoveUserFromBot } from '../services/userAccessCleanup'
 import { logger } from '../utils/logger'
 
 export interface CommentApiRouterDeps {
@@ -190,6 +192,12 @@ interface AdminModerationInput {
   userId: number
 }
 
+interface DisableChannelAdminInput {
+  actorUserId: number
+  targetUserId: number
+  chatId: number
+}
+
 function parseAdminModerationBody(body: unknown): AdminModerationInput | null {
   if (!isRecord(body)) {
     return null
@@ -202,6 +210,19 @@ function parseAdminModerationBody(body: unknown): AdminModerationInput | null {
     return null
   }
   return { commentId, postId, chatId, userId }
+}
+
+function parseDisableChannelAdminBody(body: unknown): DisableChannelAdminInput | null {
+  if (!isRecord(body)) {
+    return null
+  }
+  const actorUserId = parsePositiveInt(body.user_id)
+  const targetUserId = parsePositiveInt(body.target_user_id)
+  const chatId = parseNonZeroInt(body.chat_id)
+  if (!actorUserId || !targetUserId || !chatId) {
+    return null
+  }
+  return { actorUserId, targetUserId, chatId }
 }
 
 async function resolveAdminCommentAccess(
@@ -400,7 +421,7 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
         name: m.name,
         initials: adminDisplayInitials(m.name),
         linked: linkedIds.has(m.user_id),
-      }))
+      })).filter((a) => !disabledAdminStore.isDisabled(a.user_id))
       const listedIds = new Set(admins.map((a) => a.user_id))
       for (const linkedUserId of linkedIds) {
         if (listedIds.has(linkedUserId)) {
@@ -412,6 +433,9 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
           })
           const m = linkedMembers[0]
           if (m && isChannelAdminOrOwnerMember(m)) {
+            if (disabledAdminStore.isDisabled(m.user_id)) {
+              continue
+            }
             admins.push({
               user_id: m.user_id,
               name: m.name,
@@ -440,6 +464,39 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
       res.json({ admins, invite_url })
     } catch (err: unknown) {
       logger.error('GET /api/channel-admins failed', { err })
+      res.status(500).json({ error: 'internal error' })
+    }
+  })
+
+  router.post('/channel-admins/disable', async (req, res) => {
+    const input = parseDisableChannelAdminBody(req.body)
+    if (!input) {
+      res.status(400).json({ error: 'missing or invalid fields' })
+      return
+    }
+    const chatId = resolveCanonicalChannelChatId(input.chatId)
+    if (chatId === null || !channelRegistry.getChannel(chatId)) {
+      res.status(404).json({ error: 'channel not connected' })
+      return
+    }
+    if (input.targetUserId === config.ownerUserId) {
+      res.status(400).json({ error: 'owner cannot be disabled' })
+      return
+    }
+    try {
+      if (!(await isUserChannelAdmin(deps.bot, chatId, input.actorUserId))) {
+        res.status(403).json({ error: 'Доступ запрещён' })
+        return
+      }
+      if (!(await isUserChannelAdmin(deps.bot, chatId, input.targetUserId))) {
+        res.status(400).json({ error: 'target user is not a channel admin' })
+        return
+      }
+      disabledAdminStore.disableUser(input.targetUserId)
+      fullyRemoveUserFromBot(input.targetUserId)
+      res.json({ ok: true })
+    } catch (err: unknown) {
+      logger.error('POST /api/channel-admins/disable failed', { err, chatId, input })
       res.status(500).json({ error: 'internal error' })
     }
   })

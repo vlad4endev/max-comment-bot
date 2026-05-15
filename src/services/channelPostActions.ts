@@ -4,6 +4,7 @@ import { v4 as uuidv4 } from 'uuid'
 
 import { logger } from '../utils/logger'
 import { pushAdminActivity } from './adminActivityStore'
+import { disabledAdminStore } from './disabledAdminStore'
 import {
   attachCommentButtonToChannelPost,
   buildMiniAppUrl,
@@ -63,6 +64,9 @@ export async function isUserChannelAdmin(
   channelChatId: number,
   userId: number,
 ): Promise<boolean> {
+  if (disabledAdminStore.isDisabled(userId)) {
+    return false
+  }
   try {
     const { members } = await bot.api.getChatMembers(channelChatId, { user_ids: [userId] })
     const m = members[0]

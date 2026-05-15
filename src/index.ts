@@ -15,6 +15,7 @@ import { channelNotifyLinkStore } from './services/channelNotifyLinkStore'
 import { channelRegistry } from './services/channelRegistry'
 import { commentStore } from './services/commentStore'
 import { adminRuntimeSettingsStore } from './services/adminRuntimeSettingsStore'
+import { disabledAdminStore } from './services/disabledAdminStore'
 import { subscriberStore } from './services/subscriberStore'
 import { startChannelPostPoller } from './services/channelPoller'
 import { postStore } from './services/postStore'
@@ -31,6 +32,7 @@ async function main(): Promise<void> {
   await channelNotifyLinkStore.loadFromDisk()
   await subscriberStore.loadFromDisk()
   await adminRuntimeSettingsStore.loadFromDisk()
+  await disabledAdminStore.loadFromDisk()
   await ensureBotProfile(bot)
   startChannelPostPoller(bot)
 

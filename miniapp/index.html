@@ -610,6 +610,28 @@
       justify-content: center;
       gap: 6px;
     }
+    .admin-row-controls {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-shrink: 0;
+    }
+    .btn-admin-disable {
+      border: 1px solid var(--danger);
+      background: transparent;
+      color: var(--danger);
+      border-radius: 8px;
+      padding: 5px 8px;
+      font-size: 11px;
+      font-weight: 600;
+      cursor: pointer;
+      line-height: 1;
+      flex-shrink: 0;
+    }
+    .btn-admin-disable:disabled {
+      opacity: 0.55;
+      cursor: not-allowed;
+    }
     .features-grid {
       display: grid;
       grid-template-columns: 1fr 1fr;
@@ -1724,45 +1746,6 @@
       var viewGate = document.getElementById('view-gate');
       var viewJoin = document.getElementById('view-join');
 
-      ;(function bindAdminsInviteClicks() {
-        var host = document.getElementById('adminsList')
-        if (!host || host.dataset.inviteBound === '1') return
-        host.dataset.inviteBound = '1'
-        host.addEventListener('click', function (ev) {
-          var btn = ev.target.closest('.btn-invite')
-          if (!btn) return
-          var card = btn.closest('.admins-card')
-          var url = card && card.getAttribute('data-invite-url')
-          if (!url) return
-          var p =
-            navigator.clipboard && navigator.clipboard.writeText
-              ? navigator.clipboard.writeText(url)
-              : Promise.reject()
-          p.catch(function () {
-            try {
-              var ta = document.createElement('textarea')
-              ta.value = url
-              ta.setAttribute('readonly', '')
-              ta.style.position = 'fixed'
-              ta.style.left = '-9999px'
-              document.body.appendChild(ta)
-              ta.select()
-              document.execCommand('copy')
-              document.body.removeChild(ta)
-              return Promise.resolve()
-            } catch (e) {
-              return Promise.reject(e)
-            }
-          })
-            .then(function () {
-              showToast('Ссылка скопирована! Отправьте её другим администраторам')
-            })
-            .catch(function () {
-              showToast('Не удалось скопировать ссылку')
-            })
-        })
-      })()
-
       if (joinChannelId) {
         viewJoin.classList.remove('hidden');
         viewHome.classList.add('hidden');
@@ -1922,14 +1905,19 @@
           .replace(/"/g, '&quot;');
       }
 
+      var channelsById = {}
+
       function renderChannelAdmins(ch, data) {
         var adminsHost = document.getElementById('adminsList')
         if (!adminsHost) return
         var title = (ch.title && String(ch.title).trim()) || 'Канал ' + ch.chat_id
+        var cardIdAttr = ' data-channel-id="' + esc(String(ch.chat_id)) + '"'
         if (!data || !Array.isArray(data.admins)) {
           adminsHost.insertAdjacentHTML(
             'beforeend',
-            '<div class="admins-card" role="article">' +
+            '<div class="admins-card" role="article"' +
+              cardIdAttr +
+              '>' +
               '<div class="admins-card-title"><span aria-hidden="true">📢</span><span>' +
               esc(title) +
               '</span></div>' +
@@ -1947,6 +1935,14 @@
             var statusCls = connected ? 'admin-status-connected' : 'admin-status-pending'
             var dotCls = connected ? 'admin-status-dot teal' : 'admin-status-dot yellow'
             var label = connected ? 'подключён' : 'не подключён'
+            var removeBtn =
+              '<button type="button" class="btn-admin-disable" data-channel-id="' +
+              esc(String(ch.chat_id)) +
+              '" data-admin-user-id="' +
+              esc(String(a.user_id)) +
+              '" data-admin-name="' +
+              nm +
+              '">Отключить</button>'
             return (
               '<div class="admin-row">' +
               '<div class="admin-av">' +
@@ -1955,12 +1951,14 @@
               '<div class="admin-name">' +
               nm +
               '</div>' +
-              '<div class="' +
+              '<div class="admin-row-controls"><div class="' +
               statusCls +
               '"><span class="' +
               dotCls +
               '" aria-hidden="true"></span>' +
               label +
+              '</div>' +
+              removeBtn +
               '</div></div>'
             )
           })
@@ -1975,6 +1973,7 @@
             : '<div style="font-size:12px;color:var(--muted);padding:4px 0;">Нет администраторов в ответе API.</div>'
         var card =
           '<div class="admins-card" role="article"' +
+          cardIdAttr +
           (inviteAttr !== '' ? ' data-invite-url="' + inviteAttr + '"' : '') +
           '>' +
           '<div class="admins-card-title"><span aria-hidden="true">📢</span><span>' +
@@ -1984,6 +1983,32 @@
           inviteBtn +
           '</div>'
         adminsHost.insertAdjacentHTML('beforeend', card)
+      }
+
+      function removeChannelAdminsCard(channelChatId) {
+        var adminsHost = document.getElementById('adminsList')
+        if (!adminsHost) return
+        var selector = '.admins-card[data-channel-id="' + String(channelChatId) + '"]'
+        var card = adminsHost.querySelector(selector)
+        if (card) card.remove()
+      }
+
+      function refreshChannelAdminsCard(channelChatId, apiUid) {
+        if (apiUid == null) return Promise.resolve()
+        var ch = channelsById[String(channelChatId)] || { chat_id: channelChatId, title: null }
+        return fetch(
+          '/api/channel-admins?chat_id=' +
+            encodeURIComponent(String(channelChatId)) +
+            '&user_id=' +
+            encodeURIComponent(String(apiUid))
+        )
+          .then(function (r) {
+            return r.ok ? r.json() : null
+          })
+          .then(function (admData) {
+            removeChannelAdminsCard(channelChatId)
+            renderChannelAdmins(ch, admData)
+          })
       }
 
       var displayName =
@@ -2085,6 +2110,104 @@
 
       wireFeatureToggles(uid);
 
+      ;(function bindAdminsActions() {
+        var host = document.getElementById('adminsList')
+        if (!host || host.dataset.actionsBound === '1') return
+        host.dataset.actionsBound = '1'
+        host.addEventListener('click', function (ev) {
+          var inviteBtn = ev.target.closest('.btn-invite')
+          if (inviteBtn) {
+            var cardForInvite = inviteBtn.closest('.admins-card')
+            var url = cardForInvite && cardForInvite.getAttribute('data-invite-url')
+            if (!url) return
+            var p =
+              navigator.clipboard && navigator.clipboard.writeText
+                ? navigator.clipboard.writeText(url)
+                : Promise.reject()
+            p.catch(function () {
+              try {
+                var ta = document.createElement('textarea')
+                ta.value = url
+                ta.setAttribute('readonly', '')
+                ta.style.position = 'fixed'
+                ta.style.left = '-9999px'
+                document.body.appendChild(ta)
+                ta.select()
+                document.execCommand('copy')
+                document.body.removeChild(ta)
+                return Promise.resolve()
+              } catch (e) {
+                return Promise.reject(e)
+              }
+            })
+              .then(function () {
+                showToast('Ссылка скопирована! Отправьте её другим администраторам')
+              })
+              .catch(function () {
+                showToast('Не удалось скопировать ссылку')
+              })
+            return
+          }
+
+          var disableBtn = ev.target.closest('.btn-admin-disable')
+          if (!disableBtn) return
+          if (disableBtn.disabled) return
+          var channelChatId = parseInt(disableBtn.getAttribute('data-channel-id') || '', 10)
+          var targetUserId = parseInt(disableBtn.getAttribute('data-admin-user-id') || '', 10)
+          var targetName = String(disableBtn.getAttribute('data-admin-name') || '').trim()
+          if (!Number.isFinite(channelChatId) || !Number.isFinite(targetUserId)) {
+            showToast('Некорректные данные администратора')
+            return
+          }
+          var actorUserId = uid
+          if (!actorUserId) {
+            showToast('Нужен user_id для отключения администратора')
+            return
+          }
+          var displayTarget = targetName || ('ID ' + targetUserId)
+          if (
+            !confirm(
+              'Отключить администратора «' +
+                displayTarget +
+                '»?\n\nПользователь будет удалён из базы бота и потеряет админ-права в CommentBot.'
+            )
+          ) {
+            return
+          }
+          disableBtn.disabled = true
+          var prevText = disableBtn.textContent
+          disableBtn.textContent = 'Отключение...'
+          fetch('/api/channel-admins/disable', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              user_id: actorUserId,
+              target_user_id: targetUserId,
+              chat_id: channelChatId,
+            }),
+          })
+            .then(function (r) {
+              return r.json().then(function (j) {
+                return { ok: r.ok, body: j }
+              })
+            })
+            .then(function (x) {
+              if (!x.ok) {
+                throw new Error((x.body && x.body.error) || 'Не удалось отключить администратора')
+              }
+              showToast('Администратор отключён')
+              return refreshChannelAdminsCard(channelChatId, actorUserId)
+            })
+            .catch(function (e) {
+              showToast(e.message || 'Не удалось отключить администратора')
+            })
+            .finally(function () {
+              disableBtn.disabled = false
+              disableBtn.textContent = prevText || 'Отключить'
+            })
+        })
+      })()
+
       fetch('/api/settings?user_id=' + encodeURIComponent(String(uid)))
         .then(function (r) {
           if (!r.ok) throw new Error('settings');
@@ -2123,6 +2246,7 @@
           var adminsHost = document.getElementById('adminsList');
           list.innerHTML = '';
           if (adminsHost) adminsHost.innerHTML = '';
+          channelsById = {}
           if (data.bot_nickname) botNick = '@' + String(data.bot_nickname).replace(/^@/, '');
           var arr = data.channels || [];
           if (!arr.length) {
@@ -2134,6 +2258,7 @@
             return;
           }
           arr.forEach(function (ch) {
+            channelsById[String(ch.chat_id)] = ch
             var title = (ch.title && String(ch.title).trim()) || 'Канал ' + ch.chat_id;
             var subs =
               typeof ch.subscribers === 'number'
