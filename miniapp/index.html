@@ -864,43 +864,53 @@
       opacity: 0.92;
       transform: scale(0.98);
     }
-    #view-comments .reply-inline {
-      display: none;
-      flex-direction: column;
-      gap: 8px;
-      margin: 10px 0 0;
-      width: 100%;
-    }
-    #view-comments .reply-inline.open {
+    #view-comments .reply-banner {
+      background: rgba(127, 119, 221, 0.1);
+      border-top: 1px solid rgba(127, 119, 221, 0.25);
+      border-left: 3px solid #7f77dd;
+      padding: 7px 12px;
       display: flex;
+      align-items: center;
     }
-    #view-comments .reply-inline textarea {
+    #view-comments .reply-banner-inner {
+      display: flex;
+      align-items: center;
+      gap: 8px;
       width: 100%;
-      border-radius: 12px;
-      border: 1px solid rgba(255, 255, 255, 0.1);
-      background: rgba(255, 255, 255, 0.05);
-      color: rgba(255, 255, 255, 0.85);
-      padding: 8px 12px;
+    }
+    #view-comments .reply-banner-icon {
       font-size: 16px;
-      resize: none;
-      min-height: 40px;
-      max-height: 120px;
-      font-family: inherit;
+      color: #7f77dd;
     }
-    #view-comments .reply-inline .reply-send {
-      align-self: flex-end;
-      padding: 7px 16px;
-      border-radius: 10px;
-      background: #7f77dd;
-      color: #fff;
-      border: none;
-      font-size: 13px;
+    #view-comments .reply-banner-text {
+      flex: 1;
+      min-width: 0;
+    }
+    #view-comments .reply-banner-label {
+      font-size: 11px;
+      color: #7f77dd;
       font-weight: 600;
-      cursor: pointer;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
     }
-    #view-comments .reply-inline .reply-send:disabled {
-      opacity: 0.45;
-      cursor: not-allowed;
+    #view-comments .reply-banner-name {
+      font-size: 13px;
+      color: rgba(255, 255, 255, 0.75);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    #view-comments .reply-banner-close {
+      background: none;
+      border: none;
+      color: rgba(255, 255, 255, 0.4);
+      font-size: 16px;
+      cursor: pointer;
+      padding: 0 4px;
+      line-height: 1;
+    }
+    #view-comments .reply-banner-close:hover {
+      color: rgba(255, 255, 255, 0.8);
     }
     #view-comments .admin-actions {
       display: flex;
@@ -1229,6 +1239,16 @@
         <div id="err"></div>
         <div id="feed"></div>
         <div class="composer-wrap">
+          <div id="replyBanner" class="reply-banner" style="display:none">
+            <div class="reply-banner-inner">
+              <span class="reply-banner-icon">↩</span>
+              <div class="reply-banner-text">
+                <div class="reply-banner-label">Отвечает</div>
+                <div class="reply-banner-name" id="replyBannerName"></div>
+              </div>
+              <button type="button" class="reply-banner-close" id="replyBannerClose">✕</button>
+            </div>
+          </div>
           <div class="composer">
             <div class="av av-composer" id="composerAv" aria-hidden="true">?</div>
             <input type="text" id="input" placeholder="Написать комментарий…" autocomplete="off" />
@@ -2118,14 +2138,19 @@
       var countBadgeEl = document.getElementById('countBadge');
       var postPreviewTextEl = document.getElementById('postPreviewText');
       var postThumbEl = document.getElementById('postThumb');
+      var replyBannerEl = document.getElementById('replyBanner');
+      var replyBannerNameEl = document.getElementById('replyBannerName');
+      var replyBannerCloseEl = document.getElementById('replyBannerClose');
       var feedEl = document.getElementById('feed');
       var errEl = document.getElementById('err');
       var inputEl = document.getElementById('input');
       var sendBtn = document.getElementById('sendBtn');
       var composerAvEl = document.getElementById('composerAv');
+      var currentPostId = postId;
 
       var knownIds = new Set();
       var postCommentCount = null;
+      var replyContext = null; // { comment_id, username, post_id }
 
       function setErr(msg) {
         errEl.textContent = msg || '';
@@ -2351,17 +2376,7 @@
             '">' +
             '<button type="button" class="reply-btn" data-toggle-reply="' +
             esc(c.comment_id) +
-            '">Ответить</button>' +
-            '<div class="reply-inline" data-reply-box="' +
-            esc(c.comment_id) +
-            '">' +
-            '<textarea placeholder="Ответ от канала…" data-reply-input="' +
-            esc(c.comment_id) +
-            '"></textarea>' +
-            '<button type="button" class="reply-send" data-reply-send="' +
-            esc(c.comment_id) +
-            '">Отправить</button>' +
-            '</div></div>';
+            '">↩ Ответить</button></div>';
         }
         var cts = parseCommentTimestamp(c.timestamp);
         var timeShown = formatCommentClock(cts);
@@ -2395,7 +2410,6 @@
       }
 
       function wireCommentNode(node) {
-        wireAdminReply(node);
         wireAdminModeration(node);
       }
 
@@ -2560,71 +2574,15 @@
         });
       }
 
-      function wireAdminReply(block) {
-        if (!isAdmin) return;
-        var toggle = block.querySelector('.reply-btn');
-        var box = block.querySelector('.reply-inline');
-        var ta = box && box.querySelector('textarea');
-        var send = box && box.querySelector('.reply-send');
-        if (!toggle || !box || !ta || !send) return;
-        toggle.addEventListener('click', function () {
-          var open = box.classList.toggle('open');
-          if (open) {
-            ta.focus();
-          }
-        });
-        send.addEventListener('click', function () {
-          var text = ta.value.trim();
-          if (!text) return;
-          var cid = block.getAttribute('data-comment-id');
-          if (!cid || cid.indexOf('temp-') === 0) {
-            setErr('Дождитесь отправки комментария');
-            return;
-          }
-          send.disabled = true;
-          setErr('');
-          var payload = {
-            comment_id: cid,
-            post_id: postId,
-            chat_id: Number(chatId),
-            user_id: Number(userId),
-            admin_text: text,
-            admin_name: adminNameForReply,
-          };
-          fetch('/api/reply', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload),
-          })
-            .then(function (r) {
-              if (!r.ok) {
-                return r.json().then(function (j) {
-                  throw new Error(j.error || String(r.status));
-                });
-              }
-              return r.json();
-            })
-            .then(function () {
-              ta.value = '';
-              box.classList.remove('open');
-              return fetch('/api/comments/' + encodeURIComponent(postId)).then(function (r) {
-                return r.json();
-              });
-            })
-            .then(function (list) {
-              var found = Array.isArray(list) ? list.find(function (x) { return x.comment_id === cid; }) : null;
-              if (found && found.reply) {
-                mergeOrUpdateComment(found);
-                scrollToBottom();
-              }
-            })
-            .catch(function (e) {
-              setErr(e.message || String(e));
-            })
-            .finally(function () {
-              send.disabled = false;
-            });
-        });
+      function hideReplyBanner() {
+        replyContext = null;
+        if (replyBannerEl) replyBannerEl.style.display = 'none';
+      }
+
+      function showReplyBanner(name) {
+        if (!replyBannerEl || !replyBannerNameEl) return;
+        replyBannerNameEl.textContent = name || 'пользователю';
+        replyBannerEl.style.display = 'block';
       }
 
       function mergeOrUpdateComment(c) {
@@ -2667,9 +2625,7 @@
         }
         if (c.reply && !existing.querySelector('.reply-block')) {
           var btn = existing.querySelector('.reply-btn');
-          var ibox = existing.querySelector('.reply-inline');
           if (btn) btn.remove();
-          if (ibox) ibox.remove();
           var slot = existing.querySelector('[data-admin-slot]');
           var replyOuter = buildReplyBlockHtml(c);
           if (slot) {
@@ -2813,6 +2769,44 @@
         if (!text) return;
         sendBtn.disabled = true;
         setErr('');
+        if (replyContext) {
+          if (!replyContext.comment_id || String(replyContext.comment_id).indexOf('temp-') === 0) {
+            setErr('Дождитесь отправки комментария');
+            sendBtn.disabled = !inputEl.value.trim();
+            return;
+          }
+          fetch('/api/reply', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              comment_id: replyContext.comment_id,
+              post_id: replyContext.post_id,
+              chat_id: Number(chatId),
+              admin_text: text,
+            }),
+          })
+            .then(function (r) {
+              if (!r.ok) {
+                return r.json().then(function (j) {
+                  throw new Error(j.error || String(r.status));
+                });
+              }
+              return r.json();
+            })
+            .then(function () {
+              inputEl.value = '';
+              hideReplyBanner();
+              return loadComments(false);
+            })
+            .catch(function (e) {
+              setErr(e.message || String(e));
+            })
+            .finally(function () {
+              sendBtn.disabled = !inputEl.value.trim();
+              scrollToBottom();
+            });
+          return;
+        }
         var tempId = 'temp-' + Date.now();
         var optimistic = {
           comment_id: tempId,
@@ -2867,14 +2861,6 @@
             if (isAdmin) {
               var rep = node.querySelector('.reply-btn');
               if (rep) rep.setAttribute('data-toggle-reply', res.comment_id);
-              var box = node.querySelector('.reply-inline');
-              if (box) {
-                box.setAttribute('data-reply-box', res.comment_id);
-                var ta = box.querySelector('textarea');
-                if (ta) ta.setAttribute('data-reply-input', res.comment_id);
-                var sb = box.querySelector('.reply-send');
-                if (sb) sb.setAttribute('data-reply-send', res.comment_id);
-              }
             }
             var slot = node.querySelector('[data-admin-slot]');
             if (slot) slot.setAttribute('data-admin-slot', res.comment_id);
@@ -2893,6 +2879,31 @@
       }
 
       sendBtn.addEventListener('click', submitComment);
+      if (replyBannerCloseEl && !replyBannerCloseEl.dataset.bound) {
+        replyBannerCloseEl.dataset.bound = '1';
+        replyBannerCloseEl.addEventListener('click', function () {
+          hideReplyBanner();
+        });
+      }
+      if (isAdmin && !feedEl.dataset.replyToggleBound) {
+        feedEl.dataset.replyToggleBound = '1';
+        feedEl.addEventListener('click', function (e) {
+          var btn = e.target.closest('[data-toggle-reply]');
+          if (!btn) return;
+          var commentId = btn.dataset.toggleReply;
+          if (!commentId) return;
+          var commentEl = btn.closest('[data-comment-id]');
+          var usernameEl = commentEl ? commentEl.querySelector('.uname') : null;
+          var username = usernameEl ? String(usernameEl.textContent || '').trim() : 'пользователю';
+          replyContext = {
+            comment_id: commentId,
+            username: username || 'пользователю',
+            post_id: currentPostId,
+          };
+          showReplyBanner(replyContext.username);
+          inputEl.focus();
+        });
+      }
       inputEl.addEventListener('input', function () {
         sendBtn.disabled = !inputEl.value.trim();
       });
