@@ -1679,6 +1679,23 @@
     function bootComments() {
       if (!hasPostContext || joinChannelId) return;
 
+      var chatIdForReg = mergedParams.get('chat_id');
+      var uid =
+        getBridgeNumericUserId(user) ||
+        parseInt(mergedParams.get('user_id') || '', 10) ||
+        null;
+      if (uid && chatIdForReg) {
+        fetch('/api/register-subscriber', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            user_id: uid,
+            chat_id: Number(chatIdForReg),
+            source: 'miniapp_open',
+          }),
+        }).catch(function () {});
+      }
+
       var params = mergedParams;
       var postId = params.get('post_id');
       var chatId = params.get('chat_id');

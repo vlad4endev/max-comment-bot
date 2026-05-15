@@ -176,7 +176,17 @@ function createCommentApiRouter(deps) {
             res.status(400).json({ error: 'missing or invalid user_id' });
             return;
         }
+        const chatId = parseNonZeroInt(body.chat_id);
+        const source = parseNonEmptyString(body.source);
+        const wasAlreadySubscribed = subscriberStore_1.subscriberStore.hasSubscriber(userId);
+        logger_1.logger.info('register-subscriber called', {
+            userId: body.user_id,
+            chatId: body.chat_id,
+            source: body.source,
+            wasAlreadySubscribed,
+        });
         subscriberStore_1.subscriberStore.addSubscriber(userId);
+        logger_1.logger.info('subscriber registered', { userId, chatId, source });
         res.json({ ok: true });
     });
     router.get('/stats', async (req, res) => {
