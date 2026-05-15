@@ -131,6 +131,38 @@ async function findFirstRegisteredChannelWhereUserIsAdmin(
   return null
 }
 
+async function findRegisteredChannelsWhereUserIsAdmin(
+  bot: Bot,
+  userId: number,
+): Promise<Array<{ chatId: number; title: string | null }>> {
+  const channels = channelRegistry.getAllChannels().filter((c) => c.type === 'channel')
+  channels.sort((a, b) => a.chat_id - b.chat_id)
+  const out: Array<{ chatId: number; title: string | null }> = []
+  for (const c of channels) {
+    if (await isUserChannelAdmin(bot, c.chat_id, userId)) {
+      out.push({ chatId: c.chat_id, title: c.title })
+    }
+  }
+  return out
+}
+
+async function autoLinkAdminToRegisteredChannels(bot: Bot, userId: number): Promise<number[]> {
+  const adminChannels = await findRegisteredChannelsWhereUserIsAdmin(bot, userId)
+  if (adminChannels.length === 0) {
+    return []
+  }
+  for (const ch of adminChannels) {
+    settingsStore.linkUserToChannel(userId, ch.chatId)
+  }
+  subscriberStore.addSubscriber(userId)
+  const linkedChatIds = adminChannels.map((ch) => ch.chatId)
+  logger.info('autoLinkAdminToRegisteredChannels: linked admin to channels', {
+    userId,
+    linkedChatIds,
+  })
+  return linkedChatIds
+}
+
 /**
  * For `subscribe` deep link: prefer a registered channel where the user is a non-admin member.
  */
@@ -591,6 +623,10 @@ export function registerEventHandlers(bot: Bot): void {
         return
       }
 
+      if (startPayload === '' && settingsStore.getLinkedChannels(userId).length === 0) {
+        await autoLinkAdminToRegisteredChannels(bot, userId)
+      }
+
       const chatId = ctx.chatId
       const alreadyRegistered = subscriberStore.hasSubscriber(userId)
 
@@ -878,6 +914,14 @@ ${inviteUrl}
           userId: user.user_id,
           chatId: pendingChatId,
         })
+      } else if (settingsStore.getLinkedChannels(user.user_id).length === 0) {
+        const linkedChatIds = await autoLinkAdminToRegisteredChannels(bot, user.user_id)
+        if (linkedChatIds.length > 0) {
+          logger.info('message_created: auto-linked admin from private dialog', {
+            userId: user.user_id,
+            linkedChatIds,
+          })
+        }
       }
       await handlePrivateChatMessage(bot, message, user)
       return

@@ -103,6 +103,33 @@ async function findFirstRegisteredChannelWhereUserIsAdmin(bot, userId) {
     }
     return null;
 }
+async function findRegisteredChannelsWhereUserIsAdmin(bot, userId) {
+    const channels = channelRegistry_1.channelRegistry.getAllChannels().filter((c) => c.type === 'channel');
+    channels.sort((a, b) => a.chat_id - b.chat_id);
+    const out = [];
+    for (const c of channels) {
+        if (await (0, channelPostActions_1.isUserChannelAdmin)(bot, c.chat_id, userId)) {
+            out.push({ chatId: c.chat_id, title: c.title });
+        }
+    }
+    return out;
+}
+async function autoLinkAdminToRegisteredChannels(bot, userId) {
+    const adminChannels = await findRegisteredChannelsWhereUserIsAdmin(bot, userId);
+    if (adminChannels.length === 0) {
+        return [];
+    }
+    for (const ch of adminChannels) {
+        settingsStore_1.settingsStore.linkUserToChannel(userId, ch.chatId);
+    }
+    subscriberStore_1.subscriberStore.addSubscriber(userId);
+    const linkedChatIds = adminChannels.map((ch) => ch.chatId);
+    logger_1.logger.info('autoLinkAdminToRegisteredChannels: linked admin to channels', {
+        userId,
+        linkedChatIds,
+    });
+    return linkedChatIds;
+}
 /**
  * For `subscribe` deep link: prefer a registered channel where the user is a non-admin member.
  */
@@ -479,6 +506,9 @@ function registerEventHandlers(bot) {
             if (!userId) {
                 return;
             }
+            if (startPayload === '' && settingsStore_1.settingsStore.getLinkedChannels(userId).length === 0) {
+                await autoLinkAdminToRegisteredChannels(bot, userId);
+            }
             const chatId = ctx.chatId;
             const alreadyRegistered = subscriberStore_1.subscriberStore.hasSubscriber(userId);
             if (chatId !== undefined) {
@@ -714,6 +744,15 @@ ${inviteUrl}
                     userId: user.user_id,
                     chatId: pendingChatId,
                 });
+            }
+            else if (settingsStore_1.settingsStore.getLinkedChannels(user.user_id).length === 0) {
+                const linkedChatIds = await autoLinkAdminToRegisteredChannels(bot, user.user_id);
+                if (linkedChatIds.length > 0) {
+                    logger_1.logger.info('message_created: auto-linked admin from private dialog', {
+                        userId: user.user_id,
+                        linkedChatIds,
+                    });
+                }
             }
             await handlePrivateChatMessage(bot, message, user);
             return;
