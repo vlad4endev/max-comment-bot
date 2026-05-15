@@ -142,6 +142,19 @@ function toWireComment(c) {
         reply: c.reply,
     };
 }
+function parseAdminModerationBody(body) {
+    if (!isRecord(body)) {
+        return null;
+    }
+    const commentId = parseNonEmptyString(body.comment_id);
+    const postId = parseNonEmptyString(body.post_id);
+    const chatId = parseNonZeroInt(body.chat_id);
+    const userId = parsePositiveInt(body.user_id);
+    if (!commentId || !postId || !chatId || !userId) {
+        return null;
+    }
+    return { commentId, postId, chatId, userId };
+}
 async function resolveAdminCommentAccess(bot, input) {
     const post = postStore_1.postStore.getPost(input.postId);
     if (!post || post.chat_id !== input.chatId) {
@@ -638,43 +651,46 @@ function createCommentApiRouter(deps) {
         }
         res.json(toWireComment(updated));
     });
-    router.delete('/comment', async (req, res) => {
-        const body = req.body;
-        if (!isRecord(body)) {
-            res.status(400).json({ error: 'invalid body' });
-            return;
-        }
-        const commentId = parseNonEmptyString(body.comment_id);
-        const postId = parseNonEmptyString(body.post_id);
-        const chatId = parseNonZeroInt(body.chat_id);
-        const editorUserId = parsePositiveInt(body.user_id);
-        if (!commentId || !postId || !chatId || !editorUserId) {
-            res.status(400).json({ error: 'missing or invalid fields' });
-            return;
-        }
+    const adminDeleteComment = async (res, input) => {
         const access = await resolveAdminCommentAccess(deps.bot, {
-            commentId,
-            postId,
-            chatId,
-            userId: editorUserId,
+            commentId: input.commentId,
+            postId: input.postId,
+            chatId: input.chatId,
+            userId: input.userId,
         });
         if (!access.ok) {
             res.status(access.status).json({ error: access.error });
             return;
         }
-        const removed = commentStore_1.commentStore.deleteComment(commentId);
+        const removed = commentStore_1.commentStore.deleteComment(input.commentId);
         if (!removed) {
             res.status(404).json({ error: 'comment not found' });
             return;
         }
-        const newCount = postStore_1.postStore.decrementCommentCount(postId);
+        const newCount = postStore_1.postStore.decrementCommentCount(input.postId);
         if (newCount !== null) {
-            const updatedPost = postStore_1.postStore.getPost(postId);
+            const updatedPost = postStore_1.postStore.getPost(input.postId);
             if (updatedPost) {
                 await postStore_1.postStore.updateButtonCaption(deps.bot, updatedPost);
             }
         }
         res.json({ ok: true, comment_count: newCount });
+    };
+    router.delete('/comment', async (req, res) => {
+        const input = parseAdminModerationBody(req.body);
+        if (!input) {
+            res.status(400).json({ error: 'missing or invalid fields' });
+            return;
+        }
+        await adminDeleteComment(res, input);
+    });
+    router.post('/comment/delete', async (req, res) => {
+        const input = parseAdminModerationBody(req.body);
+        if (!input) {
+            res.status(400).json({ error: 'missing or invalid fields' });
+            return;
+        }
+        await adminDeleteComment(res, input);
     });
     router.patch('/reply', async (req, res) => {
         const body = req.body;
@@ -709,36 +725,39 @@ function createCommentApiRouter(deps) {
         }
         res.json(toWireComment(updated));
     });
-    router.delete('/reply', async (req, res) => {
-        const body = req.body;
-        if (!isRecord(body)) {
-            res.status(400).json({ error: 'invalid body' });
-            return;
-        }
-        const commentId = parseNonEmptyString(body.comment_id);
-        const postId = parseNonEmptyString(body.post_id);
-        const chatId = parseNonZeroInt(body.chat_id);
-        const editorUserId = parsePositiveInt(body.user_id);
-        if (!commentId || !postId || !chatId || !editorUserId) {
-            res.status(400).json({ error: 'missing or invalid fields' });
-            return;
-        }
+    const adminDeleteReply = async (res, input) => {
         const access = await resolveAdminCommentAccess(deps.bot, {
-            commentId,
-            postId,
-            chatId,
-            userId: editorUserId,
+            commentId: input.commentId,
+            postId: input.postId,
+            chatId: input.chatId,
+            userId: input.userId,
         });
         if (!access.ok) {
             res.status(access.status).json({ error: access.error });
             return;
         }
-        const updated = commentStore_1.commentStore.deleteReply(commentId);
+        const updated = commentStore_1.commentStore.deleteReply(input.commentId);
         if (!updated) {
             res.status(404).json({ error: 'reply not found' });
             return;
         }
         res.json(toWireComment(updated));
+    };
+    router.delete('/reply', async (req, res) => {
+        const input = parseAdminModerationBody(req.body);
+        if (!input) {
+            res.status(400).json({ error: 'missing or invalid fields' });
+            return;
+        }
+        await adminDeleteReply(res, input);
+    });
+    router.post('/reply/delete', async (req, res) => {
+        const input = parseAdminModerationBody(req.body);
+        if (!input) {
+            res.status(400).json({ error: 'missing or invalid fields' });
+            return;
+        }
+        await adminDeleteReply(res, input);
     });
     return router;
 }

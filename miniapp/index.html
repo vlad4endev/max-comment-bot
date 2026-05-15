@@ -1818,7 +1818,53 @@
       });
     }
 
+    var gateUid = null;
+
+    function manualRegister() {
+      var uid =
+        gateUid ||
+        getBridgeNumericUserId(user) ||
+        parseInt(mergedParams.get('user_id') || '', 10) ||
+        null;
+      if (!uid) {
+        showToast('Не удалось определить user_id');
+        return;
+      }
+      if (!chatId) {
+        showToast('Нет chat_id');
+        return;
+      }
+      var btn = document.getElementById('gateManualRegisterBtn');
+      if (btn) btn.disabled = true;
+      fetch('/api/register-subscriber', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          user_id: uid,
+          chat_id: Number(chatId),
+          source: 'manual_gate',
+        }),
+      })
+        .then(function (r) {
+          return r.json().then(function (j) {
+            if (!r.ok) throw new Error(j.error || String(r.status));
+            return j;
+          });
+        })
+        .then(function () {
+          if (viewGate) viewGate.classList.add('hidden');
+          loadPostAndComments();
+        })
+        .catch(function (e) {
+          showToast(e.message || 'Не удалось зарегистрироваться');
+        })
+        .finally(function () {
+          if (btn) btn.disabled = false;
+        });
+    }
+
     function showGate(uid) {
+      gateUid = uid;
       if (viewGate) viewGate.classList.remove('hidden');
       viewComments.classList.add('hidden');
 
@@ -1841,12 +1887,20 @@
         .then(function (cfg) {
           var startParam = uid ? 'sub_' + uid : 'start';
           var nick = String(cfg.bot_nickname || '').replace(/^@/, '');
+          // MAX bot deeplink: ?start= triggers bot_started (see dev.max.ru/docs/chatbots/bots-coding/prepare)
           var url = 'https://max.ru/' + nick + '?startapp=' + startParam;
           var btn = document.getElementById('gateLaunchBtn');
           if (btn) btn.href = url;
         })
         .catch(function () {});
     }
+
+    ;(function bindGateManualRegister() {
+      var gateBtn = document.getElementById('gateManualRegisterBtn');
+      if (!gateBtn || gateBtn.dataset.bound === '1') return;
+      gateBtn.dataset.bound = '1';
+      gateBtn.addEventListener('click', manualRegister);
+    })();
 
     function bootComments() {
       if (!hasPostContext || joinChannelId) return;
@@ -2238,12 +2292,13 @@
         });
 
         block.querySelectorAll('[data-delete-comment]').forEach(function (btn) {
+          if (btn.dataset.delWired === '1') return;
+          btn.dataset.delWired = '1';
           btn.addEventListener('click', function () {
-            if (!confirm('Удалить комментарий?')) return;
             btn.disabled = true;
             setErr('');
-            fetch('/api/comment', {
-              method: 'DELETE',
+            fetch('/api/comment/delete', {
+              method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify(adminApiBase(cid)),
             })
@@ -2278,12 +2333,13 @@
         });
 
         block.querySelectorAll('[data-delete-reply]').forEach(function (btn) {
+          if (btn.dataset.delWired === '1') return;
+          btn.dataset.delWired = '1';
           btn.addEventListener('click', function () {
-            if (!confirm('Удалить ответ канала?')) return;
             btn.disabled = true;
             setErr('');
-            fetch('/api/reply', {
-              method: 'DELETE',
+            fetch('/api/reply/delete', {
+              method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify(adminApiBase(cid)),
             })
