@@ -12,6 +12,9 @@ import { dispatchBotUpdate } from './dispatchUpdate'
 
 const MAX_SECRET_HEADER = 'x-max-bot-api-secret'
 
+/** Корень `admin-panel/` рядом с `dist/` (в Docker: `/app/admin-panel`). */
+const adminPanelRoot = join(__dirname, '..', '..', 'admin-panel')
+
 export interface HttpAppOptions {
   bot: Bot
   /** Если задан — регистрируется POST webhook для MAX */
@@ -50,8 +53,6 @@ export function createHttpApp(options: HttpAppOptions): express.Express {
   app.get('/health', (_req, res) => {
     res.status(200).type('text/plain').send('ok')
   })
-
-  const adminPanelRoot = join(process.cwd(), 'admin-panel')
 
   app.get('/admin/login', (_req, res) => {
     res.sendFile(join(adminPanelRoot, 'login.html'), (err) => {

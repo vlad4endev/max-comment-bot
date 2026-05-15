@@ -13,6 +13,8 @@ const adminAuth_1 = require("../middleware/adminAuth");
 const logger_1 = require("../utils/logger");
 const dispatchUpdate_1 = require("./dispatchUpdate");
 const MAX_SECRET_HEADER = 'x-max-bot-api-secret';
+/** Корень `admin-panel/` рядом с `dist/` (в Docker: `/app/admin-panel`). */
+const adminPanelRoot = (0, node_path_1.join)(__dirname, '..', '..', 'admin-panel');
 function isRecord(value) {
     return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
@@ -32,7 +34,6 @@ function createHttpApp(options) {
     app.get('/health', (_req, res) => {
         res.status(200).type('text/plain').send('ok');
     });
-    const adminPanelRoot = (0, node_path_1.join)(process.cwd(), 'admin-panel');
     app.get('/admin/login', (_req, res) => {
         res.sendFile((0, node_path_1.join)(adminPanelRoot, 'login.html'), (err) => {
             if (err) {
