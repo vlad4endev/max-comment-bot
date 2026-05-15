@@ -363,7 +363,6 @@ async function tryActivateChannelRegistration(ctx, bot, channelChatId, isChannel
         return { status: 'already_registered' };
     }
     await notifyAdminsChannelJoined(bot, channelChatId);
-    await postChannelAdminInviteToChannel(bot, channelChatId);
     (0, channelAdminJoinNotified_1.markChannelAdminJoinNotified)(channelChatId);
     return { status: 'registered' };
 }
