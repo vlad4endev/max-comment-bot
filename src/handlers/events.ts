@@ -441,7 +441,6 @@ async function tryActivateChannelRegistration(
   }
 
   await notifyAdminsChannelJoined(bot, channelChatId)
-  await postChannelAdminInviteToChannel(bot, channelChatId)
   markChannelAdminJoinNotified(channelChatId)
   return { status: 'registered' }
 }

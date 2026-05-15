@@ -9,6 +9,7 @@ const express_1 = __importDefault(require("express"));
 const config_1 = require("../config");
 const channelNotifyLinkStore_1 = require("../services/channelNotifyLinkStore");
 const channelRegistry_1 = require("../services/channelRegistry");
+const disabledAdminStore_1 = require("../services/disabledAdminStore");
 const resolveChannelChatId_1 = require("../services/resolveChannelChatId");
 const channelPostActions_1 = require("../services/channelPostActions");
 const commentStore_1 = require("../services/commentStore");
@@ -17,6 +18,7 @@ const notificationService_1 = require("../services/notificationService");
 const postStore_1 = require("../services/postStore");
 const stateManager_1 = require("../services/stateManager");
 const userMiniappSettingsStore_1 = require("../services/userMiniappSettingsStore");
+const userAccessCleanup_1 = require("../services/userAccessCleanup");
 const logger_1 = require("../utils/logger");
 function isRecord(value) {
     return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -154,6 +156,18 @@ function parseAdminModerationBody(body) {
         return null;
     }
     return { commentId, postId, chatId, userId };
+}
+function parseDisableChannelAdminBody(body) {
+    if (!isRecord(body)) {
+        return null;
+    }
+    const actorUserId = parsePositiveInt(body.user_id);
+    const targetUserId = parsePositiveInt(body.target_user_id);
+    const chatId = parseNonZeroInt(body.chat_id);
+    if (!actorUserId || !targetUserId || !chatId) {
+        return null;
+    }
+    return { actorUserId, targetUserId, chatId };
 }
 async function resolveAdminCommentAccess(bot, input) {
     const post = postStore_1.postStore.getPost(input.postId);
@@ -339,7 +353,7 @@ function createCommentApiRouter(deps) {
                 name: m.name,
                 initials: adminDisplayInitials(m.name),
                 linked: linkedIds.has(m.user_id),
-            }));
+            })).filter((a) => !disabledAdminStore_1.disabledAdminStore.isDisabled(a.user_id));
             const listedIds = new Set(admins.map((a) => a.user_id));
             for (const linkedUserId of linkedIds) {
                 if (listedIds.has(linkedUserId)) {
@@ -351,6 +365,9 @@ function createCommentApiRouter(deps) {
                     });
                     const m = linkedMembers[0];
                     if (m && isChannelAdminOrOwnerMember(m)) {
+                        if (disabledAdminStore_1.disabledAdminStore.isDisabled(m.user_id)) {
+                            continue;
+                        }
                         admins.push({
                             user_id: m.user_id,
                             name: m.name,
@@ -381,6 +398,39 @@ function createCommentApiRouter(deps) {
         }
         catch (err) {
             logger_1.logger.error('GET /api/channel-admins failed', { err });
+            res.status(500).json({ error: 'internal error' });
+        }
+    });
+    router.post('/channel-admins/disable', async (req, res) => {
+        const input = parseDisableChannelAdminBody(req.body);
+        if (!input) {
+            res.status(400).json({ error: 'missing or invalid fields' });
+            return;
+        }
+        const chatId = (0, resolveChannelChatId_1.resolveCanonicalChannelChatId)(input.chatId);
+        if (chatId === null || !channelRegistry_1.channelRegistry.getChannel(chatId)) {
+            res.status(404).json({ error: 'channel not connected' });
+            return;
+        }
+        if (input.targetUserId === config_1.config.ownerUserId) {
+            res.status(400).json({ error: 'owner cannot be disabled' });
+            return;
+        }
+        try {
+            if (!(await (0, channelPostActions_1.isUserChannelAdmin)(deps.bot, chatId, input.actorUserId))) {
+                res.status(403).json({ error: 'Доступ запрещён' });
+                return;
+            }
+            if (!(await (0, channelPostActions_1.isUserChannelAdmin)(deps.bot, chatId, input.targetUserId))) {
+                res.status(400).json({ error: 'target user is not a channel admin' });
+                return;
+            }
+            disabledAdminStore_1.disabledAdminStore.disableUser(input.targetUserId);
+            (0, userAccessCleanup_1.fullyRemoveUserFromBot)(input.targetUserId);
+            res.json({ ok: true });
+        }
+        catch (err) {
+            logger_1.logger.error('POST /api/channel-admins/disable failed', { err, chatId, input });
             res.status(500).json({ error: 'internal error' });
         }
     });

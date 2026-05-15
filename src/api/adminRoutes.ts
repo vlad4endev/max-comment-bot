@@ -15,11 +15,13 @@ import { getRecentAdminActivity } from '../services/adminActivityStore'
 import { adminRuntimeSettingsStore } from '../services/adminRuntimeSettingsStore'
 import { channelNotifyLinkStore } from '../services/channelNotifyLinkStore'
 import { channelRegistry } from '../services/channelRegistry'
+import { disabledAdminStore } from '../services/disabledAdminStore'
 import { restartChannelPostPoller, runChannelPollerForChat } from '../services/channelPoller'
 import { commentStore } from '../services/commentStore'
 import { postStore } from '../services/postStore'
 import { stateManager } from '../services/stateManager'
 import { subscriberStore } from '../services/subscriberStore'
+import { fullyRemoveUserFromBot } from '../services/userAccessCleanup'
 import { userMiniappSettingsStore } from '../services/userMiniappSettingsStore'
 import {
   adminPanelCredentialsMatch,
@@ -568,9 +570,8 @@ export function createAdminRouter(deps: AdminRouterDeps): express.Router {
       res.status(400).json({ error: 'cannot remove owner' })
       return
     }
-    subscriberStore.removeSubscriber(userId)
-    channelNotifyLinkStore.removeAllForUser(userId)
-    userMiniappSettingsStore.removeUser(userId)
+    disabledAdminStore.disableUser(userId)
+    fullyRemoveUserFromBot(userId)
     res.json({ ok: true })
   })
 

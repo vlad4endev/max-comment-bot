@@ -1,4 +1,5 @@
 import { channelNotifyLinkStore } from './channelNotifyLinkStore'
+import { disabledAdminStore } from './disabledAdminStore'
 import { logger } from '../utils/logger'
 
 /**
@@ -24,6 +25,10 @@ export const settingsStore = {
   },
 
   linkUserToChannel(userId: number, channelChatId: number): void {
+    if (disabledAdminStore.isDisabled(userId)) {
+      logger.info('settingsStore.linkUserToChannel skipped for disabled admin', { userId, chatId: channelChatId })
+      return
+    }
     const linkedChannelsBefore = this.getLinkedChannels(userId)
     const channelUsersBefore = this.getUsersLinkedToChannel(channelChatId)
     logger.info('settingsStore.linkUserToChannel called', {

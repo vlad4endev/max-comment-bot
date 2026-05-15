@@ -8,6 +8,7 @@ const max_bot_api_1 = require("@maxhub/max-bot-api");
 const uuid_1 = require("uuid");
 const logger_1 = require("../utils/logger");
 const adminActivityStore_1 = require("./adminActivityStore");
+const disabledAdminStore_1 = require("./disabledAdminStore");
 const postStore_1 = require("./postStore");
 /**
  * Resolves chat id for a message (channel/group/dialog). Falls back to sender id for 1:1.
@@ -53,6 +54,9 @@ function firstImageUrlFromMessage(message) {
 }
 /** True if the user is a non-bot admin or owner of the channel. */
 async function isUserChannelAdmin(bot, channelChatId, userId) {
+    if (disabledAdminStore_1.disabledAdminStore.isDisabled(userId)) {
+        return false;
+    }
     try {
         const { members } = await bot.api.getChatMembers(channelChatId, { user_ids: [userId] });
         const m = members[0];

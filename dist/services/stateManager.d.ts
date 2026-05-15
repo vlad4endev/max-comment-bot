@@ -51,6 +51,14 @@ export declare class StateManager {
      */
     getUserPrivateChatId(userId: number): number | undefined;
     /**
+     * Removes remembered private dialog chat id for this user.
+     */
+    clearUserPrivateChatId(userId: number): void;
+    /**
+     * Deletes all transient conversation states for this user across every chat.
+     */
+    clearAllStatesForUser(userId: number): void;
+    /**
      * Marks a channel as waiting for admin rights (or manual `/connect` after rights are granted).
      */
     markChannelPendingAdminRights(channelChatId: number): void;
