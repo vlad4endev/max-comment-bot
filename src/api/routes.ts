@@ -6,6 +6,10 @@ import express from 'express'
 import { config } from '../config'
 import { channelNotifyLinkStore } from '../services/channelNotifyLinkStore'
 import { channelRegistry } from '../services/channelRegistry'
+import {
+  resolveCanonicalChannelChatId,
+  resolveChannelChatIdFromInviteParam,
+} from '../services/resolveChannelChatId'
 import { isUserChannelAdmin } from '../services/channelPostActions'
 import type { Comment } from '../services/commentStore'
 import { commentStore } from '../services/commentStore'
@@ -100,6 +104,21 @@ function adminDisplayInitials(name: string): string {
  * Lists channel admins/owners: paginates {@link Bot.api.getChatMembers}, filters roles; if none found, uses {@link Bot.api.getChatAdmins}.
  */
 async function listChannelAdminsForMiniApp(bot: Bot, chatId: number): Promise<ChatMember[]> {
+  try {
+    const { members } = await bot.api.getChatAdmins(chatId)
+    const admins = members.filter(isChannelAdminOrOwnerMember)
+    if (admins.length > 0) {
+      return [...new Map(admins.map((m) => [m.user_id, m])).values()].sort(
+        (a, b) => a.user_id - b.user_id,
+      )
+    }
+  } catch (err: unknown) {
+    logger.warn('listChannelAdminsForMiniApp: getChatAdmins failed, falling back to members list', {
+      chatId,
+      err,
+    })
+  }
+
   const byId = new Map<number, ChatMember>()
   let marker: number | undefined
   const pageSize = 100
@@ -269,12 +288,13 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
 
   router.get('/channel-admins', async (req, res) => {
     const userId = parsePositiveInt(req.query.user_id)
-    const chatId = parseNonZeroInt(req.query.chat_id)
-    if (!userId || !chatId) {
+    const chatIdRaw = parseNonZeroInt(req.query.chat_id)
+    if (!userId || !chatIdRaw) {
       res.status(400).json({ error: 'missing or invalid user_id or chat_id' })
       return
     }
-    if (!channelRegistry.getChannel(chatId)) {
+    const chatId = resolveCanonicalChannelChatId(chatIdRaw)
+    if (chatId === null || !channelRegistry.getChannel(chatId)) {
       res.status(404).json({ error: 'channel not connected' })
       return
     }
@@ -291,6 +311,41 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
         initials: adminDisplayInitials(m.name),
         linked: linkedIds.has(m.user_id),
       }))
+      const listedIds = new Set(admins.map((a) => a.user_id))
+      for (const linkedUserId of linkedIds) {
+        if (listedIds.has(linkedUserId)) {
+          continue
+        }
+        try {
+          const { members: linkedMembers } = await deps.bot.api.getChatMembers(chatId, {
+            user_ids: [linkedUserId],
+          })
+          const m = linkedMembers[0]
+          if (m && isChannelAdminOrOwnerMember(m)) {
+            admins.push({
+              user_id: m.user_id,
+              name: m.name,
+              initials: adminDisplayInitials(m.name),
+              linked: true,
+            })
+            listedIds.add(m.user_id)
+          }
+        } catch (err: unknown) {
+          logger.warn('GET /api/channel-admins: could not resolve linked admin', {
+            chatId,
+            linkedUserId,
+            err,
+          })
+        }
+      }
+      admins.sort((a, b) => a.user_id - b.user_id)
+      logger.info('GET /api/channel-admins', {
+        chatId,
+        chatIdRaw,
+        requestUserId: userId,
+        linkedUserIds: [...linkedIds],
+        adminUserIds: admins.map((a) => a.user_id),
+      })
       const invite_url = `https://max.ru/${config.botNickname}?startapp=join${Math.abs(chatId)}`
       res.json({ admins, invite_url })
     } catch (err: unknown) {
@@ -332,8 +387,11 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
     | { ok: true; channelChatId: number; title: string | null }
     | { ok: false; status: 400 | 403 | 404; error: string }
   > {
-    const channelChatId = parseNonZeroInt(joinChannelIdRaw)
-    if (!channelChatId) {
+    if (!joinChannelIdRaw) {
+      return { ok: false, status: 400, error: 'missing or invalid join_channel_id' }
+    }
+    const channelChatId = resolveChannelChatIdFromInviteParam(joinChannelIdRaw)
+    if (channelChatId === null) {
       return { ok: false, status: 400, error: 'missing or invalid join_channel_id' }
     }
     const reg = channelRegistry.getChannel(channelChatId)
@@ -390,6 +448,8 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
       }
       const wasLinked = channelNotifyLinkStore.isLinked(userId, access.channelChatId)
       channelNotifyLinkStore.register(userId, access.channelChatId)
+      subscriberStore.addSubscriber(userId)
+      await channelNotifyLinkStore.forcePersist()
       res.json({
         ok: true,
         channel_title: access.title,

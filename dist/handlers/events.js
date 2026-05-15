@@ -6,6 +6,7 @@ const config_1 = require("../config");
 const channelPostActions_1 = require("../services/channelPostActions");
 const channelNotifyLinkStore_1 = require("../services/channelNotifyLinkStore");
 const channelRegistry_1 = require("../services/channelRegistry");
+const resolveChannelChatId_1 = require("../services/resolveChannelChatId");
 const commentStore_1 = require("../services/commentStore");
 const notificationService_1 = require("../services/notificationService");
 const postStore_1 = require("../services/postStore");
@@ -27,21 +28,6 @@ function delay(ms) {
 function getBotStartPayload(ctx) {
     const u = ctx.update;
     return (u.payload ?? u.start_payload ?? '').trim();
-}
-function resolveChannelChatIdFromJoinPayload(payload) {
-    const m = /^join(\d+)$/i.exec(payload.trim());
-    if (!m) {
-        return null;
-    }
-    const absId = Number.parseInt(m[1], 10);
-    if (!Number.isFinite(absId) || absId <= 0) {
-        return null;
-    }
-    const found = channelRegistry_1.channelRegistry.getAllChannels().find((c) => Math.abs(c.chat_id) === absId);
-    if (found) {
-        return found.chat_id;
-    }
-    return Number(`-${absId}`);
 }
 async function fetchChannelParticipantsCount(bot, channelChatId) {
     try {
@@ -385,7 +371,7 @@ function registerEventHandlers(bot) {
             };
             // 1) Admin invited via join link
             if (startPayload.toLowerCase().startsWith('join') && /^join\d+$/i.test(startPayload)) {
-                const channelChatId = resolveChannelChatIdFromJoinPayload(startPayload);
+                const channelChatId = (0, resolveChannelChatId_1.resolveChannelChatIdFromInviteParam)(startPayload);
                 if (channelChatId === null) {
                     const kb = max_bot_api_1.Keyboard.inlineKeyboard([[max_bot_api_1.Keyboard.button.link('🚀 Подключить канал', homeUrl)]]);
                     await sendUser(`Не удалось разобрать ссылку приглашения. Откройте мини-приложение и попробуйте снова.`, kb);
@@ -398,6 +384,7 @@ function registerEventHandlers(bot) {
                     return;
                 }
                 settingsStore_1.settingsStore.linkUserToChannel(userId, channelChatId);
+                await settingsStore_1.settingsStore.forcePersist();
                 let channelTitle = channelRegistry_1.channelRegistry.getChannel(channelChatId)?.title ?? null;
                 if (!channelTitle) {
                     channelTitle = await fetchChatTitle(bot, channelChatId);

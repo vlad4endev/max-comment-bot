@@ -9,6 +9,7 @@ const express_1 = __importDefault(require("express"));
 const config_1 = require("../config");
 const channelNotifyLinkStore_1 = require("../services/channelNotifyLinkStore");
 const channelRegistry_1 = require("../services/channelRegistry");
+const resolveChannelChatId_1 = require("../services/resolveChannelChatId");
 const channelPostActions_1 = require("../services/channelPostActions");
 const commentStore_1 = require("../services/commentStore");
 const subscriberStore_1 = require("../services/subscriberStore");
@@ -84,6 +85,19 @@ function adminDisplayInitials(name) {
  * Lists channel admins/owners: paginates {@link Bot.api.getChatMembers}, filters roles; if none found, uses {@link Bot.api.getChatAdmins}.
  */
 async function listChannelAdminsForMiniApp(bot, chatId) {
+    try {
+        const { members } = await bot.api.getChatAdmins(chatId);
+        const admins = members.filter(isChannelAdminOrOwnerMember);
+        if (admins.length > 0) {
+            return [...new Map(admins.map((m) => [m.user_id, m])).values()].sort((a, b) => a.user_id - b.user_id);
+        }
+    }
+    catch (err) {
+        logger_1.logger.warn('listChannelAdminsForMiniApp: getChatAdmins failed, falling back to members list', {
+            chatId,
+            err,
+        });
+    }
     const byId = new Map();
     let marker;
     const pageSize = 100;
@@ -233,12 +247,13 @@ function createCommentApiRouter(deps) {
     });
     router.get('/channel-admins', async (req, res) => {
         const userId = parsePositiveInt(req.query.user_id);
-        const chatId = parseNonZeroInt(req.query.chat_id);
-        if (!userId || !chatId) {
+        const chatIdRaw = parseNonZeroInt(req.query.chat_id);
+        if (!userId || !chatIdRaw) {
             res.status(400).json({ error: 'missing or invalid user_id or chat_id' });
             return;
         }
-        if (!channelRegistry_1.channelRegistry.getChannel(chatId)) {
+        const chatId = (0, resolveChannelChatId_1.resolveCanonicalChannelChatId)(chatIdRaw);
+        if (chatId === null || !channelRegistry_1.channelRegistry.getChannel(chatId)) {
             res.status(404).json({ error: 'channel not connected' });
             return;
         }
@@ -255,6 +270,42 @@ function createCommentApiRouter(deps) {
                 initials: adminDisplayInitials(m.name),
                 linked: linkedIds.has(m.user_id),
             }));
+            const listedIds = new Set(admins.map((a) => a.user_id));
+            for (const linkedUserId of linkedIds) {
+                if (listedIds.has(linkedUserId)) {
+                    continue;
+                }
+                try {
+                    const { members: linkedMembers } = await deps.bot.api.getChatMembers(chatId, {
+                        user_ids: [linkedUserId],
+                    });
+                    const m = linkedMembers[0];
+                    if (m && isChannelAdminOrOwnerMember(m)) {
+                        admins.push({
+                            user_id: m.user_id,
+                            name: m.name,
+                            initials: adminDisplayInitials(m.name),
+                            linked: true,
+                        });
+                        listedIds.add(m.user_id);
+                    }
+                }
+                catch (err) {
+                    logger_1.logger.warn('GET /api/channel-admins: could not resolve linked admin', {
+                        chatId,
+                        linkedUserId,
+                        err,
+                    });
+                }
+            }
+            admins.sort((a, b) => a.user_id - b.user_id);
+            logger_1.logger.info('GET /api/channel-admins', {
+                chatId,
+                chatIdRaw,
+                requestUserId: userId,
+                linkedUserIds: [...linkedIds],
+                adminUserIds: admins.map((a) => a.user_id),
+            });
             const invite_url = `https://max.ru/${config_1.config.botNickname}?startapp=join${Math.abs(chatId)}`;
             res.json({ admins, invite_url });
         }
@@ -288,8 +339,11 @@ function createCommentApiRouter(deps) {
         res.json(next);
     });
     async function resolveChannelInviteAccess(userId, joinChannelIdRaw) {
-        const channelChatId = parseNonZeroInt(joinChannelIdRaw);
-        if (!channelChatId) {
+        if (!joinChannelIdRaw) {
+            return { ok: false, status: 400, error: 'missing or invalid join_channel_id' };
+        }
+        const channelChatId = (0, resolveChannelChatId_1.resolveChannelChatIdFromInviteParam)(joinChannelIdRaw);
+        if (channelChatId === null) {
             return { ok: false, status: 400, error: 'missing or invalid join_channel_id' };
         }
         const reg = channelRegistry_1.channelRegistry.getChannel(channelChatId);
@@ -345,6 +399,8 @@ function createCommentApiRouter(deps) {
             }
             const wasLinked = channelNotifyLinkStore_1.channelNotifyLinkStore.isLinked(userId, access.channelChatId);
             channelNotifyLinkStore_1.channelNotifyLinkStore.register(userId, access.channelChatId);
+            subscriberStore_1.subscriberStore.addSubscriber(userId);
+            await channelNotifyLinkStore_1.channelNotifyLinkStore.forcePersist();
             res.json({
                 ok: true,
                 channel_title: access.title,

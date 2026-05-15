@@ -1117,20 +1117,20 @@
       return { post_id: uuid, chat_id: '-' + m[2], admin: !!m[3] }
     }
 
-    /** MAX Bridge docs: user id is `user.id`; tolerate legacy `user_id`. */
+    /** Same numeric id as MAX API / bot (`user_id`); Bridge may also expose `id`. */
     function getBridgeNumericUserId(bridgeUser) {
       if (!bridgeUser || typeof bridgeUser !== 'object') return null
-      var a = bridgeUser.id
-      var b = bridgeUser.user_id
-      if (typeof a === 'number' && a > 0) return a
-      if (typeof b === 'number' && b > 0) return b
-      if (typeof a === 'string' && /^\d+$/.test(a)) {
-        var x = parseInt(a, 10)
-        if (Number.isFinite(x) && x > 0) return x
+      var apiId = bridgeUser.user_id
+      var bridgeId = bridgeUser.id
+      if (typeof apiId === 'number' && apiId > 0) return apiId
+      if (typeof bridgeId === 'number' && bridgeId > 0) return bridgeId
+      if (typeof apiId === 'string' && /^\d+$/.test(apiId)) {
+        var fromApi = parseInt(apiId, 10)
+        if (Number.isFinite(fromApi) && fromApi > 0) return fromApi
       }
-      if (typeof b === 'string' && /^\d+$/.test(b)) {
-        var y = parseInt(b, 10)
-        if (Number.isFinite(y) && y > 0) return y
+      if (typeof bridgeId === 'string' && /^\d+$/.test(bridgeId)) {
+        var fromBridge = parseInt(bridgeId, 10)
+        if (Number.isFinite(fromBridge) && fromBridge > 0) return fromBridge
       }
       return null
     }

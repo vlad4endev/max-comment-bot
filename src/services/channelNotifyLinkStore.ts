@@ -1,6 +1,7 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 
+import { resolveCanonicalChannelChatId } from './resolveChannelChatId'
 import { logger } from '../utils/logger'
 
 /** User opted in via Mini App invite to receive comment notifications for this channel. */
@@ -80,10 +81,12 @@ export class ChannelNotifyLinkStore {
    * Distinct user ids registered for comment notifications on this channel (order preserved).
    */
   getUserIdsForChannel(channelChatId: number): number[] {
+    const canonical = resolveCanonicalChannelChatId(channelChatId) ?? channelChatId
+    const targetAbs = Math.abs(canonical)
     const seen = new Set<number>()
     const out: number[] = []
     for (const row of this.links) {
-      if (row.channel_chat_id !== channelChatId || seen.has(row.user_id)) {
+      if (Math.abs(row.channel_chat_id) !== targetAbs || seen.has(row.user_id)) {
         continue
       }
       seen.add(row.user_id)
@@ -93,20 +96,52 @@ export class ChannelNotifyLinkStore {
   }
 
   isLinked(userId: number, channelChatId: number): boolean {
-    return this.links.some((r) => r.user_id === userId && r.channel_chat_id === channelChatId)
+    const canonical = resolveCanonicalChannelChatId(channelChatId) ?? channelChatId
+    const targetAbs = Math.abs(canonical)
+    return this.links.some(
+      (r) => r.user_id === userId && Math.abs(r.channel_chat_id) === targetAbs,
+    )
+  }
+
+  private normalizeChannelChatIds(canonicalChatId: number): boolean {
+    const targetAbs = Math.abs(canonicalChatId)
+    let changed = false
+    for (const row of this.links) {
+      if (Math.abs(row.channel_chat_id) === targetAbs && row.channel_chat_id !== canonicalChatId) {
+        row.channel_chat_id = canonicalChatId
+        changed = true
+      }
+    }
+    return changed
   }
 
   register(userId: number, channelChatId: number): void {
-    if (this.isLinked(userId, channelChatId)) {
+    const canonical = resolveCanonicalChannelChatId(channelChatId) ?? channelChatId
+    if (this.normalizeChannelChatIds(canonical)) {
+      this.queuePersist()
+    }
+    logger.info('DEBUG channelNotifyLinkStore.register', {
+      userId,
+      channelChatId,
+      canonicalChatId: canonical,
+      currentLinkedForChannel: this.getUserIdsForChannel(canonical),
+      alreadyLinked: this.isLinked(userId, canonical),
+    })
+    if (this.isLinked(userId, canonical)) {
       return
     }
     this.links.push({
       user_id: userId,
-      channel_chat_id: channelChatId,
+      channel_chat_id: canonical,
       joined_at: new Date().toISOString(),
     })
     this.queuePersist()
     logger.info('channelNotifyLinkStore: registered', { userId, channelChatId })
+  }
+
+  /** Await all queued writes so a following HTTP response or process restart sees the link. */
+  async forcePersist(): Promise<void> {
+    await this.persistChain
   }
 
   /** When the bot leaves a channel, drop all opt-ins for that chat. */

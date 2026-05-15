@@ -71,21 +71,31 @@ async function deliverAdminNotifications(bot, sourceChatId, recipientIds, messag
     return out;
 }
 /**
- * Кто получает DM о новом комментарии: явные подписки из мини-приложения, иначе все админы из API.
+ * Кто получает DM: сначала явно подключившиеся через invite, плюс админы/владельцы из API.
  */
-async function resolveMiniappCommentNotifyRecipientIds(bot, channelChatId) {
+async function collectAdminNotifyRecipientIds(bot, channelChatId) {
+    const recipients = new Set();
     const linked = channelNotifyLinkStore_1.channelNotifyLinkStore.getUserIdsForChannel(channelChatId);
-    if (linked.length > 0) {
-        return linked;
+    for (const userId of linked) {
+        recipients.add(userId);
     }
-    return getChannelAdmins(bot, channelChatId);
+    const admins = await getChannelAdmins(bot, channelChatId);
+    for (const userId of admins) {
+        recipients.add(userId);
+    }
+    logger_1.logger.info('notifyAllAdmins: recipients', {
+        chatId: channelChatId,
+        linked,
+        total: recipients.size,
+    });
+    return [...recipients];
 }
 /**
  * Уведомляет всех админов канала личными сообщениями; для `ADMIN_CHAT_ID` используется `sendMessageToChat` (супер-админ / группа).
  * Возвращает пары `admin_id` / `message_mid` только для успешно отправленных сообщений.
  */
 async function notifyAllAdmins(bot, chatId, message, extra) {
-    const recipients = await getChannelAdmins(bot, chatId);
+    const recipients = await collectAdminNotifyRecipientIds(bot, chatId);
     return deliverAdminNotifications(bot, chatId, recipients, message, extra);
 }
 /**
@@ -106,7 +116,7 @@ async function notifyAdminsNewMiniappComment(bot, input) {
 Канал: ${input.channelTitle}
 👤 ${input.username}: ${input.commentText}`;
     commentStore_1.commentStore.saveNotificationText(input.commentId, message);
-    const recipientIds = await resolveMiniappCommentNotifyRecipientIds(bot, input.channelChatId);
+    const recipientIds = await collectAdminNotifyRecipientIds(bot, input.channelChatId);
     const sent = await deliverAdminNotifications(bot, input.channelChatId, recipientIds, message, {
         attachments: [keyboard],
     });

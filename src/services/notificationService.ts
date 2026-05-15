@@ -87,14 +87,24 @@ async function deliverAdminNotifications(
 }
 
 /**
- * Кто получает DM о новом комментарии: явные подписки из мини-приложения, иначе все админы из API.
+ * Кто получает DM: сначала явно подключившиеся через invite, плюс админы/владельцы из API.
  */
-async function resolveMiniappCommentNotifyRecipientIds(bot: Bot, channelChatId: number): Promise<number[]> {
+async function collectAdminNotifyRecipientIds(bot: Bot, channelChatId: number): Promise<number[]> {
+  const recipients = new Set<number>()
   const linked = channelNotifyLinkStore.getUserIdsForChannel(channelChatId)
-  if (linked.length > 0) {
-    return linked
+  for (const userId of linked) {
+    recipients.add(userId)
   }
-  return getChannelAdmins(bot, channelChatId)
+  const admins = await getChannelAdmins(bot, channelChatId)
+  for (const userId of admins) {
+    recipients.add(userId)
+  }
+  logger.info('notifyAllAdmins: recipients', {
+    chatId: channelChatId,
+    linked,
+    total: recipients.size,
+  })
+  return [...recipients]
 }
 
 /**
@@ -107,7 +117,7 @@ export async function notifyAllAdmins(
   message: string,
   extra?: SendMessageExtra,
 ): Promise<AdminNotificationSendResult[]> {
-  const recipients = await getChannelAdmins(bot, chatId)
+  const recipients = await collectAdminNotifyRecipientIds(bot, chatId)
   return deliverAdminNotifications(bot, chatId, recipients, message, extra)
 }
 
@@ -142,7 +152,7 @@ export async function notifyAdminsNewMiniappComment(
 
   commentStore.saveNotificationText(input.commentId, message)
 
-  const recipientIds = await resolveMiniappCommentNotifyRecipientIds(bot, input.channelChatId)
+  const recipientIds = await collectAdminNotifyRecipientIds(bot, input.channelChatId)
   const sent = await deliverAdminNotifications(bot, input.channelChatId, recipientIds, message, {
     attachments: [keyboard],
   })

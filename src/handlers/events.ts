@@ -11,6 +11,7 @@ import {
 } from '../services/channelPostActions'
 import { channelNotifyLinkStore } from '../services/channelNotifyLinkStore'
 import { channelRegistry } from '../services/channelRegistry'
+import { resolveChannelChatIdFromInviteParam } from '../services/resolveChannelChatId'
 import { commentStore } from '../services/commentStore'
 import { notifyAllAdmins, type SendMessageExtra } from '../services/notificationService'
 import { postStore } from '../services/postStore'
@@ -36,22 +37,6 @@ function delay(ms: number): Promise<void> {
 function getBotStartPayload(ctx: Context): string {
   const u = ctx.update as { payload?: string | null; start_payload?: string | null }
   return (u.payload ?? u.start_payload ?? '').trim()
-}
-
-function resolveChannelChatIdFromJoinPayload(payload: string): number | null {
-  const m = /^join(\d+)$/i.exec(payload.trim())
-  if (!m) {
-    return null
-  }
-  const absId = Number.parseInt(m[1], 10)
-  if (!Number.isFinite(absId) || absId <= 0) {
-    return null
-  }
-  const found = channelRegistry.getAllChannels().find((c) => Math.abs(c.chat_id) === absId)
-  if (found) {
-    return found.chat_id
-  }
-  return Number(`-${absId}`)
 }
 
 async function fetchChannelParticipantsCount(bot: Bot, channelChatId: number): Promise<number> {
@@ -470,7 +455,7 @@ export function registerEventHandlers(bot: Bot): void {
 
       // 1) Admin invited via join link
       if (startPayload.toLowerCase().startsWith('join') && /^join\d+$/i.test(startPayload)) {
-        const channelChatId = resolveChannelChatIdFromJoinPayload(startPayload)
+        const channelChatId = resolveChannelChatIdFromInviteParam(startPayload)
         if (channelChatId === null) {
           const kb = Keyboard.inlineKeyboard([[Keyboard.button.link('🚀 Подключить канал', homeUrl)]])
           await sendUser(
@@ -491,6 +476,7 @@ export function registerEventHandlers(bot: Bot): void {
         }
 
         settingsStore.linkUserToChannel(userId, channelChatId)
+        await settingsStore.forcePersist()
 
         let channelTitle = channelRegistry.getChannel(channelChatId)?.title ?? null
         if (!channelTitle) {

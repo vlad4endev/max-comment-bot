@@ -3,6 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.channelNotifyLinkStore = exports.ChannelNotifyLinkStore = void 0;
 const promises_1 = require("node:fs/promises");
 const node_path_1 = require("node:path");
+const resolveChannelChatId_1 = require("./resolveChannelChatId");
 const logger_1 = require("../utils/logger");
 const DEFAULT_PATH = (0, node_path_1.join)(process.cwd(), 'data', 'channel-notify-links.json');
 function isLinkRow(value) {
@@ -64,10 +65,12 @@ class ChannelNotifyLinkStore {
      * Distinct user ids registered for comment notifications on this channel (order preserved).
      */
     getUserIdsForChannel(channelChatId) {
+        const canonical = (0, resolveChannelChatId_1.resolveCanonicalChannelChatId)(channelChatId) ?? channelChatId;
+        const targetAbs = Math.abs(canonical);
         const seen = new Set();
         const out = [];
         for (const row of this.links) {
-            if (row.channel_chat_id !== channelChatId || seen.has(row.user_id)) {
+            if (Math.abs(row.channel_chat_id) !== targetAbs || seen.has(row.user_id)) {
                 continue;
             }
             seen.add(row.user_id);
@@ -76,19 +79,47 @@ class ChannelNotifyLinkStore {
         return out;
     }
     isLinked(userId, channelChatId) {
-        return this.links.some((r) => r.user_id === userId && r.channel_chat_id === channelChatId);
+        const canonical = (0, resolveChannelChatId_1.resolveCanonicalChannelChatId)(channelChatId) ?? channelChatId;
+        const targetAbs = Math.abs(canonical);
+        return this.links.some((r) => r.user_id === userId && Math.abs(r.channel_chat_id) === targetAbs);
+    }
+    normalizeChannelChatIds(canonicalChatId) {
+        const targetAbs = Math.abs(canonicalChatId);
+        let changed = false;
+        for (const row of this.links) {
+            if (Math.abs(row.channel_chat_id) === targetAbs && row.channel_chat_id !== canonicalChatId) {
+                row.channel_chat_id = canonicalChatId;
+                changed = true;
+            }
+        }
+        return changed;
     }
     register(userId, channelChatId) {
-        if (this.isLinked(userId, channelChatId)) {
+        const canonical = (0, resolveChannelChatId_1.resolveCanonicalChannelChatId)(channelChatId) ?? channelChatId;
+        if (this.normalizeChannelChatIds(canonical)) {
+            this.queuePersist();
+        }
+        logger_1.logger.info('DEBUG channelNotifyLinkStore.register', {
+            userId,
+            channelChatId,
+            canonicalChatId: canonical,
+            currentLinkedForChannel: this.getUserIdsForChannel(canonical),
+            alreadyLinked: this.isLinked(userId, canonical),
+        });
+        if (this.isLinked(userId, canonical)) {
             return;
         }
         this.links.push({
             user_id: userId,
-            channel_chat_id: channelChatId,
+            channel_chat_id: canonical,
             joined_at: new Date().toISOString(),
         });
         this.queuePersist();
         logger_1.logger.info('channelNotifyLinkStore: registered', { userId, channelChatId });
+    }
+    /** Await all queued writes so a following HTTP response or process restart sees the link. */
+    async forcePersist() {
+        await this.persistChain;
     }
     /** When the bot leaves a channel, drop all opt-ins for that chat. */
     removeAllForChannel(channelChatId) {
