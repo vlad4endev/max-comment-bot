@@ -12,7 +12,12 @@ import {
 import { postStore } from './postStore'
 import { stateManager } from './stateManager'
 
-export type ChannelFullDisconnectReason = 'removed_from_chat' | 'lost_admin_rights' | 'manual_admin_panel'
+export type ChannelFullDisconnectReason =
+  | 'removed_from_chat'
+  | 'lost_admin_rights'
+  | 'manual_admin_panel'
+  /** Реестр устарел: getChat не проходит, уведомления не шлём. */
+  | 'registry_stale_removed'
 
 /**
  * Removes all bot-side data for a registered channel (registry, posts, comments, notify links)
@@ -30,7 +35,8 @@ export async function fullyDisconnectRegisteredChannel(
   }
 
   const displayTitle = reg.title?.trim() || 'без названия'
-  const shouldNotify = reason !== 'manual_admin_panel'
+  const shouldNotify =
+    reason !== 'manual_admin_panel' && reason !== 'registry_stale_removed'
 
   let recipientIds: number[] = []
   if (shouldNotify) {
@@ -71,4 +77,26 @@ export async function fullyDisconnectRegisteredChannel(
 
   logger.info('channelFullDisconnect: completed', { chatId, reason, notified: shouldNotify })
   return true
+}
+
+/**
+ * Удаляет из реестра каналы типа `channel`, для которых {@link Bot.api.getChat} больше не проходит
+ * (бот выгнан, чат удалён и т.п.), чтобы админка и поллер не показывали «мёртвые» записи.
+ */
+export async function pruneRegisteredChannelsNotAccessibleByBot(bot: Bot): Promise<void> {
+  const snapshot = [...channelRegistry.getAllChannels()].filter((c) => c.type === 'channel')
+  for (const c of snapshot) {
+    if (channelRegistry.getChannel(c.chat_id) === null) {
+      continue
+    }
+    try {
+      await bot.api.getChat(c.chat_id)
+    } catch (err: unknown) {
+      logger.warn('pruneRegisteredChannelsNotAccessibleByBot: getChat failed, removing', {
+        chatId: c.chat_id,
+        err,
+      })
+      await fullyDisconnectRegisteredChannel(bot, c.chat_id, 'registry_stale_removed')
+    }
+  }
 }

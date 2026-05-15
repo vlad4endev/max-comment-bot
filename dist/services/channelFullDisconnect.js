@@ -1,6 +1,7 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.fullyDisconnectRegisteredChannel = fullyDisconnectRegisteredChannel;
+exports.pruneRegisteredChannelsNotAccessibleByBot = pruneRegisteredChannelsNotAccessibleByBot;
 const logger_1 = require("../utils/logger");
 const channelNotifyLinkStore_1 = require("./channelNotifyLinkStore");
 const channelRegistry_1 = require("./channelRegistry");
@@ -20,7 +21,7 @@ async function fullyDisconnectRegisteredChannel(bot, chatId, reason) {
         return false;
     }
     const displayTitle = reg.title?.trim() || 'без названия';
-    const shouldNotify = reason !== 'manual_admin_panel';
+    const shouldNotify = reason !== 'manual_admin_panel' && reason !== 'registry_stale_removed';
     let recipientIds = [];
     if (shouldNotify) {
         try {
@@ -54,5 +55,27 @@ async function fullyDisconnectRegisteredChannel(bot, chatId, reason) {
     }
     logger_1.logger.info('channelFullDisconnect: completed', { chatId, reason, notified: shouldNotify });
     return true;
+}
+/**
+ * Удаляет из реестра каналы типа `channel`, для которых {@link Bot.api.getChat} больше не проходит
+ * (бот выгнан, чат удалён и т.п.), чтобы админка и поллер не показывали «мёртвые» записи.
+ */
+async function pruneRegisteredChannelsNotAccessibleByBot(bot) {
+    const snapshot = [...channelRegistry_1.channelRegistry.getAllChannels()].filter((c) => c.type === 'channel');
+    for (const c of snapshot) {
+        if (channelRegistry_1.channelRegistry.getChannel(c.chat_id) === null) {
+            continue;
+        }
+        try {
+            await bot.api.getChat(c.chat_id);
+        }
+        catch (err) {
+            logger_1.logger.warn('pruneRegisteredChannelsNotAccessibleByBot: getChat failed, removing', {
+                chatId: c.chat_id,
+                err,
+            });
+            await fullyDisconnectRegisteredChannel(bot, c.chat_id, 'registry_stale_removed');
+        }
+    }
 }
 //# sourceMappingURL=channelFullDisconnect.js.map

@@ -7,7 +7,10 @@ import express from 'express'
 
 import { config } from '../config'
 import { checkAdminAuth } from '../middleware/adminAuth'
-import { fullyDisconnectRegisteredChannel } from '../services/channelFullDisconnect'
+import {
+  fullyDisconnectRegisteredChannel,
+  pruneRegisteredChannelsNotAccessibleByBot,
+} from '../services/channelFullDisconnect'
 import { getRecentAdminActivity } from '../services/adminActivityStore'
 import { adminRuntimeSettingsStore } from '../services/adminRuntimeSettingsStore'
 import { channelNotifyLinkStore } from '../services/channelNotifyLinkStore'
@@ -88,6 +91,58 @@ async function listChannelAdminsShort(bot: Bot, chatId: number): Promise<ChatMem
   return []
 }
 
+const REL_CHANNEL_ADMIN = 'Админ канала'
+const REL_COMMENT_NOTIFY = 'Уведомления о комментариях'
+
+function latestUsernameFromComments(userId: number): string | null {
+  for (const c of commentStore.listAllCommentsNewestFirst()) {
+    if (c.user_id === userId) {
+      const u = c.username.trim()
+      if (u !== '') {
+        return u
+      }
+    }
+  }
+  return null
+}
+
+async function resolveDisplayNameFromMax(
+  bot: Bot,
+  userId: number,
+  channelChatIds: number[],
+): Promise<string | null> {
+  const ordered = [...new Set(channelChatIds)]
+  for (const chatId of ordered) {
+    try {
+      const { members } = await bot.api.getChatMembers(chatId, { user_ids: [userId] })
+      const m = members[0]
+      const n = m?.name?.trim()
+      if (n) {
+        return n
+      }
+    } catch (err: unknown) {
+      logger.debug('admin /users: getChatMembers for display name failed', { chatId, userId, err })
+    }
+  }
+  const priv = stateManager.getUserPrivateChatId(userId)
+  if (priv !== undefined) {
+    try {
+      const { members } = await bot.api.getChatMembers(priv, { user_ids: [userId] })
+      const n = members[0]?.name?.trim()
+      if (n) {
+        return n
+      }
+    } catch (err: unknown) {
+      logger.debug('admin /users: getChatMembers private for display name failed', {
+        priv,
+        userId,
+        err,
+      })
+    }
+  }
+  return null
+}
+
 export function createAdminRouter(deps: AdminRouterDeps): express.Router {
   const router = express.Router()
   router.use(express.json({ limit: '256kb' }))
@@ -138,7 +193,8 @@ export function createAdminRouter(deps: AdminRouterDeps): express.Router {
     })
   })
 
-  secured.get('/stats', (_req, res) => {
+  secured.get('/stats', async (_req, res) => {
+    await pruneRegisteredChannelsNotAccessibleByBot(deps.bot)
     const channels = channelRegistry.getAllChannels().filter((c) => c.type === 'channel')
     res.json({
       channel_count: channels.length,
@@ -149,34 +205,48 @@ export function createAdminRouter(deps: AdminRouterDeps): express.Router {
   })
 
   secured.get('/channels', async (_req, res) => {
-    const rows = await Promise.all(
-      channelRegistry.getAllChannels().map(async (c) => {
-        let subscribers: number | null = null
-        try {
-          const chat = await deps.bot.api.getChat(c.chat_id)
-          const raw = (chat as { participants_count?: unknown }).participants_count
-          if (typeof raw === 'number' && Number.isFinite(raw) && raw >= 0) {
-            subscribers = raw
-          }
-        } catch {
-          subscribers = null
+    const snapshot = [...channelRegistry.getAllChannels()].filter((c) => c.type === 'channel')
+    const rows: {
+      chat_id: number
+      title: string | null
+      type: (typeof snapshot)[0]['type']
+      subscribers: number | null
+      post_count: number
+      comment_count: number
+      date_added: string
+      status: 'pending' | 'active'
+    }[] = []
+    for (const c of snapshot) {
+      if (channelRegistry.getChannel(c.chat_id) === null) {
+        continue
+      }
+      let subscribers: number | null = null
+      try {
+        const chat = await deps.bot.api.getChat(c.chat_id)
+        const raw = (chat as { participants_count?: unknown }).participants_count
+        if (typeof raw === 'number' && Number.isFinite(raw) && raw >= 0) {
+          subscribers = raw
         }
-        const posts = postStore.getPostsByChatId(c.chat_id)
-        const postIds = new Set(posts.map((p) => p.post_id))
-        const commentCount = commentStore.countForPostIds(postIds)
-        const pending = stateManager.isChannelPendingAdminRights(c.chat_id)
-        return {
-          chat_id: c.chat_id,
-          title: c.title,
-          type: c.type,
-          subscribers,
-          post_count: posts.length,
-          comment_count: commentCount,
-          date_added: c.date_added,
-          status: pending ? ('pending' as const) : ('active' as const),
-        }
-      }),
-    )
+      } catch (err: unknown) {
+        logger.warn('admin GET /channels: getChat failed, pruning channel', { chatId: c.chat_id, err })
+        await fullyDisconnectRegisteredChannel(deps.bot, c.chat_id, 'registry_stale_removed')
+        continue
+      }
+      const posts = postStore.getPostsByChatId(c.chat_id)
+      const postIds = new Set(posts.map((p) => p.post_id))
+      const commentCount = commentStore.countForPostIds(postIds)
+      const pending = stateManager.isChannelPendingAdminRights(c.chat_id)
+      rows.push({
+        chat_id: c.chat_id,
+        title: c.title,
+        type: c.type,
+        subscribers,
+        post_count: posts.length,
+        comment_count: commentCount,
+        date_added: c.date_added,
+        status: pending ? 'pending' : 'active',
+      })
+    }
     res.json({ channels: rows })
   })
 
@@ -185,6 +255,7 @@ export function createAdminRouter(deps: AdminRouterDeps): express.Router {
   })
 
   secured.get('/users', async (_req, res) => {
+    await pruneRegisteredChannelsNotAccessibleByBot(deps.bot)
     const ownerId = config.ownerUserId
     const channels = channelRegistry.getAllChannels().filter((ch) => ch.type === 'channel')
 
@@ -192,9 +263,10 @@ export function createAdminRouter(deps: AdminRouterDeps): express.Router {
       user_id: number
       name: string | null
       role: 'owner' | 'admin' | 'subscriber'
-      channels: { chat_id: number; title: string | null }[]
+      linkByChatId: Map<number, { title: string | null; relations: Set<string> }>
       registered_at: string | null
       is_subscriber: boolean
+      has_miniapp_settings: boolean
     }
 
     const byUser = new Map<number, Row>()
@@ -206,23 +278,30 @@ export function createAdminRouter(deps: AdminRouterDeps): express.Router {
           user_id: userId,
           name: null,
           role: 'subscriber',
-          channels: [],
+          linkByChatId: new Map(),
           registered_at: null,
           is_subscriber: false,
+          has_miniapp_settings: false,
         }
         byUser.set(userId, row)
       }
       return row
     }
 
-    function addChannel(row: Row, chatId: number, title: string | null): void {
-      if (!row.channels.some((c) => c.chat_id === chatId)) {
-        row.channels.push({ chat_id: chatId, title })
+    function rowAddLinkRelation(row: Row, chatId: number, title: string | null, relation: string): void {
+      let cell = row.linkByChatId.get(chatId)
+      if (!cell) {
+        cell = { title, relations: new Set() }
+        row.linkByChatId.set(chatId, cell)
       }
+      if (title) {
+        cell.title = cell.title ?? title
+      }
+      cell.relations.add(relation)
     }
 
     for (const uid of userMiniappSettingsStore.getAllUserIdsWithSettings()) {
-      touch(uid)
+      touch(uid).has_miniapp_settings = true
     }
 
     for (const uid of subscriberStore.getAllSubscribers()) {
@@ -242,7 +321,7 @@ export function createAdminRouter(deps: AdminRouterDeps): express.Router {
         if (m.name) {
           row.name = row.name ?? m.name
         }
-        addChannel(row, ch.chat_id, ch.title)
+        rowAddLinkRelation(row, ch.chat_id, ch.title, REL_CHANNEL_ADMIN)
         if (m.user_id === ownerId) {
           row.role = 'owner'
         } else if (row.role !== 'owner') {
@@ -254,7 +333,7 @@ export function createAdminRouter(deps: AdminRouterDeps): express.Router {
     for (const link of channelNotifyLinkStore.getAllLinks()) {
       const row = touch(link.user_id)
       const title = channelRegistry.getChannel(link.channel_chat_id)?.title ?? null
-      addChannel(row, link.channel_chat_id, title)
+      rowAddLinkRelation(row, link.channel_chat_id, title, REL_COMMENT_NOTIFY)
       row.is_subscriber = row.is_subscriber || subscriberStore.hasSubscriber(link.user_id)
       if (row.registered_at === null) {
         row.registered_at = link.joined_at
@@ -269,14 +348,56 @@ export function createAdminRouter(deps: AdminRouterDeps): express.Router {
       }
     }
 
-    const out = [...byUser.values()].map((row) => ({
-      user_id: row.user_id,
-      name: row.name,
-      role: row.role,
-      channels: row.channels,
-      registered_at: row.registered_at,
-      avatar_url: null as string | null,
-    }))
+    const rows = [...byUser.values()]
+    for (const row of rows) {
+      const chatIdsForName = [...row.linkByChatId.keys()].sort((a, b) => a - b)
+      const existing = row.name?.trim()
+      if (!existing) {
+        const fromMax = await resolveDisplayNameFromMax(deps.bot, row.user_id, chatIdsForName)
+        if (fromMax) {
+          row.name = fromMax
+        }
+      }
+      if (!row.name?.trim()) {
+        const fromComments = latestUsernameFromComments(row.user_id)
+        if (fromComments) {
+          row.name = fromComments
+        }
+      }
+    }
+
+    const out = rows.map((row) => {
+      const channel_links = [...row.linkByChatId.entries()]
+        .sort((a, b) => a[0] - b[0])
+        .map(([chat_id, v]) => ({
+          chat_id,
+          channel_title: v.title,
+          relations: [...v.relations].sort((x, y) => x.localeCompare(y, 'ru')),
+        }))
+
+      let context_hint: string | null = null
+      if (row.linkByChatId.size === 0) {
+        if (row.is_subscriber) {
+          context_hint =
+            'Подписчик бота (/start): привязка к каналу в боте не найдена (уведомления не включены или канал отключён)'
+        } else if (row.has_miniapp_settings) {
+          context_hint =
+            'Открывали настройки мини-приложения: канал не привязан (нет ссылки уведомлений и нет прав админа в подключённых каналах)'
+        }
+      }
+
+      return {
+        user_id: row.user_id,
+        name: row.name,
+        role: row.role,
+        /** @deprecated Используйте channel_links; оставлено для совместимости */
+        channels: channel_links.map((l) => ({ chat_id: l.chat_id, title: l.channel_title })),
+        channel_links,
+        context_hint,
+        registered_at: row.registered_at,
+        avatar_url: null as string | null,
+      }
+    })
 
     out.sort((a, b) => a.user_id - b.user_id)
     res.json({ users: out })

@@ -73,6 +73,53 @@ async function listChannelAdminsShort(bot, chatId) {
     }
     return [];
 }
+const REL_CHANNEL_ADMIN = 'Админ канала';
+const REL_COMMENT_NOTIFY = 'Уведомления о комментариях';
+function latestUsernameFromComments(userId) {
+    for (const c of commentStore_1.commentStore.listAllCommentsNewestFirst()) {
+        if (c.user_id === userId) {
+            const u = c.username.trim();
+            if (u !== '') {
+                return u;
+            }
+        }
+    }
+    return null;
+}
+async function resolveDisplayNameFromMax(bot, userId, channelChatIds) {
+    const ordered = [...new Set(channelChatIds)];
+    for (const chatId of ordered) {
+        try {
+            const { members } = await bot.api.getChatMembers(chatId, { user_ids: [userId] });
+            const m = members[0];
+            const n = m?.name?.trim();
+            if (n) {
+                return n;
+            }
+        }
+        catch (err) {
+            logger_1.logger.debug('admin /users: getChatMembers for display name failed', { chatId, userId, err });
+        }
+    }
+    const priv = stateManager_1.stateManager.getUserPrivateChatId(userId);
+    if (priv !== undefined) {
+        try {
+            const { members } = await bot.api.getChatMembers(priv, { user_ids: [userId] });
+            const n = members[0]?.name?.trim();
+            if (n) {
+                return n;
+            }
+        }
+        catch (err) {
+            logger_1.logger.debug('admin /users: getChatMembers private for display name failed', {
+                priv,
+                userId,
+                err,
+            });
+        }
+    }
+    return null;
+}
 function createAdminRouter(deps) {
     const router = express_1.default.Router();
     router.use(express_1.default.json({ limit: '256kb' }));
@@ -107,7 +154,8 @@ function createAdminRouter(deps) {
             admin_panel_user: config_1.config.adminPanelUser,
         });
     });
-    secured.get('/stats', (_req, res) => {
+    secured.get('/stats', async (_req, res) => {
+        await (0, channelFullDisconnect_1.pruneRegisteredChannelsNotAccessibleByBot)(deps.bot);
         const channels = channelRegistry_1.channelRegistry.getAllChannels().filter((c) => c.type === 'channel');
         res.json({
             channel_count: channels.length,
@@ -117,7 +165,12 @@ function createAdminRouter(deps) {
         });
     });
     secured.get('/channels', async (_req, res) => {
-        const rows = await Promise.all(channelRegistry_1.channelRegistry.getAllChannels().map(async (c) => {
+        const snapshot = [...channelRegistry_1.channelRegistry.getAllChannels()].filter((c) => c.type === 'channel');
+        const rows = [];
+        for (const c of snapshot) {
+            if (channelRegistry_1.channelRegistry.getChannel(c.chat_id) === null) {
+                continue;
+            }
             let subscribers = null;
             try {
                 const chat = await deps.bot.api.getChat(c.chat_id);
@@ -126,14 +179,16 @@ function createAdminRouter(deps) {
                     subscribers = raw;
                 }
             }
-            catch {
-                subscribers = null;
+            catch (err) {
+                logger_1.logger.warn('admin GET /channels: getChat failed, pruning channel', { chatId: c.chat_id, err });
+                await (0, channelFullDisconnect_1.fullyDisconnectRegisteredChannel)(deps.bot, c.chat_id, 'registry_stale_removed');
+                continue;
             }
             const posts = postStore_1.postStore.getPostsByChatId(c.chat_id);
             const postIds = new Set(posts.map((p) => p.post_id));
             const commentCount = commentStore_1.commentStore.countForPostIds(postIds);
             const pending = stateManager_1.stateManager.isChannelPendingAdminRights(c.chat_id);
-            return {
+            rows.push({
                 chat_id: c.chat_id,
                 title: c.title,
                 type: c.type,
@@ -142,14 +197,15 @@ function createAdminRouter(deps) {
                 comment_count: commentCount,
                 date_added: c.date_added,
                 status: pending ? 'pending' : 'active',
-            };
-        }));
+            });
+        }
         res.json({ channels: rows });
     });
     secured.get('/activity', (_req, res) => {
         res.json({ events: (0, adminActivityStore_1.getRecentAdminActivity)(10) });
     });
     secured.get('/users', async (_req, res) => {
+        await (0, channelFullDisconnect_1.pruneRegisteredChannelsNotAccessibleByBot)(deps.bot);
         const ownerId = config_1.config.ownerUserId;
         const channels = channelRegistry_1.channelRegistry.getAllChannels().filter((ch) => ch.type === 'channel');
         const byUser = new Map();
@@ -160,21 +216,28 @@ function createAdminRouter(deps) {
                     user_id: userId,
                     name: null,
                     role: 'subscriber',
-                    channels: [],
+                    linkByChatId: new Map(),
                     registered_at: null,
                     is_subscriber: false,
+                    has_miniapp_settings: false,
                 };
                 byUser.set(userId, row);
             }
             return row;
         }
-        function addChannel(row, chatId, title) {
-            if (!row.channels.some((c) => c.chat_id === chatId)) {
-                row.channels.push({ chat_id: chatId, title });
+        function rowAddLinkRelation(row, chatId, title, relation) {
+            let cell = row.linkByChatId.get(chatId);
+            if (!cell) {
+                cell = { title, relations: new Set() };
+                row.linkByChatId.set(chatId, cell);
             }
+            if (title) {
+                cell.title = cell.title ?? title;
+            }
+            cell.relations.add(relation);
         }
         for (const uid of userMiniappSettingsStore_1.userMiniappSettingsStore.getAllUserIdsWithSettings()) {
-            touch(uid);
+            touch(uid).has_miniapp_settings = true;
         }
         for (const uid of subscriberStore_1.subscriberStore.getAllSubscribers()) {
             const row = touch(uid);
@@ -193,7 +256,7 @@ function createAdminRouter(deps) {
                 if (m.name) {
                     row.name = row.name ?? m.name;
                 }
-                addChannel(row, ch.chat_id, ch.title);
+                rowAddLinkRelation(row, ch.chat_id, ch.title, REL_CHANNEL_ADMIN);
                 if (m.user_id === ownerId) {
                     row.role = 'owner';
                 }
@@ -205,7 +268,7 @@ function createAdminRouter(deps) {
         for (const link of channelNotifyLinkStore_1.channelNotifyLinkStore.getAllLinks()) {
             const row = touch(link.user_id);
             const title = channelRegistry_1.channelRegistry.getChannel(link.channel_chat_id)?.title ?? null;
-            addChannel(row, link.channel_chat_id, title);
+            rowAddLinkRelation(row, link.channel_chat_id, title, REL_COMMENT_NOTIFY);
             row.is_subscriber = row.is_subscriber || subscriberStore_1.subscriberStore.hasSubscriber(link.user_id);
             if (row.registered_at === null) {
                 row.registered_at = link.joined_at;
@@ -219,14 +282,54 @@ function createAdminRouter(deps) {
                 row.role = 'owner';
             }
         }
-        const out = [...byUser.values()].map((row) => ({
-            user_id: row.user_id,
-            name: row.name,
-            role: row.role,
-            channels: row.channels,
-            registered_at: row.registered_at,
-            avatar_url: null,
-        }));
+        const rows = [...byUser.values()];
+        for (const row of rows) {
+            const chatIdsForName = [...row.linkByChatId.keys()].sort((a, b) => a - b);
+            const existing = row.name?.trim();
+            if (!existing) {
+                const fromMax = await resolveDisplayNameFromMax(deps.bot, row.user_id, chatIdsForName);
+                if (fromMax) {
+                    row.name = fromMax;
+                }
+            }
+            if (!row.name?.trim()) {
+                const fromComments = latestUsernameFromComments(row.user_id);
+                if (fromComments) {
+                    row.name = fromComments;
+                }
+            }
+        }
+        const out = rows.map((row) => {
+            const channel_links = [...row.linkByChatId.entries()]
+                .sort((a, b) => a[0] - b[0])
+                .map(([chat_id, v]) => ({
+                chat_id,
+                channel_title: v.title,
+                relations: [...v.relations].sort((x, y) => x.localeCompare(y, 'ru')),
+            }));
+            let context_hint = null;
+            if (row.linkByChatId.size === 0) {
+                if (row.is_subscriber) {
+                    context_hint =
+                        'Подписчик бота (/start): привязка к каналу в боте не найдена (уведомления не включены или канал отключён)';
+                }
+                else if (row.has_miniapp_settings) {
+                    context_hint =
+                        'Открывали настройки мини-приложения: канал не привязан (нет ссылки уведомлений и нет прав админа в подключённых каналах)';
+                }
+            }
+            return {
+                user_id: row.user_id,
+                name: row.name,
+                role: row.role,
+                /** @deprecated Используйте channel_links; оставлено для совместимости */
+                channels: channel_links.map((l) => ({ chat_id: l.chat_id, title: l.channel_title })),
+                channel_links,
+                context_hint,
+                registered_at: row.registered_at,
+                avatar_url: null,
+            };
+        });
         out.sort((a, b) => a.user_id - b.user_id);
         res.json({ users: out });
     });

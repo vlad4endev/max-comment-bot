@@ -232,6 +232,10 @@
 
     .toolbar { display: flex; flex-wrap: wrap; gap: 0.75rem; margin-bottom: 1rem; align-items: center; }
     .user-cell { display: flex; align-items: center; gap: 0.5rem; }
+    .user-channels-cell { font-size: 0.875rem; line-height: 1.4; max-width: 32rem; vertical-align: top; }
+    .ch-link-line { margin-bottom: 0.5rem; }
+    .ch-link-line:last-child { margin-bottom: 0; }
+    .ch-link-line .rel { color: var(--muted); font-size: 0.8125rem; }
     .avatar-placeholder {
       width: 32px; height: 32px; border-radius: 50%; background: var(--border); color: var(--text);
       display: flex; align-items: center; justify-content: center; font-size: 0.65rem; font-weight: 700;
@@ -571,26 +575,59 @@
       })
   }
 
+  function formatUserChannelsCell(u) {
+    var links = u.channel_links || []
+    if (links.length === 0) {
+      if (u.context_hint) {
+        return '<span class="muted">' + esc(u.context_hint) + '</span>'
+      }
+      return '<span class="muted">—</span>'
+    }
+    return links.map(function (l) {
+      var title = l.channel_title || ('Канал ' + l.chat_id)
+      var rel = (l.relations || []).join(' · ')
+      return '<div class="ch-link-line"><strong>' + esc(title) + '</strong> <span class="muted">(' + esc(l.chat_id) +
+        ')</span><div class="rel">' + esc(rel || 'связь') + '</div></div>'
+    }).join('')
+  }
+
+  function userRowMatchesSearch(u, q) {
+    if (!q) return true
+    if (String(u.user_id).includes(q)) return true
+    if (String(u.name || '').toLowerCase().includes(q)) return true
+    if (String(u.context_hint || '').toLowerCase().includes(q)) return true
+    var links = u.channel_links || []
+    for (var i = 0; i < links.length; i++) {
+      var l = links[i]
+      if (String(l.chat_id).includes(q)) return true
+      if (String(l.channel_title || '').toLowerCase().includes(q)) return true
+      var rels = l.relations || []
+      for (var j = 0; j < rels.length; j++) {
+        if (String(rels[j]).toLowerCase().includes(q)) return true
+      }
+    }
+    return false
+  }
+
   function renderUsers() {
     var q = (qs('#userSearch').value || '').toLowerCase()
     var rf = qs('#userRoleFilter').value
     var list = (window.__usersCache || []).filter(function (u) {
       if (rf !== 'all' && u.role !== rf) return false
-      if (!q) return true
-      return String(u.user_id).includes(q) || String(u.name || '').toLowerCase().includes(q)
+      return userRowMatchesSearch(u, q)
     })
     var body = list.map(function (u) {
       var badge = u.role === 'owner' ? 'badge-owner' : u.role === 'admin' ? 'badge-admin' : 'badge-sub'
       var label = u.role === 'owner' ? 'Владелец' : u.role === 'admin' ? 'Админ' : 'Подписчик'
-      var ch = (u.channels || []).map(function (x) { return esc(x.title || x.chat_id) }).join(', ')
+      var chHtml = formatUserChannelsCell(u)
       var nm = u.name || 'Неизвестный'
       var ini = nm.split(/\s+/).map(function (x) { return x.charAt(0) }).join('').slice(0, 2).toUpperCase() || '?'
       var del = u.role === 'owner' ? '' : '<button type="button" class="btn btn-danger btn-sm u-del" data-id="' + esc(u.user_id) + '">Удалить</button>'
       return '<tr><td><div class="user-cell"><div class="avatar-placeholder">' + esc(ini) + '</div><div>' + esc(nm) + '</div></div></td><td>' +
-        esc(u.user_id) + '</td><td><span class="badge ' + badge + '">' + label + '</span></td><td>' + esc(ch || '—') + '</td><td>' + esc(u.registered_at || '—') + '</td><td>' + del + '</td></tr>'
+        esc(u.user_id) + '</td><td><span class="badge ' + badge + '">' + label + '</span></td><td class="user-channels-cell">' + chHtml + '</td><td>' + esc(u.registered_at || '—') + '</td><td>' + del + '</td></tr>'
     }).join('')
     qs('#usersTableWrap').innerHTML =
-      '<table><thead><tr><th>Пользователь</th><th>user_id</th><th>Роль</th><th>Каналы</th><th>Дата регистрации</th><th></th></tr></thead><tbody>' +
+      '<table><thead><tr><th>Пользователь</th><th>user_id</th><th>Роль</th><th>Каналы в MAX</th><th>Дата регистрации</th><th></th></tr></thead><tbody>' +
       (body || '<tr><td colspan="6" class="muted">Нет данных</td></tr>') + '</tbody></table>'
     qs('#usersTableWrap').onclick = function (e) {
       var t = e.target
