@@ -14,9 +14,59 @@ const settingsStore_1 = require("../services/settingsStore");
 const subscriberStore_1 = require("../services/subscriberStore");
 const stateManager_1 = require("../services/stateManager");
 const logger_1 = require("../utils/logger");
+/** Mini App deeplink (`startapp` → `initDataUnsafe.start_param`). */
 function buildBotStartappUrl(startappPayload) {
     const nick = config_1.config.botNickname.trim();
     return `https://max.ru/${nick}?startapp=${startappPayload}`;
+}
+const BOT_ACTIVATION_WELCOME_TEXT = '✅ Бот активирован!\n\n' +
+    'Теперь когда вам ответят на комментарий — я сразу пришлю вам сообщение.\n\n' +
+    'Вернитесь в канал и напишите комментарий!';
+async function trySendBotActivationWelcome(bot, chatId) {
+    try {
+        await bot.api.sendMessageToChat(chatId, BOT_ACTIVATION_WELCOME_TEXT);
+    }
+    catch (err) {
+        logger_1.logger.warn('trySendBotActivationWelcome: send failed', { chatId, err });
+    }
+}
+async function handlePrivateChatMessage(bot, message, user) {
+    const userId = user.user_id;
+    const chatId = (0, channelPostActions_1.resolveMessageChatId)(message, userId);
+    const messageText = message.body?.text?.trim() ?? '';
+    logger_1.logger.info('handlePrivateChatMessage', { userId, chatId, messageText });
+    if (/^\/stop\b/i.test(messageText) || /^\/unsubscribe\b/i.test(messageText)) {
+        subscriberStore_1.subscriberStore.removeSubscriber(userId);
+        try {
+            await bot.api.sendMessageToChat(chatId, 'Уведомления отключены. Чтобы включить снова — напишите /start');
+        }
+        catch (err) {
+            logger_1.logger.warn('handlePrivateChatMessage: /stop reply failed', { userId, err });
+        }
+        return;
+    }
+    if (/^\/start\b/i.test(messageText)) {
+        const alreadyRegistered = subscriberStore_1.subscriberStore.hasSubscriber(userId);
+        subscriberStore_1.subscriberStore.addSubscriber(userId);
+        try {
+            if (!alreadyRegistered) {
+                await trySendBotActivationWelcome(bot, chatId);
+            }
+            else {
+                await bot.api.sendMessageToChat(chatId, 'Уведомления включены. Когда канал ответит на ваш комментарий, вы получите сообщение здесь.');
+            }
+        }
+        catch (err) {
+            logger_1.logger.warn('handlePrivateChatMessage: /start reply failed', { userId, err });
+        }
+        return;
+    }
+    const alreadyRegistered = subscriberStore_1.subscriberStore.hasSubscriber(userId);
+    if (!alreadyRegistered) {
+        subscriberStore_1.subscriberStore.addSubscriber(userId);
+        logger_1.logger.info('New subscriber registered', { userId });
+        await trySendBotActivationWelcome(bot, chatId);
+    }
 }
 function buildMiniAppHomeUrl() {
     return buildBotStartappUrl('start');
@@ -360,12 +410,14 @@ function registerEventHandlers(bot) {
                 return;
             }
             const chatId = ctx.chatId;
+            const alreadyRegistered = subscriberStore_1.subscriberStore.hasSubscriber(userId);
             if (chatId !== undefined) {
                 stateManager_1.stateManager.setUserPrivateChatId(userId, chatId);
             }
-            const firstBotStart = !subscriberStore_1.subscriberStore.hasSubscriber(userId);
-            subscriberStore_1.subscriberStore.addSubscriber(userId);
-            logger_1.logger.info('bot_started: registered subscriber', { userId, payload: startPayload });
+            if (!alreadyRegistered) {
+                subscriberStore_1.subscriberStore.addSubscriber(userId);
+                logger_1.logger.info('Subscriber registered via bot_started', { userId, payload: startPayload });
+            }
             // Mini App opened from channel post — silent registration only
             if (startPayload.startsWith('pid_')) {
                 const m = startPayload.match(/^pid_[a-f0-9]+_cid_(\d+)/);
@@ -375,19 +427,21 @@ function registerEventHandlers(bot) {
                 }
                 return;
             }
-            // Comments gate: user tapped «Запустить бота» in Mini App
+            // Comments gate: `?startapp=sub_<userId>` or `?start=sub_<userId>`
             if (/^sub_\d+$/i.test(startPayload)) {
-                const welcomeText = '✅ Отлично! Бот запущен.\n\n' +
-                    'Теперь когда администраторы канала ответят ' +
-                    'на ваш комментарий — я сразу пришлю вам сообщение.\n\n' +
-                    'Можете вернуться в канал и написать комментарий!';
-                await bot.api.sendMessageToUser(userId, welcomeText);
+                if (!alreadyRegistered && chatId !== undefined) {
+                    await trySendBotActivationWelcome(bot, chatId);
+                }
+                else if (!alreadyRegistered) {
+                    await trySendDmToUser(bot, userId, BOT_ACTIVATION_WELCOME_TEXT);
+                }
                 return;
             }
             if (chatId === undefined) {
                 logger_1.logger.warn('bot_started: нет chat_id в контексте');
                 return;
             }
+            const firstBotStart = !alreadyRegistered;
             const firstName = ctx.user?.name || 'пользователь';
             const homeUrl = buildMiniAppHomeUrl();
             const sendUser = async (text, kb) => {
@@ -556,19 +610,19 @@ ${inviteUrl}
             return;
         }
         const chatId = (0, channelPostActions_1.resolveMessageChatId)(message, user.user_id);
-        logger_1.logger.info(`message_created: от ${user.user_id} в чате ${chatId}`);
         const text = message.body.text?.trim() ?? '';
-        if (message.recipient.chat_type === 'dialog') {
-            if (/^\/stop\b/i.test(text) || /^\/unsubscribe\b/i.test(text)) {
-                subscriberStore_1.subscriberStore.removeSubscriber(user.user_id);
-                await ctx.reply('Уведомления отключены. Чтобы включить снова — напишите /start');
-                return;
-            }
-            if (/^\/start\b/i.test(text)) {
-                subscriberStore_1.subscriberStore.addSubscriber(user.user_id);
-                await ctx.reply('Уведомления включены. Когда канал ответит на ваш комментарий, вы получите сообщение здесь.');
-                return;
-            }
+        const isPrivateDialog = message.recipient?.chat_type === 'dialog';
+        logger_1.logger.info('message_created received', {
+            chatType: message.recipient?.chat_type,
+            userId: user.user_id,
+            isPrivate: isPrivateDialog,
+            text: text.slice(0, 30),
+        });
+        if (isPrivateDialog &&
+            !/^\/addbutton\b/i.test(text) &&
+            !/^\/connect\b/i.test(text)) {
+            await handlePrivateChatMessage(bot, message, user);
+            return;
         }
         if (/^\/addbutton\b/i.test(text)) {
             const rawArgs = text.replace(/^\/addbutton\b/i, '').trim();
