@@ -660,6 +660,10 @@
       gap: 8px;
       align-items: center;
       flex-shrink: 0;
+      margin: 16px 0 10px;
+    }
+    #view-comments .date-divider:first-child {
+      margin-top: 4px;
     }
     #view-comments .date-divider::before,
     #view-comments .date-divider::after {
@@ -2117,6 +2121,73 @@
         return d.firstChild;
       }
 
+      var RU_MONTHS_GEN = [
+        'января',
+        'февраля',
+        'марта',
+        'апреля',
+        'мая',
+        'июня',
+        'июля',
+        'августа',
+        'сентября',
+        'октября',
+        'ноября',
+        'декабря',
+      ];
+
+      function pad2(n) {
+        return (n < 10 ? '0' : '') + n;
+      }
+
+      function parseCommentTimestamp(raw) {
+        if (raw == null || raw === '') return null;
+        var d = new Date(String(raw));
+        return isNaN(d.getTime()) ? null : d;
+      }
+
+      function dateKeyLocal(d) {
+        if (!d) return '';
+        return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate());
+      }
+
+      function formatCommentClock(d) {
+        if (!d) return '—';
+        return pad2(d.getHours()) + ':' + pad2(d.getMinutes());
+      }
+
+      function formatDateDividerLabel(d) {
+        if (!d) return '';
+        var now = new Date();
+        var key = dateKeyLocal(d);
+        if (key === dateKeyLocal(now)) return 'Сегодня';
+        var yest = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
+        if (key === dateKeyLocal(yest)) return 'Вчера';
+        var day = d.getDate();
+        var mon = RU_MONTHS_GEN[d.getMonth()];
+        if (d.getFullYear() === now.getFullYear()) return day + ' ' + mon;
+        return day + ' ' + mon + ' ' + d.getFullYear();
+      }
+
+      function buildDateDividerNode(d) {
+        var label = formatDateDividerLabel(d);
+        if (!label) return null;
+        return elFromHTML(
+          '<div class="date-divider" role="separator"><span>' + esc(label) + '</span></div>'
+        );
+      }
+
+      function maybePrependDateDividerBeforeComment(commentDate) {
+        if (!commentDate) return;
+        var key = dateKeyLocal(commentDate);
+        if (!key) return;
+        var lastGroup = feedEl.querySelector('.comment-group:last-of-type');
+        var prevKey = lastGroup ? lastGroup.getAttribute('data-date-key') || '' : '';
+        if (prevKey === key) return;
+        var div = buildDateDividerNode(commentDate);
+        if (div) feedEl.appendChild(div);
+      }
+
       function buildAdminActionsHtml(commentId, kind) {
         if (!isAdmin) return '';
         var labelEdit = kind === 'reply' ? 'Изменить ответ' : 'Изменить';
@@ -2165,6 +2236,8 @@
         var replyLabel =
           named && named !== 'Админ' ? 'от ' + esc(named) : 'от канала';
         var adminReplyActs = buildAdminActionsHtml(c.comment_id, 'reply');
+        var replyT = c.reply && c.reply.timestamp ? parseCommentTimestamp(c.reply.timestamp) : null;
+        var replyClock = formatCommentClock(replyT);
         return (
           '<div class="reply-block">' +
           '<div class="reply-inner">' +
@@ -2178,7 +2251,7 @@
           esc(c.reply.text) +
           '</div>' +
           '<div class="reply-time">' +
-          esc(c.reply.timestamp) +
+          esc(replyClock) +
           '</div>' +
           '</div>' +
           adminReplyActs +
@@ -2213,10 +2286,16 @@
             '">Отправить</button>' +
             '</div></div>';
         }
+        var cts = parseCommentTimestamp(c.timestamp);
+        var timeShown = formatCommentClock(cts);
+        var dk = cts ? dateKeyLocal(cts) : '';
+        var dkAttr = dk ? ' data-date-key="' + esc(dk) + '"' : '';
         return (
           '<div class="comment-group" data-comment-id="' +
           esc(c.comment_id) +
-          '">' +
+          '"' +
+          dkAttr +
+          '>' +
           '<div class="msg-user">' +
           '<div class="av av-u">' +
           esc(av) +
@@ -2229,7 +2308,7 @@
           esc(c.text) +
           '</div>' +
           '<div class="utime">' +
-          esc(c.timestamp) +
+          esc(timeShown) +
           '</div>' +
           '</div></div>' +
           commentAdminActs +
@@ -2474,6 +2553,7 @@
           '.comment-group[data-comment-id="' + cssEsc(c.comment_id) + '"]'
         );
         if (!existing) {
+          maybePrependDateDividerBeforeComment(parseCommentTimestamp(c.timestamp));
           var node = elFromHTML(buildUserBlock(c));
           feedEl.appendChild(node);
           wireCommentNode(node);
@@ -2488,10 +2568,24 @@
         }
         var utext = existing.querySelector('.bubble-u .utext');
         if (utext) utext.textContent = c.text;
+        var utimeEl = existing.querySelector('.bubble-u .utime');
+        if (utimeEl && c.timestamp) {
+          var utd = parseCommentTimestamp(c.timestamp);
+          utimeEl.textContent = utd ? formatCommentClock(utd) : String(c.timestamp);
+        }
+        if (c.timestamp) {
+          var utd2 = parseCommentTimestamp(c.timestamp);
+          if (utd2) existing.setAttribute('data-date-key', dateKeyLocal(utd2));
+        }
         var quote = existing.querySelector('.reply-quote');
         if (quote) quote.textContent = c.text;
         var rtext = existing.querySelector('.reply-text');
         if (c.reply && rtext) rtext.textContent = c.reply.text;
+        var rtimeEl = existing.querySelector('.reply-time');
+        if (c.reply && rtimeEl && c.reply.timestamp) {
+          var rtd = parseCommentTimestamp(c.reply.timestamp);
+          rtimeEl.textContent = rtd ? formatCommentClock(rtd) : String(c.reply.timestamp);
+        }
         if (c.reply && !existing.querySelector('.reply-block')) {
           var btn = existing.querySelector('.reply-btn');
           var ibox = existing.querySelector('.reply-inline');
@@ -2517,8 +2611,16 @@
           return;
         }
         var frag = document.createDocumentFragment();
+        var lastDayKey = null;
         list.forEach(function (c) {
           knownIds.add(c.comment_id);
+          var cts = parseCommentTimestamp(c.timestamp);
+          var dk = cts ? dateKeyLocal(cts) : '';
+          if (dk && dk !== lastDayKey) {
+            var divn = buildDateDividerNode(cts);
+            if (divn) frag.appendChild(divn);
+            lastDayKey = dk;
+          }
           var node = elFromHTML(buildUserBlock(c));
           frag.appendChild(node);
           wireCommentNode(node);
@@ -2538,6 +2640,7 @@
             feedEl.innerHTML = '';
             hadEmpty = false;
           }
+          maybePrependDateDividerBeforeComment(parseCommentTimestamp(c.timestamp));
           var node = elFromHTML(buildUserBlock(c));
           feedEl.appendChild(node);
           wireCommentNode(node);
@@ -2641,6 +2744,7 @@
         if (feedEl.querySelector('.feed-empty')) {
           feedEl.innerHTML = '';
         }
+        maybePrependDateDividerBeforeComment(parseCommentTimestamp(optimistic.timestamp));
         var node = elFromHTML(buildUserBlock(optimistic));
         feedEl.appendChild(node);
         wireCommentNode(node);
@@ -2673,7 +2777,14 @@
             node.setAttribute('data-comment-id', res.comment_id);
             knownIds.add(res.comment_id);
             var tEl = node.querySelector('.bubble-u .utime');
-            if (tEl && res.timestamp) tEl.textContent = res.timestamp;
+            if (tEl && res.timestamp) {
+              var tx = parseCommentTimestamp(res.timestamp);
+              tEl.textContent = tx ? formatCommentClock(tx) : String(res.timestamp);
+            }
+            if (res.timestamp) {
+              var tx2 = parseCommentTimestamp(res.timestamp);
+              if (tx2) node.setAttribute('data-date-key', dateKeyLocal(tx2));
+            }
             if (isAdmin) {
               var rep = node.querySelector('.reply-btn');
               if (rep) rep.setAttribute('data-toggle-reply', res.comment_id);
