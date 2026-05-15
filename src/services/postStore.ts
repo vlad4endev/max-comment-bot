@@ -180,6 +180,39 @@ export class PostStore {
   }
 
   /**
+   * Удаляет все посты канала, возвращает затронутые post_id (для чистки комментариев).
+   */
+  removePostsForChatId(chatId: number): string[] {
+    const removedIds: string[] = []
+    for (const [id, p] of this.byId) {
+      if (p.chat_id === chatId) {
+        removedIds.push(id)
+      }
+    }
+    if (removedIds.length === 0) {
+      return []
+    }
+    for (const id of removedIds) {
+      this.byId.delete(id)
+    }
+    this.queuePersist()
+    return removedIds
+  }
+
+  clearAllPosts(): void {
+    if (this.byId.size === 0) {
+      return
+    }
+    this.byId.clear()
+    this.queuePersist()
+    logger.warn('postStore: clearAllPosts')
+  }
+
+  getTotalPostCount(): number {
+    return this.byId.size
+  }
+
+  /**
    * Updates the channel message inline keyboard to show the current comment count.
    */
   async updateButtonCaption(bot: Bot, post: Post): Promise<void> {

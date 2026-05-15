@@ -3,6 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.channelRegistry = exports.ChannelRegistry = void 0;
 const promises_1 = require("node:fs/promises");
 const node_path_1 = require("node:path");
+const adminActivityStore_1 = require("./adminActivityStore");
 const logger_1 = require("../utils/logger");
 /** Same volume as posts/comments: `./data` → `/app/data` in Docker. */
 const DEFAULT_CHANNELS_PATH = (0, node_path_1.join)(process.cwd(), 'data', 'channels.json');
@@ -82,8 +83,15 @@ class ChannelRegistry {
                 type: chatData.type,
                 date_added: new Date().toISOString(),
             };
+        const isNew = !existing;
         this.channels.set(chatId, record);
         this.queuePersist();
+        if (isNew) {
+            (0, adminActivityStore_1.pushAdminActivity)('channel_added', {
+                chat_id: chatId,
+                title: record.title,
+            });
+        }
     }
     /**
      * Удаляет канал из реестра. Возвращает удалённую запись (для текста уведомления) или `null`, если чата не было.

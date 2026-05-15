@@ -7,7 +7,9 @@ exports.createHttpApp = createHttpApp;
 exports.createWebhookApp = createWebhookApp;
 const node_path_1 = require("node:path");
 const express_1 = __importDefault(require("express"));
+const adminRoutes_1 = require("../api/adminRoutes");
 const routes_1 = require("../api/routes");
+const adminAuth_1 = require("../middleware/adminAuth");
 const logger_1 = require("../utils/logger");
 const dispatchUpdate_1 = require("./dispatchUpdate");
 const MAX_SECRET_HEADER = 'x-max-bot-api-secret';
@@ -30,6 +32,32 @@ function createHttpApp(options) {
     app.get('/health', (_req, res) => {
         res.status(200).type('text/plain').send('ok');
     });
+    const adminPanelRoot = (0, node_path_1.join)(process.cwd(), 'admin-panel');
+    app.get('/admin/login', (_req, res) => {
+        res.sendFile((0, node_path_1.join)(adminPanelRoot, 'login.html'), (err) => {
+            if (err) {
+                logger_1.logger.error('/admin/login: sendFile failed', err);
+                if (!res.headersSent) {
+                    res.status(500).end();
+                }
+            }
+        });
+    });
+    app.get('/admin', (req, res) => {
+        if (!(0, adminAuth_1.isAdminPanelSessionValid)(req)) {
+            res.redirect(302, '/admin/login');
+            return;
+        }
+        res.sendFile((0, node_path_1.join)(adminPanelRoot, 'admin.html'), (err) => {
+            if (err) {
+                logger_1.logger.error('/admin: sendFile failed', err);
+                if (!res.headersSent) {
+                    res.status(500).end();
+                }
+            }
+        });
+    });
+    app.use('/api/admin', (0, adminRoutes_1.createAdminRouter)({ bot: options.bot }));
     app.use('/api', (0, routes_1.createCommentApiRouter)({ bot: options.bot }));
     const miniappRoot = (0, node_path_1.join)(process.cwd(), 'miniapp');
     app.use('/miniapp', express_1.default.static(miniappRoot));

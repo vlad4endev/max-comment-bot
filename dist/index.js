@@ -7,6 +7,7 @@ const subscriptions_1 = require("./maxPlatform/subscriptions");
 const channelNotifyLinkStore_1 = require("./services/channelNotifyLinkStore");
 const channelRegistry_1 = require("./services/channelRegistry");
 const commentStore_1 = require("./services/commentStore");
+const adminRuntimeSettingsStore_1 = require("./services/adminRuntimeSettingsStore");
 const subscriberStore_1 = require("./services/subscriberStore");
 const channelPoller_1 = require("./services/channelPoller");
 const postStore_1 = require("./services/postStore");
@@ -21,6 +22,7 @@ async function main() {
     await userMiniappSettingsStore_1.userMiniappSettingsStore.loadFromDisk();
     await channelNotifyLinkStore_1.channelNotifyLinkStore.loadFromDisk();
     await subscriberStore_1.subscriberStore.loadFromDisk();
+    await adminRuntimeSettingsStore_1.adminRuntimeSettingsStore.loadFromDisk();
     await (0, bot_1.ensureBotProfile)(bot);
     (0, channelPoller_1.startChannelPostPoller)(bot);
     const listenPort = config_1.config.listenPort;

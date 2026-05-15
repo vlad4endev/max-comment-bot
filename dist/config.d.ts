@@ -1,6 +1,20 @@
 export type ReceiveMode = 'webhook' | 'polling';
 export interface Config {
     BOT_TOKEN: string;
+    /**
+     * Единственный владелец панели /admin (числовой user_id в MAX).
+     */
+    ownerUserId: number;
+    /**
+     * Первые 16 hex-символов sha256(ownerUserId + BOT_TOKEN) — устаревший токен (совместимость).
+     */
+    adminToken: string;
+    /** Логин веб-панели `/admin` (переопределяется `ADMIN_PANEL_USER`). */
+    adminPanelUser: string;
+    /** Пароль веб-панели (переопределяется `ADMIN_PANEL_PASSWORD`). */
+    adminPanelPassword: string;
+    /** Секрет подписи cookie сессии панели (`ADMIN_PANEL_SESSION_SECRET` или производное от BOT_TOKEN). */
+    adminPanelSessionSecret: string;
     ADMIN_CHAT_ID: number;
     BOT_NICKNAME: string;
     /**

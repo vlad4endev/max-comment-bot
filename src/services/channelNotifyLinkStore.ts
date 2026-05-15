@@ -144,6 +144,24 @@ export class ChannelNotifyLinkStore {
     await this.persistChain
   }
 
+  /**
+   * Все связи user↔channel (копия).
+   */
+  getAllLinks(): ChannelNotifyLink[] {
+    return [...this.links]
+  }
+
+  removeAllForUser(userId: number): void {
+    const next = this.links.filter((r) => r.user_id !== userId)
+    if (next.length === this.links.length) {
+      return
+    }
+    this.links.length = 0
+    this.links.push(...next)
+    this.queuePersist()
+    logger.info('channelNotifyLinkStore: removeAllForUser', { userId })
+  }
+
   /** When the bot leaves a channel, drop all opt-ins for that chat. */
   removeAllForChannel(channelChatId: number): void {
     const before = this.links.length

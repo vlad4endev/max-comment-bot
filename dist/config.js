@@ -4,9 +4,16 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.config = void 0;
+const node_crypto_1 = require("node:crypto");
 const dotenv_1 = __importDefault(require("dotenv"));
 const logger_1 = require("./utils/logger");
 dotenv_1.default.config();
+function computeAdminToken(ownerUserId, botToken) {
+    return (0, node_crypto_1.createHash)('sha256')
+        .update(`${ownerUserId}${botToken}`, 'utf8')
+        .digest('hex')
+        .slice(0, 16);
+}
 const WEBHOOK_SECRET_RE = /^[a-zA-Z0-9_-]{5,256}$/;
 function parseReceiveMode(raw, nodeEnv) {
     const v = raw?.trim().toLowerCase();
@@ -19,6 +26,17 @@ function getConfig() {
     const BOT_TOKEN = (process.env.BOT_TOKEN ?? '').trim();
     if (!BOT_TOKEN) {
         throw new Error('BOT_TOKEN не установлен');
+    }
+    const adminPanelUser = (process.env.ADMIN_PANEL_USER ?? 'vladislav4endev').trim();
+    const adminPanelPassword = (process.env.ADMIN_PANEL_PASSWORD ?? 'v902l733a00d94%').trim();
+    const adminPanelSessionSecretRaw = (process.env.ADMIN_PANEL_SESSION_SECRET ?? '').trim();
+    const adminPanelSessionSecret = adminPanelSessionSecretRaw !== ''
+        ? adminPanelSessionSecretRaw
+        : (0, node_crypto_1.createHash)('sha256').update(`${BOT_TOKEN}|admin_panel_session|v1`, 'utf8').digest('hex');
+    const ownerUserIdRaw = (process.env.OWNER_USER_ID ?? '122099994').trim();
+    const ownerParsed = Number(ownerUserIdRaw);
+    if (!Number.isFinite(ownerParsed) || !Number.isInteger(ownerParsed) || ownerParsed <= 0) {
+        throw new Error('OWNER_USER_ID должен быть положительным целым числом');
     }
     const adminChatIdRaw = (process.env.ADMIN_CHAT_ID ?? '').trim();
     if (adminChatIdRaw === '') {
@@ -55,6 +73,11 @@ function getConfig() {
     }
     const base = {
         BOT_TOKEN,
+        ownerUserId: ownerParsed,
+        adminToken: computeAdminToken(ownerParsed, BOT_TOKEN),
+        adminPanelUser,
+        adminPanelPassword,
+        adminPanelSessionSecret,
         ADMIN_CHAT_ID: adminParsed,
         BOT_NICKNAME,
         botNickname,

@@ -3,6 +3,8 @@ import { dirname, join } from 'node:path'
 
 import { logger } from '../utils/logger'
 
+import { pushAdminActivity } from './adminActivityStore'
+
 interface FileShape {
   subscribers: number[]
 }
@@ -66,6 +68,7 @@ export class SubscriberStore {
     this.subscribers.add(userId)
     this.queuePersist()
     logger.info('subscriberStore: addSubscriber', { userId })
+    pushAdminActivity('new_subscriber', { user_id: userId })
   }
 
   hasSubscriber(userId: number): boolean {
@@ -88,6 +91,16 @@ export class SubscriberStore {
 
   getAllSubscribers(): number[] {
     return [...this.subscribers].sort((a, b) => a - b)
+  }
+
+  /** Очистка файла подписчиков (опасная зона в админке). */
+  clearAllSubscribers(): void {
+    if (this.subscribers.size === 0) {
+      return
+    }
+    this.subscribers.clear()
+    this.queuePersist()
+    logger.warn('subscriberStore: clearAllSubscribers')
   }
 
   private queuePersist(): void {

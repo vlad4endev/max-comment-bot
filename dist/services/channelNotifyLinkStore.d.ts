@@ -23,6 +23,11 @@ export declare class ChannelNotifyLinkStore {
     register(userId: number, channelChatId: number): void;
     /** Await all queued writes so a following HTTP response or process restart sees the link. */
     forcePersist(): Promise<void>;
+    /**
+     * Все связи user↔channel (копия).
+     */
+    getAllLinks(): ChannelNotifyLink[];
+    removeAllForUser(userId: number): void;
     /** When the bot leaves a channel, drop all opt-ins for that chat. */
     removeAllForChannel(channelChatId: number): void;
     private queuePersist;

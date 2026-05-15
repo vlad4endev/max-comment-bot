@@ -16,7 +16,10 @@ export declare class UserMiniappSettingsStore {
     constructor(filePath?: string);
     loadFromDisk(): Promise<void>;
     getMerged(userId: number): MiniappUserSettings;
+    /** Все user_id, у которых есть сохранённые настройки Mini App. */
+    getAllUserIdsWithSettings(): number[];
     setFeature(userId: number, feature: MiniappFeatureKey, enabled: boolean): MiniappUserSettings;
+    removeUser(userId: number): void;
     private queuePersist;
     private persist;
 }

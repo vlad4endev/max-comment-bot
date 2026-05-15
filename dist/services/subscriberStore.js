@@ -4,6 +4,7 @@ exports.subscriberStore = exports.SubscriberStore = void 0;
 const promises_1 = require("node:fs/promises");
 const node_path_1 = require("node:path");
 const logger_1 = require("../utils/logger");
+const adminActivityStore_1 = require("./adminActivityStore");
 const DEFAULT_PATH = (0, node_path_1.join)(process.cwd(), 'data', 'subscribers.json');
 function isPositiveIntId(value) {
     return typeof value === 'number' && Number.isInteger(value) && value > 0;
@@ -59,6 +60,7 @@ class SubscriberStore {
         this.subscribers.add(userId);
         this.queuePersist();
         logger_1.logger.info('subscriberStore: addSubscriber', { userId });
+        (0, adminActivityStore_1.pushAdminActivity)('new_subscriber', { user_id: userId });
     }
     hasSubscriber(userId) {
         if (!isPositiveIntId(userId)) {
@@ -78,6 +80,15 @@ class SubscriberStore {
     }
     getAllSubscribers() {
         return [...this.subscribers].sort((a, b) => a - b);
+    }
+    /** Очистка файла подписчиков (опасная зона в админке). */
+    clearAllSubscribers() {
+        if (this.subscribers.size === 0) {
+            return;
+        }
+        this.subscribers.clear();
+        this.queuePersist();
+        logger_1.logger.warn('subscriberStore: clearAllSubscribers');
     }
     queuePersist() {
         this.persistChain = this.persistChain

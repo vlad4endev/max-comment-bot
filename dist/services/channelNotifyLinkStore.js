@@ -121,6 +121,22 @@ class ChannelNotifyLinkStore {
     async forcePersist() {
         await this.persistChain;
     }
+    /**
+     * Все связи user↔channel (копия).
+     */
+    getAllLinks() {
+        return [...this.links];
+    }
+    removeAllForUser(userId) {
+        const next = this.links.filter((r) => r.user_id !== userId);
+        if (next.length === this.links.length) {
+            return;
+        }
+        this.links.length = 0;
+        this.links.push(...next);
+        this.queuePersist();
+        logger_1.logger.info('channelNotifyLinkStore: removeAllForUser', { userId });
+    }
     /** When the bot leaves a channel, drop all opt-ins for that chat. */
     removeAllForChannel(channelChatId) {
         const before = this.links.length;

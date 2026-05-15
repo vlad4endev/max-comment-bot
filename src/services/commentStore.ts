@@ -3,6 +3,8 @@ import { dirname, join } from 'node:path'
 
 import { v4 as uuidv4 } from 'uuid'
 
+import { postStore } from './postStore'
+import { pushAdminActivity } from './adminActivityStore'
 import { logger } from '../utils/logger'
 
 export interface CommentReply {
@@ -183,6 +185,13 @@ export class CommentStore {
     this.comments.push(comment)
     this.queuePersist()
     logger.info(`commentStore: saved ${comment.comment_id}`)
+    const post = postStore.getPost(comment.post_id)
+    pushAdminActivity('new_comment', {
+      comment_id: comment.comment_id,
+      post_id: comment.post_id,
+      user_id: comment.user_id,
+      ...(post ? { chat_id: post.chat_id } : {}),
+    })
     return comment
   }
 
@@ -212,6 +221,12 @@ export class CommentStore {
     c.reply = reply
     this.queuePersist()
     logger.info(`commentStore: reply on ${commentId}`)
+    const post = postStore.getPost(c.post_id)
+    pushAdminActivity('admin_reply', {
+      comment_id: commentId,
+      post_id: c.post_id,
+      ...(post ? { chat_id: post.chat_id } : {}),
+    })
     return c
   }
 
@@ -329,6 +344,54 @@ export class CommentStore {
       return 0
     }
     return this.comments.filter((c) => postIds.has(c.post_id)).length
+  }
+
+  /**
+   * All comments, newest first (admin list).
+   */
+  listAllCommentsNewestFirst(): Comment[] {
+    return [...this.comments].sort((a, b) => b.timestamp.localeCompare(a.timestamp))
+  }
+
+  /**
+   * Comments for posts in a channel (`postStore` lookup).
+   */
+  listCommentsForChannelChatId(chatId: number): Comment[] {
+    return this.listAllCommentsNewestFirst().filter((c) => {
+      const p = postStore.getPost(c.post_id)
+      return p?.chat_id === chatId
+    })
+  }
+
+  removeCommentsByPostIds(postIds: Set<string>): number {
+    let removed = 0
+    for (let i = this.comments.length - 1; i >= 0; i -= 1) {
+      if (postIds.has(this.comments[i]!.post_id)) {
+        this.comments.splice(i, 1)
+        removed += 1
+      }
+    }
+    if (removed > 0) {
+      this.queuePersist()
+    }
+    return removed
+  }
+
+  /** Очистка comments.json (опасная зона / сброс постов). */
+  clearAllComments(): void {
+    if (this.comments.length === 0) {
+      return
+    }
+    this.comments.length = 0
+    this.queuePersist()
+    logger.warn('commentStore: clearAllComments')
+  }
+
+  /**
+   * Total comment count.
+   */
+  get totalCount(): number {
+    return this.comments.length
   }
 
   private queuePersist(): void {

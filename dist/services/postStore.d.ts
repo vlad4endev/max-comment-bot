@@ -58,6 +58,12 @@ export declare class PostStore {
      */
     decrementCommentCount(postId: string): number | null;
     /**
+     * Удаляет все посты канала, возвращает затронутые post_id (для чистки комментариев).
+     */
+    removePostsForChatId(chatId: number): string[];
+    clearAllPosts(): void;
+    getTotalPostCount(): number;
+    /**
      * Updates the channel message inline keyboard to show the current comment count.
      */
     updateButtonCaption(bot: Bot, post: Post): Promise<void>;

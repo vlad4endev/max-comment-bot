@@ -1,14 +1,16 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.runChannelPollerForChat = runChannelPollerForChat;
 exports.runChannelPollerTick = runChannelPollerTick;
 exports.startChannelPostPoller = startChannelPostPoller;
+exports.restartChannelPostPoller = restartChannelPostPoller;
 exports.stopChannelPostPoller = stopChannelPostPoller;
+const adminRuntimeSettingsStore_1 = require("./adminRuntimeSettingsStore");
 const logger_1 = require("../utils/logger");
 const channelPostActions_1 = require("./channelPostActions");
 const postStore_1 = require("./postStore");
 const channelRegistry_1 = require("./channelRegistry");
 const MIN_POLL_INTERVAL_MS = 3_000;
-const DEFAULT_INTERVAL_MS = Math.max(MIN_POLL_INTERVAL_MS, parseInt(process.env.CHANNEL_POLL_INTERVAL_MS || '', 10) || 30_000);
 const FETCH_COUNT = 10;
 let intervalId;
 let tickInFlight = false;
@@ -18,6 +20,31 @@ function logTickFired() {
         channelCount: channels.length,
         channels: channels.map((c) => c.chat_id),
     });
+}
+/**
+ * One sweep for a single channel (admin «обновить кнопки»).
+ */
+async function runChannelPollerForChat(bot, chatId) {
+    if (!(0, postStore_1.isMiniAppOpenUrlConfigured)()) {
+        return;
+    }
+    const reg = channelRegistry_1.channelRegistry.getChannel(chatId);
+    if (!reg || reg.type !== 'channel') {
+        return;
+    }
+    const botUid = bot.botInfo?.user_id;
+    try {
+        const { messages } = await bot.api.getMessages(chatId, { count: FETCH_COUNT });
+        for (const message of messages) {
+            await (0, channelPostActions_1.tryAttachCommentsToChannelPost)(bot, message, {
+                botUserId: botUid,
+                channelChatIdOverride: chatId,
+            });
+        }
+    }
+    catch (err) {
+        logger_1.logger.warn('channelPoller: runChannelPollerForChat failed', { chatId, err });
+    }
 }
 /**
  * One sweep: for each registered channel, fetch recent messages and attach the comment button to new admin posts.
@@ -65,12 +92,15 @@ async function runChannelPollerTick(bot) {
 /**
  * Starts periodic polling of registered channels. No-op if Mini App open URL is not configured.
  */
-function startChannelPostPoller(bot, intervalMs = DEFAULT_INTERVAL_MS) {
+function startChannelPostPoller(bot, intervalMs) {
     if (!(0, postStore_1.isMiniAppOpenUrlConfigured)()) {
         logger_1.logger.info('channelPoller: disabled (BOT_NICKNAME / MINI_APP_URL not set for Mini App links)');
         return;
     }
-    const ms = Math.max(MIN_POLL_INTERVAL_MS, intervalMs);
+    const fromStoreOrArg = intervalMs !== undefined && Number.isFinite(intervalMs)
+        ? intervalMs
+        : adminRuntimeSettingsStore_1.adminRuntimeSettingsStore.getPollIntervalMs();
+    const ms = Math.max(MIN_POLL_INTERVAL_MS, fromStoreOrArg);
     stopChannelPostPoller();
     logTickFired();
     void (async () => {
@@ -101,6 +131,12 @@ function startChannelPostPoller(bot, intervalMs = DEFAULT_INTERVAL_MS) {
         })();
     }, ms);
     logger_1.logger.info(`channelPoller: started (interval ${ms / 1000}s, count=${FETCH_COUNT})`);
+}
+/**
+ * Перезапуск таймера с разрешением из {@link adminRuntimeSettingsStore}.
+ */
+function restartChannelPostPoller(bot) {
+    startChannelPostPoller(bot);
 }
 function stopChannelPostPoller() {
     if (intervalId !== undefined) {

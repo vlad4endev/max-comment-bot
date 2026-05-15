@@ -404,6 +404,13 @@ If nothing happens, open this chat and send: /connect ${channelChatId}`
 }
 
 /**
+ * Сбрасывает in-memory флаги уведомления о подключении (при ручном «отключении» канала в админке).
+ */
+export function clearAdminJoinNotifiedForChannel(channelChatId: number): void {
+  channelsAdminJoinNotified.delete(channelChatId)
+}
+
+/**
  * Удаляет чат из реестра и уведомляет администратора (один раз, если запись была).
  */
 async function unregisterChannelOnBotLeave(bot: Bot, chatId: number): Promise<void> {

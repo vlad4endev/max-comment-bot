@@ -83,6 +83,21 @@ export declare class CommentStore {
      * Counts comments whose posts belong to the given channel (`postIds` from postStore).
      */
     countForPostIds(postIds: Set<string>): number;
+    /**
+     * All comments, newest first (admin list).
+     */
+    listAllCommentsNewestFirst(): Comment[];
+    /**
+     * Comments for posts in a channel (`postStore` lookup).
+     */
+    listCommentsForChannelChatId(chatId: number): Comment[];
+    removeCommentsByPostIds(postIds: Set<string>): number;
+    /** Очистка comments.json (опасная зона / сброс постов). */
+    clearAllComments(): void;
+    /**
+     * Total comment count.
+     */
+    get totalCount(): number;
     private queuePersist;
     private persist;
 }

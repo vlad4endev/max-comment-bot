@@ -11,6 +11,8 @@ export declare class SubscriberStore {
     hasSubscriber(userId: number): boolean;
     removeSubscriber(userId: number): void;
     getAllSubscribers(): number[];
+    /** Очистка файла подписчиков (опасная зона в админке). */
+    clearAllSubscribers(): void;
     private queuePersist;
     private persist;
 }

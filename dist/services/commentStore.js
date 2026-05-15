@@ -4,6 +4,8 @@ exports.commentStore = exports.CommentStore = void 0;
 const promises_1 = require("node:fs/promises");
 const node_path_1 = require("node:path");
 const uuid_1 = require("uuid");
+const postStore_1 = require("./postStore");
+const adminActivityStore_1 = require("./adminActivityStore");
 const logger_1 = require("../utils/logger");
 const DEFAULT_COMMENTS_PATH = (0, node_path_1.join)(process.cwd(), 'data', 'comments.json');
 function isCommentReply(value) {
@@ -138,6 +140,13 @@ class CommentStore {
         this.comments.push(comment);
         this.queuePersist();
         logger_1.logger.info(`commentStore: saved ${comment.comment_id}`);
+        const post = postStore_1.postStore.getPost(comment.post_id);
+        (0, adminActivityStore_1.pushAdminActivity)('new_comment', {
+            comment_id: comment.comment_id,
+            post_id: comment.post_id,
+            user_id: comment.user_id,
+            ...(post ? { chat_id: post.chat_id } : {}),
+        });
         return comment;
     }
     /**
@@ -165,6 +174,12 @@ class CommentStore {
         c.reply = reply;
         this.queuePersist();
         logger_1.logger.info(`commentStore: reply on ${commentId}`);
+        const post = postStore_1.postStore.getPost(c.post_id);
+        (0, adminActivityStore_1.pushAdminActivity)('admin_reply', {
+            comment_id: commentId,
+            post_id: c.post_id,
+            ...(post ? { chat_id: post.chat_id } : {}),
+        });
         return c;
     }
     /**
@@ -275,6 +290,49 @@ class CommentStore {
             return 0;
         }
         return this.comments.filter((c) => postIds.has(c.post_id)).length;
+    }
+    /**
+     * All comments, newest first (admin list).
+     */
+    listAllCommentsNewestFirst() {
+        return [...this.comments].sort((a, b) => b.timestamp.localeCompare(a.timestamp));
+    }
+    /**
+     * Comments for posts in a channel (`postStore` lookup).
+     */
+    listCommentsForChannelChatId(chatId) {
+        return this.listAllCommentsNewestFirst().filter((c) => {
+            const p = postStore_1.postStore.getPost(c.post_id);
+            return p?.chat_id === chatId;
+        });
+    }
+    removeCommentsByPostIds(postIds) {
+        let removed = 0;
+        for (let i = this.comments.length - 1; i >= 0; i -= 1) {
+            if (postIds.has(this.comments[i].post_id)) {
+                this.comments.splice(i, 1);
+                removed += 1;
+            }
+        }
+        if (removed > 0) {
+            this.queuePersist();
+        }
+        return removed;
+    }
+    /** Очистка comments.json (опасная зона / сброс постов). */
+    clearAllComments() {
+        if (this.comments.length === 0) {
+            return;
+        }
+        this.comments.length = 0;
+        this.queuePersist();
+        logger_1.logger.warn('commentStore: clearAllComments');
+    }
+    /**
+     * Total comment count.
+     */
+    get totalCount() {
+        return this.comments.length;
     }
     queuePersist() {
         this.persistChain = this.persistChain

@@ -1,5 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.clearAdminJoinNotifiedForChannel = clearAdminJoinNotifiedForChannel;
 exports.registerEventHandlers = registerEventHandlers;
 const max_bot_api_1 = require("@maxhub/max-bot-api");
 const config_1 = require("../config");
@@ -329,6 +330,12 @@ If nothing happens, open this chat and send: /connect ${channelChatId}`;
         return;
     }
     logger_1.logger.warn('dmInviterAboutMissingAdmin: no inviter user id; skipping DM', { channelChatId });
+}
+/**
+ * Сбрасывает in-memory флаги уведомления о подключении (при ручном «отключении» канала в админке).
+ */
+function clearAdminJoinNotifiedForChannel(channelChatId) {
+    channelsAdminJoinNotified.delete(channelChatId);
 }
 /**
  * Удаляет чат из реестра и уведомляет администратора (один раз, если запись была).

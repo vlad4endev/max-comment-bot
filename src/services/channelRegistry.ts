@@ -3,6 +3,7 @@ import { dirname, join } from 'node:path'
 
 import type { ChatType } from '@maxhub/max-bot-api/types'
 
+import { pushAdminActivity } from './adminActivityStore'
 import { logger } from '../utils/logger'
 
 /**
@@ -113,8 +114,15 @@ export class ChannelRegistry {
           type: chatData.type,
           date_added: new Date().toISOString(),
         }
+    const isNew = !existing
     this.channels.set(chatId, record)
     this.queuePersist()
+    if (isNew) {
+      pushAdminActivity('channel_added', {
+        chat_id: chatId,
+        title: record.title,
+      })
+    }
   }
 
   /**

@@ -105,12 +105,26 @@ export class UserMiniappSettingsStore {
     return mergeWithDefaults(this.byUserId.get(userId))
   }
 
+  /** Все user_id, у которых есть сохранённые настройки Mini App. */
+  getAllUserIdsWithSettings(): number[] {
+    return [...this.byUserId.keys()].sort((a, b) => a - b)
+  }
+
   setFeature(userId: number, feature: MiniappFeatureKey, enabled: boolean): MiniappUserSettings {
     const prev = this.byUserId.get(userId) ?? {}
     const next = { ...prev, [feature]: enabled }
     this.byUserId.set(userId, next)
     this.queuePersist()
     return mergeWithDefaults(next)
+  }
+
+  removeUser(userId: number): void {
+    if (!this.byUserId.has(userId)) {
+      return
+    }
+    this.byUserId.delete(userId)
+    this.queuePersist()
+    logger.info('userMiniappSettingsStore: removeUser', { userId })
   }
 
   private queuePersist(): void {

@@ -3,6 +3,7 @@ import type { Message } from '@maxhub/max-bot-api/types'
 import { v4 as uuidv4 } from 'uuid'
 
 import { logger } from '../utils/logger'
+import { pushAdminActivity } from './adminActivityStore'
 import {
   attachCommentButtonToChannelPost,
   buildMiniAppUrl,
@@ -174,5 +175,10 @@ export async function tryAttachCommentsToChannelPost(
   const editText = text === '' ? '\u00a0' : text
 
   await attachCommentButtonToChannelPost(bot, post, editText, kb)
+  pushAdminActivity('new_post_button', {
+    chat_id: chatId,
+    post_id: postId,
+    message_mid: mid,
+  })
   return { ok: true }
 }

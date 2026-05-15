@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Вход — CommentBot</title>
+  <style>
+    :root {
+      --bg: #0d0d18;
+      --surface: #1a1a32;
+      --border: rgba(127, 119, 221, 0.22);
+      --text: #e8e6ff;
+      --muted: #9b97b8;
+      --accent: #7f77dd;
+      --danger: #e85d6f;
+      --radius: 12px;
+      --font: system-ui, -apple-system, Segoe UI, sans-serif;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: var(--font); background: var(--bg); color: var(--text); min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 1.5rem; }
+    .card {
+      width: 100%; max-width: 400px; background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 2rem;
+    }
+    h1 { margin: 0 0 0.5rem; font-size: 1.35rem; }
+    p { color: var(--muted); margin: 0 0 1.25rem; font-size: 0.95rem; line-height: 1.45; }
+    label { display: block; font-size: 0.8rem; color: var(--muted); margin-bottom: 0.35rem; }
+    input {
+      width: 100%; padding: 0.65rem 0.85rem; border-radius: 8px; border: 1px solid var(--border);
+      background: #141428; color: var(--text); font-size: 1rem; margin-bottom: 0.85rem;
+    }
+    .btn {
+      width: 100%; padding: 0.65rem; border-radius: 8px; border: none; font-weight: 600; font-size: 0.95rem;
+      cursor: pointer; font-family: inherit; background: var(--accent); color: #0d0d18; margin-top: 0.25rem;
+    }
+    .btn:hover { filter: brightness(1.08); }
+    .err { color: var(--danger); font-size: 0.85rem; margin-top: 0.75rem; min-height: 1.2em; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Панель CommentBot</h1>
+    <p>Войдите, чтобы открыть панель управления.</p>
+    <form id="f">
+      <label for="u">Логин</label>
+      <input id="u" name="username" type="text" autocomplete="username" required />
+      <label for="p">Пароль</label>
+      <input id="p" name="password" type="password" autocomplete="current-password" required />
+      <button type="submit" class="btn">Войти</button>
+      <div id="e" class="err"></div>
+    </form>
+  </div>
+  <script>
+(function () {
+  fetch('/api/admin/settings', { credentials: 'same-origin' })
+    .then(function (r) {
+      if (r.ok) window.location.replace('/admin')
+    })
+    .catch(function () {})
+
+  document.getElementById('f').addEventListener('submit', function (ev) {
+    ev.preventDefault()
+    var err = document.getElementById('e')
+    err.textContent = ''
+    var u = document.getElementById('u').value
+    var p = document.getElementById('p').value
+    fetch('/api/admin/panel-login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify({ username: u, password: p }),
+    })
+      .then(function (r) { return r.json().then(function (j) { return { r: r, j: j } }) })
+      .then(function (x) {
+        if (!x.r.ok) {
+          err.textContent = x.j.error === 'invalid credentials' ? 'Неверный логин или пароль' : (x.j.error || 'Ошибка')
+          return
+        }
+        window.location.replace('/admin')
+      })
+      .catch(function () { err.textContent = 'Сеть недоступна' })
+  })
+})()
+  </script>
+</body>
+</html>

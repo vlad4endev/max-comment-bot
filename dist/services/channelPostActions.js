@@ -7,6 +7,7 @@ exports.tryAttachCommentsToChannelPost = tryAttachCommentsToChannelPost;
 const max_bot_api_1 = require("@maxhub/max-bot-api");
 const uuid_1 = require("uuid");
 const logger_1 = require("../utils/logger");
+const adminActivityStore_1 = require("./adminActivityStore");
 const postStore_1 = require("./postStore");
 /**
  * Resolves chat id for a message (channel/group/dialog). Falls back to sender id for 1:1.
@@ -133,6 +134,11 @@ async function tryAttachCommentsToChannelPost(bot, message, options = {}) {
     const kb = max_bot_api_1.Keyboard.inlineKeyboard([[max_bot_api_1.Keyboard.button.link('💬 Комментарии (0)', openUrl)]]);
     const editText = text === '' ? '\u00a0' : text;
     await (0, postStore_1.attachCommentButtonToChannelPost)(bot, post, editText, kb);
+    (0, adminActivityStore_1.pushAdminActivity)('new_post_button', {
+        chat_id: chatId,
+        post_id: postId,
+        message_mid: mid,
+    });
     return { ok: true };
 }
 //# sourceMappingURL=channelPostActions.js.map

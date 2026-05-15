@@ -6,6 +6,29 @@
  * logger.debug('Переменные окружения загружены')
  */
 
+import { appendFile } from 'node:fs/promises'
+import { join } from 'node:path'
+
+const RUNTIME_LOG_PATH = join(process.cwd(), 'data', 'runtime.log')
+const ADMIN_LOG_BUFFER_MAX = 500
+const adminLogLines: string[] = []
+
+function pushAdminLogLine(line: string): void {
+  adminLogLines.push(line)
+  if (adminLogLines.length > ADMIN_LOG_BUFFER_MAX) {
+    adminLogLines.splice(0, adminLogLines.length - ADMIN_LOG_BUFFER_MAX)
+  }
+  void appendFile(RUNTIME_LOG_PATH, `${line}\n`, 'utf8').catch(() => {
+    /* ignore disk errors for log tail */
+  })
+}
+
+/** Последние строки консольного лога (и дубль в data/runtime.log при возможности). */
+export function getAdminLogTail(maxLines: number): string[] {
+  const n = Math.min(Math.max(1, maxLines), adminLogLines.length)
+  return adminLogLines.slice(-n)
+}
+
 const RESET = '\x1b[0m'
 const GREEN = '\x1b[32m'
 const RED = '\x1b[31m'
@@ -57,6 +80,11 @@ export class Logger {
   ): void {
     const timestamp = new Date().toISOString()
     const header = `${color}${timestamp} [${level}] ${message}${RESET}`
+    const plain =
+      extra !== undefined
+        ? `${timestamp} [${level}] ${message} ${typeof extra === 'object' ? JSON.stringify(extra) : String(extra)}`
+        : `${timestamp} [${level}] ${message}`
+    pushAdminLogLine(plain)
 
     if (extra !== undefined) {
       write(header, extra)

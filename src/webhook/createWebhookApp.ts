@@ -4,7 +4,9 @@ import type { Bot } from '@maxhub/max-bot-api'
 import type { Update } from '@maxhub/max-bot-api/types'
 import express from 'express'
 
+import { createAdminRouter } from '../api/adminRoutes'
 import { createCommentApiRouter } from '../api/routes'
+import { isAdminPanelSessionValid } from '../middleware/adminAuth'
 import { logger } from '../utils/logger'
 import { dispatchBotUpdate } from './dispatchUpdate'
 
@@ -48,6 +50,36 @@ export function createHttpApp(options: HttpAppOptions): express.Express {
   app.get('/health', (_req, res) => {
     res.status(200).type('text/plain').send('ok')
   })
+
+  const adminPanelRoot = join(process.cwd(), 'admin-panel')
+
+  app.get('/admin/login', (_req, res) => {
+    res.sendFile(join(adminPanelRoot, 'login.html'), (err) => {
+      if (err) {
+        logger.error('/admin/login: sendFile failed', err)
+        if (!res.headersSent) {
+          res.status(500).end()
+        }
+      }
+    })
+  })
+
+  app.get('/admin', (req, res) => {
+    if (!isAdminPanelSessionValid(req)) {
+      res.redirect(302, '/admin/login')
+      return
+    }
+    res.sendFile(join(adminPanelRoot, 'admin.html'), (err) => {
+      if (err) {
+        logger.error('/admin: sendFile failed', err)
+        if (!res.headersSent) {
+          res.status(500).end()
+        }
+      }
+    })
+  })
+
+  app.use('/api/admin', createAdminRouter({ bot: options.bot }))
 
   app.use('/api', createCommentApiRouter({ bot: options.bot }))
 

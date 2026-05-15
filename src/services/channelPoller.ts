@@ -1,15 +1,12 @@
 import type { Bot } from '@maxhub/max-bot-api'
 
+import { adminRuntimeSettingsStore } from './adminRuntimeSettingsStore'
 import { logger } from '../utils/logger'
 import { tryAttachCommentsToChannelPost } from './channelPostActions'
 import { isMiniAppOpenUrlConfigured } from './postStore'
 import { channelRegistry } from './channelRegistry'
 
 const MIN_POLL_INTERVAL_MS = 3_000
-const DEFAULT_INTERVAL_MS = Math.max(
-  MIN_POLL_INTERVAL_MS,
-  parseInt(process.env.CHANNEL_POLL_INTERVAL_MS || '', 10) || 30_000,
-)
 const FETCH_COUNT = 10
 
 let intervalId: ReturnType<typeof setInterval> | undefined
@@ -21,6 +18,33 @@ function logTickFired(): void {
     channelCount: channels.length,
     channels: channels.map((c) => c.chat_id),
   })
+}
+
+/**
+ * One sweep for a single channel (admin «обновить кнопки»).
+ */
+export async function runChannelPollerForChat(bot: Bot, chatId: number): Promise<void> {
+  if (!isMiniAppOpenUrlConfigured()) {
+    return
+  }
+
+  const reg = channelRegistry.getChannel(chatId)
+  if (!reg || reg.type !== 'channel') {
+    return
+  }
+
+  const botUid = bot.botInfo?.user_id
+  try {
+    const { messages } = await bot.api.getMessages(chatId, { count: FETCH_COUNT })
+    for (const message of messages) {
+      await tryAttachCommentsToChannelPost(bot, message, {
+        botUserId: botUid,
+        channelChatIdOverride: chatId,
+      })
+    }
+  } catch (err: unknown) {
+    logger.warn('channelPoller: runChannelPollerForChat failed', { chatId, err })
+  }
 }
 
 /**
@@ -71,13 +95,17 @@ export async function runChannelPollerTick(bot: Bot): Promise<void> {
 /**
  * Starts periodic polling of registered channels. No-op if Mini App open URL is not configured.
  */
-export function startChannelPostPoller(bot: Bot, intervalMs: number = DEFAULT_INTERVAL_MS): void {
+export function startChannelPostPoller(bot: Bot, intervalMs?: number): void {
   if (!isMiniAppOpenUrlConfigured()) {
     logger.info('channelPoller: disabled (BOT_NICKNAME / MINI_APP_URL not set for Mini App links)')
     return
   }
 
-  const ms = Math.max(MIN_POLL_INTERVAL_MS, intervalMs)
+  const fromStoreOrArg =
+    intervalMs !== undefined && Number.isFinite(intervalMs)
+      ? intervalMs
+      : adminRuntimeSettingsStore.getPollIntervalMs()
+  const ms = Math.max(MIN_POLL_INTERVAL_MS, fromStoreOrArg)
 
   stopChannelPostPoller()
 
@@ -109,6 +137,13 @@ export function startChannelPostPoller(bot: Bot, intervalMs: number = DEFAULT_IN
   }, ms)
 
   logger.info(`channelPoller: started (interval ${ms / 1000}s, count=${FETCH_COUNT})`)
+}
+
+/**
+ * Перезапуск таймера с разрешением из {@link adminRuntimeSettingsStore}.
+ */
+export function restartChannelPostPoller(bot: Bot): void {
+  startChannelPostPoller(bot)
 }
 
 export function stopChannelPostPoller(): void {
