@@ -35,6 +35,8 @@ const BOT_ACTIVATION_WELCOME_TEXT =
   'Теперь когда вам ответят на комментарий — я сразу пришлю вам сообщение.\n\n' +
   'Вернитесь в канал и напишите комментарий!'
 
+const pendingJoins = new Map<number, number>() // userId -> channelChatId
+
 async function trySendBotActivationWelcome(bot: Bot, chatId: number): Promise<void> {
   try {
     await bot.api.sendMessageToChat(chatId, BOT_ACTIVATION_WELCOME_TEXT)
@@ -502,6 +504,12 @@ export function registerEventHandlers(bot: Bot): void {
     logger.info(`bot_added: chat_id=${channelChatId}`)
 
     const outcome = await tryActivateChannelRegistration(ctx, bot, channelChatId, isChannel)
+    const inviterUserId = resolveInviterUserId(ctx.update.update_type, ctx.user, undefined)
+    if (inviterUserId) {
+      settingsStore.linkUserToChannel(inviterUserId, channelChatId)
+      subscriberStore.addSubscriber(inviterUserId)
+      logger.info('bot_added: linked inviter as admin', { inviterUserId, channelChatId })
+    }
     if (outcome.status === 'pending' && outcome.shouldNotifyMissingAdmin) {
       const inviter = resolveInviterUserId(ctx.update.update_type, ctx.user, undefined)
       const title = await fetchChatTitle(bot, channelChatId)
@@ -572,6 +580,12 @@ export function registerEventHandlers(bot: Bot): void {
         payload: startPayload,
         updateRaw: JSON.stringify(ctx.update).slice(0, 200),
       })
+      logger.info('bot_started: payload detected', {
+        userId: ctx.user?.user_id,
+        payload: startPayload,
+        isJoin: startPayload.startsWith('join'),
+        parsedChatId: startPayload.startsWith('join') ? '-' + startPayload.slice(4) : null,
+      })
 
       if (!userId) {
         return
@@ -634,6 +648,10 @@ export function registerEventHandlers(bot: Bot): void {
           )
           return
         }
+
+        pendingJoins.set(userId, channelChatId)
+        settingsStore.linkUserToChannel(userId, channelChatId)
+        subscriberStore.addSubscriber(userId)
 
         const isAdmin = await isUserChannelAdmin(bot, channelChatId, userId)
         if (!isAdmin) {
@@ -851,6 +869,16 @@ ${inviteUrl}
       !/^\/addbutton\b/i.test(text) &&
       !/^\/connect\b/i.test(text)
     ) {
+      const pendingChatId = pendingJoins.get(user.user_id)
+      if (pendingChatId !== undefined) {
+        settingsStore.linkUserToChannel(user.user_id, pendingChatId)
+        subscriberStore.addSubscriber(user.user_id)
+        pendingJoins.delete(user.user_id)
+        logger.info('message_created: linked user from pending join', {
+          userId: user.user_id,
+          chatId: pendingChatId,
+        })
+      }
       await handlePrivateChatMessage(bot, message, user)
       return
     }

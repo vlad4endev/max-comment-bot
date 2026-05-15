@@ -12,6 +12,7 @@ const channelRegistry_1 = require("../services/channelRegistry");
 const resolveChannelChatId_1 = require("../services/resolveChannelChatId");
 const channelPostActions_1 = require("../services/channelPostActions");
 const commentStore_1 = require("../services/commentStore");
+const settingsStore_1 = require("../services/settingsStore");
 const subscriberStore_1 = require("../services/subscriberStore");
 const notificationService_1 = require("../services/notificationService");
 const postStore_1 = require("../services/postStore");
@@ -280,21 +281,31 @@ function createCommentApiRouter(deps) {
             const channels = await Promise.all(adminChannelIds.map(async (chatId) => {
                 const reg = channelRegistry_1.channelRegistry.getChannel(chatId);
                 let subscribers = null;
+                let avatar_url = null;
                 try {
                     const chat = await deps.bot.api.getChat(chatId);
                     const raw = chat.participants_count;
                     if (typeof raw === 'number' && Number.isFinite(raw) && raw >= 0) {
                         subscribers = raw;
                     }
+                    const iconRaw = chat.icon?.url;
+                    if (typeof iconRaw === 'string') {
+                        const trimmed = iconRaw.trim();
+                        if (trimmed) {
+                            avatar_url = trimmed;
+                        }
+                    }
                 }
                 catch {
                     subscribers = null;
+                    avatar_url = null;
                 }
                 const pending = stateManager_1.stateManager.isChannelPendingAdminRights(chatId);
                 return {
                     chat_id: chatId,
                     title: reg?.title ?? null,
                     subscribers,
+                    avatar_url,
                     status: pending ? 'pending' : 'active',
                 };
             }));
@@ -323,13 +334,22 @@ function createCommentApiRouter(deps) {
                 return;
             }
             const members = await listChannelAdminsForMiniApp(deps.bot, chatId);
-            const linkedIds = new Set(channelNotifyLinkStore_1.channelNotifyLinkStore.getUserIdsForChannel(chatId));
-            const admins = members.map((m) => ({
-                user_id: m.user_id,
-                name: m.name,
-                initials: adminDisplayInitials(m.name),
-                linked: linkedIds.has(m.user_id),
-            }));
+            logger_1.logger.info('GET /api/channel-admins: linked users', {
+                chatId,
+                linkedUsers: settingsStore_1.settingsStore.getUsersLinkedToChannel(chatId),
+                allSettings: 'check settings.json',
+            });
+            const linkedIds = new Set(settingsStore_1.settingsStore.getUsersLinkedToChannel(chatId));
+            const admins = members.map((member) => {
+                const linked = settingsStore_1.settingsStore.getUsersLinkedToChannel(chatId);
+                const isLinked = linked.includes(member.user_id);
+                return {
+                    user_id: member.user_id,
+                    name: member.name,
+                    initials: adminDisplayInitials(member.name),
+                    linked: isLinked,
+                };
+            });
             const listedIds = new Set(admins.map((a) => a.user_id));
             for (const linkedUserId of linkedIds) {
                 if (listedIds.has(linkedUserId)) {

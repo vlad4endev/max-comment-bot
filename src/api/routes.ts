@@ -341,20 +341,30 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
         adminChannelIds.map(async (chatId) => {
           const reg = channelRegistry.getChannel(chatId)
           let subscribers: number | null = null
+          let avatar_url: string | null = null
           try {
             const chat = await deps.bot.api.getChat(chatId)
             const raw = (chat as { participants_count?: unknown }).participants_count
             if (typeof raw === 'number' && Number.isFinite(raw) && raw >= 0) {
               subscribers = raw
             }
+            const iconRaw = chat.icon?.url
+            if (typeof iconRaw === 'string') {
+              const trimmed = iconRaw.trim()
+              if (trimmed) {
+                avatar_url = trimmed
+              }
+            }
           } catch {
             subscribers = null
+            avatar_url = null
           }
           const pending = stateManager.isChannelPendingAdminRights(chatId)
           return {
             chat_id: chatId,
             title: reg?.title ?? null,
             subscribers,
+            avatar_url,
             status: pending ? ('pending' as const) : ('active' as const),
           }
         }),

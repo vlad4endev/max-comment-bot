@@ -24,6 +24,7 @@ function buildBotStartappUrl(startappPayload) {
 const BOT_ACTIVATION_WELCOME_TEXT = '✅ Бот активирован!\n\n' +
     'Теперь когда вам ответят на комментарий — я сразу пришлю вам сообщение.\n\n' +
     'Вернитесь в канал и напишите комментарий!';
+const pendingJoins = new Map(); // userId -> channelChatId
 async function trySendBotActivationWelcome(bot, chatId) {
     try {
         await bot.api.sendMessageToChat(chatId, BOT_ACTIVATION_WELCOME_TEXT);
@@ -403,6 +404,12 @@ function registerEventHandlers(bot) {
         const { chat_id: channelChatId, is_channel: isChannel } = ctx.update;
         logger_1.logger.info(`bot_added: chat_id=${channelChatId}`);
         const outcome = await tryActivateChannelRegistration(ctx, bot, channelChatId, isChannel);
+        const inviterUserId = resolveInviterUserId(ctx.update.update_type, ctx.user, undefined);
+        if (inviterUserId) {
+            settingsStore_1.settingsStore.linkUserToChannel(inviterUserId, channelChatId);
+            subscriberStore_1.subscriberStore.addSubscriber(inviterUserId);
+            logger_1.logger.info('bot_added: linked inviter as admin', { inviterUserId, channelChatId });
+        }
         if (outcome.status === 'pending' && outcome.shouldNotifyMissingAdmin) {
             const inviter = resolveInviterUserId(ctx.update.update_type, ctx.user, undefined);
             const title = await fetchChatTitle(bot, channelChatId);
@@ -463,6 +470,12 @@ function registerEventHandlers(bot) {
                 payload: startPayload,
                 updateRaw: JSON.stringify(ctx.update).slice(0, 200),
             });
+            logger_1.logger.info('bot_started: payload detected', {
+                userId: ctx.user?.user_id,
+                payload: startPayload,
+                isJoin: startPayload.startsWith('join'),
+                parsedChatId: startPayload.startsWith('join') ? '-' + startPayload.slice(4) : null,
+            });
             if (!userId) {
                 return;
             }
@@ -512,6 +525,9 @@ function registerEventHandlers(bot) {
                     await sendUser(`Не удалось разобрать ссылку приглашения. Откройте мини-приложение и попробуйте снова.`, kb);
                     return;
                 }
+                pendingJoins.set(userId, channelChatId);
+                settingsStore_1.settingsStore.linkUserToChannel(userId, channelChatId);
+                subscriberStore_1.subscriberStore.addSubscriber(userId);
                 const isAdmin = await (0, channelPostActions_1.isUserChannelAdmin)(bot, channelChatId, userId);
                 if (!isAdmin) {
                     const kb = max_bot_api_1.Keyboard.inlineKeyboard([[max_bot_api_1.Keyboard.button.link('💬 Открыть панель управления', homeUrl)]]);
@@ -689,6 +705,16 @@ ${inviteUrl}
         if (isPrivateDialog &&
             !/^\/addbutton\b/i.test(text) &&
             !/^\/connect\b/i.test(text)) {
+            const pendingChatId = pendingJoins.get(user.user_id);
+            if (pendingChatId !== undefined) {
+                settingsStore_1.settingsStore.linkUserToChannel(user.user_id, pendingChatId);
+                subscriberStore_1.subscriberStore.addSubscriber(user.user_id);
+                pendingJoins.delete(user.user_id);
+                logger_1.logger.info('message_created: linked user from pending join', {
+                    userId: user.user_id,
+                    chatId: pendingChatId,
+                });
+            }
             await handlePrivateChatMessage(bot, message, user);
             return;
         }
