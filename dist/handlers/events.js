@@ -9,22 +9,83 @@ const channelRegistry_1 = require("../services/channelRegistry");
 const commentStore_1 = require("../services/commentStore");
 const notificationService_1 = require("../services/notificationService");
 const postStore_1 = require("../services/postStore");
+const settingsStore_1 = require("../services/settingsStore");
+const subscriberStore_1 = require("../services/subscriberStore");
 const stateManager_1 = require("../services/stateManager");
 const logger_1 = require("../utils/logger");
-/** Welcome copy for first-time private `bot_started` without a deeplink payload. */
-const ONBOARDING_WELCOME_TEXT = `👋 Hello! I'm the comment bot.
-
-To connect your channel:
-1. Add me to your channel
-2. Grant me admin rights
-3. Come back here — I'll confirm automatically`;
-const ONBOARDING_WELCOME_KEYBOARD = max_bot_api_1.Keyboard.inlineKeyboard([
-    [max_bot_api_1.Keyboard.button.link('📖 How to add bot to channel', 'https://help.max.ru')],
-]);
-const SUBSCRIBER_START_WELCOME_TEXT = '✅ Отлично! Теперь вы будете получать уведомления когда вам ответят на комментарий.';
 function buildBotStartappUrl(startappPayload) {
     const nick = config_1.config.botNickname.trim();
     return `https://max.ru/${nick}?startapp=${startappPayload}`;
+}
+function buildMiniAppHomeUrl() {
+    return buildBotStartappUrl('start');
+}
+function delay(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+}
+/** MAX `bot_started` payload (tolerate alternate field names). */
+function getBotStartPayload(ctx) {
+    const u = ctx.update;
+    return (u.payload ?? u.start_payload ?? '').trim();
+}
+function resolveChannelChatIdFromJoinPayload(payload) {
+    const m = /^join(\d+)$/i.exec(payload.trim());
+    if (!m) {
+        return null;
+    }
+    const absId = Number.parseInt(m[1], 10);
+    if (!Number.isFinite(absId) || absId <= 0) {
+        return null;
+    }
+    const found = channelRegistry_1.channelRegistry.getAllChannels().find((c) => Math.abs(c.chat_id) === absId);
+    if (found) {
+        return found.chat_id;
+    }
+    return Number(`-${absId}`);
+}
+async function fetchChannelParticipantsCount(bot, channelChatId) {
+    try {
+        const chat = await bot.api.getChat(channelChatId);
+        return chat.participants_count ?? 0;
+    }
+    catch {
+        return 0;
+    }
+}
+/** First registered channel (sorted by id) where the user is admin or owner. */
+async function findFirstRegisteredChannelWhereUserIsAdmin(bot, userId) {
+    const channels = channelRegistry_1.channelRegistry.getAllChannels().filter((c) => c.type === 'channel');
+    channels.sort((a, b) => a.chat_id - b.chat_id);
+    for (const c of channels) {
+        if (await (0, channelPostActions_1.isUserChannelAdmin)(bot, c.chat_id, userId)) {
+            return { chatId: c.chat_id, title: c.title };
+        }
+    }
+    return null;
+}
+/**
+ * For `subscribe` deep link: prefer a registered channel where the user is a non-admin member.
+ */
+async function resolveSubscribeWelcomeChannel(bot, userId) {
+    const channels = channelRegistry_1.channelRegistry.getAllChannels().filter((c) => c.type === 'channel');
+    channels.sort((a, b) => a.chat_id - b.chat_id);
+    for (const c of channels) {
+        try {
+            const { members } = await bot.api.getChatMembers(c.chat_id, { user_ids: [userId] });
+            const m = members[0];
+            if (m && !m.is_bot && !m.is_admin && !m.is_owner) {
+                return { chatId: c.chat_id, title: c.title };
+            }
+        }
+        catch {
+            /* try next */
+        }
+    }
+    const first = channels[0];
+    if (first) {
+        return { chatId: first.chat_id, title: first.title };
+    }
+    return { chatId: 0, title: 'канала' };
 }
 /**
  * Подтягивает тип чата из флага `is_channel`, если запрос метаданных чата не удался.
@@ -301,20 +362,178 @@ function registerEventHandlers(bot) {
         await unregisterChannelOnBotLeave(bot, chat_id);
     });
     bot.on('bot_started', async (ctx) => {
-        const user = ctx.user;
-        if (!user) {
-            return;
+        try {
+            const user = ctx.user;
+            if (!user) {
+                return;
+            }
+            const chatId = ctx.chatId;
+            if (chatId === undefined) {
+                logger_1.logger.warn('bot_started: нет chat_id в контексте');
+                return;
+            }
+            const userId = user.user_id;
+            const firstName = user.name || 'пользователь';
+            const startPayload = getBotStartPayload(ctx);
+            const firstBotStart = !subscriberStore_1.subscriberStore.hasSubscriber(userId);
+            stateManager_1.stateManager.setUserPrivateChatId(userId, chatId);
+            subscriberStore_1.subscriberStore.addSubscriber(userId);
+            logger_1.logger.info(`bot_started: пользователь ${userId}, chat ${chatId}, payload=${startPayload}`);
+            const homeUrl = buildMiniAppHomeUrl();
+            const sendUser = async (text, kb) => {
+                await bot.api.sendMessageToUser(userId, text, { attachments: [kb] });
+            };
+            // 1) Admin invited via join link
+            if (startPayload.toLowerCase().startsWith('join') && /^join\d+$/i.test(startPayload)) {
+                const channelChatId = resolveChannelChatIdFromJoinPayload(startPayload);
+                if (channelChatId === null) {
+                    const kb = max_bot_api_1.Keyboard.inlineKeyboard([[max_bot_api_1.Keyboard.button.link('🚀 Подключить канал', homeUrl)]]);
+                    await sendUser(`Не удалось разобрать ссылку приглашения. Откройте мини-приложение и попробуйте снова.`, kb);
+                    return;
+                }
+                const isAdmin = await (0, channelPostActions_1.isUserChannelAdmin)(bot, channelChatId, userId);
+                if (!isAdmin) {
+                    const kb = max_bot_api_1.Keyboard.inlineKeyboard([[max_bot_api_1.Keyboard.button.link('💬 Открыть панель управления', homeUrl)]]);
+                    await sendUser(`Эта ссылка для администраторов канала. Если вы администратор, убедитесь, что вы вошли в MAX под нужным аккаунтом.`, kb);
+                    return;
+                }
+                settingsStore_1.settingsStore.linkUserToChannel(userId, channelChatId);
+                let channelTitle = channelRegistry_1.channelRegistry.getChannel(channelChatId)?.title ?? null;
+                if (!channelTitle) {
+                    channelTitle = await fetchChatTitle(bot, channelChatId);
+                }
+                const displayTitle = channelTitle ?? 'канал';
+                const subscribers = await fetchChannelParticipantsCount(bot, channelChatId);
+                const adminText = `🎉 Добро пожаловать, ${firstName}!
+
+Вы подключены как администратор канала «${displayTitle}».
+
+Теперь вы будете получать уведомления о новых комментариях и сможете отвечать от имени канала прямо в мини-приложении.`;
+                const adminKb = max_bot_api_1.Keyboard.inlineKeyboard([
+                    [max_bot_api_1.Keyboard.button.link('💬 Открыть панель управления', homeUrl)],
+                    [max_bot_api_1.Keyboard.button.callback('⚙️ Настройки уведомлений', 'settings')],
+                ]);
+                await sendUser(adminText, adminKb);
+                await delay(1000);
+                await bot.api.sendMessageToUser(userId, `Канал: ${displayTitle} · ${subscribers} подписчиков`);
+                return;
+            }
+            // 2) Subscriber deep link
+            if (startPayload === 'subscribe') {
+                const { title } = await resolveSubscribeWelcomeChannel(bot, userId);
+                const channelTitle = title ?? 'канала';
+                const subText = `🔔 Вы подписаны на уведомления!
+
+Когда администраторы канала «${channelTitle}» ответят на ваш комментарий — я сразу пришлю вам сообщение.
+
+Чтобы написать комментарий — откройте любой пост канала и нажмите кнопку «💬 Комментарии».`;
+                const subKb = max_bot_api_1.Keyboard.inlineKeyboard([
+                    [max_bot_api_1.Keyboard.button.callback('🔕 Отключить уведомления', 'unsubscribe')],
+                ]);
+                await sendUser(subText, subKb);
+                return;
+            }
+            // 3) Channel owner — first /start, no payload, admin of a registered channel
+            if (startPayload === '' && firstBotStart) {
+                const adminChannel = await findFirstRegisteredChannelWhereUserIsAdmin(bot, userId);
+                if (adminChannel) {
+                    const displayTitle = adminChannel.title ?? 'канал';
+                    const ownerText = `✅ Канал успешно подключён!
+
+Канал «${displayTitle}» теперь использует CommentBot.
+
+Следующий шаг — пригласите других администраторов, чтобы они тоже получали уведомления о комментариях.`;
+                    const ownerKb = max_bot_api_1.Keyboard.inlineKeyboard([
+                        [max_bot_api_1.Keyboard.button.callback('👥 Пригласить администраторов', 'invite_admins')],
+                        [max_bot_api_1.Keyboard.button.link('💬 Открыть панель управления', homeUrl)],
+                    ]);
+                    await sendUser(ownerText, ownerKb);
+                    return;
+                }
+            }
+            // 4) Default new user
+            const newUserText = `👋 Привет, ${firstName}!
+
+Я CommentBot — система комментариев для каналов MAX.
+
+С моей помощью подписчики смогут оставлять комментарии к постам прямо внутри мессенджера, а вы — отвечать от имени канала.
+
+Что умею:
+💬 Комментарии под каждым постом
+🔔 Мгновенные уведомления
+📢 Ответы от имени канала
+📊 Статистика по комментариям`;
+            const newUserKb = max_bot_api_1.Keyboard.inlineKeyboard([
+                [max_bot_api_1.Keyboard.button.link('🚀 Подключить канал', homeUrl)],
+                [max_bot_api_1.Keyboard.button.callback('📖 Как это работает', 'how_it_works')],
+            ]);
+            await sendUser(newUserText, newUserKb);
         }
-        const chatId = ctx.chatId;
-        if (chatId === undefined) {
-            logger_1.logger.warn('bot_started: нет chat_id в контексте');
-            return;
+        catch (err) {
+            logger_1.logger.error('bot_started: handler error', err);
         }
-        stateManager_1.stateManager.setUserPrivateChatId(user.user_id, chatId);
-        logger_1.logger.info(`bot_started: пользователь ${user.user_id}, chat ${chatId}`);
-        await ctx.reply(ONBOARDING_WELCOME_TEXT, {
-            attachments: [ONBOARDING_WELCOME_KEYBOARD],
-        });
+    });
+    bot.on('message_callback', async (ctx) => {
+        try {
+            const cb = ctx.callback;
+            if (!cb?.user) {
+                return;
+            }
+            const userId = cb.user.user_id;
+            const rawPayload = (cb.payload ?? '').trim();
+            try {
+                await ctx.answerOnCallback({});
+            }
+            catch (e) {
+                logger_1.logger.warn('message_callback: answerOnCallback failed', { userId, e });
+            }
+            const homeUrl = buildMiniAppHomeUrl();
+            const nick = config_1.config.botNickname.trim();
+            if (rawPayload === 'how_it_works') {
+                const howText = `📖 Как работает CommentBot:
+
+1️⃣ Добавьте бота в канал как администратора
+2️⃣ Под каждым постом появится кнопка «💬 Комментарии»
+3️⃣ Подписчики нажимают кнопку и пишут комментарии прямо в MAX
+4️⃣ Вы получаете уведомление с текстом комментария
+5️⃣ Отвечаете от имени канала — подписчик получает ваш ответ
+
+Всё общение происходит внутри MAX без внешних сайтов.`;
+                const howKb = max_bot_api_1.Keyboard.inlineKeyboard([[max_bot_api_1.Keyboard.button.link('🚀 Подключить канал', homeUrl)]]);
+                await bot.api.sendMessageToUser(userId, howText, { attachments: [howKb] });
+                return;
+            }
+            if (rawPayload === 'settings') {
+                await bot.api.sendMessageToUser(userId, `⚙️ Настройки уведомлений\n\nОткройте мини-приложение и нажмите «Настройки канала» вверху экрана.`, {
+                    attachments: [
+                        max_bot_api_1.Keyboard.inlineKeyboard([[max_bot_api_1.Keyboard.button.link('Открыть мини-приложение', homeUrl)]]),
+                    ],
+                });
+                return;
+            }
+            if (rawPayload === 'unsubscribe') {
+                subscriberStore_1.subscriberStore.removeSubscriber(userId);
+                await bot.api.sendMessageToUser(userId, 'Вы отключили уведомления. Чтобы снова получать ответы канала в личку — нажмите «Подписаться» в мини-приложении или напишите боту /start.');
+                return;
+            }
+            if (rawPayload === 'invite_admins') {
+                const ch = await findFirstRegisteredChannelWhereUserIsAdmin(bot, userId);
+                if (!ch) {
+                    await bot.api.sendMessageToUser(userId, 'Не найден подключённый канал, где вы администратор. Добавьте бота в канал и выдайте права администратора.');
+                    return;
+                }
+                const channelTitle = ch.title ?? 'канал';
+                const inviteUrl = `https://max.ru/${nick}?startapp=join${Math.abs(ch.chatId)}`;
+                await bot.api.sendMessageToUser(userId, `Отправьте эту ссылку другим администраторам канала «${channelTitle}»:
+
+${inviteUrl}
+
+Администратор нажмёт на ссылку → запустит бота → начнёт получать уведомления.`);
+            }
+        }
+        catch (err) {
+            logger_1.logger.error('message_callback: handler error', err);
+        }
     });
     bot.on('message_created', async (ctx) => {
         const message = ctx.message;
@@ -328,6 +547,18 @@ function registerEventHandlers(bot) {
         const chatId = (0, channelPostActions_1.resolveMessageChatId)(message, user.user_id);
         logger_1.logger.info(`message_created: от ${user.user_id} в чате ${chatId}`);
         const text = message.body.text?.trim() ?? '';
+        if (message.recipient.chat_type === 'dialog') {
+            if (/^\/stop\b/i.test(text) || /^\/unsubscribe\b/i.test(text)) {
+                subscriberStore_1.subscriberStore.removeSubscriber(user.user_id);
+                await ctx.reply('Уведомления отключены. Чтобы включить снова — напишите /start');
+                return;
+            }
+            if (/^\/start\b/i.test(text)) {
+                subscriberStore_1.subscriberStore.addSubscriber(user.user_id);
+                await ctx.reply('Уведомления включены. Когда канал ответит на ваш комментарий, вы получите сообщение здесь.');
+                return;
+            }
+        }
         if (/^\/addbutton\b/i.test(text)) {
             const rawArgs = text.replace(/^\/addbutton\b/i, '').trim();
             const parsedAb = parseAddButtonInput(rawArgs);

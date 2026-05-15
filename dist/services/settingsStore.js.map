@@ -1,0 +1,1 @@
+{"version":3,"file":"settingsStore.js","sourceRoot":"","sources":["../../src/services/settingsStore.ts"],"names":[],"mappings":";;;AAAA,qEAAiE;AAEjE;;GAEG;AACU,QAAA,aAAa,GAAG;IAC3B,iBAAiB,CAAC,MAAc,EAAE,aAAqB;QACrD,+CAAsB,CAAC,QAAQ,CAAC,MAAM,EAAE,aAAa,CAAC,CAAA;IACxD,CAAC;CACF,CAAA"}
