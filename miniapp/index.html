@@ -2087,7 +2087,9 @@
           '<div class="reply-time">' +
           esc(c.reply.timestamp) +
           '</div>' +
-          '</div></div>'
+          '</div>' +
+          adminReplyActs +
+          '</div>'
         );
       }
 
@@ -2097,6 +2099,7 @@
         if (c.reply) {
           replyHtml = buildReplyBlockHtml(c);
         }
+        var commentAdminActs = buildAdminActionsHtml(c.comment_id, 'comment');
         var adminHtml = '';
         if (isAdmin && !c.reply) {
           adminHtml =
@@ -2138,8 +2141,171 @@
           '</div></div>' +
           commentAdminActs +
           (c.reply ? replyHtml : adminHtml) +
-          '</motion>'
+          '</div>'
         );
+      }
+
+      function wireCommentNode(node) {
+        wireAdminReply(node);
+        wireAdminModeration(node);
+      }
+
+      function adminApiBase(cid) {
+        return {
+          comment_id: cid,
+          post_id: postId,
+          chat_id: Number(chatId),
+          user_id: Number(userId),
+        };
+      }
+
+      function wireAdminModeration(block) {
+        if (!isAdmin) return;
+        var cid = block.getAttribute('data-comment-id');
+        if (!cid || cid.indexOf('temp-') === 0) return;
+
+        block.querySelectorAll('[data-edit-comment]').forEach(function (btn) {
+          btn.addEventListener('click', function () {
+            var box = block.querySelector(
+              '[data-admin-edit-box="' + cssEsc(cid) + '"][data-edit-kind="comment"]'
+            );
+            var ta = box && box.querySelector('textarea');
+            var utext = block.querySelector('.bubble-u .utext');
+            if (!box || !ta || !utext) return;
+            ta.value = utext.textContent || '';
+            box.classList.add('open');
+            ta.focus();
+          });
+        });
+
+        block.querySelectorAll('[data-edit-reply]').forEach(function (btn) {
+          btn.addEventListener('click', function () {
+            var box = block.querySelector(
+              '[data-admin-edit-box="' + cssEsc(cid) + '"][data-edit-kind="reply"]'
+            );
+            var rtext = block.querySelector('.reply-text');
+            var ta = box && box.querySelector('textarea');
+            if (!box || !ta || !rtext) return;
+            ta.value = rtext.textContent || '';
+            box.classList.add('open');
+            ta.focus();
+          });
+        });
+
+        block.querySelectorAll('[data-admin-edit-save]').forEach(function (btn) {
+          btn.addEventListener('click', function () {
+            var box = btn.closest('[data-admin-edit-box]');
+            if (!box) return;
+            var kind = box.getAttribute('data-edit-kind');
+            var ta = box.querySelector('textarea');
+            var text = ta && ta.value.trim();
+            if (!text) return;
+            btn.disabled = true;
+            setErr('');
+            var url = kind === 'reply' ? '/api/reply' : '/api/comment';
+            var body =
+              kind === 'reply'
+                ? Object.assign(adminApiBase(cid), {
+                    admin_text: text,
+                    admin_name: adminNameForReply,
+                  })
+                : Object.assign(adminApiBase(cid), { text: text });
+            fetch(url, {
+              method: 'PATCH',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(body),
+            })
+              .then(function (r) {
+                if (!r.ok) {
+                  return r.json().then(function (j) {
+                    throw new Error(j.error || String(r.status));
+                  });
+                }
+                return r.json();
+              })
+              .then(function (updated) {
+                box.classList.remove('open');
+                if (ta) ta.value = '';
+                mergeOrUpdateComment(updated);
+              })
+              .catch(function (e) {
+                setErr(e.message || String(e));
+              })
+              .finally(function () {
+                btn.disabled = false;
+              });
+          });
+        });
+
+        block.querySelectorAll('[data-delete-comment]').forEach(function (btn) {
+          btn.addEventListener('click', function () {
+            if (!confirm('Удалить комментарий?')) return;
+            btn.disabled = true;
+            setErr('');
+            fetch('/api/comment', {
+              method: 'DELETE',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(adminApiBase(cid)),
+            })
+              .then(function (r) {
+                if (!r.ok) {
+                  return r.json().then(function (j) {
+                    throw new Error(j.error || String(r.status));
+                  });
+                }
+                return r.json();
+              })
+              .then(function (res) {
+                knownIds.delete(cid);
+                block.remove();
+                if (typeof res.comment_count === 'number') {
+                  postCommentCount = res.comment_count;
+                  updateBadgeFromCount(postCommentCount);
+                } else {
+                  bumpCommentCount(-1);
+                }
+                if (!feedEl.querySelector('.comment-group')) {
+                  feedEl.innerHTML = '<div class="feed-empty">Пока нет комментариев</div>';
+                }
+              })
+              .catch(function (e) {
+                setErr(e.message || String(e));
+              })
+              .finally(function () {
+                btn.disabled = false;
+              });
+          });
+        });
+
+        block.querySelectorAll('[data-delete-reply]').forEach(function (btn) {
+          btn.addEventListener('click', function () {
+            if (!confirm('Удалить ответ канала?')) return;
+            btn.disabled = true;
+            setErr('');
+            fetch('/api/reply', {
+              method: 'DELETE',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(adminApiBase(cid)),
+            })
+              .then(function (r) {
+                if (!r.ok) {
+                  return r.json().then(function (j) {
+                    throw new Error(j.error || String(r.status));
+                  });
+                }
+                return r.json();
+              })
+              .then(function (updated) {
+                mergeOrUpdateComment(updated);
+              })
+              .catch(function (e) {
+                setErr(e.message || String(e));
+              })
+              .finally(function () {
+                btn.disabled = false;
+              });
+          });
+        });
       }
 
       function wireAdminReply(block) {
@@ -2215,10 +2381,22 @@
         if (!existing) {
           var node = elFromHTML(buildUserBlock(c));
           feedEl.appendChild(node);
-          wireAdminReply(node);
+          wireCommentNode(node);
           knownIds.add(c.comment_id);
           return;
         }
+        if (!c.reply && existing.querySelector('.reply-block')) {
+          var fresh = elFromHTML(buildUserBlock(c));
+          existing.replaceWith(fresh);
+          wireCommentNode(fresh);
+          return;
+        }
+        var utext = existing.querySelector('.bubble-u .utext');
+        if (utext) utext.textContent = c.text;
+        var quote = existing.querySelector('.reply-quote');
+        if (quote) quote.textContent = c.text;
+        var rtext = existing.querySelector('.reply-text');
+        if (c.reply && rtext) rtext.textContent = c.reply.text;
         if (c.reply && !existing.querySelector('.reply-block')) {
           var btn = existing.querySelector('.reply-btn');
           var ibox = existing.querySelector('.reply-inline');
@@ -2232,6 +2410,7 @@
             var msgUser = existing.querySelector('.msg-user');
             if (msgUser) msgUser.insertAdjacentHTML('afterend', replyOuter);
           }
+          wireAdminModeration(existing);
         }
       }
 
@@ -2247,7 +2426,7 @@
           knownIds.add(c.comment_id);
           var node = elFromHTML(buildUserBlock(c));
           frag.appendChild(node);
-          wireAdminReply(node);
+          wireCommentNode(node);
         });
         feedEl.appendChild(frag);
       }
@@ -2266,7 +2445,7 @@
           }
           var node = elFromHTML(buildUserBlock(c));
           feedEl.appendChild(node);
-          wireAdminReply(node);
+          wireCommentNode(node);
           knownIds.add(c.comment_id);
           if (typeof postCommentCount === 'number') {
             postCommentCount += 1;
@@ -2369,7 +2548,7 @@
         }
         var node = elFromHTML(buildUserBlock(optimistic));
         feedEl.appendChild(node);
-        wireAdminReply(node);
+        wireCommentNode(node);
         knownIds.add(tempId);
         bumpCommentCount(1);
         inputEl.value = '';
