@@ -236,7 +236,7 @@ function resolveInviterUserId(
 }
 
 /**
- * Parses `/connect` with optional positive integer channel id.
+ * Parses `/connect` with optional channel chat id.
  * Returns `false` when the message is not this command, or `undefined` when the argument is invalid.
  */
 function parseConnectCommand(
@@ -251,10 +251,53 @@ function parseConnectCommand(
     return { mode: 'all' }
   }
   const channelId = Number.parseInt(rest, 10)
-  if (!Number.isInteger(channelId) || channelId <= 0) {
+  if (!Number.isFinite(channelId) || !Number.isInteger(channelId) || channelId === 0) {
     return undefined
   }
   return { mode: 'one', channelId }
+}
+
+/** Inline callback: подтвердить подключение канала (аналог `/connect <id>`). */
+function buildConfirmChannelPayload(channelChatId: number): string {
+  return `confirm_ch_${channelChatId}`
+}
+
+function parseConfirmChannelPayload(raw: string): number | null {
+  const m = /^confirm_ch_(-?\d+)$/.exec(raw.trim())
+  if (!m) {
+    return null
+  }
+  const id = Number(m[1])
+  return Number.isFinite(id) && Number.isInteger(id) && id !== 0 ? id : null
+}
+
+/**
+ * Повторная проверка прав и финализация подключения (как `/connect`).
+ * Возвращает строки для ответа пользователю.
+ */
+async function runChannelConnectAttempt(
+  ctx: Context,
+  bot: Bot,
+  channelChatIds: number[],
+): Promise<string[]> {
+  const lines: string[] = []
+  for (const channelChatId of channelChatIds) {
+    const chatType = await fetchChatType(bot, channelChatId)
+    const isChannelFlag = chatType === null ? true : chatType === 'channel'
+    const outcome = await tryActivateChannelRegistration(ctx, bot, channelChatId, isChannelFlag)
+    const regTitle = channelRegistry.getChannel(channelChatId)?.title ?? null
+    const display = regTitle ? `«${regTitle}»` : `канал (номер чата: ${channelChatId})`
+    if (outcome.status === 'registered') {
+      lines.push(`✅ ${display} — подключение выполнено.`)
+    } else if (outcome.status === 'already_registered') {
+      lines.push(`ℹ️ ${display} — канал уже подключён.`)
+    } else if (outcome.status === 'pending') {
+      lines.push(
+        `⏳ ${display} — пока нет прав администратора у бота или не удалось проверить доступ. Выдайте боту админ-права в канале и снова нажмите «Подтвердить подключение».`,
+      )
+    }
+  }
+  return lines
 }
 
 type ParsedAddButton =
@@ -316,8 +359,14 @@ async function ensureChannelPersisted(ctx: Context, chatId: number, isChannel: b
 
 async function notifyAdminsChannelJoined(bot: Bot, channelChatId: number): Promise<void> {
   const reg = channelRegistry.getChannel(channelChatId)
-  const title = reg?.title ?? '—'
-  await notifyAllAdmins(bot, channelChatId, `✅ Bot added to channel: ${title} (ID: ${channelChatId})`)
+  const title = reg?.title ?? 'канал'
+  const homeUrl = buildMiniAppHomeUrl()
+  const message =
+    `✅ Канал подключён\n\n` +
+    `«${title}» успешно связан с CommentBot.\n\n` +
+    `Под постами может появиться кнопка «Комментарии». Ответы на комментарии и настройки — в мини-приложении.`
+  const kb = Keyboard.inlineKeyboard([[Keyboard.button.link('💬 Открыть панель управления', homeUrl)]])
+  await notifyAllAdmins(bot, channelChatId, message, { attachments: [kb] })
 }
 
 /**
@@ -332,8 +381,8 @@ async function postChannelAdminInviteToChannel(bot: Bot, channelChatId: number):
   const joinPayload = `join${Math.abs(channelChatId)}`
   const joinUrl = `https://max.ru/${nick}?startapp=${joinPayload}`
   const text =
-    '👋 CommentBot подключён к каналу!\n\n' +
-    'Администраторы — чтобы получать уведомления о комментариях, нажмите кнопку ниже и запустите бота.'
+    '👋 CommentBot подключён к каналу.\n\n' +
+    'Администраторы: чтобы получать уведомления о комментариях, нажмите кнопку ниже и запустите бота.'
   try {
     await bot.api.sendMessageToChat(channelChatId, text, {
       attachments: [
@@ -388,15 +437,20 @@ async function dmInviterAboutMissingAdmin(
   channelChatId: number,
   channelTitle: string | null,
 ): Promise<void> {
-  const title = channelTitle ?? '—'
-  const text = `⚠️ I was added to "${title}" but I need admin rights to work.
+  const title = channelTitle ?? 'ваш канал'
+  const text =
+    `📢 Канал «${title}»\n\n` +
+    `Вы добавили CommentBot в этот канал — спасибо.\n\n` +
+    `Чтобы под постами появлялись комментарии, боту нужны права администратора в канале.\n\n` +
+    `1. Откройте настройки канала → участники → выдайте боту роль администратора.\n` +
+    `2. Нажмите кнопку ниже — я проверю доступ и завершу подключение.`
 
-Please grant me admin rights, then I'll connect automatically.
-
-If nothing happens, open this chat and send: /connect ${channelChatId}`
+  const kb = Keyboard.inlineKeyboard([
+    [Keyboard.button.callback('✅ Подтвердить подключение', buildConfirmChannelPayload(channelChatId))],
+  ])
 
   if (inviterUserId !== undefined) {
-    await trySendDmToUser(bot, inviterUserId, text)
+    await trySendDmToUser(bot, inviterUserId, text, { attachments: [kb] })
     return
   }
 
@@ -424,7 +478,7 @@ async function unregisterChannelOnBotLeave(bot: Bot, chatId: number): Promise<vo
   await notifyAllAdmins(
     bot,
     chatId,
-    `❌ Bot removed from channel: ${removed.title ?? '—'} (ID: ${chatId})`,
+    `❌ Бот удалён из канала «${removed.title ?? 'без названия'}» (номер чата: ${chatId}).`,
   )
 }
 
@@ -680,6 +734,17 @@ export function registerEventHandlers(bot: Bot): void {
         logger.warn('message_callback: answerOnCallback failed', { userId, e })
       }
 
+      const confirmChannelId = parseConfirmChannelPayload(rawPayload)
+      if (confirmChannelId !== null) {
+        const lines = await runChannelConnectAttempt(ctx, bot, [confirmChannelId])
+        try {
+          await bot.api.sendMessageToUser(userId, lines.join('\n'))
+        } catch (e: unknown) {
+          logger.warn('message_callback: confirm_ch reply failed', { userId, confirmChannelId, e })
+        }
+        return
+      }
+
       const homeUrl = buildMiniAppHomeUrl()
       const nick = config.botNickname.trim()
 
@@ -886,7 +951,7 @@ ${inviteUrl}
 
     const parsedConnect = parseConnectCommand(text)
     if (parsedConnect === undefined) {
-      await ctx.reply('Usage: /connect  or  /connect <channel_id>')
+      await ctx.reply('Команда /connect: без параметров — проверить все каналы в ожидании; с числом — номер чата нужного канала.')
       return
     }
     if (parsedConnect !== false) {
@@ -895,11 +960,11 @@ ${inviteUrl}
         currentChat = await ctx.api.getChat(chatId)
       } catch (err: unknown) {
         logger.warn('message_created /connect: getChat failed', { chatId, err })
-        await ctx.reply('Could not load this chat. Try again later.')
+        await ctx.reply('Не удалось загрузить чат. Попробуйте позже.')
         return
       }
       if (currentChat.type !== 'dialog') {
-        await ctx.reply('/connect works only in a private chat with the bot.')
+        await ctx.reply('Команда /connect работает только в личном чате с ботом.')
         return
       }
       const targets: number[] =
@@ -908,30 +973,13 @@ ${inviteUrl}
           : stateManager.getPendingAdminChannelIds()
 
       if (targets.length === 0) {
-        await ctx.reply('No channels are waiting for admin rights. Add the bot to a channel first.')
+        await ctx.reply(
+          'Нет каналов, ожидающих подключения. Сначала добавьте бота в канал (и при необходимости выдайте права администратора).',
+        )
         return
       }
 
-      const lines: string[] = []
-      for (const channelChatId of targets) {
-        const chatType = await fetchChatType(bot, channelChatId)
-        const isChannelFlag = chatType === null ? true : chatType === 'channel'
-        const outcome = await tryActivateChannelRegistration(
-          ctx,
-          bot,
-          channelChatId,
-          isChannelFlag,
-        )
-        if (outcome.status === 'registered') {
-          lines.push(`✅ Channel ${channelChatId}: connected.`)
-        } else if (outcome.status === 'already_registered') {
-          lines.push(`ℹ️ Channel ${channelChatId}: already connected.`)
-        } else if (outcome.status === 'pending') {
-          lines.push(
-            `⏳ Channel ${channelChatId}: still not admin, or API could not verify membership. Grant admin rights and run /connect again.`,
-          )
-        }
-      }
+      const lines = await runChannelConnectAttempt(ctx, bot, targets)
       await ctx.reply(lines.join('\n'))
       return
     }

@@ -197,7 +197,7 @@ function resolveInviterUserId(updateType, addedByUserFromContext, inviterId) {
     return undefined;
 }
 /**
- * Parses `/connect` with optional positive integer channel id.
+ * Parses `/connect` with optional channel chat id.
  * Returns `false` when the message is not this command, or `undefined` when the argument is invalid.
  */
 function parseConnectCommand(text) {
@@ -210,10 +210,46 @@ function parseConnectCommand(text) {
         return { mode: 'all' };
     }
     const channelId = Number.parseInt(rest, 10);
-    if (!Number.isInteger(channelId) || channelId <= 0) {
+    if (!Number.isFinite(channelId) || !Number.isInteger(channelId) || channelId === 0) {
         return undefined;
     }
     return { mode: 'one', channelId };
+}
+/** Inline callback: подтвердить подключение канала (аналог `/connect <id>`). */
+function buildConfirmChannelPayload(channelChatId) {
+    return `confirm_ch_${channelChatId}`;
+}
+function parseConfirmChannelPayload(raw) {
+    const m = /^confirm_ch_(-?\d+)$/.exec(raw.trim());
+    if (!m) {
+        return null;
+    }
+    const id = Number(m[1]);
+    return Number.isFinite(id) && Number.isInteger(id) && id !== 0 ? id : null;
+}
+/**
+ * Повторная проверка прав и финализация подключения (как `/connect`).
+ * Возвращает строки для ответа пользователю.
+ */
+async function runChannelConnectAttempt(ctx, bot, channelChatIds) {
+    const lines = [];
+    for (const channelChatId of channelChatIds) {
+        const chatType = await fetchChatType(bot, channelChatId);
+        const isChannelFlag = chatType === null ? true : chatType === 'channel';
+        const outcome = await tryActivateChannelRegistration(ctx, bot, channelChatId, isChannelFlag);
+        const regTitle = channelRegistry_1.channelRegistry.getChannel(channelChatId)?.title ?? null;
+        const display = regTitle ? `«${regTitle}»` : `канал (номер чата: ${channelChatId})`;
+        if (outcome.status === 'registered') {
+            lines.push(`✅ ${display} — подключение выполнено.`);
+        }
+        else if (outcome.status === 'already_registered') {
+            lines.push(`ℹ️ ${display} — канал уже подключён.`);
+        }
+        else if (outcome.status === 'pending') {
+            lines.push(`⏳ ${display} — пока нет прав администратора у бота или не удалось проверить доступ. Выдайте боту админ-права в канале и снова нажмите «Подтвердить подключение».`);
+        }
+    }
+    return lines;
 }
 /**
  * Parses `/addbutton` arguments: `mid`, or `channel_chat_id mid`.
@@ -263,8 +299,13 @@ async function ensureChannelPersisted(ctx, chatId, isChannel) {
 }
 async function notifyAdminsChannelJoined(bot, channelChatId) {
     const reg = channelRegistry_1.channelRegistry.getChannel(channelChatId);
-    const title = reg?.title ?? '—';
-    await (0, notificationService_1.notifyAllAdmins)(bot, channelChatId, `✅ Bot added to channel: ${title} (ID: ${channelChatId})`);
+    const title = reg?.title ?? 'канал';
+    const homeUrl = buildMiniAppHomeUrl();
+    const message = `✅ Канал подключён\n\n` +
+        `«${title}» успешно связан с CommentBot.\n\n` +
+        `Под постами может появиться кнопка «Комментарии». Ответы на комментарии и настройки — в мини-приложении.`;
+    const kb = max_bot_api_1.Keyboard.inlineKeyboard([[max_bot_api_1.Keyboard.button.link('💬 Открыть панель управления', homeUrl)]]);
+    await (0, notificationService_1.notifyAllAdmins)(bot, channelChatId, message, { attachments: [kb] });
 }
 /**
  * Публичное сообщение в канал с deep link для админов, подписывающихся на уведомления о комментариях.
@@ -277,8 +318,8 @@ async function postChannelAdminInviteToChannel(bot, channelChatId) {
     }
     const joinPayload = `join${Math.abs(channelChatId)}`;
     const joinUrl = `https://max.ru/${nick}?startapp=${joinPayload}`;
-    const text = '👋 CommentBot подключён к каналу!\n\n' +
-        'Администраторы — чтобы получать уведомления о комментариях, нажмите кнопку ниже и запустите бота.';
+    const text = '👋 CommentBot подключён к каналу.\n\n' +
+        'Администраторы: чтобы получать уведомления о комментариях, нажмите кнопку ниже и запустите бота.';
     try {
         await bot.api.sendMessageToChat(channelChatId, text, {
             attachments: [
@@ -319,14 +360,17 @@ async function tryActivateChannelRegistration(ctx, bot, channelChatId, isChannel
     return { status: 'registered' };
 }
 async function dmInviterAboutMissingAdmin(bot, inviterUserId, channelChatId, channelTitle) {
-    const title = channelTitle ?? '—';
-    const text = `⚠️ I was added to "${title}" but I need admin rights to work.
-
-Please grant me admin rights, then I'll connect automatically.
-
-If nothing happens, open this chat and send: /connect ${channelChatId}`;
+    const title = channelTitle ?? 'ваш канал';
+    const text = `📢 Канал «${title}»\n\n` +
+        `Вы добавили CommentBot в этот канал — спасибо.\n\n` +
+        `Чтобы под постами появлялись комментарии, боту нужны права администратора в канале.\n\n` +
+        `1. Откройте настройки канала → участники → выдайте боту роль администратора.\n` +
+        `2. Нажмите кнопку ниже — я проверю доступ и завершу подключение.`;
+    const kb = max_bot_api_1.Keyboard.inlineKeyboard([
+        [max_bot_api_1.Keyboard.button.callback('✅ Подтвердить подключение', buildConfirmChannelPayload(channelChatId))],
+    ]);
     if (inviterUserId !== undefined) {
-        await trySendDmToUser(bot, inviterUserId, text);
+        await trySendDmToUser(bot, inviterUserId, text, { attachments: [kb] });
         return;
     }
     logger_1.logger.warn('dmInviterAboutMissingAdmin: no inviter user id; skipping DM', { channelChatId });
@@ -348,7 +392,7 @@ async function unregisterChannelOnBotLeave(bot, chatId) {
     if (!removed) {
         return;
     }
-    await (0, notificationService_1.notifyAllAdmins)(bot, chatId, `❌ Bot removed from channel: ${removed.title ?? '—'} (ID: ${chatId})`);
+    await (0, notificationService_1.notifyAllAdmins)(bot, chatId, `❌ Бот удалён из канала «${removed.title ?? 'без названия'}» (номер чата: ${chatId}).`);
 }
 function registerEventHandlers(bot) {
     bot.on('bot_added', async (ctx) => {
@@ -560,6 +604,17 @@ function registerEventHandlers(bot) {
             catch (e) {
                 logger_1.logger.warn('message_callback: answerOnCallback failed', { userId, e });
             }
+            const confirmChannelId = parseConfirmChannelPayload(rawPayload);
+            if (confirmChannelId !== null) {
+                const lines = await runChannelConnectAttempt(ctx, bot, [confirmChannelId]);
+                try {
+                    await bot.api.sendMessageToUser(userId, lines.join('\n'));
+                }
+                catch (e) {
+                    logger_1.logger.warn('message_callback: confirm_ch reply failed', { userId, confirmChannelId, e });
+                }
+                return;
+            }
             const homeUrl = buildMiniAppHomeUrl();
             const nick = config_1.config.botNickname.trim();
             if (rawPayload === 'how_it_works') {
@@ -737,7 +792,7 @@ ${inviteUrl}
         }
         const parsedConnect = parseConnectCommand(text);
         if (parsedConnect === undefined) {
-            await ctx.reply('Usage: /connect  or  /connect <channel_id>');
+            await ctx.reply('Команда /connect: без параметров — проверить все каналы в ожидании; с числом — номер чата нужного канала.');
             return;
         }
         if (parsedConnect !== false) {
@@ -747,35 +802,21 @@ ${inviteUrl}
             }
             catch (err) {
                 logger_1.logger.warn('message_created /connect: getChat failed', { chatId, err });
-                await ctx.reply('Could not load this chat. Try again later.');
+                await ctx.reply('Не удалось загрузить чат. Попробуйте позже.');
                 return;
             }
             if (currentChat.type !== 'dialog') {
-                await ctx.reply('/connect works only in a private chat with the bot.');
+                await ctx.reply('Команда /connect работает только в личном чате с ботом.');
                 return;
             }
             const targets = parsedConnect.mode === 'one'
                 ? [parsedConnect.channelId]
                 : stateManager_1.stateManager.getPendingAdminChannelIds();
             if (targets.length === 0) {
-                await ctx.reply('No channels are waiting for admin rights. Add the bot to a channel first.');
+                await ctx.reply('Нет каналов, ожидающих подключения. Сначала добавьте бота в канал (и при необходимости выдайте права администратора).');
                 return;
             }
-            const lines = [];
-            for (const channelChatId of targets) {
-                const chatType = await fetchChatType(bot, channelChatId);
-                const isChannelFlag = chatType === null ? true : chatType === 'channel';
-                const outcome = await tryActivateChannelRegistration(ctx, bot, channelChatId, isChannelFlag);
-                if (outcome.status === 'registered') {
-                    lines.push(`✅ Channel ${channelChatId}: connected.`);
-                }
-                else if (outcome.status === 'already_registered') {
-                    lines.push(`ℹ️ Channel ${channelChatId}: already connected.`);
-                }
-                else if (outcome.status === 'pending') {
-                    lines.push(`⏳ Channel ${channelChatId}: still not admin, or API could not verify membership. Grant admin rights and run /connect again.`);
-                }
-            }
+            const lines = await runChannelConnectAttempt(ctx, bot, targets);
             await ctx.reply(lines.join('\n'));
             return;
         }
