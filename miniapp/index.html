@@ -965,7 +965,7 @@
       background: #0d0d18;
       border-top: 1px solid rgba(255, 255, 255, 0.06);
       padding: 10px 14px;
-      padding-bottom: calc(10px + env(safe-area-inset-bottom));
+      padding-bottom: calc(10px + var(--composer-safe-bottom, env(safe-area-inset-bottom)));
     }
     #view-comments .composer {
       display: flex;
@@ -1984,12 +1984,24 @@
       if (!hasPostContext || joinChannelId) return;
 
       if (window.visualViewport) {
-        window.visualViewport.addEventListener('resize', function () {
-          var viewComments = document.getElementById('view-comments')
-          if (viewComments) {
-            viewComments.style.height = window.visualViewport.height + 'px'
+        var shellEl = document.querySelector('.shell')
+        var rootEl = document.documentElement
+        var MIN_KEYBOARD_HEIGHT = 120
+        var syncViewportLayout = function () {
+          var vv = window.visualViewport
+          if (!vv) return
+          if (shellEl) {
+            shellEl.style.height = vv.height + 'px'
           }
-        })
+          var keyboardOpen = vv.height < window.innerHeight - MIN_KEYBOARD_HEIGHT
+          rootEl.style.setProperty(
+            '--composer-safe-bottom',
+            keyboardOpen ? '0px' : 'env(safe-area-inset-bottom)'
+          )
+        }
+        window.visualViewport.addEventListener('resize', syncViewportLayout)
+        window.visualViewport.addEventListener('scroll', syncViewportLayout)
+        syncViewportLayout()
       }
 
       var uid =
