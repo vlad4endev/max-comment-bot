@@ -4,27 +4,179 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0, user-scalable=no, viewport-fit=cover" />
   <title>CommentBot</title>
+  <script>
+    (function() {
+      var STORAGE_KEY = 'commentbot_theme'
+
+      function getSystemTheme() {
+        return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+      }
+
+      function getEffectiveTheme(pref) {
+        if (pref === 'auto' || !pref) return getSystemTheme()
+        return pref
+      }
+
+      function getStoredPref() {
+        try { return localStorage.getItem(STORAGE_KEY) || 'auto' } catch (e) { return 'auto' }
+      }
+
+      function applyTheme(pref) {
+        var safePref = (pref === 'light' || pref === 'dark' || pref === 'auto') ? pref : 'auto'
+        var effective = getEffectiveTheme(safePref)
+        document.documentElement.setAttribute('data-theme', effective)
+        try { localStorage.setItem(STORAGE_KEY, safePref) } catch (e) {}
+      }
+
+      applyTheme(getStoredPref())
+
+      var media = window.matchMedia('(prefers-color-scheme: dark)')
+      if (typeof media.addEventListener === 'function') {
+        media.addEventListener('change', function() {
+          if (getStoredPref() === 'auto') applyTheme('auto')
+        })
+      } else if (typeof media.addListener === 'function') {
+        media.addListener(function() {
+          if (getStoredPref() === 'auto') applyTheme('auto')
+        })
+      }
+
+      window.ThemeManager = {
+        set: function(pref) { applyTheme(pref) },
+        get: function() { return getStoredPref() },
+        getEffective: function() { return getEffectiveTheme(getStoredPref()) }
+      }
+    })()
+  </script>
   <!-- Official URL from https://dev.max.ru/docs/webapps/bridge (page embeds st.max.ru/js/max-web-app.js) -->
   <script src="https://st.max.ru/js/max-web-app.js"></script>
   <style>
     :root {
-      --bg: #0f0f1a;
-      --surface: rgba(255, 255, 255, 0.04);
-      --surface-border: rgba(255, 255, 255, 0.08);
-      --accent: #7f77dd;
-      --teal: #5dcaa5;
-      --admin-bubble: rgba(127, 119, 221, 0.12);
-      --user-bubble: rgba(255, 255, 255, 0.06);
-      --text: rgba(255, 255, 255, 0.92);
-      --muted: rgba(255, 255, 255, 0.55);
+      --bg-primary: #0d0d18;
+      --bg-secondary: #161625;
+      --bg-surface: rgba(255,255,255,0.04);
+      --bg-surface-hover: rgba(255,255,255,0.07);
+
+      --text-primary: rgba(255,255,255,0.92);
+      --text-secondary: rgba(255,255,255,0.55);
+      --text-muted: rgba(255,255,255,0.3);
+      --text-on-accent: #ffffff;
+      --text-strong: rgba(255,255,255,0.88);
+
+      --border: rgba(255,255,255,0.08);
+      --border-strong: rgba(255,255,255,0.15);
+
+      --accent: #7F77DD;
+      --accent-bg: rgba(127,119,221,0.12);
+      --accent-border: rgba(127,119,221,0.25);
+      --teal: #5DCAA5;
+      --teal-bg: rgba(93,202,165,0.12);
+
       --danger: #ff8a80;
-      --yellow: #e6c229;
+      --warning: #EF9F27;
+      --success: #5DCAA5;
+
+      --bubble-user: rgba(255,255,255,0.06);
+      --bubble-admin: rgba(127,119,221,0.10);
+      --bubble-admin-border: rgba(127,119,221,0.20);
+
+      --input-bg: rgba(255,255,255,0.06);
+      --input-border: rgba(255,255,255,0.10);
+      --send-bg: #7F77DD;
+
+      --overlay-bg: rgba(8, 8, 14, 0.72);
+      --bg-elevated: #14142a;
+      --shadow-accent: rgba(127,119,221,0.35);
+      --shadow-accent-strong: rgba(127,119,221,0.4);
+      --warning-bg: rgba(239,159,39,0.2);
+      --teal-strong-bg: rgba(93,202,165,0.25);
+      --teal-border-strong: rgba(93,202,165,0.35);
+      --accent-strong: #afa9ec;
+      --text-dim: rgba(255,255,255,0.45);
+      --text-soft: rgba(255,255,255,0.4);
+      --text-subtle: rgba(255,255,255,0.35);
+      --text-tiny: rgba(255,255,255,0.28);
+      --danger-soft: #e88;
+      --danger-border: rgba(255,100,100,0.35);
+      --warning-ring: rgba(230,194,41,0.2);
+      --elevation-shadow: rgba(0,0,0,0.35);
+      --text-faint: rgba(255,255,255,0.5);
+      --overlay-transition: rgba(255,255,255,0.05);
+
+      --bg: var(--bg-primary);
+      --surface: var(--bg-surface);
+      --surface-border: var(--border);
+      --admin-bubble: var(--accent-bg);
+      --user-bubble: var(--bubble-user);
+      --text: var(--text-primary);
+      --muted: var(--text-secondary);
+      --yellow: var(--warning);
     }
+    [data-theme="light"] {
+      --bg-primary: #f5f5f7;
+      --bg-secondary: #ffffff;
+      --bg-surface: rgba(0,0,0,0.04);
+      --bg-surface-hover: rgba(0,0,0,0.07);
+
+      --text-primary: rgba(0,0,0,0.88);
+      --text-secondary: rgba(0,0,0,0.55);
+      --text-muted: rgba(0,0,0,0.35);
+      --text-on-accent: #ffffff;
+      --text-strong: rgba(0,0,0,0.88);
+
+      --border: rgba(0,0,0,0.08);
+      --border-strong: rgba(0,0,0,0.15);
+
+      --accent: #6C64CC;
+      --accent-bg: rgba(108,100,204,0.10);
+      --accent-border: rgba(108,100,204,0.25);
+      --teal: #1D9E75;
+      --teal-bg: rgba(29,158,117,0.10);
+
+      --danger: #E53935;
+      --warning: #F57C00;
+      --success: #1D9E75;
+
+      --bubble-user: rgba(0,0,0,0.05);
+      --bubble-admin: rgba(108,100,204,0.08);
+      --bubble-admin-border: rgba(108,100,204,0.20);
+
+      --input-bg: rgba(0,0,0,0.05);
+      --input-border: rgba(0,0,0,0.12);
+      --send-bg: #6C64CC;
+
+      --overlay-bg: rgba(0, 0, 0, 0.45);
+      --bg-elevated: #ffffff;
+      --shadow-accent: rgba(108,100,204,0.22);
+      --shadow-accent-strong: rgba(108,100,204,0.28);
+      --warning-bg: rgba(245,124,0,0.18);
+      --teal-strong-bg: rgba(29,158,117,0.2);
+      --teal-border-strong: rgba(29,158,117,0.3);
+      --accent-strong: #6C64CC;
+      --text-dim: rgba(0,0,0,0.55);
+      --text-soft: rgba(0,0,0,0.45);
+      --text-subtle: rgba(0,0,0,0.4);
+      --text-tiny: rgba(0,0,0,0.38);
+      --danger-soft: #E53935;
+      --danger-border: rgba(229,57,53,0.35);
+      --warning-ring: rgba(245,124,0,0.2);
+      --elevation-shadow: rgba(0,0,0,0.2);
+      --text-faint: rgba(0,0,0,0.5);
+      --overlay-transition: rgba(0,0,0,0.08);
+    }
+    [data-theme="dark"] {}
     * {
       box-sizing: border-box;
       -webkit-text-size-adjust: 100%;
       -webkit-tap-highlight-color: transparent;
       touch-action: manipulation;
+    }
+    *,*::before,*::after {
+      transition: background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease;
+    }
+    .no-transition,
+    input, textarea, button {
+      transition: none;
     }
     html, body {
       margin: 0;
@@ -109,15 +261,43 @@
       display: none;
       padding: 10px 12px;
       border-radius: 12px;
-      background: rgba(127, 119, 221, 0.15);
-      border: 1px solid rgba(127, 119, 221, 0.4);
+      background: var(--accent-bg);
+      border: 1px solid var(--shadow-accent-strong);
       font-size: 13px;
       color: var(--text);
     }
     .admin-banner.show { display: block; }
     .hero {
+      position: relative;
       text-align: center;
       padding: 8px 0 4px;
+    }
+    #view-home .hero {
+      padding-top: 44px;
+    }
+    .theme-toggle {
+      position: absolute;
+      top: 0;
+      right: 0;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      border-radius: 999px;
+      border: 1px solid var(--surface-border);
+      background: var(--surface);
+      color: var(--text);
+      font-size: 12px;
+      font-weight: 600;
+      line-height: 1;
+      padding: 7px 10px;
+      cursor: pointer;
+    }
+    .theme-icon {
+      font-size: 14px;
+      line-height: 1;
+    }
+    .theme-label {
+      font-size: 12px;
     }
     .bot-avatar {
       width: 72px;
@@ -125,7 +305,7 @@
       margin: 0 auto 12px;
       border-radius: 50%;
       background: linear-gradient(135deg, var(--accent) 0%, var(--teal) 100%);
-      box-shadow: 0 8px 28px rgba(127, 119, 221, 0.35);
+      box-shadow: 0 8px 28px var(--shadow-accent);
     }
     .bot-name {
       font-size: 22px;
@@ -158,7 +338,7 @@
       border-radius: 50%;
       flex-shrink: 0;
       background: var(--accent);
-      color: #fff;
+      color: var(--text-on-accent);
       font-weight: 700;
       font-size: 16px;
       display: flex;
@@ -190,9 +370,9 @@
       font-weight: 700;
       padding: 4px 8px;
       border-radius: 999px;
-      background: rgba(93, 202, 165, 0.18);
+      background: var(--teal-bg);
       color: var(--teal);
-      border: 1px solid rgba(93, 202, 165, 0.35);
+      border: 1px solid var(--teal-border-strong);
     }
     .stats-row {
       display: grid;
@@ -232,7 +412,7 @@
       gap: 10px;
       padding: 10px;
       border-radius: 12px;
-      background: rgba(0, 0, 0, 0.2);
+      background: var(--bg-surface);
       border: 1px solid var(--surface-border);
     }
     .ch-icon {
@@ -240,7 +420,7 @@
       height: 40px;
       border-radius: 50%;
       background: var(--accent);
-      color: #fff;
+      color: var(--text-on-accent);
       font-weight: 700;
       font-size: 14px;
       display: flex;
@@ -257,14 +437,14 @@
       border-radius: 50%;
       flex-shrink: 0;
     }
-    .status-dot.active { background: var(--teal); box-shadow: 0 0 0 3px rgba(93, 202, 165, 0.25); }
-    .status-dot.pending { background: var(--yellow); box-shadow: 0 0 0 3px rgba(230, 194, 41, 0.2); }
+    .status-dot.active { background: var(--teal); box-shadow: 0 0 0 3px var(--teal-strong-bg); }
+    .status-dot.pending { background: var(--yellow); box-shadow: 0 0 0 3px var(--warning-ring); }
     .btn-dashed {
       width: 100%;
       margin-top: 4px;
       padding: 12px;
       border-radius: 12px;
-      border: 2px dashed rgba(127, 119, 221, 0.45);
+      border: 2px dashed var(--shadow-accent-strong);
       background: transparent;
       color: var(--accent);
       font-size: 14px;
@@ -279,7 +459,7 @@
       line-height: 1.45;
       padding: 10px;
       border-radius: 10px;
-      background: rgba(0, 0, 0, 0.25);
+      background: var(--bg-surface);
     }
     .connect-hint.show { display: block; }
     .section-label {
@@ -292,8 +472,8 @@
     }
     #adminsList { margin-top: 8px; }
     .admins-card {
-      background: rgba(255, 255, 255, 0.04);
-      border: 1px solid rgba(255, 255, 255, 0.08);
+      background: var(--surface);
+      border: 1px solid var(--surface-border);
       border-radius: 14px;
       padding: 12px;
       margin-bottom: 10px;
@@ -301,7 +481,7 @@
     .admins-card-title {
       font-size: 13px;
       font-weight: 600;
-      color: rgba(255, 255, 255, 0.7);
+      color: var(--text-secondary);
       margin-bottom: 10px;
       display: flex;
       align-items: center;
@@ -312,14 +492,14 @@
       align-items: center;
       gap: 10px;
       padding: 7px 0;
-      border-top: 1px solid rgba(255, 255, 255, 0.05);
+      border-top: 1px solid var(--overlay-transition);
     }
     .admin-av {
       width: 32px;
       height: 32px;
       border-radius: 50%;
-      background: rgba(127, 119, 221, 0.2);
-      color: #afa9ec;
+      background: var(--accent-bg);
+      color: var(--accent-strong);
       font-size: 11px;
       font-weight: 700;
       display: flex;
@@ -330,7 +510,7 @@
     .admin-name {
       flex: 1;
       font-size: 13px;
-      color: rgba(255, 255, 255, 0.85);
+      color: var(--text-strong);
       min-width: 0;
       overflow: hidden;
       text-overflow: ellipsis;
@@ -338,7 +518,7 @@
     }
     .admin-status-connected {
       font-size: 11px;
-      color: #5dcaa5;
+      color: var(--teal);
       display: flex;
       align-items: center;
       gap: 4px;
@@ -346,7 +526,7 @@
     }
     .admin-status-pending {
       font-size: 11px;
-      color: rgba(255, 255, 255, 0.35);
+      color: var(--text-subtle);
       display: flex;
       align-items: center;
       gap: 4px;
@@ -358,16 +538,16 @@
       border-radius: 50%;
       flex-shrink: 0;
     }
-    .admin-status-dot.teal { background: #5dcaa5; }
+    .admin-status-dot.teal { background: var(--teal); }
     .admin-status-dot.yellow { background: var(--yellow); }
     .btn-invite {
       width: 100%;
       margin-top: 10px;
       padding: 10px;
       border-radius: 10px;
-      border: 1px dashed rgba(127, 119, 221, 0.4);
+      border: 1px dashed var(--accent-border);
       background: transparent;
-      color: #afa9ec;
+      color: var(--accent-strong);
       font-size: 13px;
       font-weight: 600;
       cursor: pointer;
@@ -385,7 +565,7 @@
     .feat-cell {
       padding: 12px;
       border-radius: 12px;
-      background: rgba(0, 0, 0, 0.2);
+      background: var(--bg-surface);
       border: 1px solid var(--surface-border);
     }
     .feat-label { font-size: 13px; font-weight: 600; margin-bottom: 10px; }
@@ -394,7 +574,7 @@
       width: 44px;
       height: 26px;
       border-radius: 999px;
-      background: rgba(255, 255, 255, 0.12);
+      background: var(--input-border);
       cursor: pointer;
       transition: background 0.2s;
     }
@@ -407,9 +587,9 @@
       width: 20px;
       height: 20px;
       border-radius: 50%;
-      background: #fff;
+      background: var(--text-on-accent);
       transition: transform 0.2s;
-      box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
+      box-shadow: 0 1px 4px var(--elevation-shadow);
     }
     .switch.on::after { transform: translateX(18px); }
     .feat-cell.disabled .switch { opacity: 0.45; cursor: not-allowed; }
@@ -429,10 +609,10 @@
     }
     .btn-primary {
       background: var(--accent);
-      color: #fff;
+      color: var(--text-on-accent);
     }
     .btn-secondary {
-      background: rgba(255, 255, 255, 0.08);
+      background: var(--surface);
       color: var(--text);
       border: 1px solid var(--surface-border);
     }
@@ -442,7 +622,7 @@
       padding: 12px;
       border-radius: 12px;
       border: 1px solid var(--surface-border);
-      background: rgba(0, 0, 0, 0.22);
+      background: var(--bg-surface);
       font-size: 13px;
       color: var(--muted);
     }
@@ -480,7 +660,7 @@
       border: 1px solid var(--surface-border);
       padding: 0 12px;
       font-size: 16px;
-      background: rgba(0, 0, 0, 0.25);
+      background: var(--input-bg);
       color: var(--text);
     }
     .test-user-row button {
@@ -489,7 +669,7 @@
       border-radius: 12px;
       border: none;
       background: var(--accent);
-      color: #fff;
+      color: var(--text-on-accent);
       font-weight: 600;
       font-size: 14px;
       cursor: pointer;
@@ -497,7 +677,7 @@
     .overlay {
       position: fixed;
       inset: 0;
-      background: rgba(8, 8, 14, 0.72);
+      background: var(--overlay-bg);
       z-index: 200;
       display: flex;
       align-items: flex-end;
@@ -511,7 +691,7 @@
       max-width: 375px;
       max-height: 85vh;
       overflow-y: auto;
-      background: #14142a;
+      background: var(--bg-elevated);
       border: 1px solid var(--surface-border);
       border-radius: 16px;
       padding: 16px;
@@ -532,7 +712,7 @@
       border-radius: 12px;
       border: none;
       background: var(--accent);
-      color: #fff;
+      color: var(--text-on-accent);
       font-weight: 600;
       font-size: 15px;
       cursor: pointer;
@@ -560,7 +740,7 @@
       display: flex;
       flex-direction: column;
       overflow: hidden;
-      background: #0d0d18;
+      background: var(--bg-primary);
     }
     #view-comments #app {
       display: flex;
@@ -572,8 +752,8 @@
     #view-comments .header-wrap {
       flex: 0 0 auto;
       z-index: 10;
-      background: #0d0d18;
-      border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+      background: var(--bg-primary);
+      border-bottom: 1px solid var(--border);
       padding: 14px 16px 12px;
       padding-top: calc(14px + env(safe-area-inset-top));
     }
@@ -588,8 +768,8 @@
       height: 36px;
       border-radius: 50%;
       flex-shrink: 0;
-      background: linear-gradient(135deg, #7f77dd 0%, #5dcaa5 100%);
-      color: #fff;
+      background: linear-gradient(135deg, var(--accent) 0%, var(--teal) 100%);
+      color: var(--text-on-accent);
       font-weight: 700;
       font-size: 13px;
       display: flex;
@@ -616,7 +796,7 @@
     }
     #view-comments .channel-subs {
       font-size: 11px;
-      color: rgba(255, 255, 255, 0.45);
+      color: var(--text-dim);
       margin-top: 2px;
     }
     #view-comments .count-badge {
@@ -625,14 +805,14 @@
       height: 26px;
       padding: 0 9px;
       border-radius: 999px;
-      background: rgba(127, 119, 221, 0.35);
-      color: #fff;
+      background: var(--shadow-accent);
+      color: var(--text-on-accent);
       font-size: 11px;
       font-weight: 700;
       display: flex;
       align-items: center;
       justify-content: center;
-      border: 1px solid rgba(127, 119, 221, 0.45);
+      border: 1px solid var(--shadow-accent-strong);
     }
     #view-comments .post-preview {
       display: flex;
@@ -640,8 +820,8 @@
       align-items: center;
       gap: 10px;
       padding: 10px 12px;
-      background: rgba(255, 255, 255, 0.04);
-      border: 1px solid rgba(255, 255, 255, 0.07);
+      background: var(--surface);
+      border: 1px solid var(--surface-border);
       border-radius: 12px;
     }
     #view-comments .post-preview-text {
@@ -650,7 +830,7 @@
       order: 0;
       font-size: 13px;
       line-height: 1.45;
-      color: rgba(255, 255, 255, 0.6);
+      color: var(--text-secondary);
       display: -webkit-box;
       -webkit-box-orient: vertical;
       -webkit-line-clamp: 2;
@@ -663,7 +843,7 @@
       border-radius: 8px;
       object-fit: cover;
       flex-shrink: 0;
-      background: rgba(255, 255, 255, 0.06);
+      background: var(--input-bg);
       display: none;
     }
     #view-comments .post-thumb.show {
@@ -690,7 +870,7 @@
     }
     #view-comments .feed-empty {
       text-align: center;
-      color: rgba(255, 255, 255, 0.45);
+      color: var(--text-dim);
       font-size: 14px;
       padding: 28px 12px;
     }
@@ -709,11 +889,11 @@
       content: '';
       flex: 1;
       height: 1px;
-      background: rgba(255, 255, 255, 0.07);
+      background: var(--surface-border);
     }
     #view-comments .date-divider span {
       font-size: 11px;
-      color: rgba(255, 255, 255, 0.3);
+      color: var(--text-muted);
       white-space: nowrap;
     }
     #view-comments .comment-group {
@@ -742,8 +922,8 @@
       line-height: 1;
     }
     #view-comments .msg-user .av-u {
-      background: rgba(93, 202, 165, 0.25);
-      color: #5dcaa5;
+      background: var(--teal-strong-bg);
+      color: var(--teal);
     }
     #view-comments .bubble-u {
       flex: 1;
@@ -751,25 +931,25 @@
       max-width: calc(100% - 60px);
       padding: 10px 13px;
       border-radius: 4px 16px 16px 16px;
-      background: rgba(255, 255, 255, 0.06);
-      border: 1px solid rgba(255, 255, 255, 0.08);
+      background: var(--bubble-user);
+      border: 1px solid var(--surface-border);
     }
     #view-comments .bubble-u .uname {
       font-size: 12px;
       font-weight: 600;
-      color: #5dcaa5;
+      color: var(--teal);
       margin-bottom: 2px;
     }
     #view-comments .bubble-u .utext {
       font-size: 14px;
       line-height: 1.45;
-      color: rgba(255, 255, 255, 0.88);
+      color: var(--text-strong);
       word-break: break-word;
       white-space: pre-wrap;
     }
     #view-comments .bubble-u .utime {
       font-size: 10px;
-      color: rgba(255, 255, 255, 0.28);
+      color: var(--text-tiny);
       margin-top: 6px;
     }
     #view-comments .reply-block {
@@ -779,8 +959,8 @@
     }
     #view-comments .reply-inner {
       position: relative;
-      background: rgba(127, 119, 221, 0.1);
-      border: 1px solid rgba(127, 119, 221, 0.2);
+      background: var(--accent-bg);
+      border: 1px solid var(--accent-border);
       border-radius: 4px 16px 16px 16px;
       padding: 10px 13px;
     }
@@ -791,7 +971,7 @@
       top: 0;
       bottom: 0;
       width: 3px;
-      background: #7f77dd;
+      background: var(--accent);
       border-radius: 2px 0 0 2px;
     }
     #view-comments .reply-tag {
@@ -804,18 +984,18 @@
       width: 5px;
       height: 5px;
       border-radius: 50%;
-      background: #7f77dd;
+      background: var(--accent);
       flex-shrink: 0;
     }
     #view-comments .reply-tag span {
       font-size: 11px;
       font-weight: 700;
-      color: #afa9ec;
+      color: var(--accent-strong);
     }
     #view-comments .reply-quote {
       font-size: 12px;
       font-style: italic;
-      color: rgba(255, 255, 255, 0.35);
+      color: var(--text-subtle);
       line-height: 1.4;
       margin-bottom: 6px;
       display: -webkit-box;
@@ -827,13 +1007,13 @@
     #view-comments .reply-text {
       font-size: 14px;
       line-height: 1.45;
-      color: rgba(255, 255, 255, 0.88);
+      color: var(--text-strong);
       word-break: break-word;
       white-space: pre-wrap;
     }
     #view-comments .reply-time {
       font-size: 10px;
-      color: rgba(255, 255, 255, 0.28);
+      color: var(--text-tiny);
       margin-top: 6px;
     }
     #view-comments .admin-reply-wrap {
@@ -851,23 +1031,23 @@
       padding: 12px 18px;
       border-radius: 12px;
       border: none;
-      background: #7f77dd;
-      color: #fff;
+      background: var(--accent);
+      color: var(--text-on-accent);
       font-size: 15px;
       font-weight: 600;
       letter-spacing: 0.01em;
       text-align: center;
       cursor: pointer;
-      box-shadow: 0 2px 10px rgba(127, 119, 221, 0.4);
+      box-shadow: 0 2px 10px var(--shadow-accent-strong);
     }
     #view-comments .reply-btn:active {
       opacity: 0.92;
       transform: scale(0.98);
     }
     #view-comments .reply-banner {
-      background: rgba(127, 119, 221, 0.1);
-      border-top: 1px solid rgba(127, 119, 221, 0.25);
-      border-left: 3px solid #7f77dd;
+      background: var(--accent-bg);
+      border-top: 1px solid var(--accent-border);
+      border-left: 3px solid var(--accent);
       padding: 7px 12px;
       display: flex;
       align-items: center;
@@ -880,7 +1060,7 @@
     }
     #view-comments .reply-banner-icon {
       font-size: 16px;
-      color: #7f77dd;
+      color: var(--accent);
     }
     #view-comments .reply-banner-text {
       flex: 1;
@@ -888,14 +1068,14 @@
     }
     #view-comments .reply-banner-label {
       font-size: 11px;
-      color: #7f77dd;
+      color: var(--accent);
       font-weight: 600;
       text-transform: uppercase;
       letter-spacing: 0.5px;
     }
     #view-comments .reply-banner-name {
       font-size: 13px;
-      color: rgba(255, 255, 255, 0.75);
+      color: var(--text-strong);
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
@@ -903,14 +1083,14 @@
     #view-comments .reply-banner-close {
       background: none;
       border: none;
-      color: rgba(255, 255, 255, 0.4);
+      color: var(--text-soft);
       font-size: 16px;
       cursor: pointer;
       padding: 0 4px;
       line-height: 1;
     }
     #view-comments .reply-banner-close:hover {
-      color: rgba(255, 255, 255, 0.8);
+      color: var(--text-strong);
     }
     #view-comments .admin-actions {
       display: flex;
@@ -926,14 +1106,14 @@
       font-size: 11px;
       padding: 4px 10px;
       border-radius: 8px;
-      border: 1px solid rgba(255, 255, 255, 0.12);
-      background: rgba(255, 255, 255, 0.04);
-      color: rgba(255, 255, 255, 0.55);
+      border: 1px solid var(--border-strong);
+      background: var(--surface);
+      color: var(--text-secondary);
       cursor: pointer;
     }
     #view-comments .admin-act-btn.danger {
-      border-color: rgba(255, 100, 100, 0.35);
-      color: #e88;
+      border-color: var(--danger-border);
+      color: var(--danger-soft);
     }
     #view-comments .admin-edit-inline {
       display: none;
@@ -947,9 +1127,9 @@
     #view-comments .admin-edit-inline textarea {
       width: 100%;
       border-radius: 12px;
-      border: 1px solid rgba(255, 255, 255, 0.1);
-      background: rgba(255, 255, 255, 0.05);
-      color: rgba(255, 255, 255, 0.85);
+      border: 1px solid var(--input-border);
+      background: var(--input-bg);
+      color: var(--text-strong);
       padding: 8px 12px;
       font-size: 16px;
       resize: none;
@@ -961,8 +1141,8 @@
       align-self: flex-end;
       padding: 7px 16px;
       border-radius: 10px;
-      background: #7f77dd;
-      color: #fff;
+      background: var(--accent);
+      color: var(--text-on-accent);
       border: none;
       font-size: 13px;
       font-weight: 600;
@@ -972,8 +1152,8 @@
       flex: 0 0 auto;
       position: relative;
       z-index: 10;
-      background: #0d0d18;
-      border-top: 1px solid rgba(255, 255, 255, 0.06);
+      background: var(--bg-primary);
+      border-top: 1px solid var(--border);
       padding: 10px 14px;
       padding-bottom: calc(10px + var(--composer-safe-bottom, env(safe-area-inset-bottom)));
     }
@@ -993,22 +1173,22 @@
       display: flex;
       align-items: center;
       justify-content: center;
-      background: rgba(93, 202, 165, 0.25);
-      color: #5dcaa5;
+      background: var(--teal-strong-bg);
+      color: var(--teal);
     }
     #view-comments .composer input[type="text"] {
       flex: 1;
       min-width: 0;
       height: 40px;
       border-radius: 20px;
-      border: 1px solid rgba(255, 255, 255, 0.1);
+      border: 1px solid var(--input-border);
       padding: 0 14px;
       font-size: 16px;
-      background: rgba(255, 255, 255, 0.06);
-      color: rgba(255, 255, 255, 0.92);
+      background: var(--input-bg);
+      color: var(--text-primary);
     }
     #view-comments .composer input::placeholder {
-      color: rgba(255, 255, 255, 0.4);
+      color: var(--text-soft);
     }
     #view-comments .send-btn {
       width: 40px;
@@ -1016,8 +1196,8 @@
       border-radius: 50%;
       border: none;
       flex-shrink: 0;
-      background: #7f77dd;
-      color: #fff;
+      background: var(--accent);
+      color: var(--text-on-accent);
       cursor: pointer;
       display: flex;
       align-items: center;
@@ -1039,6 +1219,10 @@
     <div id="view-home" class="view hidden">
       <div id="adminBanner" class="admin-banner">Режим администратора: вы вошли с параметром <code style="color:var(--teal)">admin=1</code>. Для ответов на комментарии откройте мини-приложение из уведомления по конкретному посту.</div>
       <div class="hero">
+        <button type="button" id="themeToggle" class="theme-toggle" aria-label="Тема: Авто">
+          <span id="themeIcon" class="theme-icon" aria-hidden="true">✨</span>
+          <span id="themeLabel" class="theme-label">Авто</span>
+        </button>
         <div class="bot-avatar" aria-hidden="true"></div>
         <div class="bot-name">CommentBot</div>
         <p class="bot-desc">Комментарии к постам канала прямо в MAX: собирайте обратную связь и отвечайте читателям из одного окна.</p>
@@ -1126,22 +1310,22 @@
         <div style="
           width: 88px; height: 88px;
           border-radius: 28px;
-          background: rgba(127,119,221,0.15);
-          border: 1px solid rgba(127,119,221,0.25);
+          background: var(--accent-bg);
+          border: 1px solid var(--accent-border);
           display: flex; align-items: center; justify-content: center;
           font-size: 40px;
           margin-bottom: 24px;
         ">💬</div>
 
-        <div style="font-size:22px;font-weight:700;color:#fff;margin-bottom:8px">
+        <div style="font-size:22px;font-weight:700;color:var(--text-on-accent);margin-bottom:8px">
           Комментарии канала
         </div>
         <div id="gateChannelName" style="
-          font-size:14px;color:rgba(255,255,255,0.4);margin-bottom:28px
+          font-size:14px;color:var(--text-soft);margin-bottom:28px
         "></div>
 
         <div style="
-          font-size:15px;color:rgba(255,255,255,0.65);
+          font-size:15px;color:var(--text-secondary);
           line-height:1.6;margin-bottom:32px;max-width:280px
         ">
           Чтобы писать комментарии и получать ответы — запустите бота. Это займёт 5 секунд.
@@ -1152,9 +1336,9 @@
           width: 100%;
           max-width: 300px;
           padding: 16px;
-          background: #7F77DD;
+          background: var(--accent);
           border-radius: 14px;
-          color: #fff;
+          color: var(--text-on-accent);
           font-size: 16px;
           font-weight: 700;
           text-decoration: none;
@@ -1163,7 +1347,7 @@
 
         <p id="gateLaunchHint" style="
           font-size: 13px;
-          color: rgba(255,255,255,0.45);
+          color: var(--text-dim);
           line-height: 1.5;
           max-width: 300px;
           margin: 0 0 16px;
@@ -1180,39 +1364,39 @@
           max-width: 300px;
           padding: 12px;
           background: transparent;
-          border: 1px solid rgba(255,255,255,0.15);
+          border: 1px solid var(--border-strong);
           border-radius: 12px;
-          color: rgba(255,255,255,0.5);
+          color: var(--text-faint);
           font-size: 14px;
           cursor: pointer;
         ">✓ Я уже написал боту</button>
 
         <div style="
-          background: rgba(255,255,255,0.04);
-          border: 1px solid rgba(255,255,255,0.07);
+          background: var(--surface);
+          border: 1px solid var(--surface-border);
           border-radius: 14px;
           padding: 16px 20px;
           max-width: 300px;
           width: 100%;
           text-align: left;
         ">
-          <div style="font-size:12px;color:rgba(255,255,255,0.35);
+          <div style="font-size:12px;color:var(--text-subtle);
                       margin-bottom:10px;text-transform:uppercase;
                       letter-spacing:.06em">После запуска вы сможете</div>
           <div style="display:flex;flex-direction:column;gap:8px">
-            <div style="font-size:14px;color:rgba(255,255,255,0.7);
+            <div style="font-size:14px;color:var(--text-secondary);
                         display:flex;align-items:center;gap:10px">
-              <span style="color:#5DCAA5;font-size:16px">✓</span>
+              <span style="color:var(--teal);font-size:16px">✓</span>
               Писать комментарии к постам
             </div>
-            <div style="font-size:14px;color:rgba(255,255,255,0.7);
+            <div style="font-size:14px;color:var(--text-secondary);
                         display:flex;align-items:center;gap:10px">
-              <span style="color:#5DCAA5;font-size:16px">✓</span>
+              <span style="color:var(--teal);font-size:16px">✓</span>
               Получать ответы от канала
             </div>
-            <div style="font-size:14px;color:rgba(255,255,255,0.7);
+            <div style="font-size:14px;color:var(--text-secondary);
                         display:flex;align-items:center;gap:10px">
-              <span style="color:#5DCAA5;font-size:16px">✓</span>
+              <span style="color:var(--teal);font-size:16px">✓</span>
               Видеть все обсуждения поста
             </div>
           </div>
@@ -1274,9 +1458,9 @@
       max-width: min(360px, 92vw);
       text-align: center;
       white-space: normal;
-      background: rgba(93, 202, 165, 0.15);
-      border: 1px solid rgba(93, 202, 165, 0.3);
-      color: #5dcaa5;
+      background: var(--teal-bg);
+      border: 1px solid var(--teal-border-strong);
+      color: var(--teal);
       font-size: 13px;
       padding: 10px 20px;
       border-radius: 20px;
@@ -1385,8 +1569,63 @@
       }, 2000)
     }
 
+    function updateToggleUI() {
+      var pref = 'auto'
+      if (window.ThemeManager && typeof window.ThemeManager.get === 'function') {
+        pref = window.ThemeManager.get() || 'auto'
+      }
+      if (pref !== 'auto' && pref !== 'light' && pref !== 'dark') pref = 'auto'
+
+      var themeMap = {
+        auto: { icon: '✨', label: 'Авто' },
+        light: { icon: '☀️', label: 'Светлая' },
+        dark: { icon: '🌙', label: 'Тёмная' },
+      }
+      var config = themeMap[pref] || themeMap.auto
+      var iconEl = document.getElementById('themeIcon')
+      var labelEl = document.getElementById('themeLabel')
+      var toggleEl = document.getElementById('themeToggle')
+
+      if (iconEl) iconEl.textContent = config.icon
+      if (labelEl) labelEl.textContent = config.label
+      if (toggleEl) {
+        toggleEl.dataset.theme = pref
+        toggleEl.setAttribute('aria-label', 'Тема: ' + config.label)
+      }
+    }
+
+    function cycleTheme() {
+      var order = ['auto', 'light', 'dark']
+      var current = 'auto'
+      if (window.ThemeManager && typeof window.ThemeManager.get === 'function') {
+        current = window.ThemeManager.get() || 'auto'
+      }
+      var idx = order.indexOf(current)
+      if (idx === -1) idx = 0
+      var next = order[(idx + 1) % order.length]
+
+      if (window.ThemeManager && typeof window.ThemeManager.set === 'function') {
+        window.ThemeManager.set(next)
+      } else {
+        document.documentElement.setAttribute('data-theme', next === 'auto' ? 'light' : next)
+      }
+      updateToggleUI()
+    }
+
     function initApp() {
       var tg = window.WebApp || {};
+      if (tg.colorScheme && window.ThemeManager && typeof window.ThemeManager.get === 'function' && window.ThemeManager.get() === 'auto') {
+        var bridgeTheme = String(tg.colorScheme).toLowerCase();
+        if (bridgeTheme === 'light' || bridgeTheme === 'dark') {
+          document.documentElement.setAttribute('data-theme', bridgeTheme);
+        }
+      }
+      updateToggleUI();
+      var themeToggleEl = document.getElementById('themeToggle');
+      if (themeToggleEl && themeToggleEl.dataset.bound !== '1') {
+        themeToggleEl.dataset.bound = '1';
+        themeToggleEl.addEventListener('click', cycleTheme);
+      }
       try {
         if (window.WebApp && typeof window.WebApp.expand === 'function') {
           window.WebApp.expand();

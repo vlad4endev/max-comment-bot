@@ -472,13 +472,30 @@ function createCommentApiRouter(deps) {
             res.status(500).json({ error: 'internal error' });
         }
     });
-    router.get('/post/:postId', (req, res) => {
+    router.get('/post/:postId', async (req, res) => {
         const post = postStore_1.postStore.getPost(req.params.postId);
         if (!post) {
             res.status(404).json({ error: 'post not found' });
             return;
         }
         const channel = channelRegistry_1.channelRegistry.getChannel(post.chat_id);
+        let channel_avatar_url = null;
+        try {
+            const chat = await deps.bot.api.getChat(post.chat_id);
+            const raw = chat.icon?.url;
+            if (typeof raw === 'string') {
+                const trimmed = raw.trim();
+                if (trimmed) {
+                    channel_avatar_url = trimmed;
+                }
+            }
+        }
+        catch (err) {
+            logger_1.logger.warn('GET /post/:postId: getChat failed (channel avatar)', {
+                chatId: post.chat_id,
+                err,
+            });
+        }
         res.json({
             post_id: post.post_id,
             text: post.text,
@@ -486,6 +503,7 @@ function createCommentApiRouter(deps) {
             chat_id: post.chat_id,
             comment_count: post.comment_count,
             channel_title: channel?.title ?? null,
+            channel_avatar_url,
         });
     });
     router.get('/comments/:postId', (req, res) => {
