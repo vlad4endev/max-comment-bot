@@ -426,26 +426,44 @@ export function registerEventHandlers(bot: Bot): void {
 
   bot.on('bot_started', async (ctx) => {
     try {
-      const user = ctx.user
-      if (!user) {
+      const startPayload = getBotStartPayload(ctx)
+      const userId = ctx.user?.user_id
+
+      logger.info('bot_started fired', {
+        userId,
+        payload: startPayload,
+        updateRaw: JSON.stringify(ctx.update).slice(0, 200),
+      })
+
+      if (!userId) {
         return
       }
 
       const chatId = ctx.chatId
+      if (chatId !== undefined) {
+        stateManager.setUserPrivateChatId(userId, chatId)
+      }
+
+      const firstBotStart = !subscriberStore.hasSubscriber(userId)
+      subscriberStore.addSubscriber(userId)
+      logger.info('bot_started: registered subscriber', { userId, payload: startPayload })
+
+      // Mini App opened from channel post — silent registration only
+      if (startPayload.startsWith('pid_')) {
+        const m = startPayload.match(/^pid_[a-f0-9]+_cid_(\d+)/)
+        if (m) {
+          const channelChatId = -Number.parseInt(m[1]!, 10)
+          logger.info('bot_started: linked to channel via post', { userId, chatId: channelChatId })
+        }
+        return
+      }
+
       if (chatId === undefined) {
         logger.warn('bot_started: нет chat_id в контексте')
         return
       }
 
-      const userId = user.user_id
-      const firstName = user.name || 'пользователь'
-      const startPayload = getBotStartPayload(ctx)
-      const firstBotStart = !subscriberStore.hasSubscriber(userId)
-
-      stateManager.setUserPrivateChatId(userId, chatId)
-      subscriberStore.addSubscriber(userId)
-
-      logger.info(`bot_started: пользователь ${userId}, chat ${chatId}, payload=${startPayload}`)
+      const firstName = ctx.user?.name || 'пользователь'
 
       const homeUrl = buildMiniAppHomeUrl()
 
