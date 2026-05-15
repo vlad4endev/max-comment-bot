@@ -469,6 +469,18 @@
       align-items: center;
       justify-content: center;
       flex-shrink: 0;
+      overflow: hidden;
+    }
+    .ch-icon.with-photo {
+      background: var(--bg-surface);
+      border: 1px solid var(--surface-border);
+      padding: 0;
+    }
+    .ch-icon.with-photo img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
     }
     .ch-body { flex: 1; min-width: 0; }
     .ch-name { font-size: 14px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -2128,11 +2140,18 @@
                 ? 'подписчики: ' + ch.subscribers
                 : 'подписчики: —';
             var dotClass = ch.status === 'pending' ? 'pending' : 'active';
+            var avUrl =
+              ch.avatar_url && String(ch.avatar_url).trim()
+                ? String(ch.avatar_url).trim()
+                : '';
+            var iconHtml = avUrl
+              ? '<div class="ch-icon with-photo"><img src="' +
+                esc(avUrl) +
+                '" alt="" /></div>'
+              : '<div class="ch-icon">' + esc(initials(title)) + '</div>';
             var row =
               '<div class="channel-item">' +
-              '<div class="ch-icon">' +
-              esc(initials(title)) +
-              '</div>' +
+              iconHtml +
               '<div class="ch-body"><div class="ch-name">' +
               esc(title) +
               '</div><div class="ch-subs">' +

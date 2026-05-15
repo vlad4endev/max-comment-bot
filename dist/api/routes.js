@@ -12,7 +12,6 @@ const channelRegistry_1 = require("../services/channelRegistry");
 const resolveChannelChatId_1 = require("../services/resolveChannelChatId");
 const channelPostActions_1 = require("../services/channelPostActions");
 const commentStore_1 = require("../services/commentStore");
-const settingsStore_1 = require("../services/settingsStore");
 const subscriberStore_1 = require("../services/subscriberStore");
 const notificationService_1 = require("../services/notificationService");
 const postStore_1 = require("../services/postStore");
@@ -334,22 +333,13 @@ function createCommentApiRouter(deps) {
                 return;
             }
             const members = await listChannelAdminsForMiniApp(deps.bot, chatId);
-            logger_1.logger.info('GET /api/channel-admins: linked users', {
-                chatId,
-                linkedUsers: settingsStore_1.settingsStore.getUsersLinkedToChannel(chatId),
-                allSettings: 'check settings.json',
-            });
-            const linkedIds = new Set(settingsStore_1.settingsStore.getUsersLinkedToChannel(chatId));
-            const admins = members.map((member) => {
-                const linked = settingsStore_1.settingsStore.getUsersLinkedToChannel(chatId);
-                const isLinked = linked.includes(member.user_id);
-                return {
-                    user_id: member.user_id,
-                    name: member.name,
-                    initials: adminDisplayInitials(member.name),
-                    linked: isLinked,
-                };
-            });
+            const linkedIds = new Set(channelNotifyLinkStore_1.channelNotifyLinkStore.getUserIdsForChannel(chatId));
+            const admins = members.map((m) => ({
+                user_id: m.user_id,
+                name: m.name,
+                initials: adminDisplayInitials(m.name),
+                linked: linkedIds.has(m.user_id),
+            }));
             const listedIds = new Set(admins.map((a) => a.user_id));
             for (const linkedUserId of linkedIds) {
                 if (listedIds.has(linkedUserId)) {
