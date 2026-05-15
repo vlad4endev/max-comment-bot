@@ -25,6 +25,45 @@ function preview80(text: string): string {
   return `${t.slice(0, 80)}…`
 }
 
+function parseNotifyUserId(value: number): number | null {
+  const userId = Number(value)
+  if (!Number.isInteger(userId) || userId <= 0) {
+    return null
+  }
+  return userId
+}
+
+/** Extract MAX API error fields for logs (status / response body when present). */
+function loggableApiError(err: unknown): {
+  error: string
+  errorCode?: number
+  errorResponse?: unknown
+} {
+  if (err instanceof Error) {
+    const extra = err as Error & { status?: unknown; response?: unknown }
+    return {
+      error: err.message,
+      errorCode: typeof extra.status === 'number' ? extra.status : undefined,
+      errorResponse: extra.response,
+    }
+  }
+  if (typeof err === 'object' && err !== null) {
+    const o = err as Record<string, unknown>
+    const msg =
+      typeof o.message === 'string'
+        ? o.message
+        : typeof o.error === 'string'
+          ? o.error
+          : String(err)
+    return {
+      error: msg,
+      errorCode: typeof o.status === 'number' ? o.status : undefined,
+      errorResponse: o.response,
+    }
+  }
+  return { error: String(err) }
+}
+
 function isChannelAdminOrOwner(member: ChatMember): boolean {
   return !member.is_bot && (member.is_admin || member.is_owner)
 }
@@ -168,6 +207,7 @@ export async function notifyUserAboutMiniappReply(
   bot: Bot,
   input: {
     userId: number
+    commentId: string
     postText: string
     userCommentText: string
     adminReplyText: string
@@ -175,7 +215,23 @@ export async function notifyUserAboutMiniappReply(
     channelChatId: number
   },
 ): Promise<void> {
-  if (!subscriberStore.hasSubscriber(input.userId)) {
+  const userId = parseNotifyUserId(input.userId)
+  if (userId === null) {
+    logger.warn('notifyUserAboutMiniappReply: invalid userId', {
+      userId: input.userId,
+      commentId: input.commentId,
+    })
+    return
+  }
+
+  logger.info('notifyUserAboutMiniappReply: attempting', {
+    userId,
+    commentId: input.commentId,
+    isSubscriber: subscriberStore.hasSubscriber(userId),
+    commentText: input.userCommentText.slice(0, 50),
+  })
+
+  if (!subscriberStore.hasSubscriber(userId)) {
     return
   }
   if (!isMiniAppOpenUrlConfigured()) {
@@ -194,12 +250,14 @@ export async function notifyUserAboutMiniappReply(
     `Ответ канала: ${replyPreview}`
 
   try {
-    await bot.api.sendMessageToUser(input.userId, message, { attachments: [keyboard] })
-    logger.info('notifyUserAboutMiniappReply: delivered', { userId: input.userId })
+    await bot.api.sendMessageToUser(userId, message, { attachments: [keyboard] })
+    logger.info('notifyUserAboutMiniappReply: delivered', { userId, commentId: input.commentId })
   } catch (err: unknown) {
+    const apiErr = loggableApiError(err)
     logger.warn('notifyUserAboutMiniappReply: could not deliver', {
-      userId: input.userId,
-      err,
+      userId,
+      commentId: input.commentId,
+      ...apiErr,
     })
   }
 }

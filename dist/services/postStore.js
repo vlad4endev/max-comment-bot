@@ -123,6 +123,19 @@ class PostStore {
         return next.comment_count;
     }
     /**
+     * Decrements {@link Post.comment_count} (floored at 0). Returns new count or `null` if unknown post.
+     */
+    decrementCommentCount(postId) {
+        const p = this.byId.get(postId);
+        if (!p) {
+            return null;
+        }
+        const next = { ...p, comment_count: Math.max(0, p.comment_count - 1) };
+        this.byId.set(postId, next);
+        this.queuePersist();
+        return next.comment_count;
+    }
+    /**
      * Updates the channel message inline keyboard to show the current comment count.
      */
     async updateButtonCaption(bot, post) {

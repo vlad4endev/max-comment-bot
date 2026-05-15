@@ -51,6 +51,22 @@ export declare class CommentStore {
      */
     addReply(commentId: string, replyText: string, replyAdminName?: string): Comment | null;
     /**
+     * Updates comment body text. Returns updated comment or `null`.
+     */
+    updateCommentText(commentId: string, text: string): Comment | null;
+    /**
+     * Updates an existing admin reply (preserves original timestamp). Returns `null` if missing.
+     */
+    updateReply(commentId: string, replyText: string, replyAdminName?: string): Comment | null;
+    /**
+     * Removes the admin reply from a comment. Returns updated comment or `null`.
+     */
+    deleteReply(commentId: string): Comment | null;
+    /**
+     * Deletes a comment entirely. Returns removed comment or `null`.
+     */
+    deleteComment(commentId: string): Comment | null;
+    /**
      * Returns a single comment or `null`.
      */
     getComment(commentId: string): Comment | null;

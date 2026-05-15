@@ -16,6 +16,18 @@ function isCommentReply(value) {
     }
     return typeof o.text === 'string' && typeof o.timestamp === 'string';
 }
+function parseStoredUserId(value) {
+    if (typeof value === 'number' && Number.isInteger(value) && value > 0) {
+        return value;
+    }
+    if (typeof value === 'string' && value.trim() !== '') {
+        const n = Number.parseInt(value, 10);
+        if (Number.isInteger(n) && n > 0) {
+            return n;
+        }
+    }
+    return null;
+}
 function isCommentAdminNotificationMid(value) {
     if (typeof value !== 'object' || value === null) {
         return false;
@@ -25,32 +37,49 @@ function isCommentAdminNotificationMid(value) {
         Number.isInteger(o.admin_id) &&
         typeof o.message_mid === 'string');
 }
-function isComment(value) {
-    if (typeof value !== 'object' || value === null) {
-        return false;
+function normalizeCommentFromDisk(raw) {
+    if (typeof raw !== 'object' || raw === null) {
+        return null;
     }
-    const o = value;
+    const o = raw;
+    const userId = parseStoredUserId(o.user_id);
+    if (userId === null ||
+        typeof o.comment_id !== 'string' ||
+        typeof o.post_id !== 'string' ||
+        typeof o.username !== 'string' ||
+        typeof o.text !== 'string' ||
+        typeof o.timestamp !== 'string' ||
+        (o.reply !== undefined && !isCommentReply(o.reply))) {
+        return null;
+    }
     if (o.notification_text !== undefined && typeof o.notification_text !== 'string') {
-        return false;
+        return null;
     }
     if (o.notification_mids !== undefined) {
         if (!Array.isArray(o.notification_mids)) {
-            return false;
+            return null;
         }
         for (const row of o.notification_mids) {
             if (!isCommentAdminNotificationMid(row)) {
-                return false;
+                return null;
             }
         }
     }
-    return (typeof o.comment_id === 'string' &&
-        typeof o.post_id === 'string' &&
-        typeof o.user_id === 'number' &&
-        Number.isInteger(o.user_id) &&
-        typeof o.username === 'string' &&
-        typeof o.text === 'string' &&
-        typeof o.timestamp === 'string' &&
-        (o.reply === undefined || isCommentReply(o.reply)));
+    return {
+        comment_id: o.comment_id,
+        post_id: o.post_id,
+        user_id: userId,
+        username: o.username,
+        text: o.text,
+        timestamp: o.timestamp,
+        ...(o.reply !== undefined ? { reply: o.reply } : {}),
+        ...(o.notification_text !== undefined
+            ? { notification_text: o.notification_text }
+            : {}),
+        ...(o.notification_mids !== undefined
+            ? { notification_mids: o.notification_mids }
+            : {}),
+    };
 }
 /**
  * JSON-backed comment list with async persistence under `data/comments.json`.
@@ -81,8 +110,9 @@ class CommentStore {
             }
             this.comments.length = 0;
             for (const item of list) {
-                if (isComment(item)) {
-                    this.comments.push(item);
+                const normalized = normalizeCommentFromDisk(item);
+                if (normalized) {
+                    this.comments.push(normalized);
                 }
             }
             logger_1.logger.info(`commentStore: loaded ${this.comments.length} comment(s)`);
@@ -136,6 +166,65 @@ class CommentStore {
         this.queuePersist();
         logger_1.logger.info(`commentStore: reply on ${commentId}`);
         return c;
+    }
+    /**
+     * Updates comment body text. Returns updated comment or `null`.
+     */
+    updateCommentText(commentId, text) {
+        const c = this.comments.find((x) => x.comment_id === commentId);
+        if (!c) {
+            return null;
+        }
+        c.text = text;
+        this.queuePersist();
+        logger_1.logger.info(`commentStore: updated text ${commentId}`);
+        return c;
+    }
+    /**
+     * Updates an existing admin reply (preserves original timestamp). Returns `null` if missing.
+     */
+    updateReply(commentId, replyText, replyAdminName) {
+        const c = this.comments.find((x) => x.comment_id === commentId);
+        if (!c?.reply) {
+            return null;
+        }
+        c.reply.text = replyText;
+        const trimmedName = replyAdminName?.trim();
+        if (trimmedName) {
+            c.reply.admin_name = trimmedName;
+        }
+        else {
+            delete c.reply.admin_name;
+        }
+        this.queuePersist();
+        logger_1.logger.info(`commentStore: updated reply ${commentId}`);
+        return c;
+    }
+    /**
+     * Removes the admin reply from a comment. Returns updated comment or `null`.
+     */
+    deleteReply(commentId) {
+        const c = this.comments.find((x) => x.comment_id === commentId);
+        if (!c?.reply) {
+            return null;
+        }
+        delete c.reply;
+        this.queuePersist();
+        logger_1.logger.info(`commentStore: deleted reply ${commentId}`);
+        return c;
+    }
+    /**
+     * Deletes a comment entirely. Returns removed comment or `null`.
+     */
+    deleteComment(commentId) {
+        const idx = this.comments.findIndex((x) => x.comment_id === commentId);
+        if (idx < 0) {
+            return null;
+        }
+        const [removed] = this.comments.splice(idx, 1);
+        this.queuePersist();
+        logger_1.logger.info(`commentStore: deleted ${commentId}`);
+        return removed;
     }
     /**
      * Returns a single comment or `null`.

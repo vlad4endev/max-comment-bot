@@ -18,6 +18,38 @@ function preview80(text) {
     }
     return `${t.slice(0, 80)}…`;
 }
+function parseNotifyUserId(value) {
+    const userId = Number(value);
+    if (!Number.isInteger(userId) || userId <= 0) {
+        return null;
+    }
+    return userId;
+}
+/** Extract MAX API error fields for logs (status / response body when present). */
+function loggableApiError(err) {
+    if (err instanceof Error) {
+        const extra = err;
+        return {
+            error: err.message,
+            errorCode: typeof extra.status === 'number' ? extra.status : undefined,
+            errorResponse: extra.response,
+        };
+    }
+    if (typeof err === 'object' && err !== null) {
+        const o = err;
+        const msg = typeof o.message === 'string'
+            ? o.message
+            : typeof o.error === 'string'
+                ? o.error
+                : String(err);
+        return {
+            error: msg,
+            errorCode: typeof o.status === 'number' ? o.status : undefined,
+            errorResponse: o.response,
+        };
+    }
+    return { error: String(err) };
+}
 function isChannelAdminOrOwner(member) {
     return !member.is_bot && (member.is_admin || member.is_owner);
 }
@@ -128,7 +160,21 @@ async function notifyAdminsNewMiniappComment(bot, input) {
  * Шлёт пользователю DM об ответе канала на комментарий (кнопка «Открыть»). Ошибки доставки логируются.
  */
 async function notifyUserAboutMiniappReply(bot, input) {
-    if (!subscriberStore_1.subscriberStore.hasSubscriber(input.userId)) {
+    const userId = parseNotifyUserId(input.userId);
+    if (userId === null) {
+        logger_1.logger.warn('notifyUserAboutMiniappReply: invalid userId', {
+            userId: input.userId,
+            commentId: input.commentId,
+        });
+        return;
+    }
+    logger_1.logger.info('notifyUserAboutMiniappReply: attempting', {
+        userId,
+        commentId: input.commentId,
+        isSubscriber: subscriberStore_1.subscriberStore.hasSubscriber(userId),
+        commentText: input.userCommentText.slice(0, 50),
+    });
+    if (!subscriberStore_1.subscriberStore.hasSubscriber(userId)) {
         return;
     }
     if (!(0, postStore_1.isMiniAppOpenUrlConfigured)()) {
@@ -145,13 +191,15 @@ async function notifyUserAboutMiniappReply(bot, input) {
         `Ваш комментарий: «${commentPreview}»\n\n` +
         `Ответ канала: ${replyPreview}`;
     try {
-        await bot.api.sendMessageToUser(input.userId, message, { attachments: [keyboard] });
-        logger_1.logger.info('notifyUserAboutMiniappReply: delivered', { userId: input.userId });
+        await bot.api.sendMessageToUser(userId, message, { attachments: [keyboard] });
+        logger_1.logger.info('notifyUserAboutMiniappReply: delivered', { userId, commentId: input.commentId });
     }
     catch (err) {
+        const apiErr = loggableApiError(err);
         logger_1.logger.warn('notifyUserAboutMiniappReply: could not deliver', {
-            userId: input.userId,
-            err,
+            userId,
+            commentId: input.commentId,
+            ...apiErr,
         });
     }
 }

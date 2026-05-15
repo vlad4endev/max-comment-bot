@@ -166,6 +166,20 @@ export class PostStore {
   }
 
   /**
+   * Decrements {@link Post.comment_count} (floored at 0). Returns new count or `null` if unknown post.
+   */
+  decrementCommentCount(postId: string): number | null {
+    const p = this.byId.get(postId)
+    if (!p) {
+      return null
+    }
+    const next: Post = { ...p, comment_count: Math.max(0, p.comment_count - 1) }
+    this.byId.set(postId, next)
+    this.queuePersist()
+    return next.comment_count
+  }
+
+  /**
    * Updates the channel message inline keyboard to show the current comment count.
    */
   async updateButtonCaption(bot: Bot, post: Post): Promise<void> {

@@ -32,6 +32,7 @@ export declare function notifyAdminsNewMiniappComment(bot: Bot, input: {
  */
 export declare function notifyUserAboutMiniappReply(bot: Bot, input: {
     userId: number;
+    commentId: string;
     postText: string;
     userCommentText: string;
     adminReplyText: string;

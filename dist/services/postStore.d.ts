@@ -54,6 +54,10 @@ export declare class PostStore {
      */
     incrementCommentCount(postId: string): number | null;
     /**
+     * Decrements {@link Post.comment_count} (floored at 0). Returns new count or `null` if unknown post.
+     */
+    decrementCommentCount(postId: string): number | null;
+    /**
      * Updates the channel message inline keyboard to show the current comment count.
      */
     updateButtonCaption(bot: Bot, post: Post): Promise<void>;

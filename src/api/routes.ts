@@ -18,6 +18,7 @@ import {
   notifyAdminsNewMiniappComment,
   notifyUserAboutMiniappReply,
 } from '../services/notificationService'
+import type { Post } from '../services/postStore'
 import { buildMiniAppUrl, isMiniAppOpenUrlConfigured, postStore } from '../services/postStore'
 import { stateManager } from '../services/stateManager'
 import {
@@ -176,6 +177,28 @@ function toWireComment(c: Comment): {
     timestamp: c.timestamp,
     reply: c.reply,
   }
+}
+
+type AdminCommentAccess =
+  | { ok: true; comment: Comment; post: Post }
+  | { ok: false; status: number; error: string }
+
+async function resolveAdminCommentAccess(
+  bot: Bot,
+  input: { commentId: string; postId: string; chatId: number; userId: number },
+): Promise<AdminCommentAccess> {
+  const post = postStore.getPost(input.postId)
+  if (!post || post.chat_id !== input.chatId) {
+    return { ok: false, status: 404, error: 'post not found' }
+  }
+  if (!(await isUserChannelAdmin(bot, post.chat_id, input.userId))) {
+    return { ok: false, status: 403, error: 'Только администраторы могут изменять комментарии' }
+  }
+  const comment = commentStore.getComment(input.commentId)
+  if (!comment || comment.post_id !== input.postId) {
+    return { ok: false, status: 404, error: 'comment not found' }
+  }
+  return { ok: true, comment, post }
 }
 
 /**
@@ -646,7 +669,8 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
     }
 
     await notifyUserAboutMiniappReply(deps.bot, {
-      userId: updated.user_id,
+      userId: Number(updated.user_id),
+      commentId: updated.comment_id,
       postText: post.text,
       userCommentText: updated.text,
       adminReplyText: adminText,
@@ -655,6 +679,159 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
     })
 
     res.json({ ok: true })
+  })
+
+  router.patch('/comment', async (req, res) => {
+    const body = req.body
+    if (!isRecord(body)) {
+      res.status(400).json({ error: 'invalid body' })
+      return
+    }
+    const commentId = parseNonEmptyString(body.comment_id)
+    const postId = parseNonEmptyString(body.post_id)
+    const chatId = parseNonZeroInt(body.chat_id)
+    const editorUserId = parsePositiveInt(body.user_id)
+    const text = parseNonEmptyString(body.text)
+    if (!commentId || !postId || !chatId || !editorUserId || !text) {
+      res.status(400).json({ error: 'missing or invalid fields' })
+      return
+    }
+
+    const access = await resolveAdminCommentAccess(deps.bot, {
+      commentId,
+      postId,
+      chatId,
+      userId: editorUserId,
+    })
+    if (!access.ok) {
+      res.status(access.status).json({ error: access.error })
+      return
+    }
+
+    const updated = commentStore.updateCommentText(commentId, text)
+    if (!updated) {
+      res.status(404).json({ error: 'comment not found' })
+      return
+    }
+    res.json(toWireComment(updated))
+  })
+
+  router.delete('/comment', async (req, res) => {
+    const body = req.body
+    if (!isRecord(body)) {
+      res.status(400).json({ error: 'invalid body' })
+      return
+    }
+    const commentId = parseNonEmptyString(body.comment_id)
+    const postId = parseNonEmptyString(body.post_id)
+    const chatId = parseNonZeroInt(body.chat_id)
+    const editorUserId = parsePositiveInt(body.user_id)
+    if (!commentId || !postId || !chatId || !editorUserId) {
+      res.status(400).json({ error: 'missing or invalid fields' })
+      return
+    }
+
+    const access = await resolveAdminCommentAccess(deps.bot, {
+      commentId,
+      postId,
+      chatId,
+      userId: editorUserId,
+    })
+    if (!access.ok) {
+      res.status(access.status).json({ error: access.error })
+      return
+    }
+
+    const removed = commentStore.deleteComment(commentId)
+    if (!removed) {
+      res.status(404).json({ error: 'comment not found' })
+      return
+    }
+
+    const newCount = postStore.decrementCommentCount(postId)
+    if (newCount !== null) {
+      const updatedPost = postStore.getPost(postId)
+      if (updatedPost) {
+        await postStore.updateButtonCaption(deps.bot, updatedPost)
+      }
+    }
+
+    res.json({ ok: true, comment_count: newCount })
+  })
+
+  router.patch('/reply', async (req, res) => {
+    const body = req.body
+    if (!isRecord(body)) {
+      res.status(400).json({ error: 'invalid body' })
+      return
+    }
+    const commentId = parseNonEmptyString(body.comment_id)
+    const postId = parseNonEmptyString(body.post_id)
+    const chatId = parseNonZeroInt(body.chat_id)
+    const editorUserId = parsePositiveInt(body.user_id)
+    const adminText = parseNonEmptyString(body.admin_text)
+    if (!commentId || !postId || !chatId || !editorUserId || !adminText) {
+      res.status(400).json({ error: 'missing or invalid fields' })
+      return
+    }
+    const rawAdminName =
+      typeof body.admin_name === 'string' ? body.admin_name.trim() : ''
+
+    const access = await resolveAdminCommentAccess(deps.bot, {
+      commentId,
+      postId,
+      chatId,
+      userId: editorUserId,
+    })
+    if (!access.ok) {
+      res.status(access.status).json({ error: access.error })
+      return
+    }
+
+    const updated = commentStore.updateReply(
+      commentId,
+      adminText,
+      rawAdminName || undefined,
+    )
+    if (!updated) {
+      res.status(404).json({ error: 'reply not found' })
+      return
+    }
+    res.json(toWireComment(updated))
+  })
+
+  router.delete('/reply', async (req, res) => {
+    const body = req.body
+    if (!isRecord(body)) {
+      res.status(400).json({ error: 'invalid body' })
+      return
+    }
+    const commentId = parseNonEmptyString(body.comment_id)
+    const postId = parseNonEmptyString(body.post_id)
+    const chatId = parseNonZeroInt(body.chat_id)
+    const editorUserId = parsePositiveInt(body.user_id)
+    if (!commentId || !postId || !chatId || !editorUserId) {
+      res.status(400).json({ error: 'missing or invalid fields' })
+      return
+    }
+
+    const access = await resolveAdminCommentAccess(deps.bot, {
+      commentId,
+      postId,
+      chatId,
+      userId: editorUserId,
+    })
+    if (!access.ok) {
+      res.status(access.status).json({ error: access.error })
+      return
+    }
+
+    const updated = commentStore.deleteReply(commentId)
+    if (!updated) {
+      res.status(404).json({ error: 'reply not found' })
+      return
+    }
+    res.json(toWireComment(updated))
   })
 
   return router
