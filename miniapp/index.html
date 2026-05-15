@@ -2,7 +2,7 @@
 <html lang="ru">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0, user-scalable=no, viewport-fit=cover" />
   <title>CommentBot</title>
   <!-- Official URL from https://dev.max.ru/docs/webapps/bridge (page embeds st.max.ru/js/max-web-app.js) -->
   <script src="https://st.max.ru/js/max-web-app.js"></script>
@@ -20,20 +20,39 @@
       --danger: #ff8a80;
       --yellow: #e6c229;
     }
-    * { box-sizing: border-box; }
+    * {
+      box-sizing: border-box;
+      -webkit-text-size-adjust: 100%;
+      -webkit-tap-highlight-color: transparent;
+      touch-action: manipulation;
+    }
     html, body {
       margin: 0;
-      min-height: 100%;
+      height: 100%;
+      overscroll-behavior: none;
+      overflow: hidden;
+      position: fixed;
+      width: 100%;
       font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
       background: var(--bg);
       color: var(--text);
-      -webkit-tap-highlight-color: transparent;
     }
     .shell {
-      max-width: 375px;
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      max-width: 480px;
       margin: 0 auto;
-      min-height: 100vh;
-      min-height: 100dvh;
+      overflow: hidden;
+    }
+    .view {
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
     }
     .view.hidden { display: none !important; }
     #view-join {
@@ -43,6 +62,8 @@
       padding: 12px;
       padding-top: calc(12px + env(safe-area-inset-top));
       padding-bottom: calc(16px + env(safe-area-inset-bottom));
+      overflow-y: auto;
+      -webkit-overflow-scrolling: touch;
     }
     #view-join .join-title {
       font-size: 18px;
@@ -81,6 +102,8 @@
       padding: 12px;
       padding-top: calc(12px + env(safe-area-inset-top));
       padding-bottom: calc(16px + env(safe-area-inset-bottom));
+      overflow-y: auto;
+      -webkit-overflow-scrolling: touch;
     }
     .admin-banner {
       display: none;
@@ -456,7 +479,7 @@
       border-radius: 12px;
       border: 1px solid var(--surface-border);
       padding: 0 12px;
-      font-size: 15px;
+      font-size: 16px;
       background: rgba(0, 0, 0, 0.25);
       color: var(--text);
     }
@@ -514,14 +537,30 @@
       font-size: 15px;
       cursor: pointer;
     }
+    #view-gate {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow-y: auto;
+      -webkit-overflow-scrolling: touch;
+    }
+    #view-gate .gate-inner {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 32px 24px;
+      text-align: center;
+      gap: 0;
+      width: 100%;
+      box-sizing: border-box;
+    }
     /* Comments view */
     #view-comments {
       display: flex;
       flex-direction: column;
-      height: 100vh;
-      height: 100dvh;
       overflow: hidden;
-      background: var(--bg);
+      background: #0d0d18;
     }
     #view-comments #app {
       display: flex;
@@ -529,11 +568,10 @@
       flex: 1;
       min-height: 0;
       width: 100%;
-      max-width: 375px;
-      margin: 0 auto;
     }
     #view-comments .header-wrap {
       flex: 0 0 auto;
+      z-index: 10;
       background: #0d0d18;
       border-bottom: 1px solid rgba(255, 255, 255, 0.06);
       padding: 14px 16px 12px;
@@ -642,9 +680,10 @@
       flex: 1 1 auto;
       min-height: 0;
       overflow-y: auto;
+      overflow-x: hidden;
       -webkit-overflow-scrolling: touch;
-      padding: 14px;
-      padding-bottom: calc(78px + env(safe-area-inset-bottom));
+      scroll-behavior: smooth;
+      padding: 14px 14px 0 14px;
       display: flex;
       flex-direction: column;
       gap: 16px;
@@ -842,7 +881,7 @@
       background: rgba(255, 255, 255, 0.05);
       color: rgba(255, 255, 255, 0.85);
       padding: 8px 12px;
-      font-size: 13px;
+      font-size: 16px;
       resize: none;
       min-height: 40px;
       max-height: 120px;
@@ -902,7 +941,7 @@
       background: rgba(255, 255, 255, 0.05);
       color: rgba(255, 255, 255, 0.85);
       padding: 8px 12px;
-      font-size: 13px;
+      font-size: 16px;
       resize: none;
       min-height: 40px;
       max-height: 120px;
@@ -920,15 +959,13 @@
       cursor: pointer;
     }
     #view-comments .composer-wrap {
-      position: fixed;
-      left: 50%;
-      transform: translateX(-50%);
-      bottom: 0;
-      width: 100%;
-      max-width: 375px;
+      flex: 0 0 auto;
+      position: relative;
+      z-index: 10;
       background: #0d0d18;
       border-top: 1px solid rgba(255, 255, 255, 0.06);
-      padding: 10px 14px calc(14px + env(safe-area-inset-bottom));
+      padding: 10px 14px;
+      padding-bottom: calc(10px + env(safe-area-inset-bottom));
     }
     #view-comments .composer {
       display: flex;
@@ -956,7 +993,7 @@
       border-radius: 20px;
       border: 1px solid rgba(255, 255, 255, 0.1);
       padding: 0 14px;
-      font-size: 14px;
+      font-size: 16px;
       background: rgba(255, 255, 255, 0.06);
       color: rgba(255, 255, 255, 0.92);
     }
@@ -1075,16 +1112,7 @@
     </div>
 
     <div id="view-gate" class="view hidden">
-      <div style="
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        justify-content: center;
-        min-height: 100vh;
-        padding: 32px 24px;
-        text-align: center;
-        gap: 0;
-      ">
+      <div class="gate-inner">
         <div style="
           width: 88px; height: 88px;
           border-radius: 28px;
@@ -1317,6 +1345,13 @@
         } catch (e) {}
       }
       return sp;
+    }
+
+    function scrollToBottom() {
+      var feed = document.getElementById('feed')
+      if (feed) {
+        feed.scrollTop = feed.scrollHeight
+      }
     }
 
     function showToast(msg) {
@@ -1948,6 +1983,15 @@
     function bootComments() {
       if (!hasPostContext || joinChannelId) return;
 
+      if (window.visualViewport) {
+        window.visualViewport.addEventListener('resize', function () {
+          var viewComments = document.getElementById('view-comments')
+          if (viewComments) {
+            viewComments.style.height = window.visualViewport.height + 'px'
+          }
+        })
+      }
+
       var uid =
         getBridgeNumericUserId(user) ||
         parseInt(mergedParams.get('user_id') || '', 10) ||
@@ -2061,10 +2105,6 @@
       if (!userId || !String(userId).trim()) {
         setErr('Нет user_id — войдите через MAX');
         return;
-      }
-
-      function scrollFeedToBottom() {
-        feedEl.scrollTop = feedEl.scrollHeight;
       }
 
       function esc(s) {
@@ -2399,6 +2439,7 @@
                 box.classList.remove('open');
                 if (ta) ta.value = '';
                 mergeOrUpdateComment(updated);
+                scrollToBottom();
               })
               .catch(function (e) {
                 setErr(e.message || String(e));
@@ -2537,6 +2578,7 @@
               var found = Array.isArray(list) ? list.find(function (x) { return x.comment_id === cid; }) : null;
               if (found && found.reply) {
                 mergeOrUpdateComment(found);
+                scrollToBottom();
               }
             })
             .catch(function (e) {
@@ -2701,7 +2743,7 @@
             if (postCommentCount == null) {
               updateBadgeFromCount(arr.length);
             }
-            scrollFeedToBottom();
+            scrollToBottom();
           })
           .catch(function (e) {
             setErr(e.message || String(e));
@@ -2751,7 +2793,7 @@
         knownIds.add(tempId);
         bumpCommentCount(1);
         inputEl.value = '';
-        scrollFeedToBottom();
+        scrollToBottom();
 
         fetch('/api/comment', {
           method: 'POST',
@@ -2809,7 +2851,7 @@
           })
           .finally(function () {
             sendBtn.disabled = !inputEl.value.trim();
-            scrollFeedToBottom();
+            scrollToBottom();
           });
       }
 
