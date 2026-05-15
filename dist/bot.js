@@ -8,6 +8,7 @@ const max_bot_api_1 = require("@maxhub/max-bot-api");
 const config_1 = require("./config");
 const events_1 = require("./handlers/events");
 const subscriptions_1 = require("./maxPlatform/subscriptions");
+const channelPoller_1 = require("./services/channelPoller");
 const logger_1 = require("./utils/logger");
 function initializeBot() {
     logger_1.logger.info('🤖 Инициализация бота...');
@@ -41,6 +42,7 @@ function setupGracefulShutdown(bot, options) {
     const onSignal = () => {
         void (async () => {
             logger_1.logger.info('👋 Получен сигнал выключения...');
+            (0, channelPoller_1.stopChannelPostPoller)();
             if (options.receiveMode === 'polling') {
                 bot.stop();
             }

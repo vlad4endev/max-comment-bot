@@ -1,0 +1,155 @@
+import type { Bot } from '@maxhub/max-bot-api'
+
+import { adminRuntimeSettingsStore } from './adminRuntimeSettingsStore'
+import { logger } from '../utils/logger'
+import { tryAttachCommentsToChannelPost } from './channelPostActions'
+import { isMiniAppOpenUrlConfigured } from './postStore'
+import { channelRegistry } from './channelRegistry'
+
+const MIN_POLL_INTERVAL_MS = 3_000
+const FETCH_COUNT = 10
+
+let intervalId: ReturnType<typeof setInterval> | undefined
+let tickInFlight = false
+
+function logTickFired(): void {
+  const channels = channelRegistry.getAllChannels()
+  logger.info('channelPoller: tick fired', {
+    channelCount: channels.length,
+    channels: channels.map((c) => c.chat_id),
+  })
+}
+
+/**
+ * One sweep for a single channel (admin «обновить кнопки»).
+ */
+export async function runChannelPollerForChat(bot: Bot, chatId: number): Promise<void> {
+  if (!isMiniAppOpenUrlConfigured()) {
+    return
+  }
+
+  const reg = channelRegistry.getChannel(chatId)
+  if (!reg || reg.type !== 'channel') {
+    return
+  }
+
+  const botUid = bot.botInfo?.user_id
+  try {
+    const { messages } = await bot.api.getMessages(chatId, { count: FETCH_COUNT })
+    for (const message of messages) {
+      await tryAttachCommentsToChannelPost(bot, message, {
+        botUserId: botUid,
+        channelChatIdOverride: chatId,
+      })
+    }
+  } catch (err: unknown) {
+    logger.warn('channelPoller: runChannelPollerForChat failed', { chatId, err })
+  }
+}
+
+/**
+ * One sweep: for each registered channel, fetch recent messages and attach the comment button to new admin posts.
+ */
+export async function runChannelPollerTick(bot: Bot): Promise<void> {
+  if (!isMiniAppOpenUrlConfigured()) {
+    return
+  }
+
+  const channels = channelRegistry.getAllChannels().filter((c) => c.type === 'channel')
+  const botUid = bot.botInfo?.user_id
+
+  for (const c of channels) {
+    try {
+      const { messages } = await bot.api.getMessages(c.chat_id, { count: FETCH_COUNT })
+      logger.info('channelPoller: getMessages result', {
+        chatId: c.chat_id,
+        messageCount: messages.length,
+        mids: messages.map((m) => m.body?.mid),
+      })
+      if (messages.length === 0) {
+        logger.info('channelPoller: no messages returned for channel', { chatId: c.chat_id })
+      }
+      for (const message of messages) {
+        const r = await tryAttachCommentsToChannelPost(bot, message, {
+          botUserId: botUid,
+          channelChatIdOverride: c.chat_id,
+        })
+        logger.info('channelPoller: tryAttach result', {
+          chatId: c.chat_id,
+          mid: message.body?.mid,
+          result: r,
+        })
+        if (r.ok) {
+          logger.info('channelPoller: button attached to new post', {
+            channelChatId: c.chat_id,
+            mid: message.body.mid,
+          })
+        }
+      }
+    } catch (err: unknown) {
+      logger.warn('channelPoller: failed for channel', { chatId: c.chat_id, err })
+    }
+  }
+}
+
+/**
+ * Starts periodic polling of registered channels. No-op if Mini App open URL is not configured.
+ */
+export function startChannelPostPoller(bot: Bot, intervalMs?: number): void {
+  if (!isMiniAppOpenUrlConfigured()) {
+    logger.info('channelPoller: disabled (BOT_NICKNAME / MINI_APP_URL not set for Mini App links)')
+    return
+  }
+
+  const fromStoreOrArg =
+    intervalMs !== undefined && Number.isFinite(intervalMs)
+      ? intervalMs
+      : adminRuntimeSettingsStore.getPollIntervalMs()
+  const ms = Math.max(MIN_POLL_INTERVAL_MS, fromStoreOrArg)
+
+  stopChannelPostPoller()
+
+  logTickFired()
+  void (async () => {
+    try {
+      await runChannelPollerTick(bot)
+    } catch (err: unknown) {
+      logger.error('channelPoller: tick error', err)
+    }
+  })()
+
+  intervalId = setInterval(() => {
+    logTickFired()
+    if (tickInFlight) {
+      logger.info('channelPoller: skipping tick (previous still running)')
+      return
+    }
+    tickInFlight = true
+    void (async () => {
+      try {
+        await runChannelPollerTick(bot)
+      } catch (err: unknown) {
+        logger.error('channelPoller: tick error', err)
+      } finally {
+        tickInFlight = false
+      }
+    })()
+  }, ms)
+
+  logger.info(`channelPoller: started (interval ${ms / 1000}s, count=${FETCH_COUNT})`)
+}
+
+/**
+ * Перезапуск таймера с разрешением из {@link adminRuntimeSettingsStore}.
+ */
+export function restartChannelPostPoller(bot: Bot): void {
+  startChannelPostPoller(bot)
+}
+
+export function stopChannelPostPoller(): void {
+  if (intervalId !== undefined) {
+    clearInterval(intervalId)
+    intervalId = undefined
+    logger.info('channelPoller: stopped')
+  }
+}

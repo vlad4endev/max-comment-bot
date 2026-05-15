@@ -3,6 +3,7 @@
 # (см. https://dev.max.ru/docs-api/methods/POST/subscriptions). Прокси с TLS :443 → этот контейнер;
 # путь в WEBHOOK_URL должен совпадать с POST-маршрутом приложения.
 # Локально без HTTPS: MAX_RECEIVE_MODE=polling в .env
+# Данные: ./data → /app/data (posts.json, comments.json, channels.json)
 # Сборка и запуск: docker compose up -d --build
 # Логи: docker compose logs -f bot
 services:
@@ -16,5 +17,8 @@ services:
       - .env
     environment:
       NODE_ENV: production
+    volumes:
+      - ./data:/app/data
+    # Слушает API_PORT или PORT из .env — оба значения в пробросе должны совпадать с портом процесса в контейнере.
     ports:
       - "${PORT:-3000}:${PORT:-3000}"

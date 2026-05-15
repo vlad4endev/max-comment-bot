@@ -11,14 +11,30 @@ import {
   BOT_WEBHOOK_UPDATE_TYPES,
   setWebhookSubscription,
 } from './maxPlatform/subscriptions'
+import { channelNotifyLinkStore } from './services/channelNotifyLinkStore'
 import { channelRegistry } from './services/channelRegistry'
+import { commentStore } from './services/commentStore'
+import { adminRuntimeSettingsStore } from './services/adminRuntimeSettingsStore'
+import { subscriberStore } from './services/subscriberStore'
+import { startChannelPostPoller } from './services/channelPoller'
+import { postStore } from './services/postStore'
+import { userMiniappSettingsStore } from './services/userMiniappSettingsStore'
 import { logger } from './utils/logger'
-import { createWebhookApp } from './webhook/createWebhookApp'
+import { createHttpApp, createWebhookApp } from './webhook/createWebhookApp'
 
 async function main(): Promise<void> {
   const bot = initializeBot()
   await channelRegistry.loadFromDisk()
+  await postStore.loadFromDisk()
+  await commentStore.loadFromDisk()
+  await userMiniappSettingsStore.loadFromDisk()
+  await channelNotifyLinkStore.loadFromDisk()
+  await subscriberStore.loadFromDisk()
+  await adminRuntimeSettingsStore.loadFromDisk()
   await ensureBotProfile(bot)
+  startChannelPostPoller(bot)
+
+  const listenPort = config.listenPort
 
   if (config.receiveMode === 'webhook') {
     const webhookPath = config.webhookPath!
@@ -33,12 +49,12 @@ async function main(): Promise<void> {
     const server = createServer(app)
 
     await new Promise<void>((resolve, reject) => {
-      server.listen(config.PORT, '0.0.0.0', () => resolve())
+      server.listen(listenPort, '0.0.0.0', () => resolve())
       server.once('error', reject)
     })
 
     logger.info(
-      `HTTP слушает 0.0.0.0:${config.PORT}, endpoint webhook: POST ${webhookPath}`,
+      `HTTP слушает 0.0.0.0:${listenPort}, webhook: POST ${webhookPath}, /api, /miniapp`,
     )
 
     try {
@@ -61,7 +77,23 @@ async function main(): Promise<void> {
       webhookUrl,
     })
   } else {
-    setupGracefulShutdown(bot, { receiveMode: 'polling' })
+    const app = createHttpApp({ bot })
+    const server = createServer(app)
+
+    await new Promise<void>((resolve, reject) => {
+      server.listen(listenPort, '0.0.0.0', () => resolve())
+      server.once('error', reject)
+    })
+
+    logger.info(
+      `HTTP слушает 0.0.0.0:${listenPort} (/api, /miniapp); long polling для updates`,
+    )
+
+    setupGracefulShutdown(bot, {
+      receiveMode: 'polling',
+      httpServer: server,
+    })
+
     await startBotLongPolling(bot)
   }
 }

@@ -5,6 +5,8 @@
  * logger.warn('Большой payload', { size: 150 })
  * logger.debug('Переменные окружения загружены')
  */
+/** Последние строки консольного лога (и дубль в data/runtime.log при возможности). */
+export declare function getAdminLogTail(maxLines: number): string[];
 export declare class Logger {
     /**
      * @example logger.info('Бот запущен')

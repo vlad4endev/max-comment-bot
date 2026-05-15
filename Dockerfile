@@ -22,8 +22,10 @@ COPY package.json package-lock.json ./
 RUN npm ci --omit=dev && npm cache clean --force
 
 COPY --from=builder /app/dist ./dist
+COPY miniapp ./miniapp
+COPY admin-panel ./admin-panel
 
-RUN chown -R node:node /app
+RUN mkdir -p /app/data && chown -R node:node /app
 
 USER node
 

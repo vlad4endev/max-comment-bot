@@ -4,3 +4,5 @@ config/.env
 .DS_Store
 npm-debug.log*
 channels.json
+data/channels.json
+data/subscribers.json

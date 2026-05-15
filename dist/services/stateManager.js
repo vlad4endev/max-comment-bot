@@ -10,6 +10,15 @@ const STATE_MAX_AGE_MS = 30 * 60 * 1000;
 class StateManager {
     states = new Map();
     cleanupTimer = null;
+    /**
+     * Maps MAX user id → private dialog `chat_id` where the user opened the bot (`bot_started`).
+     * Used to DM the user during onboarding when `bot_added` does not include a reliable inviter.
+     */
+    userPrivateChatIdByUserId = new Map();
+    /**
+     * Channel `chat_id` values where the bot was added but is not yet admin/owner — awaiting rights or `/connect`.
+     */
+    pendingAdminChannelIds = new Set();
     constructor() {
         this.cleanupTimer = setInterval(() => {
             this.runCleanup();
@@ -56,6 +65,42 @@ class StateManager {
      */
     countStatesInChat(chatId) {
         return this.states.get(chatId)?.size ?? 0;
+    }
+    /**
+     * Remembers the user's private chat id after `bot_started` so the bot can DM them later.
+     */
+    setUserPrivateChatId(userId, privateChatId) {
+        this.userPrivateChatIdByUserId.set(userId, privateChatId);
+    }
+    /**
+     * Returns the private dialog chat id previously stored for this user, if any.
+     */
+    getUserPrivateChatId(userId) {
+        return this.userPrivateChatIdByUserId.get(userId);
+    }
+    /**
+     * Marks a channel as waiting for admin rights (or manual `/connect` after rights are granted).
+     */
+    markChannelPendingAdminRights(channelChatId) {
+        this.pendingAdminChannelIds.add(channelChatId);
+    }
+    /**
+     * Clears the pending-admin marker when the channel is registered or no longer relevant.
+     */
+    clearChannelPendingAdminRights(channelChatId) {
+        this.pendingAdminChannelIds.delete(channelChatId);
+    }
+    /**
+     * Whether the channel is still waiting for admin rights / activation.
+     */
+    isChannelPendingAdminRights(channelChatId) {
+        return this.pendingAdminChannelIds.has(channelChatId);
+    }
+    /**
+     * Snapshot of all channel ids pending admin-based registration (for `/connect` sweep).
+     */
+    getPendingAdminChannelIds() {
+        return [...this.pendingAdminChannelIds];
     }
     destroy() {
         if (this.cleanupTimer !== null) {

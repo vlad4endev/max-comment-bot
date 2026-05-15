@@ -1,17 +1,52 @@
-import dotenv from 'dotenv';
+import { createHash } from 'node:crypto'
 
-import { logger } from './utils/logger';
+import dotenv from 'dotenv'
 
-dotenv.config();
+import { logger } from './utils/logger'
 
-export type ReceiveMode = 'webhook' | 'polling';
+dotenv.config()
+
+export type ReceiveMode = 'webhook' | 'polling'
+
+function computeAdminToken(ownerUserId: number, botToken: string): string {
+  return createHash('sha256')
+    .update(`${ownerUserId}${botToken}`, 'utf8')
+    .digest('hex')
+    .slice(0, 16)
+}
 
 export interface Config {
-  BOT_TOKEN: string;
-  ADMIN_CHAT_ID: number;
+  BOT_TOKEN: string
+  /**
+   * Единственный владелец панели /admin (числовой user_id в MAX).
+   */
+  ownerUserId: number
+  /**
+   * Первые 16 hex-символов sha256(ownerUserId + BOT_TOKEN) — устаревший токен (совместимость).
+   */
+  adminToken: string
+  /** Логин веб-панели `/admin` (переопределяется `ADMIN_PANEL_USER`). */
+  adminPanelUser: string
+  /** Пароль веб-панели (переопределяется `ADMIN_PANEL_PASSWORD`). */
+  adminPanelPassword: string
+  /** Секрет подписи cookie сессии панели (`ADMIN_PANEL_SESSION_SECRET` или производное от BOT_TOKEN). */
+  adminPanelSessionSecret: string
+  ADMIN_CHAT_ID: number
   BOT_NICKNAME: string;
+  /**
+   * Никнейм без @ для deep link MAX: `https://max.ru/<botNickname>?startapp=…`.
+   */
+  botNickname: string;
   NODE_ENV: 'development' | 'production';
   PORT: number;
+  /**
+   * Порт HTTP (webhook + /api + /static). Если задан API_PORT — используется он, иначе PORT.
+   */
+  listenPort: number;
+  /**
+   * Legacy: прямой URL мини-приложения с query (`post_id`, `chat_id`). Используется только если не удалось собрать ссылку через {@link Config.botNickname}.
+   */
+  miniAppUrl?: string;
   receiveMode: ReceiveMode;
   /** Только для webhook-режима */
   webhookUrl?: string;
@@ -35,12 +70,26 @@ function parseReceiveMode(
 }
 
 function getConfig(): Config {
-  const BOT_TOKEN = (process.env.BOT_TOKEN ?? '').trim();
+  const BOT_TOKEN = (process.env.BOT_TOKEN ?? '').trim()
   if (!BOT_TOKEN) {
-    throw new Error('BOT_TOKEN не установлен');
+    throw new Error('BOT_TOKEN не установлен')
   }
 
-  const adminChatIdRaw = (process.env.ADMIN_CHAT_ID ?? '').trim();
+  const adminPanelUser = (process.env.ADMIN_PANEL_USER ?? 'vladislav4endev').trim()
+  const adminPanelPassword = (process.env.ADMIN_PANEL_PASSWORD ?? 'v902l733a00d94%').trim()
+  const adminPanelSessionSecretRaw = (process.env.ADMIN_PANEL_SESSION_SECRET ?? '').trim()
+  const adminPanelSessionSecret =
+    adminPanelSessionSecretRaw !== ''
+      ? adminPanelSessionSecretRaw
+      : createHash('sha256').update(`${BOT_TOKEN}|admin_panel_session|v1`, 'utf8').digest('hex')
+
+  const ownerUserIdRaw = (process.env.OWNER_USER_ID ?? '122099994').trim()
+  const ownerParsed = Number(ownerUserIdRaw)
+  if (!Number.isFinite(ownerParsed) || !Number.isInteger(ownerParsed) || ownerParsed <= 0) {
+    throw new Error('OWNER_USER_ID должен быть положительным целым числом')
+  }
+
+  const adminChatIdRaw = (process.env.ADMIN_CHAT_ID ?? '').trim()
   if (adminChatIdRaw === '') {
     throw new Error('ADMIN_CHAT_ID должен быть числом');
   }
@@ -53,6 +102,7 @@ function getConfig(): Config {
   if (!BOT_NICKNAME) {
     throw new Error('BOT_NICKNAME не установлен');
   }
+  const botNickname = BOT_NICKNAME.replace(/^@/, '').trim();
 
   const NODE_ENV: Config['NODE_ENV'] =
     process.env.NODE_ENV === 'production' ? 'production' : 'development';
@@ -68,12 +118,32 @@ function getConfig(): Config {
 
   const receiveMode = parseReceiveMode(process.env.MAX_RECEIVE_MODE, NODE_ENV);
 
+  const miniAppUrlRaw = (process.env.MINI_APP_URL ?? '').trim();
+  const miniAppUrl = miniAppUrlRaw === '' ? undefined : miniAppUrlRaw.replace(/\/+$/, '');
+
+  const apiPortRaw = (process.env.API_PORT ?? '').trim();
+  let listenPort = PORT;
+  if (apiPortRaw !== '') {
+    const apiParsed = Number.parseInt(apiPortRaw, 10);
+    if (Number.isFinite(apiParsed) && apiParsed > 0) {
+      listenPort = apiParsed;
+    }
+  }
+
   const base: Config = {
     BOT_TOKEN,
+    ownerUserId: ownerParsed,
+    adminToken: computeAdminToken(ownerParsed, BOT_TOKEN),
+    adminPanelUser,
+    adminPanelPassword,
+    adminPanelSessionSecret,
     ADMIN_CHAT_ID: adminParsed,
     BOT_NICKNAME,
+    botNickname,
     NODE_ENV,
     PORT,
+    listenPort,
+    miniAppUrl,
     receiveMode,
   };
 
