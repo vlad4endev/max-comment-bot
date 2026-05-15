@@ -14,6 +14,7 @@ import {
 import { channelNotifyLinkStore } from './services/channelNotifyLinkStore'
 import { channelRegistry } from './services/channelRegistry'
 import { commentStore } from './services/commentStore'
+import { subscriberStore } from './services/subscriberStore'
 import { startChannelPostPoller } from './services/channelPoller'
 import { postStore } from './services/postStore'
 import { userMiniappSettingsStore } from './services/userMiniappSettingsStore'
@@ -27,6 +28,7 @@ async function main(): Promise<void> {
   await commentStore.loadFromDisk()
   await userMiniappSettingsStore.loadFromDisk()
   await channelNotifyLinkStore.loadFromDisk()
+  await subscriberStore.loadFromDisk()
   await ensureBotProfile(bot)
   startChannelPostPoller(bot)
 

@@ -11,6 +11,7 @@ const channelNotifyLinkStore_1 = require("../services/channelNotifyLinkStore");
 const channelRegistry_1 = require("../services/channelRegistry");
 const channelPostActions_1 = require("../services/channelPostActions");
 const commentStore_1 = require("../services/commentStore");
+const subscriberStore_1 = require("../services/subscriberStore");
 const notificationService_1 = require("../services/notificationService");
 const postStore_1 = require("../services/postStore");
 const stateManager_1 = require("../services/stateManager");
@@ -133,6 +134,17 @@ function toWireComment(c) {
 function createCommentApiRouter(deps) {
     const router = express_1.default.Router();
     router.use(express_1.default.json({ limit: '512kb' }));
+    router.get('/user-status', (req, res) => {
+        const userId = parsePositiveInt(req.query.user_id);
+        if (!userId) {
+            res.status(400).json({ error: 'missing or invalid user_id' });
+            return;
+        }
+        res.json({
+            started: subscriberStore_1.subscriberStore.hasSubscriber(userId),
+            bot_nickname: config_1.config.BOT_NICKNAME,
+        });
+    });
     router.get('/stats', async (req, res) => {
         const userId = parsePositiveInt(req.query.user_id);
         if (!userId) {

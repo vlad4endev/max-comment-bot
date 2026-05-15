@@ -14,6 +14,7 @@ import { channelRegistry } from '../services/channelRegistry'
 import { commentStore } from '../services/commentStore'
 import { notifyAllAdmins, type SendMessageExtra } from '../services/notificationService'
 import { postStore } from '../services/postStore'
+import { subscriberStore } from '../services/subscriberStore'
 import { stateManager } from '../services/stateManager'
 import { logger } from '../utils/logger'
 
@@ -28,6 +29,14 @@ To connect your channel:
 const ONBOARDING_WELCOME_KEYBOARD = Keyboard.inlineKeyboard([
   [Keyboard.button.link('📖 How to add bot to channel', 'https://help.max.ru')],
 ])
+
+const SUBSCRIBER_START_WELCOME_TEXT =
+  '✅ Отлично! Теперь вы будете получать уведомления когда вам ответят на комментарий.'
+
+function buildBotStartappUrl(startappPayload: string): string {
+  const nick = config.botNickname.trim()
+  return `https://max.ru/${nick}?startapp=${startappPayload}`
+}
 
 /**
  * Подтягивает тип чата из флага `is_channel`, если запрос метаданных чата не удался.
@@ -376,8 +385,30 @@ export function registerEventHandlers(bot: Bot): void {
     }
 
     stateManager.setUserPrivateChatId(user.user_id, chatId)
+    subscriberStore.addSubscriber(user.user_id)
 
     logger.info(`bot_started: пользователь ${user.user_id}, chat ${chatId}`)
+
+    const startPayload =
+      ctx.update.update_type === 'bot_started' ? (ctx.update.payload ?? '').trim() : ''
+    const lower = startPayload.toLowerCase()
+
+    if (/^join\d+$/i.test(startPayload)) {
+      const openMiniUrl = buildBotStartappUrl(startPayload)
+      const joinKb = Keyboard.inlineKeyboard([
+        [Keyboard.button.link('🔔 Открыть мини-приложение', openMiniUrl)],
+      ])
+      await ctx.reply(
+        'Вы администратор канала — откройте мини-приложение по кнопке ниже и подтвердите получение уведомлений о новых комментариях.',
+        { attachments: [joinKb] },
+      )
+      return
+    }
+
+    if (lower.includes('subscribe')) {
+      await trySendDmToUser(bot, user.user_id, SUBSCRIBER_START_WELCOME_TEXT)
+      return
+    }
 
     await ctx.reply(ONBOARDING_WELCOME_TEXT, {
       attachments: [ONBOARDING_WELCOME_KEYBOARD],
@@ -398,6 +429,14 @@ export function registerEventHandlers(bot: Bot): void {
     logger.info(`message_created: от ${user.user_id} в чате ${chatId}`)
 
     const text = message.body.text?.trim() ?? ''
+
+    if (message.recipient.chat_type === 'dialog') {
+      if (/^\/stop\b/i.test(text) || /^\/unsubscribe\b/i.test(text)) {
+        subscriberStore.removeSubscriber(user.user_id)
+        await ctx.reply('Уведомления отключены. Чтобы включить снова — напишите /start')
+        return
+      }
+    }
 
     if (/^\/addbutton\b/i.test(text)) {
       const rawArgs = text.replace(/^\/addbutton\b/i, '').trim()

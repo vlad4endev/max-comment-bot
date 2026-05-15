@@ -8,6 +8,7 @@ const max_bot_api_1 = require("@maxhub/max-bot-api");
 const config_1 = require("../config");
 const channelNotifyLinkStore_1 = require("./channelNotifyLinkStore");
 const commentStore_1 = require("./commentStore");
+const subscriberStore_1 = require("./subscriberStore");
 const postStore_1 = require("./postStore");
 const logger_1 = require("../utils/logger");
 function preview80(text) {
@@ -117,17 +118,22 @@ async function notifyAdminsNewMiniappComment(bot, input) {
  * Шлёт пользователю DM об ответе канала на комментарий (кнопка «Открыть»). Ошибки доставки логируются.
  */
 async function notifyUserAboutMiniappReply(bot, input) {
+    if (!subscriberStore_1.subscriberStore.hasSubscriber(input.userId)) {
+        return;
+    }
     if (!(0, postStore_1.isMiniAppOpenUrlConfigured)()) {
         logger_1.logger.warn('notifyUserAboutMiniappReply: BOT_NICKNAME / MINI_APP_URL not set for Mini App links');
         return;
     }
     const openUrl = (0, postStore_1.buildMiniAppUrl)(input.postId, input.channelChatId);
     const keyboard = max_bot_api_1.Keyboard.inlineKeyboard([[max_bot_api_1.Keyboard.button.link('Открыть', openUrl)]]);
-    const postExcerpt = preview80(input.postText);
-    const message = `💬 Вам ответили на комментарий
-Пост: «${postExcerpt}»
-Ваш комментарий: ${input.userCommentText}
-Ответ канала: ${input.adminReplyText}`;
+    const postPreview = input.postText.slice(0, 60);
+    const commentPreview = input.userCommentText.slice(0, 60);
+    const replyPreview = input.adminReplyText.slice(0, 80);
+    const message = `💬 Вам ответили на комментарий\n\n` +
+        `Пост: «${postPreview}»\n` +
+        `Ваш комментарий: «${commentPreview}»\n\n` +
+        `Ответ канала: ${replyPreview}`;
     try {
         await bot.api.sendMessageToUser(input.userId, message, { attachments: [keyboard] });
         logger_1.logger.info('notifyUserAboutMiniappReply: delivered', { userId: input.userId });

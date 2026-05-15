@@ -9,6 +9,7 @@ import { channelRegistry } from '../services/channelRegistry'
 import { isUserChannelAdmin } from '../services/channelPostActions'
 import type { Comment } from '../services/commentStore'
 import { commentStore } from '../services/commentStore'
+import { subscriberStore } from '../services/subscriberStore'
 import {
   notifyAdminsNewMiniappComment,
   notifyUserAboutMiniappReply,
@@ -164,6 +165,18 @@ function toWireComment(c: Comment): {
 export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Router {
   const router = express.Router()
   router.use(express.json({ limit: '512kb' }))
+
+  router.get('/user-status', (req, res) => {
+    const userId = parsePositiveInt(req.query.user_id)
+    if (!userId) {
+      res.status(400).json({ error: 'missing or invalid user_id' })
+      return
+    }
+    res.json({
+      started: subscriberStore.hasSubscriber(userId),
+      bot_nickname: config.BOT_NICKNAME,
+    })
+  })
 
   router.get('/stats', async (req, res) => {
     const userId = parsePositiveInt(req.query.user_id)

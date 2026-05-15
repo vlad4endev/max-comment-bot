@@ -21,6 +21,11 @@ To connect your channel:
 const ONBOARDING_WELCOME_KEYBOARD = max_bot_api_1.Keyboard.inlineKeyboard([
     [max_bot_api_1.Keyboard.button.link('📖 How to add bot to channel', 'https://help.max.ru')],
 ]);
+const SUBSCRIBER_START_WELCOME_TEXT = '✅ Отлично! Теперь вы будете получать уведомления когда вам ответят на комментарий.';
+function buildBotStartappUrl(startappPayload) {
+    const nick = config_1.config.botNickname.trim();
+    return `https://max.ru/${nick}?startapp=${startappPayload}`;
+}
 /**
  * Подтягивает тип чата из флага `is_channel`, если запрос метаданных чата не удался.
  */

@@ -5,6 +5,7 @@ import type { ChatMember } from '@maxhub/max-bot-api/types'
 import { config } from '../config'
 import { channelNotifyLinkStore } from './channelNotifyLinkStore'
 import { commentStore } from './commentStore'
+import { subscriberStore } from './subscriberStore'
 import { buildMiniAppUrl, isMiniAppOpenUrlConfigured } from './postStore'
 import { logger } from '../utils/logger'
 
@@ -164,17 +165,23 @@ export async function notifyUserAboutMiniappReply(
     channelChatId: number
   },
 ): Promise<void> {
+  if (!subscriberStore.hasSubscriber(input.userId)) {
+    return
+  }
   if (!isMiniAppOpenUrlConfigured()) {
     logger.warn('notifyUserAboutMiniappReply: BOT_NICKNAME / MINI_APP_URL not set for Mini App links')
     return
   }
   const openUrl = buildMiniAppUrl(input.postId, input.channelChatId)
   const keyboard = Keyboard.inlineKeyboard([[Keyboard.button.link('Открыть', openUrl)]])
-  const postExcerpt = preview80(input.postText)
-  const message = `💬 Вам ответили на комментарий
-Пост: «${postExcerpt}»
-Ваш комментарий: ${input.userCommentText}
-Ответ канала: ${input.adminReplyText}`
+  const postPreview = input.postText.slice(0, 60)
+  const commentPreview = input.userCommentText.slice(0, 60)
+  const replyPreview = input.adminReplyText.slice(0, 80)
+  const message =
+    `💬 Вам ответили на комментарий\n\n` +
+    `Пост: «${postPreview}»\n` +
+    `Ваш комментарий: «${commentPreview}»\n\n` +
+    `Ответ канала: ${replyPreview}`
 
   try {
     await bot.api.sendMessageToUser(input.userId, message, { attachments: [keyboard] })
