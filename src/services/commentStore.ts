@@ -8,6 +8,14 @@ import { logger } from '../utils/logger'
 export interface CommentReply {
   text: string
   timestamp: string
+  /** Display name of the admin who replied (from Mini App). */
+  admin_name?: string
+}
+
+/** DM to an admin: message id for later edits when the channel replies. */
+export interface CommentAdminNotificationMid {
+  admin_id: number
+  message_mid: string
 }
 
 /**
@@ -21,6 +29,10 @@ export interface Comment {
   text: string
   timestamp: string
   reply?: CommentReply
+  /** Original admin-notification body (before «✅ Отвечено» line is appended). */
+  notification_text?: string
+  /** One entry per admin who received the new-comment DM. */
+  notification_mids?: CommentAdminNotificationMid[]
 }
 
 interface CommentsFileShape {
@@ -34,7 +46,22 @@ function isCommentReply(value: unknown): value is CommentReply {
     return false
   }
   const o = value as Record<string, unknown>
+  if (o.admin_name !== undefined && typeof o.admin_name !== 'string') {
+    return false
+  }
   return typeof o.text === 'string' && typeof o.timestamp === 'string'
+}
+
+function isCommentAdminNotificationMid(value: unknown): value is CommentAdminNotificationMid {
+  if (typeof value !== 'object' || value === null) {
+    return false
+  }
+  const o = value as Record<string, unknown>
+  return (
+    typeof o.admin_id === 'number' &&
+    Number.isInteger(o.admin_id) &&
+    typeof o.message_mid === 'string'
+  )
 }
 
 function isComment(value: unknown): value is Comment {
@@ -42,6 +69,19 @@ function isComment(value: unknown): value is Comment {
     return false
   }
   const o = value as Record<string, unknown>
+  if (o.notification_text !== undefined && typeof o.notification_text !== 'string') {
+    return false
+  }
+  if (o.notification_mids !== undefined) {
+    if (!Array.isArray(o.notification_mids)) {
+      return false
+    }
+    for (const row of o.notification_mids) {
+      if (!isCommentAdminNotificationMid(row)) {
+        return false
+      }
+    }
+  }
   return (
     typeof o.comment_id === 'string' &&
     typeof o.post_id === 'string' &&
@@ -126,13 +166,19 @@ export class CommentStore {
 
   /**
    * Attaches a channel reply to a comment. Returns updated comment or `null`.
+   * @param replyAdminName optional display name of the replying admin (non-empty trimmed string is stored).
    */
-  addReply(commentId: string, replyText: string): Comment | null {
+  addReply(commentId: string, replyText: string, replyAdminName?: string): Comment | null {
     const c = this.comments.find((x) => x.comment_id === commentId)
     if (!c) {
       return null
     }
-    c.reply = { text: replyText, timestamp: new Date().toISOString() }
+    const trimmedName = replyAdminName?.trim()
+    const reply: CommentReply = { text: replyText, timestamp: new Date().toISOString() }
+    if (trimmedName) {
+      reply.admin_name = trimmedName
+    }
+    c.reply = reply
     this.queuePersist()
     logger.info(`commentStore: reply on ${commentId}`)
     return c
@@ -143,6 +189,43 @@ export class CommentStore {
    */
   getComment(commentId: string): Comment | null {
     return this.comments.find((c) => c.comment_id === commentId) ?? null
+  }
+
+  /**
+   * Persists the admin DM template text for this comment (used when editing notifications after reply).
+   */
+  saveNotificationText(commentId: string, text: string): void {
+    const c = this.comments.find((x) => x.comment_id === commentId)
+    if (!c) {
+      return
+    }
+    c.notification_text = text
+    this.queuePersist()
+  }
+
+  /**
+   * Records the DM `message_mid` for one admin (upserts by `admin_id`).
+   */
+  saveNotificationMid(commentId: string, adminId: number, mid: string): void {
+    const c = this.comments.find((x) => x.comment_id === commentId)
+    if (!c) {
+      return
+    }
+    const list = c.notification_mids ?? []
+    const idx = list.findIndex((e) => e.admin_id === adminId)
+    const entry: CommentAdminNotificationMid = { admin_id: adminId, message_mid: mid }
+    if (idx >= 0) {
+      list[idx] = entry
+    } else {
+      list.push(entry)
+    }
+    c.notification_mids = list
+    this.queuePersist()
+  }
+
+  getNotificationMids(commentId: string): CommentAdminNotificationMid[] {
+    const c = this.comments.find((x) => x.comment_id === commentId)
+    return c?.notification_mids ? [...c.notification_mids] : []
   }
 
   /**

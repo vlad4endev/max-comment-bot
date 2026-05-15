@@ -1252,6 +1252,17 @@
           (user.username && String(user.username).trim()) ||
           'Гость';
       }
+      var adminNameForReply =
+        [user.first_name, user.last_name]
+          .filter(Boolean)
+          .map(function (s) {
+            return String(s).trim();
+          })
+          .filter(Boolean)
+          .join(' ') ||
+        (user.username && String(user.username).trim()) ||
+        (username && String(username).trim()) ||
+        'Админ';
       var isAdmin = params.get('admin') === '1';
       var subscribersOverride = params.get('subscribers');
 
@@ -1346,10 +1357,16 @@
       }
 
       function buildReplyBlockHtml(c) {
+        var named =
+          c.reply && c.reply.admin_name && String(c.reply.admin_name).trim();
+        var replyLabel =
+          named && named !== 'Админ' ? 'от ' + esc(named) : 'от канала';
         return (
           '<div class="reply-block">' +
           '<div class="reply-inner">' +
-          '<div class="reply-tag"><div class="reply-dot"></div><span>от канала</span></div>' +
+          '<div class="reply-tag"><div class="reply-dot"></div><span>' +
+          replyLabel +
+          '</span></div>' +
           '<div class="reply-quote">' +
           esc(c.text) +
           '</div>' +
@@ -1436,15 +1453,17 @@
           }
           send.disabled = true;
           setErr('');
+          var payload = {
+            comment_id: cid,
+            post_id: postId,
+            chat_id: Number(chatId),
+            admin_text: text,
+            admin_name: adminNameForReply,
+          };
           fetch('/api/reply', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              comment_id: cid,
-              post_id: postId,
-              chat_id: Number(chatId),
-              admin_text: text,
-            }),
+            body: JSON.stringify(payload),
           })
             .then(function (r) {
               if (!r.ok) {

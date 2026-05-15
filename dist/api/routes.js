@@ -4,6 +4,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.createCommentApiRouter = createCommentApiRouter;
+const max_bot_api_1 = require("@maxhub/max-bot-api");
 const express_1 = __importDefault(require("express"));
 const config_1 = require("../config");
 const channelRegistry_1 = require("../services/channelRegistry");
@@ -234,6 +235,7 @@ function createCommentApiRouter(deps) {
         const channelTitle = channelRegistry_1.channelRegistry.getChannel(chatId)?.title ?? '—';
         try {
             await (0, notificationService_1.notifyAdminsNewMiniappComment)(deps.bot, {
+                commentId: saved.comment_id,
                 channelChatId: chatId,
                 postText: post.text,
                 channelTitle,
@@ -261,6 +263,8 @@ function createCommentApiRouter(deps) {
             res.status(400).json({ error: 'missing or invalid fields' });
             return;
         }
+        const rawAdminName = typeof body.admin_name === 'string' ? body.admin_name.trim() : '';
+        const replierName = rawAdminName || 'Админ';
         const post = postStore_1.postStore.getPost(postId);
         if (!post || post.chat_id !== chatId) {
             res.status(404).json({ error: 'post not found' });
@@ -271,10 +275,34 @@ function createCommentApiRouter(deps) {
             res.status(404).json({ error: 'comment not found' });
             return;
         }
-        const updated = commentStore_1.commentStore.addReply(commentId, adminText);
+        const updated = commentStore_1.commentStore.addReply(commentId, adminText, rawAdminName || undefined);
         if (!updated) {
             res.status(404).json({ error: 'comment not found' });
             return;
+        }
+        const mids = commentStore_1.commentStore.getNotificationMids(commentId);
+        const originalText = updated.notification_text;
+        if (mids.length > 0 && originalText && (0, postStore_1.isMiniAppOpenUrlConfigured)()) {
+            const replyPreview = adminText.slice(0, 80);
+            const ellipsis = adminText.length > 80 ? '...' : '';
+            const statusLine = `\n\n✅ Ответил ${replierName}: «${replyPreview}${ellipsis}»`;
+            const updatedText = `${originalText}${statusLine}`;
+            const miniAppUrl = (0, postStore_1.buildMiniAppUrl)(postId, chatId, { admin: '1' });
+            const kb = max_bot_api_1.Keyboard.inlineKeyboard([[max_bot_api_1.Keyboard.button.link('✅ Просмотрено', miniAppUrl)]]);
+            for (const { admin_id, message_mid } of mids) {
+                try {
+                    await deps.bot.api.editMessage(message_mid, {
+                        text: updatedText,
+                        attachments: [kb],
+                    });
+                }
+                catch (e) {
+                    logger_1.logger.warn('Could not update notification message', { admin_id, message_mid, e });
+                }
+            }
+        }
+        else if (mids.length > 0 && !originalText) {
+            logger_1.logger.warn('POST /api/reply: skip notification edit (missing notification_text)', { commentId });
         }
         await (0, notificationService_1.notifyUserAboutMiniappReply)(deps.bot, {
             userId: updated.user_id,

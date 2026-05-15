@@ -3,8 +3,14 @@ import { Keyboard } from '@maxhub/max-bot-api'
 import type { ChatMember } from '@maxhub/max-bot-api/types'
 
 import { config } from '../config'
+import { commentStore } from './commentStore'
 import { buildMiniAppUrl, isMiniAppOpenUrlConfigured } from './postStore'
 import { logger } from '../utils/logger'
+
+export interface AdminNotificationSendResult {
+  admin_id: number
+  message_mid: string
+}
 
 /** Доп. параметры отправки сообщения (клавиатура и т.д.), как у `bot.api.sendMessageToUser`. */
 export type SendMessageExtra = NonNullable<Parameters<Bot['api']['sendMessageToUser']>[2]>
@@ -52,23 +58,24 @@ function isFallbackAdminChatRecipient(recipientId: number): boolean {
 
 /**
  * Уведомляет всех админов канала личными сообщениями; для `ADMIN_CHAT_ID` используется `sendMessageToChat` (супер-админ / группа).
+ * Возвращает пары `admin_id` / `message_mid` только для успешно отправленных сообщений.
  */
 export async function notifyAllAdmins(
   bot: Bot,
   chatId: number,
   message: string,
   extra?: SendMessageExtra,
-): Promise<void> {
+): Promise<AdminNotificationSendResult[]> {
   const recipients = await getChannelAdmins(bot, chatId)
   const unique = [...new Set(recipients)]
+  const out: AdminNotificationSendResult[] = []
 
   for (const recipientId of unique) {
     try {
-      if (isFallbackAdminChatRecipient(recipientId)) {
-        await bot.api.sendMessageToChat(config.ADMIN_CHAT_ID, message, extra)
-      } else {
-        await bot.api.sendMessageToUser(recipientId, message, extra)
-      }
+      const sent = isFallbackAdminChatRecipient(recipientId)
+        ? await bot.api.sendMessageToChat(config.ADMIN_CHAT_ID, message, extra)
+        : await bot.api.sendMessageToUser(recipientId, message, extra)
+      out.push({ admin_id: recipientId, message_mid: sent.body.mid })
       logger.info('Уведомление админу доставлено', { recipientId, sourceChat: chatId })
     } catch (err) {
       logger.warn('Не удалось отправить уведомление админу (пропускаем и идём дальше)', {
@@ -78,6 +85,7 @@ export async function notifyAllAdmins(
       })
     }
   }
+  return out
 }
 
 /**
@@ -86,6 +94,7 @@ export async function notifyAllAdmins(
 export async function notifyAdminsNewMiniappComment(
   bot: Bot,
   input: {
+    commentId: string
     channelChatId: number
     postText: string
     channelTitle: string
@@ -108,9 +117,14 @@ export async function notifyAdminsNewMiniappComment(
 Канал: ${input.channelTitle}
 👤 ${input.username}: ${input.commentText}`
 
-  await notifyAllAdmins(bot, input.channelChatId, message, {
+  commentStore.saveNotificationText(input.commentId, message)
+
+  const sent = await notifyAllAdmins(bot, input.channelChatId, message, {
     attachments: [keyboard],
   })
+  for (const { admin_id, message_mid } of sent) {
+    commentStore.saveNotificationMid(input.commentId, admin_id, message_mid)
+  }
 }
 
 /**

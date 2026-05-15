@@ -1,4 +1,5 @@
 import type { Bot } from '@maxhub/max-bot-api'
+import { Keyboard } from '@maxhub/max-bot-api'
 import express from 'express'
 
 import { config } from '../config'
@@ -10,7 +11,7 @@ import {
   notifyAdminsNewMiniappComment,
   notifyUserAboutMiniappReply,
 } from '../services/notificationService'
-import { postStore } from '../services/postStore'
+import { buildMiniAppUrl, isMiniAppOpenUrlConfigured, postStore } from '../services/postStore'
 import { stateManager } from '../services/stateManager'
 import {
   parseMiniappFeatureKey,
@@ -94,7 +95,7 @@ function toWireComment(c: Comment): {
   username: string
   text: string
   timestamp: string
-  reply?: { text: string; timestamp: string }
+  reply?: { text: string; timestamp: string; admin_name?: string }
 } {
   return {
     comment_id: c.comment_id,
@@ -271,6 +272,7 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
     const channelTitle = channelRegistry.getChannel(chatId)?.title ?? '—'
     try {
       await notifyAdminsNewMiniappComment(deps.bot, {
+        commentId: saved.comment_id,
         channelChatId: chatId,
         postText: post.text,
         channelTitle,
@@ -299,6 +301,9 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
       res.status(400).json({ error: 'missing or invalid fields' })
       return
     }
+    const rawAdminName =
+      typeof body.admin_name === 'string' ? body.admin_name.trim() : ''
+    const replierName = rawAdminName || 'Админ'
 
     const post = postStore.getPost(postId)
     if (!post || post.chat_id !== chatId) {
@@ -312,10 +317,33 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
       return
     }
 
-    const updated = commentStore.addReply(commentId, adminText)
+    const updated = commentStore.addReply(commentId, adminText, rawAdminName || undefined)
     if (!updated) {
       res.status(404).json({ error: 'comment not found' })
       return
+    }
+
+    const mids = commentStore.getNotificationMids(commentId)
+    const originalText = updated.notification_text
+    if (mids.length > 0 && originalText && isMiniAppOpenUrlConfigured()) {
+      const replyPreview = adminText.slice(0, 80)
+      const ellipsis = adminText.length > 80 ? '...' : ''
+      const statusLine = `\n\n✅ Ответил ${replierName}: «${replyPreview}${ellipsis}»`
+      const updatedText = `${originalText}${statusLine}`
+      const miniAppUrl = buildMiniAppUrl(postId, chatId, { admin: '1' })
+      const kb = Keyboard.inlineKeyboard([[Keyboard.button.link('✅ Просмотрено', miniAppUrl)]])
+      for (const { admin_id, message_mid } of mids) {
+        try {
+          await deps.bot.api.editMessage(message_mid, {
+            text: updatedText,
+            attachments: [kb],
+          })
+        } catch (e: unknown) {
+          logger.warn('Could not update notification message', { admin_id, message_mid, e })
+        }
+      }
+    } else if (mids.length > 0 && !originalText) {
+      logger.warn('POST /api/reply: skip notification edit (missing notification_text)', { commentId })
     }
 
     await notifyUserAboutMiniappReply(deps.bot, {

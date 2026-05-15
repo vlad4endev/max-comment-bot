@@ -11,13 +11,38 @@ function isCommentReply(value) {
         return false;
     }
     const o = value;
+    if (o.admin_name !== undefined && typeof o.admin_name !== 'string') {
+        return false;
+    }
     return typeof o.text === 'string' && typeof o.timestamp === 'string';
+}
+function isCommentAdminNotificationMid(value) {
+    if (typeof value !== 'object' || value === null) {
+        return false;
+    }
+    const o = value;
+    return (typeof o.admin_id === 'number' &&
+        Number.isInteger(o.admin_id) &&
+        typeof o.message_mid === 'string');
 }
 function isComment(value) {
     if (typeof value !== 'object' || value === null) {
         return false;
     }
     const o = value;
+    if (o.notification_text !== undefined && typeof o.notification_text !== 'string') {
+        return false;
+    }
+    if (o.notification_mids !== undefined) {
+        if (!Array.isArray(o.notification_mids)) {
+            return false;
+        }
+        for (const row of o.notification_mids) {
+            if (!isCommentAdminNotificationMid(row)) {
+                return false;
+            }
+        }
+    }
     return (typeof o.comment_id === 'string' &&
         typeof o.post_id === 'string' &&
         typeof o.user_id === 'number' &&
@@ -95,13 +120,19 @@ class CommentStore {
     }
     /**
      * Attaches a channel reply to a comment. Returns updated comment or `null`.
+     * @param replyAdminName optional display name of the replying admin (non-empty trimmed string is stored).
      */
-    addReply(commentId, replyText) {
+    addReply(commentId, replyText, replyAdminName) {
         const c = this.comments.find((x) => x.comment_id === commentId);
         if (!c) {
             return null;
         }
-        c.reply = { text: replyText, timestamp: new Date().toISOString() };
+        const trimmedName = replyAdminName?.trim();
+        const reply = { text: replyText, timestamp: new Date().toISOString() };
+        if (trimmedName) {
+            reply.admin_name = trimmedName;
+        }
+        c.reply = reply;
         this.queuePersist();
         logger_1.logger.info(`commentStore: reply on ${commentId}`);
         return c;
@@ -111,6 +142,41 @@ class CommentStore {
      */
     getComment(commentId) {
         return this.comments.find((c) => c.comment_id === commentId) ?? null;
+    }
+    /**
+     * Persists the admin DM template text for this comment (used when editing notifications after reply).
+     */
+    saveNotificationText(commentId, text) {
+        const c = this.comments.find((x) => x.comment_id === commentId);
+        if (!c) {
+            return;
+        }
+        c.notification_text = text;
+        this.queuePersist();
+    }
+    /**
+     * Records the DM `message_mid` for one admin (upserts by `admin_id`).
+     */
+    saveNotificationMid(commentId, adminId, mid) {
+        const c = this.comments.find((x) => x.comment_id === commentId);
+        if (!c) {
+            return;
+        }
+        const list = c.notification_mids ?? [];
+        const idx = list.findIndex((e) => e.admin_id === adminId);
+        const entry = { admin_id: adminId, message_mid: mid };
+        if (idx >= 0) {
+            list[idx] = entry;
+        }
+        else {
+            list.push(entry);
+        }
+        c.notification_mids = list;
+        this.queuePersist();
+    }
+    getNotificationMids(commentId) {
+        const c = this.comments.find((x) => x.comment_id === commentId);
+        return c?.notification_mids ? [...c.notification_mids] : [];
     }
     /**
      * Counts comments whose posts belong to the given channel (`postIds` from postStore).

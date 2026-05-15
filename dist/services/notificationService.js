@@ -6,6 +6,7 @@ exports.notifyAdminsNewMiniappComment = notifyAdminsNewMiniappComment;
 exports.notifyUserAboutMiniappReply = notifyUserAboutMiniappReply;
 const max_bot_api_1 = require("@maxhub/max-bot-api");
 const config_1 = require("../config");
+const commentStore_1 = require("./commentStore");
 const postStore_1 = require("./postStore");
 const logger_1 = require("../utils/logger");
 function preview80(text) {
@@ -48,18 +49,18 @@ function isFallbackAdminChatRecipient(recipientId) {
 }
 /**
  * Уведомляет всех админов канала личными сообщениями; для `ADMIN_CHAT_ID` используется `sendMessageToChat` (супер-админ / группа).
+ * Возвращает пары `admin_id` / `message_mid` только для успешно отправленных сообщений.
  */
 async function notifyAllAdmins(bot, chatId, message, extra) {
     const recipients = await getChannelAdmins(bot, chatId);
     const unique = [...new Set(recipients)];
+    const out = [];
     for (const recipientId of unique) {
         try {
-            if (isFallbackAdminChatRecipient(recipientId)) {
-                await bot.api.sendMessageToChat(config_1.config.ADMIN_CHAT_ID, message, extra);
-            }
-            else {
-                await bot.api.sendMessageToUser(recipientId, message, extra);
-            }
+            const sent = isFallbackAdminChatRecipient(recipientId)
+                ? await bot.api.sendMessageToChat(config_1.config.ADMIN_CHAT_ID, message, extra)
+                : await bot.api.sendMessageToUser(recipientId, message, extra);
+            out.push({ admin_id: recipientId, message_mid: sent.body.mid });
             logger_1.logger.info('Уведомление админу доставлено', { recipientId, sourceChat: chatId });
         }
         catch (err) {
@@ -70,6 +71,7 @@ async function notifyAllAdmins(bot, chatId, message, extra) {
             });
         }
     }
+    return out;
 }
 /**
  * Уведомляет админов канала о новом комментарии из Mini App (текст + ссылка на приложение с admin=1).
@@ -88,9 +90,13 @@ async function notifyAdminsNewMiniappComment(bot, input) {
 Пост: «${postExcerpt}»
 Канал: ${input.channelTitle}
 👤 ${input.username}: ${input.commentText}`;
-    await notifyAllAdmins(bot, input.channelChatId, message, {
+    commentStore_1.commentStore.saveNotificationText(input.commentId, message);
+    const sent = await notifyAllAdmins(bot, input.channelChatId, message, {
         attachments: [keyboard],
     });
+    for (const { admin_id, message_mid } of sent) {
+        commentStore_1.commentStore.saveNotificationMid(input.commentId, admin_id, message_mid);
+    }
 }
 /**
  * Шлёт пользователю DM об ответе канала на комментарий (кнопка «Открыть»). Ошибки доставки логируются.
