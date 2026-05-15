@@ -258,7 +258,7 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
     }
     try {
       if (!(await isUserChannelAdmin(deps.bot, chatId, userId))) {
-        res.status(403).json({ error: 'forbidden' })
+        res.status(403).json({ error: 'Доступ запрещён' })
         return
       }
       const members = await listChannelAdminsForMiniApp(deps.bot, chatId)
@@ -418,8 +418,12 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
     }
 
     const post = postStore.getPost(postId)
-    if (!post || post.chat_id !== chatId) {
+    if (!post) {
       res.status(404).json({ error: 'post not found' })
+      return
+    }
+    if (post.chat_id !== chatId) {
+      res.status(403).json({ error: 'Доступ запрещён' })
       return
     }
 
@@ -467,8 +471,9 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
     const commentId = parseNonEmptyString(body.comment_id)
     const postId = parseNonEmptyString(body.post_id)
     const chatId = parseNonZeroInt(body.chat_id)
+    const replierUserId = parsePositiveInt(body.user_id)
     const adminText = parseNonEmptyString(body.admin_text)
-    if (!commentId || !postId || !chatId || !adminText) {
+    if (!commentId || !postId || !chatId || !replierUserId || !adminText) {
       res.status(400).json({ error: 'missing or invalid fields' })
       return
     }
@@ -479,6 +484,11 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
     const post = postStore.getPost(postId)
     if (!post || post.chat_id !== chatId) {
       res.status(404).json({ error: 'post not found' })
+      return
+    }
+
+    if (!(await isUserChannelAdmin(deps.bot, post.chat_id, replierUserId))) {
+      res.status(403).json({ error: 'Только администраторы могут отвечать' })
       return
     }
 

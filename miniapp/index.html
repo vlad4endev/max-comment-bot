@@ -1018,6 +1018,38 @@
         <div id="err"></div>
         <div id="feed"></div>
         <div class="composer-wrap">
+          <div
+            id="subscribeBanner"
+            style="
+              display: none;
+              margin: 0 12px 10px;
+              padding: 12px 14px;
+              background: rgba(127,119,221,0.1);
+              border: 1px solid rgba(127,119,221,0.25);
+              border-radius: 12px;
+              align-items: center;
+              gap: 10px;
+            "
+          >
+            <div style="flex:1; font-size:13px; color:rgba(255,255,255,0.75); line-height:1.4">
+              Запустите бота чтобы получать ответы на комментарии
+            </div>
+            <a
+              id="subscribeBannerLink"
+              href="#"
+              style="
+                flex-shrink:0;
+                padding:8px 14px;
+                background:#7F77DD;
+                border-radius:10px;
+                font-size:13px;
+                font-weight:600;
+                color:#fff;
+                text-decoration:none;
+                white-space:nowrap;
+              "
+              >🔔 Старт</a>
+          </div>
           <div class="composer">
             <div class="av av-composer" id="composerAv" aria-hidden="true">?</div>
             <input type="text" id="input" placeholder="Написать комментарий…" autocomplete="off" />
@@ -1901,6 +1933,7 @@
             comment_id: cid,
             post_id: postId,
             chat_id: Number(chatId),
+            user_id: Number(userId),
             admin_text: text,
             admin_name: adminNameForReply,
           };
@@ -2062,6 +2095,37 @@
           });
       }
 
+      function syncSubscribeBannerFromApi() {
+        var ban = document.getElementById('subscribeBanner');
+        var link = document.getElementById('subscribeBannerLink');
+        if (!ban || !feedEl) return;
+        fetch('/api/user-status?user_id=' + encodeURIComponent(String(userId)))
+          .then(function (r) {
+            return r.json();
+          })
+          .then(function (data) {
+            var started = !!(data && data.started);
+            var nick =
+              data && data.bot_nickname
+                ? String(data.bot_nickname).replace(/^@/, '').trim()
+                : '';
+            if (link && nick) {
+              link.href = 'https://max.ru/' + nick + '?startapp=subscribe';
+            }
+            if (started) {
+              ban.style.display = 'none';
+              feedEl.style.paddingBottom = 'calc(78px + env(safe-area-inset-bottom))';
+            } else {
+              ban.style.display = 'flex';
+              feedEl.style.paddingBottom = 'calc(132px + env(safe-area-inset-bottom))';
+            }
+          })
+          .catch(function () {
+            ban.style.display = 'none';
+            feedEl.style.paddingBottom = 'calc(78px + env(safe-area-inset-bottom))';
+          });
+      }
+
       function bumpCommentCount(delta) {
         if (typeof postCommentCount === 'number') {
           postCommentCount += delta;
@@ -2172,10 +2236,13 @@
 
       loadPost().then(function () {
         return loadComments(true);
+      }).then(function () {
+        syncSubscribeBannerFromApi();
       });
 
       setInterval(function () {
         loadComments(false);
+        syncSubscribeBannerFromApi();
       }, 15000);
     }
 
