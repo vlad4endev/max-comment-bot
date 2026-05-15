@@ -639,15 +639,16 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
       res.status(400).json({ error: 'missing or invalid fields' })
       return
     }
-    const rawAdminName =
-      typeof body.admin_name === 'string' ? body.admin_name.trim() : ''
-    const replierName = rawAdminName || 'Админ'
-
     const post = postStore.getPost(postId)
     if (!post || post.chat_id !== chatId) {
       res.status(404).json({ error: 'post not found' })
       return
     }
+    const channelReplyName =
+      channelRegistry.getChannel(chatId)?.title?.trim() || 'Канал'
+    const rawAdminName =
+      typeof body.admin_name === 'string' ? body.admin_name.trim() : ''
+    const replierNameForStatus = rawAdminName || `админ #${replierUserId}`
 
     if (!(await isUserChannelAdmin(deps.bot, post.chat_id, replierUserId))) {
       res.status(403).json({ error: 'Только администраторы могут отвечать' })
@@ -660,7 +661,7 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
       return
     }
 
-    const updated = commentStore.addReply(commentId, adminText, rawAdminName || undefined)
+    const updated = commentStore.addReply(commentId, adminText, channelReplyName)
     if (!updated) {
       res.status(404).json({ error: 'comment not found' })
       return
@@ -671,7 +672,7 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
     if (mids.length > 0 && originalText && isMiniAppOpenUrlConfigured()) {
       const replyPreview = adminText.slice(0, 80)
       const ellipsis = adminText.length > 80 ? '...' : ''
-      const statusLine = `\n\n✅ Ответил ${replierName}: «${replyPreview}${ellipsis}»`
+      const statusLine = `\n\n✅ Ответил ${replierNameForStatus}: «${replyPreview}${ellipsis}»`
       const updatedText = `${originalText}${statusLine}`
       const miniAppUrl = buildMiniAppUrl(postId, chatId, { admin: '1' })
       const kb = Keyboard.inlineKeyboard([[Keyboard.button.link('✅ Просмотрено', miniAppUrl)]])
@@ -802,9 +803,6 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
       res.status(400).json({ error: 'missing or invalid fields' })
       return
     }
-    const rawAdminName =
-      typeof body.admin_name === 'string' ? body.admin_name.trim() : ''
-
     const access = await resolveAdminCommentAccess(deps.bot, {
       commentId,
       postId,
@@ -816,11 +814,9 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
       return
     }
 
-    const updated = commentStore.updateReply(
-      commentId,
-      adminText,
-      rawAdminName || undefined,
-    )
+    const channelReplyName =
+      channelRegistry.getChannel(access.post.chat_id)?.title?.trim() || 'Канал'
+    const updated = commentStore.updateReply(commentId, adminText, channelReplyName)
     if (!updated) {
       res.status(404).json({ error: 'reply not found' })
       return
