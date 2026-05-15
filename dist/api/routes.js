@@ -134,16 +134,36 @@ function toWireComment(c) {
 function createCommentApiRouter(deps) {
     const router = express_1.default.Router();
     router.use(express_1.default.json({ limit: '512kb' }));
-    router.get('/user-status', (req, res) => {
+    router.get('/user-status', async (req, res) => {
         const userId = parsePositiveInt(req.query.user_id);
         if (!userId) {
             res.status(400).json({ error: 'missing or invalid user_id' });
             return;
         }
+        const chatId = parseNonZeroInt(req.query.chat_id);
+        const isSubscriber = subscriberStore_1.subscriberStore.hasSubscriber(userId);
+        const isAdmin = chatId !== null ? await (0, channelPostActions_1.isUserChannelAdmin)(deps.bot, chatId, userId) : false;
+        const showSubscribeBanner = !isSubscriber && !isAdmin;
         res.json({
-            started: subscriberStore_1.subscriberStore.hasSubscriber(userId),
+            started: isSubscriber,
+            is_admin: isAdmin,
+            show_subscribe_banner: showSubscribeBanner,
             bot_nickname: config_1.config.BOT_NICKNAME,
         });
+    });
+    router.post('/register-subscriber', (req, res) => {
+        const body = req.body;
+        if (!isRecord(body)) {
+            res.status(400).json({ error: 'invalid body' });
+            return;
+        }
+        const userId = parsePositiveInt(body.user_id);
+        if (!userId) {
+            res.status(400).json({ error: 'missing or invalid user_id' });
+            return;
+        }
+        subscriberStore_1.subscriberStore.addSubscriber(userId);
+        res.json({ ok: true });
     });
     router.get('/stats', async (req, res) => {
         const userId = parsePositiveInt(req.query.user_id);

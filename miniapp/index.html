@@ -2099,12 +2099,21 @@
         var ban = document.getElementById('subscribeBanner');
         var link = document.getElementById('subscribeBannerLink');
         if (!ban || !feedEl) return;
-        fetch('/api/user-status?user_id=' + encodeURIComponent(String(userId)))
+        if (isAdmin) {
+          ban.style.display = 'none';
+          feedEl.style.paddingBottom = 'calc(78px + env(safe-area-inset-bottom))';
+          return;
+        }
+        fetch(
+          '/api/user-status?user_id=' +
+            encodeURIComponent(String(userId)) +
+            '&chat_id=' +
+            encodeURIComponent(String(chatId))
+        )
           .then(function (r) {
             return r.json();
           })
           .then(function (data) {
-            var started = !!(data && data.started);
             var nick =
               data && data.bot_nickname
                 ? String(data.bot_nickname).replace(/^@/, '').trim()
@@ -2112,12 +2121,12 @@
             if (link && nick) {
               link.href = 'https://max.ru/' + nick + '?startapp=subscribe';
             }
-            if (started) {
-              ban.style.display = 'none';
-              feedEl.style.paddingBottom = 'calc(78px + env(safe-area-inset-bottom))';
-            } else {
+            if (data && data.show_subscribe_banner) {
               ban.style.display = 'flex';
               feedEl.style.paddingBottom = 'calc(132px + env(safe-area-inset-bottom))';
+            } else {
+              ban.style.display = 'none';
+              feedEl.style.paddingBottom = 'calc(78px + env(safe-area-inset-bottom))';
             }
           })
           .catch(function () {
@@ -2209,6 +2218,18 @@
             }
             var slot = node.querySelector('[data-admin-slot]');
             if (slot) slot.setAttribute('data-admin-slot', res.comment_id);
+            var banAfter = document.getElementById('subscribeBanner');
+            if (banAfter) {
+              banAfter.style.display = 'none';
+            }
+            if (feedEl) {
+              feedEl.style.paddingBottom = 'calc(78px + env(safe-area-inset-bottom))';
+            }
+            fetch('/api/register-subscriber', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ user_id: Number(userId) }),
+            }).catch(function () {});
           })
           .catch(function (e) {
             setErr(e.message || String(e));
