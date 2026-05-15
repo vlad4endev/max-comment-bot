@@ -36,6 +36,44 @@
       min-height: 100dvh;
     }
     .view.hidden { display: none !important; }
+    #view-join {
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      padding: 12px;
+      padding-top: calc(12px + env(safe-area-inset-top));
+      padding-bottom: calc(16px + env(safe-area-inset-bottom));
+    }
+    #view-join .join-title {
+      font-size: 18px;
+      font-weight: 700;
+      text-align: center;
+      margin: 4px 0 0;
+    }
+    #view-join .join-lead {
+      font-size: 14px;
+      color: var(--muted);
+      line-height: 1.45;
+      text-align: center;
+      margin: 0;
+    }
+    #view-join .join-channel-title {
+      font-size: 16px;
+      font-weight: 600;
+      text-align: center;
+    }
+    #view-join .join-err {
+      color: var(--danger);
+      font-size: 13px;
+      min-height: 1em;
+      text-align: center;
+    }
+    #view-join .join-success {
+      color: var(--teal);
+      font-size: 14px;
+      text-align: center;
+      font-weight: 600;
+    }
     #view-home {
       display: flex;
       flex-direction: column;
@@ -221,6 +259,100 @@
       background: rgba(0, 0, 0, 0.25);
     }
     .connect-hint.show { display: block; }
+    .section-label {
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      margin: 16px 0 0 2px;
+    }
+    #adminsList { margin-top: 8px; }
+    .admins-card {
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 14px;
+      padding: 12px;
+      margin-bottom: 10px;
+    }
+    .admins-card-title {
+      font-size: 13px;
+      font-weight: 600;
+      color: rgba(255, 255, 255, 0.7);
+      margin-bottom: 10px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .admin-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 7px 0;
+      border-top: 1px solid rgba(255, 255, 255, 0.05);
+    }
+    .admin-av {
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      background: rgba(127, 119, 221, 0.2);
+      color: #afa9ec;
+      font-size: 11px;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+    .admin-name {
+      flex: 1;
+      font-size: 13px;
+      color: rgba(255, 255, 255, 0.85);
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .admin-status-connected {
+      font-size: 11px;
+      color: #5dcaa5;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      flex-shrink: 0;
+    }
+    .admin-status-pending {
+      font-size: 11px;
+      color: rgba(255, 255, 255, 0.35);
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      flex-shrink: 0;
+    }
+    .admin-status-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+    .admin-status-dot.teal { background: #5dcaa5; }
+    .admin-status-dot.yellow { background: var(--yellow); }
+    .btn-invite {
+      width: 100%;
+      margin-top: 10px;
+      padding: 10px;
+      border-radius: 10px;
+      border: 1px dashed rgba(127, 119, 221, 0.4);
+      background: transparent;
+      color: #afa9ec;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+    }
     .features-grid {
       display: grid;
       grid-template-columns: 1fr 1fr;
@@ -817,6 +949,10 @@
         <div class="connect-hint" id="connectHint"></div>
       </div>
       <div>
+        <div class="section-label">Администраторы каналов</div>
+        <div id="adminsList"></div>
+      </div>
+      <div>
         <div class="section-title">Возможности</div>
         <div class="features-grid">
           <div class="feat-cell" data-feature="comments">
@@ -842,6 +978,25 @@
         <button type="button" class="btn-secondary" id="btnInstruction">Инструкция</button>
       </div>
       <div class="channel-settings-panel" id="channelSettingsPanel"></div>
+    </div>
+
+    <div id="view-join" class="view hidden">
+      <div class="hero">
+        <div class="bot-avatar" aria-hidden="true"></div>
+        <h1 class="join-title">Уведомления о комментариях</h1>
+        <p class="join-lead" id="joinLead">
+          Подтвердите подключение — вы будете получать личные уведомления о новых комментариях к постам этого канала.
+        </p>
+      </div>
+      <div class="card" id="joinChannelCard" style="display:none;">
+        <div class="join-channel-title" id="joinChannelTitle">—</div>
+        <div style="font-size:12px;color:var(--muted);margin-top:8px;text-align:center;" id="joinChannelIdLine"></div>
+      </div>
+      <div class="join-err" id="joinErr" aria-live="polite"></div>
+      <div class="join-success hidden" id="joinSuccess"></div>
+      <button type="button" class="btn-primary" id="joinConfirmBtn" style="width:100%;margin-top:4px;">
+        Подключить уведомления
+      </button>
     </div>
 
     <div id="view-comments" class="view hidden">
@@ -878,6 +1033,29 @@
     </div>
   </div>
 
+  <div
+    id="toast"
+    style="
+      position: fixed;
+      bottom: 80px;
+      left: 50%;
+      transform: translateX(-50%);
+      max-width: min(360px, 92vw);
+      text-align: center;
+      white-space: normal;
+      background: rgba(93, 202, 165, 0.15);
+      border: 1px solid rgba(93, 202, 165, 0.3);
+      color: #5dcaa5;
+      font-size: 13px;
+      padding: 10px 20px;
+      border-radius: 20px;
+      opacity: 0;
+      transition: opacity 0.3s;
+      pointer-events: none;
+      z-index: 100;
+    "
+  ></div>
+
   <div id="instructionOverlay" class="overlay hidden" aria-hidden="true">
     <div class="overlay-card">
       <h2>Как подключить CommentBot</h2>
@@ -894,7 +1072,12 @@
   <script>
     function decodeStartParam(raw) {
       if (!raw || raw === 'start') return null
-      var s = String(raw).trim().toLowerCase()
+      var trimmed = String(raw).trim()
+      if (/^join\d+$/i.test(trimmed)) {
+        var j = trimmed.toLowerCase()
+        return { join_channel_id: '-' + j.slice(4) }
+      }
+      var s = trimmed.toLowerCase()
       var m = s.match(/^pid_([a-f0-9]+)_cid_(\d+)(_admin)?$/)
       if (!m) return null
       var id = m[1]
@@ -936,18 +1119,32 @@
         if (fromStart.post_id && !sp.get('post_id')) sp.set('post_id', fromStart.post_id);
         if (fromStart.chat_id && !sp.get('chat_id')) sp.set('chat_id', fromStart.chat_id);
         if (fromStart.admin && !sp.get('admin')) sp.set('admin', '1');
+        if (fromStart.join_channel_id && !sp.get('join_channel_id')) {
+          sp.set('join_channel_id', fromStart.join_channel_id);
+        }
       }
       if (raw && raw !== 'start' && raw.indexOf('post_id=') !== -1) {
         var inner = raw.charAt(0) === '?' ? raw.slice(1) : raw;
         try {
           var q2 = new URLSearchParams(inner);
-          ['post_id', 'chat_id', 'user_id', 'username', 'admin', 'subscribers'].forEach(function (k) {
+          ['post_id', 'chat_id', 'user_id', 'username', 'admin', 'subscribers', 'join_channel_id'].forEach(function (k) {
             var v = q2.get(k);
             if (v && !sp.get(k)) sp.set(k, v);
           });
         } catch (e) {}
       }
       return sp;
+    }
+
+    function showToast(msg) {
+      var t = document.getElementById('toast')
+      if (!t) return
+      t.textContent = msg || ''
+      t.style.opacity = '1'
+      if (t._toastTimer) window.clearTimeout(t._toastTimer)
+      t._toastTimer = window.setTimeout(function () {
+        t.style.opacity = '0'
+      }, 2000)
     }
 
     function initApp() {
@@ -968,23 +1165,183 @@
       var mergedParams = buildMergedSearchParams(user, startParam);
       var postId = mergedParams.get('post_id');
       var chatId = mergedParams.get('chat_id');
+      var joinChannelId = mergedParams.get('join_channel_id');
       var hasPostContext = !!(postId && chatId);
       var adminParam = mergedParams.get('admin') === '1';
 
       var viewHome = document.getElementById('view-home');
       var viewComments = document.getElementById('view-comments');
+      var viewJoin = document.getElementById('view-join');
 
-      if (hasPostContext) {
+      ;(function bindAdminsInviteClicks() {
+        var host = document.getElementById('adminsList')
+        if (!host || host.dataset.inviteBound === '1') return
+        host.dataset.inviteBound = '1'
+        host.addEventListener('click', function (ev) {
+          var btn = ev.target.closest('.btn-invite')
+          if (!btn) return
+          var card = btn.closest('.admins-card')
+          var url = card && card.getAttribute('data-invite-url')
+          if (!url) return
+          var p =
+            navigator.clipboard && navigator.clipboard.writeText
+              ? navigator.clipboard.writeText(url)
+              : Promise.reject()
+          p.catch(function () {
+            try {
+              var ta = document.createElement('textarea')
+              ta.value = url
+              ta.setAttribute('readonly', '')
+              ta.style.position = 'fixed'
+              ta.style.left = '-9999px'
+              document.body.appendChild(ta)
+              ta.select()
+              document.execCommand('copy')
+              document.body.removeChild(ta)
+              return Promise.resolve()
+            } catch (e) {
+              return Promise.reject(e)
+            }
+          })
+            .then(function () {
+              showToast('Ссылка скопирована! Отправьте её другим администраторам')
+            })
+            .catch(function () {
+              showToast('Не удалось скопировать ссылку')
+            })
+        })
+      })()
+
+      if (joinChannelId) {
+        viewJoin.classList.remove('hidden');
+        viewHome.classList.add('hidden');
+        viewComments.classList.add('hidden');
+      } else if (hasPostContext) {
         viewComments.classList.remove('hidden');
         viewHome.classList.add('hidden');
+        viewJoin.classList.add('hidden');
       } else {
         viewHome.classList.remove('hidden');
         viewComments.classList.add('hidden');
+        viewJoin.classList.add('hidden');
       }
+
+    /* ——— JOIN (admin invite) ——— */
+    function showJoinPage() {
+      if (!joinChannelId) return;
+
+      var joinErr = document.getElementById('joinErr');
+      var joinSuccess = document.getElementById('joinSuccess');
+      var joinCard = document.getElementById('joinChannelCard');
+      var joinTitleEl = document.getElementById('joinChannelTitle');
+      var joinIdLine = document.getElementById('joinChannelIdLine');
+      var joinBtn = document.getElementById('joinConfirmBtn');
+
+      function setJoinErr(t) {
+        joinErr.textContent = t || '';
+        if (t) joinSuccess.classList.add('hidden');
+      }
+
+      var uid = getBridgeNumericUserId(user);
+      var uidFromQuery = mergedParams.get('user_id');
+      if (uid == null && uidFromQuery) {
+        var pu = parseInt(uidFromQuery, 10);
+        if (Number.isFinite(pu) && pu > 0) uid = pu;
+      }
+
+      if (uid == null) {
+        setJoinErr('Откройте ссылку из MAX (нужен user_id) или добавьте ?user_id= в URL для теста.');
+        joinBtn.disabled = true;
+        return;
+      }
+
+      joinBtn.disabled = true;
+
+      var loaded = false;
+      var alreadyLinked = false;
+
+      function applyInvitePayload(data) {
+        loaded = true;
+        alreadyLinked = !!data.already_linked;
+        var t = (data.channel_title && String(data.channel_title).trim()) || 'Канал';
+        joinTitleEl.textContent = t;
+        joinIdLine.textContent = 'ID: ' + joinChannelId;
+        joinCard.style.display = '';
+        joinSuccess.textContent = '';
+        if (alreadyLinked) {
+          joinSuccess.textContent = 'Вы уже подключены к уведомлениям этого канала.';
+          joinSuccess.classList.remove('hidden');
+          joinBtn.textContent = 'Готово';
+          joinBtn.disabled = true;
+        } else {
+          joinSuccess.classList.add('hidden');
+          joinBtn.textContent = 'Подключить уведомления';
+          joinBtn.disabled = false;
+        }
+        setJoinErr('');
+      }
+
+      fetch(
+        '/api/channel-invite?user_id=' +
+          encodeURIComponent(String(uid)) +
+          '&join_channel_id=' +
+          encodeURIComponent(joinChannelId)
+      )
+        .then(function (r) {
+          return r.json().then(function (j) {
+            return { ok: r.ok, status: r.status, body: j };
+          });
+        })
+        .then(function (x) {
+          if (!x.ok) {
+            var msg = (x.body && x.body.error) || 'Ошибка ' + x.status;
+            setJoinErr(msg);
+            joinBtn.disabled = true;
+            return;
+          }
+          applyInvitePayload(x.body);
+        })
+        .catch(function () {
+          setJoinErr('Не удалось связаться с сервером.');
+          joinBtn.disabled = true;
+        });
+
+      joinBtn.addEventListener('click', function () {
+        if (!loaded || alreadyLinked) return;
+        joinBtn.disabled = true;
+        setJoinErr('');
+        fetch('/api/channel-invite', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ user_id: uid, join_channel_id: joinChannelId }),
+        })
+          .then(function (r) {
+            return r.json().then(function (j) {
+              return { ok: r.ok, body: j };
+            });
+          })
+          .then(function (x) {
+            if (!x.ok) {
+              var msg = (x.body && x.body.error) || 'Не удалось сохранить';
+              setJoinErr(msg);
+              joinBtn.disabled = false;
+              return;
+            }
+            alreadyLinked = true;
+            joinSuccess.textContent = 'Готово! Уведомления о комментариях к этому каналу включены.';
+            joinSuccess.classList.remove('hidden');
+            joinBtn.textContent = 'Готово';
+          })
+          .catch(function () {
+            setJoinErr('Сеть недоступна. Попробуйте ещё раз.');
+            joinBtn.disabled = false;
+          });
+      });
+    }
 
     /* ——— HOME ——— */
     function bootHome() {
-      if (hasPostContext) return;
+      if (hasPostContext || joinChannelId) return;
       var adminBanner = document.getElementById('adminBanner');
       if (adminParam) adminBanner.classList.add('show');
 
@@ -1009,6 +1366,70 @@
           .replace(/</g, '&lt;')
           .replace(/>/g, '&gt;')
           .replace(/"/g, '&quot;');
+      }
+
+      function renderChannelAdmins(ch, data) {
+        var adminsHost = document.getElementById('adminsList')
+        if (!adminsHost) return
+        var title = (ch.title && String(ch.title).trim()) || 'Канал ' + ch.chat_id
+        if (!data || !Array.isArray(data.admins)) {
+          adminsHost.insertAdjacentHTML(
+            'beforeend',
+            '<div class="admins-card" role="article">' +
+              '<div class="admins-card-title"><span aria-hidden="true">📢</span><span>' +
+              esc(title) +
+              '</span></div>' +
+              '<div style="font-size:12px;color:var(--muted);padding:4px 0;">Не удалось загрузить список администраторов.</div></div>'
+          )
+          return
+        }
+        var inviteRaw = data.invite_url ? String(data.invite_url) : ''
+        var inviteAttr = inviteRaw ? esc(inviteRaw) : ''
+        var rows = (data.admins || [])
+          .map(function (a) {
+            var nm = esc(String(a.name || '—'))
+            var ini = esc(String(a.initials || initials(a.name)))
+            var connected = !!a.linked
+            var statusCls = connected ? 'admin-status-connected' : 'admin-status-pending'
+            var dotCls = connected ? 'admin-status-dot teal' : 'admin-status-dot yellow'
+            var label = connected ? 'подключён' : 'не подключён'
+            return (
+              '<div class="admin-row">' +
+              '<div class="admin-av">' +
+              ini +
+              '</div>' +
+              '<div class="admin-name">' +
+              nm +
+              '</div>' +
+              '<div class="' +
+              statusCls +
+              '"><span class="' +
+              dotCls +
+              '" aria-hidden="true"></span>' +
+              label +
+              '</div></div>'
+            )
+          })
+          .join('')
+        var inviteBtn =
+          inviteAttr !== ''
+            ? '<button type="button" class="btn-invite">Пригласить администраторов</button>'
+            : ''
+        var bodyRows =
+          rows !== ''
+            ? rows
+            : '<div style="font-size:12px;color:var(--muted);padding:4px 0;">Нет администраторов в ответе API.</div>'
+        var card =
+          '<div class="admins-card" role="article"' +
+          (inviteAttr !== '' ? ' data-invite-url="' + inviteAttr + '"' : '') +
+          '>' +
+          '<div class="admins-card-title"><span aria-hidden="true">📢</span><span>' +
+          esc(title) +
+          '</span></div>' +
+          bodyRows +
+          inviteBtn +
+          '</div>'
+        adminsHost.insertAdjacentHTML('beforeend', card)
       }
 
       var displayName =
@@ -1145,11 +1566,17 @@
         })
         .then(function (data) {
           var list = document.getElementById('homeChannelList');
+          var adminsHost = document.getElementById('adminsList');
           list.innerHTML = '';
+          if (adminsHost) adminsHost.innerHTML = '';
           if (data.bot_nickname) botNick = '@' + String(data.bot_nickname).replace(/^@/, '');
           var arr = data.channels || [];
           if (!arr.length) {
             list.innerHTML = '<div style="color:var(--muted);font-size:13px;padding:8px 4px;">Каналов пока нет. Подключите бота в свой канал.</div>';
+            if (adminsHost) {
+              adminsHost.innerHTML =
+                '<div style="color:var(--muted);font-size:13px;padding:8px 4px;">Подключите канал, чтобы увидеть администраторов.</div>';
+            }
             return;
           }
           arr.forEach(function (ch) {
@@ -1175,6 +1602,23 @@
               (ch.status === 'pending' ? 'Ожидает прав' : 'Активен') +
               '"></span></div>';
             list.insertAdjacentHTML('beforeend', row);
+          });
+          if (!adminsHost) return;
+          Promise.all(
+            arr.map(function (ch) {
+              return fetch(
+                '/api/channel-admins?chat_id=' +
+                  encodeURIComponent(String(ch.chat_id)) +
+                  '&user_id=' +
+                  encodeURIComponent(String(uid))
+              ).then(function (r) {
+                return r.ok ? r.json() : null;
+              });
+            })
+          ).then(function (results) {
+            results.forEach(function (admData, i) {
+              renderChannelAdmins(arr[i], admData);
+            });
           });
         })
         .catch(function () {});
@@ -1233,7 +1677,7 @@
     }
 
     function bootComments() {
-      if (!hasPostContext) return;
+      if (!hasPostContext || joinChannelId) return;
 
       var params = mergedParams;
       var postId = params.get('post_id');
@@ -1735,6 +2179,7 @@
       }, 15000);
     }
 
+    showJoinPage();
     bootHome();
     bootComments();
     }

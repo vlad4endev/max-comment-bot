@@ -1,8 +1,10 @@
 import type { Bot } from '@maxhub/max-bot-api'
 import { Keyboard } from '@maxhub/max-bot-api'
+import type { ChatMember } from '@maxhub/max-bot-api/types'
 import express from 'express'
 
 import { config } from '../config'
+import { channelNotifyLinkStore } from '../services/channelNotifyLinkStore'
 import { channelRegistry } from '../services/channelRegistry'
 import { isUserChannelAdmin } from '../services/channelPostActions'
 import type { Comment } from '../services/commentStore'
@@ -73,6 +75,54 @@ function parseBoolean(value: unknown): boolean | null {
     return false
   }
   return null
+}
+
+function isChannelAdminOrOwnerMember(m: ChatMember): boolean {
+  return !m.is_bot && (m.is_admin || m.is_owner)
+}
+
+function adminDisplayInitials(name: string): string {
+  const t = name.trim()
+  if (t === '') {
+    return '?'
+  }
+  const parts = t.split(/\s+/).filter(Boolean)
+  if (parts.length >= 2) {
+    const a = parts[0].charAt(0)
+    const b = parts[parts.length - 1].charAt(0)
+    return `${a}${b}`.toUpperCase()
+  }
+  return t.slice(0, 2).toUpperCase()
+}
+
+/**
+ * Lists channel admins/owners: paginates {@link Bot.api.getChatMembers}, filters roles; if none found, uses {@link Bot.api.getChatAdmins}.
+ */
+async function listChannelAdminsForMiniApp(bot: Bot, chatId: number): Promise<ChatMember[]> {
+  const byId = new Map<number, ChatMember>()
+  let marker: number | undefined
+  const pageSize = 100
+  for (let page = 0; page < 100; page += 1) {
+    const res = await bot.api.getChatMembers(chatId, {
+      count: pageSize,
+      ...(marker !== undefined ? { marker } : {}),
+    })
+    for (const m of res.members) {
+      if (isChannelAdminOrOwnerMember(m)) {
+        byId.set(m.user_id, m)
+      }
+    }
+    const next = res.marker
+    if (next === undefined || next === null) {
+      break
+    }
+    marker = next
+  }
+  if (byId.size > 0) {
+    return [...byId.values()].sort((a, b) => a.user_id - b.user_id)
+  }
+  const { members } = await bot.api.getChatAdmins(chatId)
+  return members.filter(isChannelAdminOrOwnerMember).sort((a, b) => a.user_id - b.user_id)
 }
 
 async function listChannelChatIdsWhereUserIsAdmin(bot: Bot, userId: number): Promise<number[]> {
@@ -182,6 +232,38 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
     }
   })
 
+  router.get('/channel-admins', async (req, res) => {
+    const userId = parsePositiveInt(req.query.user_id)
+    const chatId = parseNonZeroInt(req.query.chat_id)
+    if (!userId || !chatId) {
+      res.status(400).json({ error: 'missing or invalid user_id or chat_id' })
+      return
+    }
+    if (!channelRegistry.getChannel(chatId)) {
+      res.status(404).json({ error: 'channel not connected' })
+      return
+    }
+    try {
+      if (!(await isUserChannelAdmin(deps.bot, chatId, userId))) {
+        res.status(403).json({ error: 'forbidden' })
+        return
+      }
+      const members = await listChannelAdminsForMiniApp(deps.bot, chatId)
+      const linkedIds = new Set(channelNotifyLinkStore.getUserIdsForChannel(chatId))
+      const admins = members.map((m) => ({
+        user_id: m.user_id,
+        name: m.name,
+        initials: adminDisplayInitials(m.name),
+        linked: linkedIds.has(m.user_id),
+      }))
+      const invite_url = `https://max.ru/${config.botNickname}?startapp=join${Math.abs(chatId)}`
+      res.json({ admins, invite_url })
+    } catch (err: unknown) {
+      logger.error('GET /api/channel-admins failed', { err })
+      res.status(500).json({ error: 'internal error' })
+    }
+  })
+
   router.get('/settings', (req, res) => {
     const userId = parsePositiveInt(req.query.user_id)
     if (!userId) {
@@ -206,6 +288,82 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
     }
     const next = userMiniappSettingsStore.setFeature(userId, feature, enabled)
     res.json(next)
+  })
+
+  async function resolveChannelInviteAccess(
+    userId: number,
+    joinChannelIdRaw: string | null,
+  ): Promise<
+    | { ok: true; channelChatId: number; title: string | null }
+    | { ok: false; status: 400 | 403 | 404; error: string }
+  > {
+    const channelChatId = parseNonZeroInt(joinChannelIdRaw)
+    if (!channelChatId) {
+      return { ok: false, status: 400, error: 'missing or invalid join_channel_id' }
+    }
+    const reg = channelRegistry.getChannel(channelChatId)
+    if (!reg) {
+      return { ok: false, status: 404, error: 'channel is not connected to this bot' }
+    }
+    if (!(await isUserChannelAdmin(deps.bot, channelChatId, userId))) {
+      return { ok: false, status: 403, error: 'you must be a channel admin' }
+    }
+    return { ok: true, channelChatId, title: reg.title }
+  }
+
+  router.get('/channel-invite', async (req, res) => {
+    const userId = parsePositiveInt(req.query.user_id)
+    const joinChannelIdRaw = parseNonEmptyString(req.query.join_channel_id)
+    if (!userId || !joinChannelIdRaw) {
+      res.status(400).json({ error: 'missing user_id or join_channel_id' })
+      return
+    }
+    try {
+      const access = await resolveChannelInviteAccess(userId, joinChannelIdRaw)
+      if (!access.ok) {
+        res.status(access.status).json({ error: access.error })
+        return
+      }
+      res.json({
+        ok: true,
+        channel_title: access.title,
+        already_linked: channelNotifyLinkStore.isLinked(userId, access.channelChatId),
+      })
+    } catch (err: unknown) {
+      logger.error('GET /api/channel-invite failed', { err })
+      res.status(500).json({ error: 'internal error' })
+    }
+  })
+
+  router.post('/channel-invite', async (req, res) => {
+    const body = req.body
+    if (!isRecord(body)) {
+      res.status(400).json({ error: 'invalid body' })
+      return
+    }
+    const userId = parsePositiveInt(body.user_id)
+    const joinChannelIdRaw = parseNonEmptyString(body.join_channel_id)
+    if (!userId || !joinChannelIdRaw) {
+      res.status(400).json({ error: 'missing user_id or join_channel_id' })
+      return
+    }
+    try {
+      const access = await resolveChannelInviteAccess(userId, joinChannelIdRaw)
+      if (!access.ok) {
+        res.status(access.status).json({ error: access.error })
+        return
+      }
+      const wasLinked = channelNotifyLinkStore.isLinked(userId, access.channelChatId)
+      channelNotifyLinkStore.register(userId, access.channelChatId)
+      res.json({
+        ok: true,
+        channel_title: access.title,
+        already_linked: wasLinked,
+      })
+    } catch (err: unknown) {
+      logger.error('POST /api/channel-invite failed', { err })
+      res.status(500).json({ error: 'internal error' })
+    }
   })
 
   router.get('/post/:postId', (req, res) => {

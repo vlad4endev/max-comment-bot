@@ -4,6 +4,7 @@ exports.registerEventHandlers = registerEventHandlers;
 const max_bot_api_1 = require("@maxhub/max-bot-api");
 const config_1 = require("../config");
 const channelPostActions_1 = require("../services/channelPostActions");
+const channelNotifyLinkStore_1 = require("../services/channelNotifyLinkStore");
 const channelRegistry_1 = require("../services/channelRegistry");
 const commentStore_1 = require("../services/commentStore");
 const notificationService_1 = require("../services/notificationService");
@@ -162,6 +163,35 @@ async function notifyAdminsChannelJoined(bot, channelChatId) {
     await (0, notificationService_1.notifyAllAdmins)(bot, channelChatId, `✅ Bot added to channel: ${title} (ID: ${channelChatId})`);
 }
 /**
+ * Публичное сообщение в канал с deep link для админов, подписывающихся на уведомления о комментариях.
+ */
+async function postChannelAdminInviteToChannel(bot, channelChatId) {
+    const nick = config_1.config.botNickname.trim();
+    if (!nick) {
+        logger_1.logger.warn('postChannelAdminInviteToChannel: botNickname пустой');
+        return;
+    }
+    const joinPayload = `join${Math.abs(channelChatId)}`;
+    const joinUrl = `https://max.ru/${nick}?startapp=${joinPayload}`;
+    const text = '👋 CommentBot подключён к каналу!\n\n' +
+        'Администраторы — чтобы получать уведомления о комментариях, нажмите кнопку ниже и запустите бота.';
+    try {
+        await bot.api.sendMessageToChat(channelChatId, text, {
+            attachments: [
+                max_bot_api_1.Keyboard.inlineKeyboard([
+                    [max_bot_api_1.Keyboard.button.link('🔔 Получать уведомления о комментариях', joinUrl)],
+                ]),
+            ],
+        });
+    }
+    catch (err) {
+        logger_1.logger.warn('postChannelAdminInviteToChannel: не удалось отправить сообщение в канал', {
+            channelChatId,
+            err,
+        });
+    }
+}
+/**
  * Verifies admin/owner rights, persists channel metadata up front, sends admin join notify once when admin is OK.
  */
 async function tryActivateChannelRegistration(ctx, bot, channelChatId, isChannel) {
@@ -180,6 +210,7 @@ async function tryActivateChannelRegistration(ctx, bot, channelChatId, isChannel
         return { status: 'already_registered' };
     }
     await notifyAdminsChannelJoined(bot, channelChatId);
+    await postChannelAdminInviteToChannel(bot, channelChatId);
     channelsAdminJoinNotified.add(channelChatId);
     return { status: 'registered' };
 }
@@ -202,6 +233,7 @@ If nothing happens, open this chat and send: /connect ${channelChatId}`;
 async function unregisterChannelOnBotLeave(bot, chatId) {
     stateManager_1.stateManager.clearChannelPendingAdminRights(chatId);
     channelsAdminJoinNotified.delete(chatId);
+    channelNotifyLinkStore_1.channelNotifyLinkStore.removeAllForChannel(chatId);
     const removed = channelRegistry_1.channelRegistry.removeChannel(chatId);
     if (!removed) {
         return;

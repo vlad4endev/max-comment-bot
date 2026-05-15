@@ -9,6 +9,7 @@ import {
   resolveMessageChatId,
   tryAttachCommentsToChannelPost,
 } from '../services/channelPostActions'
+import { channelNotifyLinkStore } from '../services/channelNotifyLinkStore'
 import { channelRegistry } from '../services/channelRegistry'
 import { commentStore } from '../services/commentStore'
 import { notifyAllAdmins, type SendMessageExtra } from '../services/notificationService'
@@ -197,6 +198,36 @@ async function notifyAdminsChannelJoined(bot: Bot, channelChatId: number): Promi
 }
 
 /**
+ * Публичное сообщение в канал с deep link для админов, подписывающихся на уведомления о комментариях.
+ */
+async function postChannelAdminInviteToChannel(bot: Bot, channelChatId: number): Promise<void> {
+  const nick = config.botNickname.trim()
+  if (!nick) {
+    logger.warn('postChannelAdminInviteToChannel: botNickname пустой')
+    return
+  }
+  const joinPayload = `join${Math.abs(channelChatId)}`
+  const joinUrl = `https://max.ru/${nick}?startapp=${joinPayload}`
+  const text =
+    '👋 CommentBot подключён к каналу!\n\n' +
+    'Администраторы — чтобы получать уведомления о комментариях, нажмите кнопку ниже и запустите бота.'
+  try {
+    await bot.api.sendMessageToChat(channelChatId, text, {
+      attachments: [
+        Keyboard.inlineKeyboard([
+          [Keyboard.button.link('🔔 Получать уведомления о комментариях', joinUrl)],
+        ]),
+      ],
+    })
+  } catch (err: unknown) {
+    logger.warn('postChannelAdminInviteToChannel: не удалось отправить сообщение в канал', {
+      channelChatId,
+      err,
+    })
+  }
+}
+
+/**
  * Verifies admin/owner rights, persists channel metadata up front, sends admin join notify once when admin is OK.
  */
 async function tryActivateChannelRegistration(
@@ -223,6 +254,7 @@ async function tryActivateChannelRegistration(
   }
 
   await notifyAdminsChannelJoined(bot, channelChatId)
+  await postChannelAdminInviteToChannel(bot, channelChatId)
   channelsAdminJoinNotified.add(channelChatId)
   return { status: 'registered' }
 }
@@ -254,6 +286,7 @@ If nothing happens, open this chat and send: /connect ${channelChatId}`
 async function unregisterChannelOnBotLeave(bot: Bot, chatId: number): Promise<void> {
   stateManager.clearChannelPendingAdminRights(chatId)
   channelsAdminJoinNotified.delete(chatId)
+  channelNotifyLinkStore.removeAllForChannel(chatId)
   const removed = channelRegistry.removeChannel(chatId)
   if (!removed) {
     return

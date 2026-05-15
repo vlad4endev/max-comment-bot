@@ -6,6 +6,7 @@ exports.notifyAdminsNewMiniappComment = notifyAdminsNewMiniappComment;
 exports.notifyUserAboutMiniappReply = notifyUserAboutMiniappReply;
 const max_bot_api_1 = require("@maxhub/max-bot-api");
 const config_1 = require("../config");
+const channelNotifyLinkStore_1 = require("./channelNotifyLinkStore");
 const commentStore_1 = require("./commentStore");
 const postStore_1 = require("./postStore");
 const logger_1 = require("../utils/logger");
@@ -47,13 +48,8 @@ async function getChannelAdmins(bot, chatId) {
 function isFallbackAdminChatRecipient(recipientId) {
     return recipientId === config_1.config.ADMIN_CHAT_ID;
 }
-/**
- * Уведомляет всех админов канала личными сообщениями; для `ADMIN_CHAT_ID` используется `sendMessageToChat` (супер-админ / группа).
- * Возвращает пары `admin_id` / `message_mid` только для успешно отправленных сообщений.
- */
-async function notifyAllAdmins(bot, chatId, message, extra) {
-    const recipients = await getChannelAdmins(bot, chatId);
-    const unique = [...new Set(recipients)];
+async function deliverAdminNotifications(bot, sourceChatId, recipientIds, message, extra) {
+    const unique = [...new Set(recipientIds)];
     const out = [];
     for (const recipientId of unique) {
         try {
@@ -61,17 +57,35 @@ async function notifyAllAdmins(bot, chatId, message, extra) {
                 ? await bot.api.sendMessageToChat(config_1.config.ADMIN_CHAT_ID, message, extra)
                 : await bot.api.sendMessageToUser(recipientId, message, extra);
             out.push({ admin_id: recipientId, message_mid: sent.body.mid });
-            logger_1.logger.info('Уведомление админу доставлено', { recipientId, sourceChat: chatId });
+            logger_1.logger.info('Уведомление админу доставлено', { recipientId, sourceChat: sourceChatId });
         }
         catch (err) {
             logger_1.logger.warn('Не удалось отправить уведомление админу (пропускаем и идём дальше)', {
                 recipientId,
-                sourceChat: chatId,
+                sourceChat: sourceChatId,
                 err,
             });
         }
     }
     return out;
+}
+/**
+ * Кто получает DM о новом комментарии: явные подписки из мини-приложения, иначе все админы из API.
+ */
+async function resolveMiniappCommentNotifyRecipientIds(bot, channelChatId) {
+    const linked = channelNotifyLinkStore_1.channelNotifyLinkStore.getUserIdsForChannel(channelChatId);
+    if (linked.length > 0) {
+        return linked;
+    }
+    return getChannelAdmins(bot, channelChatId);
+}
+/**
+ * Уведомляет всех админов канала личными сообщениями; для `ADMIN_CHAT_ID` используется `sendMessageToChat` (супер-админ / группа).
+ * Возвращает пары `admin_id` / `message_mid` только для успешно отправленных сообщений.
+ */
+async function notifyAllAdmins(bot, chatId, message, extra) {
+    const recipients = await getChannelAdmins(bot, chatId);
+    return deliverAdminNotifications(bot, chatId, recipients, message, extra);
 }
 /**
  * Уведомляет админов канала о новом комментарии из Mini App (текст + ссылка на приложение с admin=1).
@@ -91,7 +105,8 @@ async function notifyAdminsNewMiniappComment(bot, input) {
 Канал: ${input.channelTitle}
 👤 ${input.username}: ${input.commentText}`;
     commentStore_1.commentStore.saveNotificationText(input.commentId, message);
-    const sent = await notifyAllAdmins(bot, input.channelChatId, message, {
+    const recipientIds = await resolveMiniappCommentNotifyRecipientIds(bot, input.channelChatId);
+    const sent = await deliverAdminNotifications(bot, input.channelChatId, recipientIds, message, {
         attachments: [keyboard],
     });
     for (const { admin_id, message_mid } of sent) {

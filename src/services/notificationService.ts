@@ -3,6 +3,7 @@ import { Keyboard } from '@maxhub/max-bot-api'
 import type { ChatMember } from '@maxhub/max-bot-api/types'
 
 import { config } from '../config'
+import { channelNotifyLinkStore } from './channelNotifyLinkStore'
 import { commentStore } from './commentStore'
 import { buildMiniAppUrl, isMiniAppOpenUrlConfigured } from './postStore'
 import { logger } from '../utils/logger'
@@ -56,6 +57,45 @@ function isFallbackAdminChatRecipient(recipientId: number): boolean {
   return recipientId === config.ADMIN_CHAT_ID
 }
 
+async function deliverAdminNotifications(
+  bot: Bot,
+  sourceChatId: number,
+  recipientIds: number[],
+  message: string,
+  extra?: SendMessageExtra,
+): Promise<AdminNotificationSendResult[]> {
+  const unique = [...new Set(recipientIds)]
+  const out: AdminNotificationSendResult[] = []
+
+  for (const recipientId of unique) {
+    try {
+      const sent = isFallbackAdminChatRecipient(recipientId)
+        ? await bot.api.sendMessageToChat(config.ADMIN_CHAT_ID, message, extra)
+        : await bot.api.sendMessageToUser(recipientId, message, extra)
+      out.push({ admin_id: recipientId, message_mid: sent.body.mid })
+      logger.info('Уведомление админу доставлено', { recipientId, sourceChat: sourceChatId })
+    } catch (err) {
+      logger.warn('Не удалось отправить уведомление админу (пропускаем и идём дальше)', {
+        recipientId,
+        sourceChat: sourceChatId,
+        err,
+      })
+    }
+  }
+  return out
+}
+
+/**
+ * Кто получает DM о новом комментарии: явные подписки из мини-приложения, иначе все админы из API.
+ */
+async function resolveMiniappCommentNotifyRecipientIds(bot: Bot, channelChatId: number): Promise<number[]> {
+  const linked = channelNotifyLinkStore.getUserIdsForChannel(channelChatId)
+  if (linked.length > 0) {
+    return linked
+  }
+  return getChannelAdmins(bot, channelChatId)
+}
+
 /**
  * Уведомляет всех админов канала личными сообщениями; для `ADMIN_CHAT_ID` используется `sendMessageToChat` (супер-админ / группа).
  * Возвращает пары `admin_id` / `message_mid` только для успешно отправленных сообщений.
@@ -67,25 +107,7 @@ export async function notifyAllAdmins(
   extra?: SendMessageExtra,
 ): Promise<AdminNotificationSendResult[]> {
   const recipients = await getChannelAdmins(bot, chatId)
-  const unique = [...new Set(recipients)]
-  const out: AdminNotificationSendResult[] = []
-
-  for (const recipientId of unique) {
-    try {
-      const sent = isFallbackAdminChatRecipient(recipientId)
-        ? await bot.api.sendMessageToChat(config.ADMIN_CHAT_ID, message, extra)
-        : await bot.api.sendMessageToUser(recipientId, message, extra)
-      out.push({ admin_id: recipientId, message_mid: sent.body.mid })
-      logger.info('Уведомление админу доставлено', { recipientId, sourceChat: chatId })
-    } catch (err) {
-      logger.warn('Не удалось отправить уведомление админу (пропускаем и идём дальше)', {
-        recipientId,
-        sourceChat: chatId,
-        err,
-      })
-    }
-  }
-  return out
+  return deliverAdminNotifications(bot, chatId, recipients, message, extra)
 }
 
 /**
@@ -119,7 +141,8 @@ export async function notifyAdminsNewMiniappComment(
 
   commentStore.saveNotificationText(input.commentId, message)
 
-  const sent = await notifyAllAdmins(bot, input.channelChatId, message, {
+  const recipientIds = await resolveMiniappCommentNotifyRecipientIds(bot, input.channelChatId)
+  const sent = await deliverAdminNotifications(bot, input.channelChatId, recipientIds, message, {
     attachments: [keyboard],
   })
   for (const { admin_id, message_mid } of sent) {

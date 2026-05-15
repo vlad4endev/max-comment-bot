@@ -11,6 +11,7 @@ import {
   BOT_WEBHOOK_UPDATE_TYPES,
   setWebhookSubscription,
 } from './maxPlatform/subscriptions'
+import { channelNotifyLinkStore } from './services/channelNotifyLinkStore'
 import { channelRegistry } from './services/channelRegistry'
 import { commentStore } from './services/commentStore'
 import { startChannelPostPoller } from './services/channelPoller'
@@ -25,6 +26,7 @@ async function main(): Promise<void> {
   await postStore.loadFromDisk()
   await commentStore.loadFromDisk()
   await userMiniappSettingsStore.loadFromDisk()
+  await channelNotifyLinkStore.loadFromDisk()
   await ensureBotProfile(bot)
   startChannelPostPoller(bot)
 
