@@ -611,6 +611,21 @@
     }
     .status-dot.active { background: var(--teal); box-shadow: 0 0 0 3px var(--teal-strong-bg); }
     .status-dot.pending { background: var(--yellow); box-shadow: 0 0 0 3px var(--warning-ring); }
+    .ch-gear-btn {
+      width: 30px;
+      height: 30px;
+      border-radius: 8px;
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      color: var(--text-muted);
+      font-size: 14px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      padding: 0;
+    }
     .btn-dashed {
       width: 100%;
       margin-top: 4px;
@@ -954,8 +969,41 @@
     #view-comments .channel-row {
       display: flex;
       align-items: center;
-      gap: 10px;
+      gap: 8px;
       margin-bottom: 10px;
+    }
+    #managerBtn {
+      position: relative;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      background: rgba(93,202,165,0.1);
+      border: 1px solid rgba(93,202,165,0.25);
+      text-decoration: none;
+      flex-shrink: 0;
+      font-size: 14px;
+      cursor: pointer;
+    }
+    #managerBtn::after {
+      content: 'Написать менеджеру';
+      position: absolute;
+      top: 42px;
+      right: 0;
+      background: rgba(0,0,0,0.8);
+      color: #fff;
+      font-size: 11px;
+      padding: 4px 8px;
+      border-radius: 6px;
+      white-space: nowrap;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.2s;
+    }
+    #managerBtn:hover::after {
+      opacity: 1;
     }
     #view-comments .channel-avatar {
       width: 36px;
@@ -1656,6 +1704,9 @@
               <div class="channel-name" id="chName">Канал</div>
               <div class="channel-subs" id="chSubs">подписчики: —</div>
             </div>
+            <a id="managerBtn" href="#" target="_blank" style="display:none">
+              <span style="font-size:11px">📩</span>
+            </a>
             <div class="count-badge" id="countBadge" title="Комментариев">0</div>
           </div>
           <div class="post-preview">
@@ -1686,6 +1737,92 @@
               </svg>
             </button>
           </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="settingsOverlay" style="display:none;position:absolute;top:0;left:0;
+      right:0;bottom:0;background:var(--overlay-bg);z-index:100;
+      flex-direction:column;justify-content:flex-end;border-radius:inherit">
+
+      <div id="settingsSheet" style="background:var(--bg-secondary);
+        border-radius:20px 20px 0 0;max-height:88%;overflow-y:auto">
+
+        <div style="width:36px;height:4px;border-radius:2px;
+          background:var(--border-strong);margin:12px auto 0"></div>
+
+        <div style="padding:14px 16px 12px;border-bottom:1px solid var(--border);
+          display:flex;align-items:center;gap:10px">
+          <div id="settingsChAv" style="width:32px;height:32px;border-radius:9px;
+            background:linear-gradient(135deg,var(--accent),var(--teal));
+            display:flex;align-items:center;justify-content:center;
+            font-size:12px;font-weight:700;color:#fff;flex-shrink:0"></div>
+          <div style="flex:1">
+            <div id="settingsChName" style="font-size:14px;font-weight:600;
+              color:var(--text-primary)">Канал</div>
+            <div style="font-size:11px;color:var(--text-muted)">Настройки канала</div>
+          </div>
+          <button type="button" onclick="closeChannelSettings()" style="width:28px;height:28px;
+            border-radius:50%;background:var(--bg-surface);border:1px solid var(--border);
+            color:var(--text-muted);font-size:15px;cursor:pointer">✕</button>
+        </div>
+
+        <div style="padding:16px">
+
+          <div style="margin-bottom:18px">
+            <div style="font-size:11px;font-weight:700;color:var(--text-muted);
+              text-transform:uppercase;letter-spacing:.06em;margin-bottom:7px">
+              📩 Менеджер для связи
+            </div>
+            <input type="url" id="settingsManagerUrl" placeholder="https://max.ru/username"
+              style="width:100%;background:var(--input-bg);border:1px solid var(--input-border);
+              border-radius:10px;padding:10px 12px;font-size:16px;color:var(--text-primary);
+              outline:none;font-family:inherit"/>
+            <div style="font-size:11px;color:var(--text-muted);margin-top:5px">
+              Кнопка «Написать менеджеру» появится в комментариях
+            </div>
+          </div>
+
+          <div style="margin-bottom:18px">
+            <div style="font-size:11px;font-weight:700;color:var(--text-muted);
+              text-transform:uppercase;letter-spacing:.06em;margin-bottom:7px">
+              🕐 Режим работы
+            </div>
+            <input type="text" id="settingsWorkHours" placeholder="Пн–Пт 10:00–19:00"
+              style="width:100%;background:var(--input-bg);border:1px solid var(--input-border);
+              border-radius:10px;padding:10px 12px;font-size:16px;color:var(--text-primary);
+              outline:none;font-family:inherit"/>
+            <div id="settingsWorkStatus" style="display:none;margin-top:6px;
+              padding:6px 10px;border-radius:8px;font-size:12px;
+              background:var(--teal-bg);border:1px solid rgba(93,202,165,0.2);
+              color:var(--teal)"></div>
+            <div style="font-size:11px;color:var(--text-muted);margin-top:5px">
+              Например: Пн–Вс 10:00–20:00
+            </div>
+          </div>
+
+          <div style="margin-bottom:18px">
+            <div style="font-size:11px;font-weight:700;color:var(--text-muted);
+              text-transform:uppercase;letter-spacing:.06em;margin-bottom:7px">
+              💬 Приветствие под постами
+            </div>
+            <textarea id="settingsWelcome" rows="3"
+              placeholder="Привет! Задавайте вопросы, мы отвечаем быстро 🙌"
+              style="width:100%;background:var(--input-bg);border:1px solid var(--input-border);
+              border-radius:10px;padding:10px 12px;font-size:14px;color:var(--text-primary);
+              outline:none;resize:none;font-family:inherit;line-height:1.5"></textarea>
+            <div style="font-size:11px;color:var(--text-muted);margin-top:5px">
+              Отправляется первым комментарием под новым постом
+            </div>
+          </div>
+
+          <button type="button" onclick="saveChannelSettings()" id="settingsSaveBtn"
+            style="width:100%;padding:13px;background:var(--accent);border:none;
+            border-radius:12px;color:#fff;font-size:14px;font-weight:700;cursor:pointer">
+            Сохранить настройки
+          </button>
+          <div id="settingsSaveStatus" style="text-align:center;font-size:12px;
+            color:var(--teal);margin-top:8px;min-height:18px"></div>
         </div>
       </div>
     </div>
@@ -1865,6 +2002,127 @@
         document.documentElement.setAttribute('data-theme', next === 'auto' ? 'light' : next)
       }
       updateToggleUI()
+    }
+
+    var currentSettingsChatId = null
+    var channelsCache = []
+    var homeSettingsUid = null
+
+    function openChannelSettings(chatId) {
+      currentSettingsChatId = chatId
+      var overlay = document.getElementById('settingsOverlay')
+      if (!overlay) return
+      overlay.style.display = 'flex'
+
+      var ch =
+        channelsCache.find(function (c) {
+          return String(c.chat_id) === String(chatId)
+        }) || {}
+      var title = (ch.title && String(ch.title).trim()) || 'Канал'
+      var nameEl = document.getElementById('settingsChName')
+      var avEl = document.getElementById('settingsChAv')
+      if (nameEl) nameEl.textContent = title
+      if (avEl) {
+        var ini = title.trim()
+        avEl.textContent =
+          ini.length >= 2
+            ? ini.slice(0, 2).toUpperCase()
+            : ini.slice(0, 1).toUpperCase() || '?'
+      }
+
+      var saveStatus = document.getElementById('settingsSaveStatus')
+      if (saveStatus) saveStatus.textContent = ''
+
+      var workStatus = document.getElementById('settingsWorkStatus')
+      if (workStatus) workStatus.style.display = 'none'
+
+      var uid = homeSettingsUid
+      if (uid == null) return
+
+      fetch(
+        '/api/channel-settings?chat_id=' +
+          encodeURIComponent(String(chatId)) +
+          '&user_id=' +
+          encodeURIComponent(String(uid))
+      )
+        .then(function (r) {
+          return r.json()
+        })
+        .then(function (data) {
+          var mgr = document.getElementById('settingsManagerUrl')
+          var wh = document.getElementById('settingsWorkHours')
+          var wl = document.getElementById('settingsWelcome')
+          var ws = document.getElementById('settingsWorkStatus')
+          if (mgr) mgr.value = data.manager_url || ''
+          if (wh) wh.value = data.work_hours || ''
+          if (wl) wl.value = data.welcome_text || ''
+          if (ws && data.is_open !== undefined) {
+            ws.style.display = 'block'
+            ws.textContent = data.is_open ? '🟢 Сейчас открыто' : '🔴 Сейчас закрыто'
+          }
+        })
+        .catch(function () {})
+    }
+
+    function closeChannelSettings() {
+      var overlay = document.getElementById('settingsOverlay')
+      if (overlay) overlay.style.display = 'none'
+      currentSettingsChatId = null
+    }
+
+    function saveChannelSettings() {
+      if (!currentSettingsChatId) return
+      var uid = homeSettingsUid
+      if (uid == null) return
+      var btn = document.getElementById('settingsSaveBtn')
+      var status = document.getElementById('settingsSaveStatus')
+      if (btn) {
+        btn.disabled = true
+        btn.textContent = 'Сохранение...'
+      }
+      if (status) {
+        status.textContent = ''
+        status.style.color = 'var(--teal)'
+      }
+
+      fetch('/api/channel-settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          chat_id: currentSettingsChatId,
+          user_id: uid,
+          manager_url:
+            document.getElementById('settingsManagerUrl').value.trim() || null,
+          work_hours: document.getElementById('settingsWorkHours').value.trim() || null,
+          welcome_text: document.getElementById('settingsWelcome').value.trim() || null,
+        }),
+      })
+        .then(function (r) {
+          return r.json().then(function (data) {
+            return { ok: r.ok, data: data }
+          })
+        })
+        .then(function (x) {
+          if (x.ok && !(x.data && x.data.error)) {
+            if (status) status.textContent = '✅ Сохранено!'
+            setTimeout(closeChannelSettings, 1200)
+          } else if (status) {
+            status.textContent = '❌ ' + ((x.data && x.data.error) || 'Ошибка')
+            status.style.color = 'var(--danger)'
+          }
+        })
+        .catch(function () {
+          if (status) {
+            status.textContent = '❌ Ошибка сети'
+            status.style.color = 'var(--danger)'
+          }
+        })
+        .finally(function () {
+          if (btn) {
+            btn.disabled = false
+            btn.textContent = 'Сохранить настройки'
+          }
+        })
     }
 
     function initApp() {
@@ -2229,6 +2487,16 @@
 
       if (testFb) testFb.classList.remove('show');
 
+      homeSettingsUid = uid;
+
+      var settingsOverlayEl = document.getElementById('settingsOverlay');
+      if (settingsOverlayEl && settingsOverlayEl.dataset.bound !== '1') {
+        settingsOverlayEl.dataset.bound = '1';
+        settingsOverlayEl.addEventListener('click', function (e) {
+          if (e.target === settingsOverlayEl) closeChannelSettings();
+        });
+      }
+
       wireFeatureToggles(uid);
 
       ;(function bindAdminsActions() {
@@ -2368,6 +2636,7 @@
           list.innerHTML = '';
           if (adminsHost) adminsHost.innerHTML = '';
           channelsById = {}
+          channelsCache = []
           if (data.bot_nickname) botNick = '@' + String(data.bot_nickname).replace(/^@/, '');
           var arr = data.channels || [];
           if (!arr.length) {
@@ -2380,6 +2649,7 @@
           }
           arr.forEach(function (ch) {
             channelsById[String(ch.chat_id)] = ch
+            channelsCache.push(ch)
             var title = (ch.title && String(ch.title).trim()) || 'Канал ' + ch.chat_id;
             var subs =
               typeof ch.subscribers === 'number'
@@ -2395,6 +2665,12 @@
                 esc(avUrl) +
                 '" alt="" /></div>'
               : '<div class="ch-icon">' + esc(initials(title)) + '</div>';
+            var gearBtn =
+              '<button type="button" class="ch-gear-btn" ' +
+              'onclick="openChannelSettings(' +
+              JSON.stringify(ch.chat_id) +
+              ')" ' +
+              'aria-label="Настройки канала">⚙️</button>';
             var row =
               '<div class="channel-item">' +
               iconHtml +
@@ -2407,7 +2683,9 @@
               dotClass +
               '" title="' +
               (ch.status === 'pending' ? 'Ожидает прав' : 'Активен') +
-              '"></span></div>';
+              '"></span>' +
+              gearBtn +
+              '</div>';
             list.insertAdjacentHTML('beforeend', row);
           });
           if (!adminsHost) return;
