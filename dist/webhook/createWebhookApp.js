@@ -61,7 +61,17 @@ function createHttpApp(options) {
     app.use('/api/admin', (0, adminRoutes_1.createAdminRouter)({ bot: options.bot }));
     app.use('/api', (0, routes_1.createCommentApiRouter)({ bot: options.bot }));
     const miniappRoot = (0, node_path_1.join)(process.cwd(), 'miniapp');
-    app.use('/miniapp', express_1.default.static(miniappRoot));
+    app.use('/miniapp', express_1.default.static(miniappRoot, {
+        etag: true,
+        lastModified: true,
+        setHeaders(res, filePath) {
+            if (filePath.endsWith('.html')) {
+                res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+                res.setHeader('Pragma', 'no-cache');
+                res.setHeader('Expires', '0');
+            }
+        },
+    }));
     if (options.webhook) {
         const { path: webhookPath, secret: webhookSecret } = options.webhook;
         app.post(webhookPath, express_1.default.json({ limit: '512kb' }), async (req, res) => {

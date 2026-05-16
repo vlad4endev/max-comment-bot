@@ -85,7 +85,20 @@ export function createHttpApp(options: HttpAppOptions): express.Express {
   app.use('/api', createCommentApiRouter({ bot: options.bot }))
 
   const miniappRoot = join(process.cwd(), 'miniapp')
-  app.use('/miniapp', express.static(miniappRoot))
+  app.use(
+    '/miniapp',
+    express.static(miniappRoot, {
+      etag: true,
+      lastModified: true,
+      setHeaders(res, filePath) {
+        if (filePath.endsWith('.html')) {
+          res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate')
+          res.setHeader('Pragma', 'no-cache')
+          res.setHeader('Expires', '0')
+        }
+      },
+    }),
+  )
 
   if (options.webhook) {
     const { path: webhookPath, secret: webhookSecret } = options.webhook

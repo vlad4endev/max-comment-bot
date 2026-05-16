@@ -252,7 +252,11 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
   router.use(express.json({ limit: '512kb' }))
 
   router.get('/config', (_req, res) => {
-    res.json({ bot_nickname: config.botNickname })
+    res.json({
+      bot_nickname: config.botNickname,
+      /** Bump when join UI changes — helps verify deploy (grep join-heading in /miniapp/index.html). */
+      miniapp_join_ui: 'admin-invite-v2',
+    })
   })
 
   router.get('/channel-info', async (req, res) => {
