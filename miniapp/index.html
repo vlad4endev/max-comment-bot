@@ -1030,37 +1030,34 @@
       margin-bottom: 10px;
     }
     #managerBtn {
-      position: relative;
       display: inline-flex;
       align-items: center;
       justify-content: center;
-      width: 28px;
-      height: 28px;
-      border-radius: 50%;
-      background: rgba(93,202,165,0.1);
-      border: 1px solid rgba(93,202,165,0.25);
+      gap: 5px;
+      min-height: 28px;
+      padding: 5px 10px;
+      border-radius: 20px;
+      background: var(--teal-bg);
+      border: 1px solid var(--teal-border-strong);
       text-decoration: none;
-      flex-shrink: 0;
-      font-size: 14px;
+      flex-shrink: 1;
+      min-width: 0;
+      max-width: 42%;
+      font-size: 11px;
+      font-weight: 600;
+      line-height: 1.2;
+      color: var(--teal);
       cursor: pointer;
     }
-    #managerBtn::after {
-      content: 'Написать менеджеру';
-      position: absolute;
-      top: 42px;
-      right: 0;
-      background: rgba(0,0,0,0.8);
-      color: #fff;
-      font-size: 11px;
-      padding: 4px 8px;
-      border-radius: 6px;
-      white-space: nowrap;
-      opacity: 0;
-      pointer-events: none;
-      transition: opacity 0.2s;
+    #managerBtn .manager-btn-icon {
+      flex-shrink: 0;
+      font-size: 13px;
+      line-height: 1;
     }
-    #managerBtn:hover::after {
-      opacity: 1;
+    #managerBtn .manager-btn-label {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
     #view-comments .channel-avatar {
       width: 36px;
@@ -1761,8 +1758,9 @@
               <div class="channel-name" id="chName">Канал</div>
               <div class="channel-subs" id="chSubs">подписчики: —</div>
             </div>
-            <a id="managerBtn" href="#" target="_blank" style="display:none">
-              <span style="font-size:11px">📩</span>
+            <a id="managerBtn" href="#" target="_blank" style="display:none" title="Написать менеджеру">
+              <span class="manager-btn-icon" aria-hidden="true">📩</span>
+              <span class="manager-btn-label">Написать менеджеру</span>
             </a>
             <div class="count-badge" id="countBadge" title="Комментариев">0</div>
           </div>
