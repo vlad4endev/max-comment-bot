@@ -1801,21 +1801,6 @@
             </div>
           </div>
 
-          <div style="margin-bottom:18px">
-            <div style="font-size:11px;font-weight:700;color:var(--text-muted);
-              text-transform:uppercase;letter-spacing:.06em;margin-bottom:7px">
-              💬 Приветствие под постами
-            </div>
-            <textarea id="settingsWelcome" rows="3"
-              placeholder="Привет! Задавайте вопросы, мы отвечаем быстро 🙌"
-              style="width:100%;background:var(--input-bg);border:1px solid var(--input-border);
-              border-radius:10px;padding:10px 12px;font-size:14px;color:var(--text-primary);
-              outline:none;resize:none;font-family:inherit;line-height:1.5"></textarea>
-            <div style="font-size:11px;color:var(--text-muted);margin-top:5px">
-              Отправляется первым комментарием под новым постом
-            </div>
-          </div>
-
           <button type="button" onclick="saveChannelSettings()" id="settingsSaveBtn"
             style="width:100%;padding:13px;background:var(--accent);border:none;
             border-radius:12px;color:#fff;font-size:14px;font-weight:700;cursor:pointer">
@@ -2051,11 +2036,9 @@
         .then(function (data) {
           var mgr = document.getElementById('settingsManagerUrl')
           var wh = document.getElementById('settingsWorkHours')
-          var wl = document.getElementById('settingsWelcome')
           var ws = document.getElementById('settingsWorkStatus')
           if (mgr) mgr.value = data.manager_url || ''
           if (wh) wh.value = data.work_hours || ''
-          if (wl) wl.value = data.welcome_text || ''
           if (ws && data.is_open !== undefined) {
             ws.style.display = 'block'
             ws.textContent = data.is_open ? '🟢 Сейчас открыто' : '🔴 Сейчас закрыто'
@@ -2094,7 +2077,6 @@
           manager_url:
             document.getElementById('settingsManagerUrl').value.trim() || null,
           work_hours: document.getElementById('settingsWorkHours').value.trim() || null,
-          welcome_text: document.getElementById('settingsWelcome').value.trim() || null,
         }),
       })
         .then(function (r) {
