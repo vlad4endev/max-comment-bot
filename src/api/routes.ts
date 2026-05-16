@@ -7,6 +7,10 @@ import { config } from '../config'
 import { buildBotJoinUrl } from '../utils/deeplink'
 import { channelNotifyLinkStore } from '../services/channelNotifyLinkStore'
 import { channelRegistry } from '../services/channelRegistry'
+import {
+  channelSettingsStore,
+  parseManagerUrlInput,
+} from '../services/channelSettingsStore'
 import { disabledAdminStore } from '../services/disabledAdminStore'
 import {
   resolveCanonicalChannelChatId,
@@ -530,6 +534,78 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
     }
     const next = userMiniappSettingsStore.setFeature(userId, feature, enabled)
     res.json(next)
+  })
+
+  router.get('/channel-settings', async (req, res) => {
+    const chatIdRaw = parseNonZeroInt(req.query.chat_id)
+    if (!chatIdRaw) {
+      res.status(400).json({ error: 'missing or invalid chat_id' })
+      return
+    }
+    const chatId = resolveCanonicalChannelChatId(chatIdRaw)
+    if (chatId === null || !channelRegistry.getChannel(chatId)) {
+      res.status(404).json({ error: 'channel not connected' })
+      return
+    }
+    const fields = parseNonEmptyString(req.query.fields)
+    const userId = parsePositiveInt(req.query.user_id)
+    const managerOnly =
+      fields === 'manager_url' || userId === null
+
+    if (managerOnly) {
+      res.json({ manager_url: channelSettingsStore.getManagerUrl(chatId) })
+      return
+    }
+
+    try {
+      if (!(await isUserChannelAdmin(deps.bot, chatId, userId))) {
+        res.json({ manager_url: channelSettingsStore.getManagerUrl(chatId) })
+        return
+      }
+      res.json(channelSettingsStore.getSettings(chatId))
+    } catch (err: unknown) {
+      logger.error('GET /api/channel-settings failed', { err, chatId })
+      res.status(500).json({ error: 'internal error' })
+    }
+  })
+
+  router.post('/channel-settings', async (req, res) => {
+    const body = req.body
+    if (!isRecord(body)) {
+      res.status(400).json({ error: 'invalid body' })
+      return
+    }
+    const userId = parsePositiveInt(body.user_id)
+    const chatIdRaw = parseNonZeroInt(body.chat_id)
+    if (!userId || !chatIdRaw) {
+      res.status(400).json({ error: 'missing or invalid user_id or chat_id' })
+      return
+    }
+    const chatId = resolveCanonicalChannelChatId(chatIdRaw)
+    if (chatId === null || !channelRegistry.getChannel(chatId)) {
+      res.status(404).json({ error: 'channel not connected' })
+      return
+    }
+    if (!('manager_url' in body)) {
+      res.status(400).json({ error: 'missing manager_url' })
+      return
+    }
+    const managerUrl = parseManagerUrlInput(body.manager_url)
+    if (managerUrl === 'invalid') {
+      res.status(400).json({ error: 'invalid manager_url' })
+      return
+    }
+    try {
+      if (!(await isUserChannelAdmin(deps.bot, chatId, userId))) {
+        res.status(403).json({ error: 'Доступ запрещён' })
+        return
+      }
+      const next = channelSettingsStore.setManagerUrl(chatId, managerUrl)
+      res.json(next)
+    } catch (err: unknown) {
+      logger.error('POST /api/channel-settings failed', { err, chatId, userId })
+      res.status(500).json({ error: 'internal error' })
+    }
   })
 
   async function resolveChannelInviteAccess(

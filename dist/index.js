@@ -6,6 +6,7 @@ const config_1 = require("./config");
 const subscriptions_1 = require("./maxPlatform/subscriptions");
 const channelNotifyLinkStore_1 = require("./services/channelNotifyLinkStore");
 const channelRegistry_1 = require("./services/channelRegistry");
+const channelSettingsStore_1 = require("./services/channelSettingsStore");
 const commentStore_1 = require("./services/commentStore");
 const adminRuntimeSettingsStore_1 = require("./services/adminRuntimeSettingsStore");
 const disabledAdminStore_1 = require("./services/disabledAdminStore");
@@ -18,6 +19,7 @@ const createWebhookApp_1 = require("./webhook/createWebhookApp");
 async function main() {
     const bot = (0, bot_1.initializeBot)();
     await channelRegistry_1.channelRegistry.loadFromDisk();
+    await channelSettingsStore_1.channelSettingsStore.loadFromDisk();
     await postStore_1.postStore.loadFromDisk();
     await commentStore_1.commentStore.loadFromDisk();
     await userMiniappSettingsStore_1.userMiniappSettingsStore.loadFromDisk();

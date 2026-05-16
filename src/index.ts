@@ -13,6 +13,7 @@ import {
 } from './maxPlatform/subscriptions'
 import { channelNotifyLinkStore } from './services/channelNotifyLinkStore'
 import { channelRegistry } from './services/channelRegistry'
+import { channelSettingsStore } from './services/channelSettingsStore'
 import { commentStore } from './services/commentStore'
 import { adminRuntimeSettingsStore } from './services/adminRuntimeSettingsStore'
 import { disabledAdminStore } from './services/disabledAdminStore'
@@ -26,6 +27,7 @@ import { createHttpApp, createWebhookApp } from './webhook/createWebhookApp'
 async function main(): Promise<void> {
   const bot = initializeBot()
   await channelRegistry.loadFromDisk()
+  await channelSettingsStore.loadFromDisk()
   await postStore.loadFromDisk()
   await commentStore.loadFromDisk()
   await userMiniappSettingsStore.loadFromDisk()

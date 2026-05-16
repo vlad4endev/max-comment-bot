@@ -10,6 +10,7 @@ const config_1 = require("../config");
 const deeplink_1 = require("../utils/deeplink");
 const channelNotifyLinkStore_1 = require("../services/channelNotifyLinkStore");
 const channelRegistry_1 = require("../services/channelRegistry");
+const channelSettingsStore_1 = require("../services/channelSettingsStore");
 const disabledAdminStore_1 = require("../services/disabledAdminStore");
 const resolveChannelChatId_1 = require("../services/resolveChannelChatId");
 const channelPostActions_1 = require("../services/channelPostActions");
@@ -191,7 +192,11 @@ function createCommentApiRouter(deps) {
     const router = express_1.default.Router();
     router.use(express_1.default.json({ limit: '512kb' }));
     router.get('/config', (_req, res) => {
-        res.json({ bot_nickname: config_1.config.botNickname });
+        res.json({
+            bot_nickname: config_1.config.botNickname,
+            /** Bump when join UI changes — helps verify deploy (grep join-heading in /miniapp/index.html). */
+            miniapp_join_ui: 'admin-invite-v2',
+        });
     });
     router.get('/channel-info', async (req, res) => {
         const chatId = parseNonZeroInt(req.query.chat_id);
@@ -458,6 +463,75 @@ function createCommentApiRouter(deps) {
         }
         const next = userMiniappSettingsStore_1.userMiniappSettingsStore.setFeature(userId, feature, enabled);
         res.json(next);
+    });
+    router.get('/channel-settings', async (req, res) => {
+        const chatIdRaw = parseNonZeroInt(req.query.chat_id);
+        if (!chatIdRaw) {
+            res.status(400).json({ error: 'missing or invalid chat_id' });
+            return;
+        }
+        const chatId = (0, resolveChannelChatId_1.resolveCanonicalChannelChatId)(chatIdRaw);
+        if (chatId === null || !channelRegistry_1.channelRegistry.getChannel(chatId)) {
+            res.status(404).json({ error: 'channel not connected' });
+            return;
+        }
+        const fields = parseNonEmptyString(req.query.fields);
+        const userId = parsePositiveInt(req.query.user_id);
+        const managerOnly = fields === 'manager_url' || userId === null;
+        if (managerOnly) {
+            res.json({ manager_url: channelSettingsStore_1.channelSettingsStore.getManagerUrl(chatId) });
+            return;
+        }
+        try {
+            if (!(await (0, channelPostActions_1.isUserChannelAdmin)(deps.bot, chatId, userId))) {
+                res.json({ manager_url: channelSettingsStore_1.channelSettingsStore.getManagerUrl(chatId) });
+                return;
+            }
+            res.json(channelSettingsStore_1.channelSettingsStore.getSettings(chatId));
+        }
+        catch (err) {
+            logger_1.logger.error('GET /api/channel-settings failed', { err, chatId });
+            res.status(500).json({ error: 'internal error' });
+        }
+    });
+    router.post('/channel-settings', async (req, res) => {
+        const body = req.body;
+        if (!isRecord(body)) {
+            res.status(400).json({ error: 'invalid body' });
+            return;
+        }
+        const userId = parsePositiveInt(body.user_id);
+        const chatIdRaw = parseNonZeroInt(body.chat_id);
+        if (!userId || !chatIdRaw) {
+            res.status(400).json({ error: 'missing or invalid user_id or chat_id' });
+            return;
+        }
+        const chatId = (0, resolveChannelChatId_1.resolveCanonicalChannelChatId)(chatIdRaw);
+        if (chatId === null || !channelRegistry_1.channelRegistry.getChannel(chatId)) {
+            res.status(404).json({ error: 'channel not connected' });
+            return;
+        }
+        if (!('manager_url' in body)) {
+            res.status(400).json({ error: 'missing manager_url' });
+            return;
+        }
+        const managerUrl = (0, channelSettingsStore_1.parseManagerUrlInput)(body.manager_url);
+        if (managerUrl === 'invalid') {
+            res.status(400).json({ error: 'invalid manager_url' });
+            return;
+        }
+        try {
+            if (!(await (0, channelPostActions_1.isUserChannelAdmin)(deps.bot, chatId, userId))) {
+                res.status(403).json({ error: 'Доступ запрещён' });
+                return;
+            }
+            const next = channelSettingsStore_1.channelSettingsStore.setManagerUrl(chatId, managerUrl);
+            res.json(next);
+        }
+        catch (err) {
+            logger_1.logger.error('POST /api/channel-settings failed', { err, chatId, userId });
+            res.status(500).json({ error: 'internal error' });
+        }
     });
     async function resolveChannelInviteAccess(userId, joinChannelIdRaw) {
         if (!joinChannelIdRaw) {
