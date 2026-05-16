@@ -7,6 +7,7 @@ exports.createCommentApiRouter = createCommentApiRouter;
 const max_bot_api_1 = require("@maxhub/max-bot-api");
 const express_1 = __importDefault(require("express"));
 const config_1 = require("../config");
+const deeplink_1 = require("../utils/deeplink");
 const channelNotifyLinkStore_1 = require("../services/channelNotifyLinkStore");
 const channelRegistry_1 = require("../services/channelRegistry");
 const disabledAdminStore_1 = require("../services/disabledAdminStore");
@@ -393,7 +394,7 @@ function createCommentApiRouter(deps) {
                 linkedUserIds: [...linkedIds],
                 adminUserIds: admins.map((a) => a.user_id),
             });
-            const invite_url = `https://max.ru/${config_1.config.botNickname}?startapp=join${Math.abs(chatId)}`;
+            const invite_url = (0, deeplink_1.buildBotJoinUrl)(chatId);
             res.json({ admins, invite_url });
         }
         catch (err) {
@@ -469,9 +470,6 @@ function createCommentApiRouter(deps) {
         const reg = channelRegistry_1.channelRegistry.getChannel(channelChatId);
         if (!reg) {
             return { ok: false, status: 404, error: 'channel is not connected to this bot' };
-        }
-        if (!(await (0, channelPostActions_1.isUserChannelAdmin)(deps.bot, channelChatId, userId))) {
-            return { ok: false, status: 403, error: 'you must be a channel admin' };
         }
         return { ok: true, channelChatId, title: reg.title };
     }

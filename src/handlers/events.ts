@@ -22,6 +22,7 @@ import { postStore } from '../services/postStore'
 import { settingsStore } from '../services/settingsStore'
 import { subscriberStore } from '../services/subscriberStore'
 import { stateManager } from '../services/stateManager'
+import { buildBotJoinUrl } from '../utils/deeplink'
 import { logger } from '../utils/logger'
 
 /** Mini App deeplink (`startapp` → `initDataUnsafe.start_param`). */
@@ -35,7 +36,7 @@ const BOT_ACTIVATION_WELCOME_TEXT =
   'Теперь когда вам ответят на комментарий — я сразу пришлю вам сообщение.\n\n' +
   'Вернитесь в канал и напишите комментарий!'
 
-const pendingJoins = new Map<number, number>() // userId -> channelChatId
+const pendingAdminJoins = new Map<number, number>() // userId -> channelChatId
 
 async function trySendBotActivationWelcome(bot: Bot, chatId: number): Promise<void> {
   try {
@@ -97,23 +98,10 @@ function buildMiniAppHomeUrl(): string {
   return buildBotStartappUrl('start')
 }
 
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms))
-}
-
 /** MAX `bot_started` payload (tolerate alternate field names). */
 function getBotStartPayload(ctx: Context): string {
   const u = ctx.update as { payload?: string | null; start_payload?: string | null }
   return (u.payload ?? u.start_payload ?? '').trim()
-}
-
-async function fetchChannelParticipantsCount(bot: Bot, channelChatId: number): Promise<number> {
-  try {
-    const chat = await bot.api.getChat(channelChatId)
-    return chat.participants_count ?? 0
-  } catch {
-    return 0
-  }
 }
 
 /** First registered channel (sorted by id) where the user is admin or owner. */
@@ -393,11 +381,10 @@ async function postChannelAdminInviteToChannel(bot: Bot, channelChatId: number):
     logger.warn('postChannelAdminInviteToChannel: botNickname пустой')
     return
   }
-  const joinPayload = `join${Math.abs(channelChatId)}`
-  const joinUrl = `https://max.ru/${nick}?startapp=${joinPayload}`
+  const joinUrl = buildBotJoinUrl(channelChatId, nick)
   const text =
     '👋 CommentBot подключён к каналу.\n\n' +
-    'Администраторы: чтобы получать уведомления о комментариях, нажмите кнопку ниже и запустите бота.'
+    'Администраторы: нажмите кнопку ниже, откройте чат с ботом и напишите любое сообщение — вы начнёте получать уведомления о комментариях.'
   try {
     await bot.api.sendMessageToChat(channelChatId, text, {
       attachments: [
@@ -658,6 +645,44 @@ export function registerEventHandlers(bot: Bot): void {
         return
       }
 
+      // Admin invite: `?start=join<abs(channelId)>` — link immediately, no Mini App / admin API check
+      if (startPayload.toLowerCase().startsWith('join')) {
+        const channelChatId = resolveChannelChatIdFromInviteParam(startPayload)
+        if (!channelChatId) {
+          logger.warn('bot_started: invalid join payload', { userId, payload: startPayload })
+          return
+        }
+
+        logger.info('bot_started: join payload detected', { userId, channelChatId, payload: startPayload })
+
+        pendingAdminJoins.set(userId, channelChatId)
+        subscriberStore.addSubscriber(userId)
+        settingsStore.linkUserToChannel(userId, channelChatId)
+
+        const channel = channelRegistry.getChannel(channelChatId)
+        const title = channel?.title ?? `ID ${channelChatId}`
+
+        const confirmText =
+          `✅ Готово! Вы подключены к каналу «${title}».\n\n` +
+          `Теперь вы будете получать уведомления о новых комментариях.\n\n` +
+          `Когда подписчики пишут комментарии — вы получите сообщение ` +
+          `с текстом комментария и кнопкой для ответа от имени канала.`
+
+        try {
+          await bot.api.sendMessageToUser(userId, confirmText)
+        } catch (err: unknown) {
+          if (chatId !== undefined) {
+            await bot.api.sendMessageToChat(chatId, confirmText)
+          } else {
+            logger.warn('bot_started: join confirm send failed', { userId, channelChatId, err })
+          }
+        }
+
+        pendingAdminJoins.delete(userId)
+        logger.info('bot_started: admin linked to channel', { userId, channelChatId, title })
+        return
+      }
+
       if (chatId === undefined) {
         logger.warn('bot_started: нет chat_id в контексте')
         return
@@ -672,62 +697,7 @@ export function registerEventHandlers(bot: Bot): void {
         await bot.api.sendMessageToUser(userId, text, { attachments: [kb] })
       }
 
-      // 1) Admin invited via join link
-      if (startPayload.toLowerCase().startsWith('join') && /^join\d+$/i.test(startPayload)) {
-        const channelChatId = resolveChannelChatIdFromInviteParam(startPayload)
-        if (channelChatId === null) {
-          const kb = Keyboard.inlineKeyboard([[Keyboard.button.link('🚀 Подключить канал', homeUrl)]])
-          await sendUser(
-            `Не удалось разобрать ссылку приглашения. Откройте мини-приложение и попробуйте снова.`,
-            kb,
-          )
-          return
-        }
-
-        pendingJoins.set(userId, channelChatId)
-        settingsStore.linkUserToChannel(userId, channelChatId)
-        subscriberStore.addSubscriber(userId)
-
-        const isAdmin = await isUserChannelAdmin(bot, channelChatId, userId)
-        if (!isAdmin) {
-          const kb = Keyboard.inlineKeyboard([[Keyboard.button.link('💬 Открыть панель управления', homeUrl)]])
-          await sendUser(
-            `Эта ссылка для администраторов канала. Если вы администратор, убедитесь, что вы вошли в MAX под нужным аккаунтом.`,
-            kb,
-          )
-          return
-        }
-
-        settingsStore.linkUserToChannel(userId, channelChatId)
-        await settingsStore.forcePersist()
-
-        let channelTitle = channelRegistry.getChannel(channelChatId)?.title ?? null
-        if (!channelTitle) {
-          channelTitle = await fetchChatTitle(bot, channelChatId)
-        }
-        const displayTitle = channelTitle ?? 'канал'
-        const subscribers = await fetchChannelParticipantsCount(bot, channelChatId)
-
-        const adminText = `🎉 Добро пожаловать, ${firstName}!
-
-Вы подключены как администратор канала «${displayTitle}».
-
-Теперь вы будете получать уведомления о новых комментариях и сможете отвечать от имени канала прямо в мини-приложении.`
-
-        const adminKb = Keyboard.inlineKeyboard([
-          [Keyboard.button.link('💬 Открыть панель управления', homeUrl)],
-          [Keyboard.button.callback('⚙️ Настройки уведомлений', 'settings')],
-        ])
-        await sendUser(adminText, adminKb)
-        await delay(1000)
-        await bot.api.sendMessageToUser(
-          userId,
-          `Канал: ${displayTitle} · ${subscribers} подписчиков`,
-        )
-        return
-      }
-
-      // 2) Subscriber deep link
+      // 1) Subscriber deep link
       if (startPayload === 'subscribe') {
         const { title } = await resolveSubscribeWelcomeChannel(bot, userId)
         const channelTitle = title ?? 'канала'
@@ -863,14 +833,14 @@ export function registerEventHandlers(bot: Bot): void {
           return
         }
         const channelTitle = ch.title ?? 'канал'
-        const inviteUrl = `https://max.ru/${nick}?startapp=join${Math.abs(ch.chatId)}`
+        const inviteUrl = buildBotJoinUrl(ch.chatId, nick)
         await bot.api.sendMessageToUser(
           userId,
           `Отправьте эту ссылку другим администраторам канала «${channelTitle}»:
 
 ${inviteUrl}
 
-Администратор нажмёт на ссылку → запустит бота → начнёт получать уведомления.`,
+Администратор нажмёт на ссылку → откроет чат с ботом → напишет любое сообщение → начнёт получать уведомления.`,
         )
       }
     } catch (err: unknown) {
@@ -904,16 +874,36 @@ ${inviteUrl}
       !/^\/addbutton\b/i.test(text) &&
       !/^\/connect\b/i.test(text)
     ) {
-      const pendingChatId = pendingJoins.get(user.user_id)
-      if (pendingChatId !== undefined) {
-        settingsStore.linkUserToChannel(user.user_id, pendingChatId)
+      const pendingChannelId = pendingAdminJoins.get(user.user_id)
+      if (pendingChannelId !== undefined) {
+        pendingAdminJoins.delete(user.user_id)
+        settingsStore.linkUserToChannel(user.user_id, pendingChannelId)
         subscriberStore.addSubscriber(user.user_id)
-        pendingJoins.delete(user.user_id)
-        logger.info('message_created: linked user from pending join', {
+
+        const channel = channelRegistry.getChannel(pendingChannelId)
+        const title = channel?.title ?? `ID ${pendingChannelId}`
+
+        try {
+          await bot.api.sendMessageToChat(
+            chatId,
+            `✅ Вы подключены к каналу «${title}»!\n\n` +
+              `Теперь вы будете получать уведомления о новых комментариях.`,
+          )
+        } catch (err: unknown) {
+          logger.warn('message_created: pending admin join confirm failed', {
+            userId: user.user_id,
+            pendingChannelId,
+            err,
+          })
+        }
+        logger.info('message_created: admin linked from pending join', {
           userId: user.user_id,
-          chatId: pendingChatId,
+          channelChatId: pendingChannelId,
         })
-      } else if (settingsStore.getLinkedChannels(user.user_id).length === 0) {
+        return
+      }
+
+      if (settingsStore.getLinkedChannels(user.user_id).length === 0) {
         const linkedChatIds = await autoLinkAdminToRegisteredChannels(bot, user.user_id)
         if (linkedChatIds.length > 0) {
           logger.info('message_created: auto-linked admin from private dialog', {

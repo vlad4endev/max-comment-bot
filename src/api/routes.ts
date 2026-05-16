@@ -4,6 +4,7 @@ import type { ChatMember } from '@maxhub/max-bot-api/types'
 import express from 'express'
 
 import { config } from '../config'
+import { buildBotJoinUrl } from '../utils/deeplink'
 import { channelNotifyLinkStore } from '../services/channelNotifyLinkStore'
 import { channelRegistry } from '../services/channelRegistry'
 import { disabledAdminStore } from '../services/disabledAdminStore'
@@ -460,7 +461,7 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
         linkedUserIds: [...linkedIds],
         adminUserIds: admins.map((a) => a.user_id),
       })
-      const invite_url = `https://max.ru/${config.botNickname}?startapp=join${Math.abs(chatId)}`
+      const invite_url = buildBotJoinUrl(chatId)
       res.json({ admins, invite_url })
     } catch (err: unknown) {
       logger.error('GET /api/channel-admins failed', { err })
@@ -544,9 +545,6 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
     const reg = channelRegistry.getChannel(channelChatId)
     if (!reg) {
       return { ok: false, status: 404, error: 'channel is not connected to this bot' }
-    }
-    if (!(await isUserChannelAdmin(deps.bot, channelChatId, userId))) {
-      return { ok: false, status: 403, error: 'you must be a channel admin' }
     }
     return { ok: true, channelChatId, title: reg.title }
   }

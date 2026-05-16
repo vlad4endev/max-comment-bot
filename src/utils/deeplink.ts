@@ -15,7 +15,7 @@ export function generateDeeplink(payload: string, botNickname?: string): string 
     )
   }
 
-  const nick = botNickname ?? config.BOT_NICKNAME
+  const nick = (botNickname ?? config.botNickname).replace(/^@/, '').trim()
   const url = `https://max.ru/${nick}?start=${encodeURIComponent(payload)}`
 
   logger.debug('Сгенерирован deeplink MAX', {
@@ -44,4 +44,9 @@ export function parsePayload(payload: string | null): ParsedPayload | null {
   }
 
   return { type, id }
+}
+
+/** Opens bot chat (not Mini App) with admin invite payload `join<abs(channelChatId)>`. */
+export function buildBotJoinUrl(channelChatId: number, botNickname?: string): string {
+  return generateDeeplink(`join${Math.abs(channelChatId)}`, botNickname)
 }

@@ -1386,17 +1386,12 @@
         </div>
         <h1 class="join-title">Уведомления о комментариях</h1>
         <p class="join-lead" id="joinLead">
-          Подтвердите подключение — вы будете получать личные уведомления о новых комментариях к постам этого канала.
+          Для подключения уведомлений — напишите любое сообщение боту
         </p>
       </div>
-      <div class="card" id="joinChannelCard" style="display:none;">
-        <div class="join-channel-title" id="joinChannelTitle">—</div>
-        <div style="font-size:12px;color:var(--muted);margin-top:8px;text-align:center;" id="joinChannelIdLine"></div>
-      </div>
       <div class="join-err" id="joinErr" aria-live="polite"></div>
-      <div class="join-success hidden" id="joinSuccess"></div>
       <button type="button" class="btn-primary" id="joinConfirmBtn" style="width:100%;margin-top:4px;">
-        Подключить уведомления
+        💬 Написать боту
       </button>
     </div>
 
@@ -1768,112 +1763,49 @@
       if (!joinChannelId) return;
 
       var joinErr = document.getElementById('joinErr');
-      var joinSuccess = document.getElementById('joinSuccess');
-      var joinCard = document.getElementById('joinChannelCard');
-      var joinTitleEl = document.getElementById('joinChannelTitle');
-      var joinIdLine = document.getElementById('joinChannelIdLine');
       var joinBtn = document.getElementById('joinConfirmBtn');
+      var joinLead = document.getElementById('joinLead');
 
-      function setJoinErr(t) {
-        joinErr.textContent = t || '';
-        if (t) joinSuccess.classList.add('hidden');
+      if (joinLead) {
+        joinLead.textContent = 'Для подключения уведомлений — напишите любое сообщение боту';
+      }
+      if (joinErr) joinErr.textContent = '';
+      if (joinBtn) {
+        joinBtn.disabled = false;
+        joinBtn.textContent = '💬 Написать боту';
       }
 
-      var uid = getBridgeNumericUserId(user);
-      var uidFromQuery = mergedParams.get('user_id');
-      if (uid == null && uidFromQuery) {
-        var pu = parseInt(uidFromQuery, 10);
-        if (Number.isFinite(pu) && pu > 0) uid = pu;
-      }
+      var absId = Math.abs(parseInt(joinChannelId, 10));
+      var startPayload = Number.isFinite(absId) && absId > 0 ? 'join' + absId : '';
 
-      if (uid == null) {
-        setJoinErr('Откройте ссылку из MAX (нужен user_id) или добавьте ?user_id= в URL для теста.');
-        joinBtn.disabled = true;
-        return;
-      }
-
-      joinBtn.disabled = true;
-
-      var loaded = false;
-      var alreadyLinked = false;
-
-      function applyInvitePayload(data) {
-        loaded = true;
-        alreadyLinked = !!data.already_linked;
-        var t = (data.channel_title && String(data.channel_title).trim()) || 'Канал';
-        joinTitleEl.textContent = t;
-        joinIdLine.textContent = 'ID: ' + joinChannelId;
-        joinCard.style.display = '';
-        joinSuccess.textContent = '';
-        if (alreadyLinked) {
-          joinSuccess.textContent = 'Вы уже подключены к уведомлениям этого канала.';
-          joinSuccess.classList.remove('hidden');
-          joinBtn.textContent = 'Готово';
-          joinBtn.disabled = true;
-        } else {
-          joinSuccess.classList.add('hidden');
-          joinBtn.textContent = 'Подключить уведомления';
-          joinBtn.disabled = false;
-        }
-        setJoinErr('');
-      }
-
-      fetch(
-        '/api/channel-invite?user_id=' +
-          encodeURIComponent(String(uid)) +
-          '&join_channel_id=' +
-          encodeURIComponent(joinChannelId)
-      )
+      fetch('/api/config')
         .then(function (r) {
-          return r.json().then(function (j) {
-            return { ok: r.ok, status: r.status, body: j };
-          });
+          return r.json();
         })
-        .then(function (x) {
-          if (!x.ok) {
-            var msg = (x.body && x.body.error) || 'Ошибка ' + x.status;
-            setJoinErr(msg);
-            joinBtn.disabled = true;
+        .then(function (cfg) {
+          var nick = String((cfg && cfg.bot_nickname) || '').replace(/^@/, '');
+          if (!nick) {
+            if (joinErr) joinErr.textContent = 'Бот не настроен.';
+            if (joinBtn) joinBtn.disabled = true;
             return;
           }
-          applyInvitePayload(x.body);
+          var botUrl = startPayload
+            ? 'https://max.ru/' + nick + '?start=' + encodeURIComponent(startPayload)
+            : 'https://max.ru/' + nick;
+          if (!joinBtn) return;
+          joinBtn.onclick = function () {
+            try {
+              if (window.WebApp && typeof window.WebApp.openMaxLink === 'function') {
+                window.WebApp.openMaxLink(botUrl);
+                return;
+              }
+            } catch (e) {}
+            window.location.href = botUrl;
+          };
         })
         .catch(function () {
-          setJoinErr('Не удалось связаться с сервером.');
-          joinBtn.disabled = true;
+          if (joinErr) joinErr.textContent = 'Не удалось загрузить настройки бота.';
         });
-
-      joinBtn.addEventListener('click', function () {
-        if (!loaded || alreadyLinked) return;
-        joinBtn.disabled = true;
-        setJoinErr('');
-        fetch('/api/channel-invite', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ user_id: uid, join_channel_id: joinChannelId }),
-        })
-          .then(function (r) {
-            return r.json().then(function (j) {
-              return { ok: r.ok, body: j };
-            });
-          })
-          .then(function (x) {
-            if (!x.ok) {
-              var msg = (x.body && x.body.error) || 'Не удалось сохранить';
-              setJoinErr(msg);
-              joinBtn.disabled = false;
-              return;
-            }
-            alreadyLinked = true;
-            joinSuccess.textContent = 'Готово! Уведомления о комментариях к этому каналу включены.';
-            joinSuccess.classList.remove('hidden');
-            joinBtn.textContent = 'Готово';
-          })
-          .catch(function () {
-            setJoinErr('Сеть недоступна. Попробуйте ещё раз.');
-            joinBtn.disabled = false;
-          });
-      });
     }
 
     /* ——— HOME ——— */
