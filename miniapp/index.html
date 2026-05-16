@@ -178,6 +178,32 @@
     input, textarea, button {
       transition: none;
     }
+    input, textarea {
+      touch-action: auto;
+      user-select: text;
+      -webkit-user-select: text;
+    }
+    .settings-url-row {
+      display: flex;
+      gap: 8px;
+      align-items: stretch;
+    }
+    .settings-url-row input {
+      flex: 1;
+      min-width: 0;
+    }
+    .settings-paste-btn {
+      flex-shrink: 0;
+      padding: 0 12px;
+      border-radius: 10px;
+      border: 1px solid var(--input-border);
+      background: var(--bg-surface);
+      color: var(--accent);
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      white-space: nowrap;
+    }
     html, body {
       margin: 0;
       height: 100%;
@@ -1774,10 +1800,17 @@
               text-transform:uppercase;letter-spacing:.06em;margin-bottom:7px">
               📩 Менеджер для связи
             </div>
-            <input type="url" id="settingsManagerUrl" placeholder="https://max.ru/username"
-              style="width:100%;background:var(--input-bg);border:1px solid var(--input-border);
-              border-radius:10px;padding:10px 12px;font-size:16px;color:var(--text-primary);
-              outline:none;font-family:inherit"/>
+            <div class="settings-url-row">
+              <input type="text" id="settingsManagerUrl" inputmode="url"
+                autocapitalize="off" autocomplete="off" autocorrect="off" spellcheck="false"
+                placeholder="https://max.ru/username"
+                style="width:100%;background:var(--input-bg);border:1px solid var(--input-border);
+                border-radius:10px;padding:10px 12px;font-size:16px;color:var(--text-primary);
+                outline:none;font-family:inherit"/>
+              <button type="button" id="settingsManagerPaste" class="settings-paste-btn">
+                Вставить
+              </button>
+            </div>
             <div style="font-size:11px;color:var(--text-muted);margin-top:5px">
               Кнопка «Написать менеджеру» появится в комментариях
             </div>
@@ -1998,6 +2031,7 @@
       var overlay = document.getElementById('settingsOverlay')
       if (!overlay) return
       overlay.style.display = 'flex'
+      wireManagerUrlPasteButton()
 
       var ch =
         channelsCache.find(function (c) {
@@ -2051,6 +2085,44 @@
       var overlay = document.getElementById('settingsOverlay')
       if (overlay) overlay.style.display = 'none'
       currentSettingsChatId = null
+    }
+
+    function pasteIntoManagerUrlField() {
+      var input = document.getElementById('settingsManagerUrl')
+      if (!input) return
+      function applyText(text) {
+        var t = String(text || '').trim()
+        if (!t) {
+          showToast('Буфер обмена пуст')
+          return
+        }
+        input.value = t
+        try {
+          input.dispatchEvent(new Event('input', { bubbles: true }))
+        } catch (e) {}
+      }
+      if (navigator.clipboard && typeof navigator.clipboard.readText === 'function') {
+        navigator.clipboard
+          .readText()
+          .then(applyText)
+          .catch(function () {
+            input.focus()
+            showToast('Не удалось вставить — разрешите доступ к буферу')
+          })
+        return
+      }
+      input.focus()
+      showToast('Вставка: долгое нажатие по полю → «Вставить»')
+    }
+
+    function wireManagerUrlPasteButton() {
+      var pasteBtn = document.getElementById('settingsManagerPaste')
+      if (!pasteBtn || pasteBtn.dataset.bound === '1') return
+      pasteBtn.dataset.bound = '1'
+      pasteBtn.addEventListener('click', function (e) {
+        e.preventDefault()
+        pasteIntoManagerUrlField()
+      })
     }
 
     function saveChannelSettings() {
@@ -2478,6 +2550,7 @@
           if (e.target === settingsOverlayEl) closeChannelSettings();
         });
       }
+      wireManagerUrlPasteButton();
 
       wireFeatureToggles(uid);
 
@@ -3742,6 +3815,23 @@
       });
 
       loadPost().then(function () {
+        fetch(
+          '/api/channel-settings?chat_id=' +
+            encodeURIComponent(chatId) +
+            '&user_id=' +
+            encodeURIComponent(userId || '0')
+        )
+          .then(function (r) {
+            return r.json();
+          })
+          .then(function (data) {
+            if (data.manager_url) {
+              var btn = document.getElementById('managerBtn');
+              btn.href = data.manager_url;
+              btn.style.display = 'inline-flex';
+            }
+          })
+          .catch(function () {});
         return loadComments(true);
       });
 
