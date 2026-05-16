@@ -204,6 +204,37 @@
       cursor: pointer;
       white-space: nowrap;
     }
+    .settings-paste-zone {
+      display: none;
+      margin-top: 8px;
+      padding: 10px 12px;
+      border-radius: 10px;
+      border: 1px dashed var(--accent-border);
+      background: var(--accent-bg);
+    }
+    .settings-paste-zone.show {
+      display: block;
+    }
+    .settings-paste-zone-label {
+      font-size: 11px;
+      color: var(--text-muted);
+      margin-bottom: 6px;
+      line-height: 1.4;
+    }
+    #settingsManagerPasteHelper {
+      width: 100%;
+      min-height: 42px;
+      box-sizing: border-box;
+      border-radius: 8px;
+      border: 1px solid var(--input-border);
+      background: var(--input-bg);
+      color: var(--text-primary);
+      font-size: 16px;
+      padding: 8px 10px;
+      font-family: inherit;
+      resize: none;
+      outline: none;
+    }
     html, body {
       margin: 0;
       height: 100%;
@@ -1811,6 +1842,14 @@
                 Вставить
               </button>
             </div>
+            <div id="settingsPasteZone" class="settings-paste-zone">
+              <div class="settings-paste-zone-label">
+                Нажмите в поле ниже и выберите «Вставить» (долгое нажатие)
+              </div>
+              <textarea id="settingsManagerPasteHelper" rows="2"
+                placeholder="https://max.ru/username"
+                autocapitalize="off" autocomplete="off" autocorrect="off" spellcheck="false"></textarea>
+            </div>
             <div style="font-size:11px;color:var(--text-muted);margin-top:5px">
               Кнопка «Написать менеджеру» появится в комментариях
             </div>
@@ -2031,6 +2070,7 @@
       var overlay = document.getElementById('settingsOverlay')
       if (!overlay) return
       overlay.style.display = 'flex'
+      hideManagerPasteZone()
       wireManagerUrlPasteButton()
 
       var ch =
@@ -2084,45 +2124,104 @@
     function closeChannelSettings() {
       var overlay = document.getElementById('settingsOverlay')
       if (overlay) overlay.style.display = 'none'
+      hideManagerPasteZone()
       currentSettingsChatId = null
+    }
+
+    function applyManagerUrlText(text) {
+      var input = document.getElementById('settingsManagerUrl')
+      if (!input) return false
+      var t = String(text || '').trim()
+      if (!t) return false
+      input.value = t
+      try {
+        input.dispatchEvent(new Event('input', { bubbles: true }))
+      } catch (e) {}
+      return true
+    }
+
+    function showManagerPasteZone() {
+      var zone = document.getElementById('settingsPasteZone')
+      var helper = document.getElementById('settingsManagerPasteHelper')
+      if (zone) zone.classList.add('show')
+      if (helper) {
+        helper.value = ''
+        setTimeout(function () {
+          helper.focus()
+        }, 80)
+      }
+    }
+
+    function hideManagerPasteZone() {
+      var zone = document.getElementById('settingsPasteZone')
+      var helper = document.getElementById('settingsManagerPasteHelper')
+      if (zone) zone.classList.remove('show')
+      if (helper) helper.value = ''
+    }
+
+    function onManagerUrlPasteEvent(e) {
+      var text = ''
+      if (e && e.clipboardData) {
+        text = e.clipboardData.getData('text/plain') || e.clipboardData.getData('text') || ''
+      }
+      if (!text && e && e.target && e.target.value) {
+        text = e.target.value
+      }
+      if (!applyManagerUrlText(text)) return
+      hideManagerPasteZone()
+      var input = document.getElementById('settingsManagerUrl')
+      if (input) input.focus()
+      showToast('Ссылка вставлена')
     }
 
     function pasteIntoManagerUrlField() {
       var input = document.getElementById('settingsManagerUrl')
       if (!input) return
-      function applyText(text) {
-        var t = String(text || '').trim()
-        if (!t) {
-          showToast('Буфер обмена пуст')
-          return
-        }
-        input.value = t
-        try {
-          input.dispatchEvent(new Event('input', { bubbles: true }))
-        } catch (e) {}
-      }
+      showManagerPasteZone()
       if (navigator.clipboard && typeof navigator.clipboard.readText === 'function') {
         navigator.clipboard
           .readText()
-          .then(applyText)
+          .then(function (text) {
+            if (applyManagerUrlText(text)) {
+              hideManagerPasteZone()
+              input.focus()
+              showToast('Ссылка вставлена')
+            }
+          })
           .catch(function () {
-            input.focus()
-            showToast('Не удалось вставить — разрешите доступ к буферу')
+            showToast('Нажмите в поле ниже → «Вставить»')
           })
         return
       }
       input.focus()
-      showToast('Вставка: долгое нажатие по полю → «Вставить»')
+      showToast('Нажмите в поле → «Вставить»')
     }
 
     function wireManagerUrlPasteButton() {
       var pasteBtn = document.getElementById('settingsManagerPaste')
-      if (!pasteBtn || pasteBtn.dataset.bound === '1') return
-      pasteBtn.dataset.bound = '1'
-      pasteBtn.addEventListener('click', function (e) {
-        e.preventDefault()
-        pasteIntoManagerUrlField()
-      })
+      if (pasteBtn && pasteBtn.dataset.bound !== '1') {
+        pasteBtn.dataset.bound = '1'
+        pasteBtn.addEventListener('click', function (e) {
+          e.preventDefault()
+          pasteIntoManagerUrlField()
+        })
+      }
+      var input = document.getElementById('settingsManagerUrl')
+      var helper = document.getElementById('settingsManagerPasteHelper')
+      if (input && input.dataset.pasteBound !== '1') {
+        input.dataset.pasteBound = '1'
+        input.addEventListener('paste', onManagerUrlPasteEvent)
+      }
+      if (helper && helper.dataset.pasteBound !== '1') {
+        helper.dataset.pasteBound = '1'
+        helper.addEventListener('paste', onManagerUrlPasteEvent)
+        helper.addEventListener('input', function () {
+          if (applyManagerUrlText(helper.value)) {
+            hideManagerPasteZone()
+            showToast('Ссылка вставлена')
+          }
+        })
+      }
     }
 
     function saveChannelSettings() {
