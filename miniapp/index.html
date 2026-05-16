@@ -210,42 +210,170 @@
     #view-join {
       display: flex;
       flex-direction: column;
-      gap: 14px;
-      padding: 12px;
-      padding-top: calc(12px + env(safe-area-inset-top));
-      padding-bottom: calc(16px + env(safe-area-inset-bottom));
+      align-items: center;
+      justify-content: center;
+      background: var(--bg-primary);
+      padding: 20px 18px;
+      padding-top: calc(20px + env(safe-area-inset-top));
+      padding-bottom: calc(20px + env(safe-area-inset-bottom));
       overflow-y: auto;
       -webkit-overflow-scrolling: touch;
     }
-    #view-join .join-title {
-      font-size: 18px;
-      font-weight: 700;
-      text-align: center;
-      margin: 4px 0 0;
-    }
-    #view-join .join-lead {
-      font-size: 14px;
-      color: var(--muted);
-      line-height: 1.45;
-      text-align: center;
-      margin: 0;
-    }
-    #view-join .join-channel-title {
-      font-size: 16px;
-      font-weight: 600;
+    #view-join .join-screen {
+      width: 100%;
+      max-width: 360px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 14px;
       text-align: center;
     }
-    #view-join .join-err {
-      color: var(--danger);
+    #view-join .join-avatar {
+      width: 80px;
+      height: 80px;
+      border-radius: 24px;
+      border: 2px solid var(--accent-border);
+      background: var(--accent-bg);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 36px;
+      line-height: 1;
+      overflow: hidden;
+      flex-shrink: 0;
+      box-shadow: 0 10px 28px var(--shadow-accent);
+    }
+    #view-join .join-avatar-img {
+      width: 72%;
+      height: 72%;
+      object-fit: contain;
+      display: block;
+    }
+    #view-join .join-channel-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      max-width: 100%;
+      padding: 5px 14px;
+      border-radius: 20px;
+      background: var(--accent-bg);
+      border: 1px solid var(--accent-border);
       font-size: 13px;
-      min-height: 1em;
-      text-align: center;
-    }
-    #view-join .join-success {
-      color: var(--teal);
-      font-size: 14px;
-      text-align: center;
       font-weight: 600;
+      color: var(--text-strong);
+    }
+    #view-join .join-channel-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--accent);
+      flex-shrink: 0;
+    }
+    #view-join .join-channel-name {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    #view-join .join-heading {
+      margin: 2px 0 0;
+      font-size: 22px;
+      font-weight: 700;
+      line-height: 1.25;
+      color: var(--text-primary);
+    }
+    #view-join .join-desc {
+      margin: 0;
+      font-size: 14px;
+      line-height: 1.5;
+      color: var(--text-secondary);
+      max-width: 320px;
+    }
+    #view-join .join-perks {
+      width: 100%;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      margin: 4px 0 2px;
+    }
+    #view-join .perk-card {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 11px 14px;
+      text-align: left;
+      width: 100%;
+    }
+    #view-join .perk-icon {
+      width: 36px;
+      height: 36px;
+      border-radius: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 18px;
+      flex-shrink: 0;
+    }
+    #view-join .perk-icon.purple { background: var(--accent-bg); }
+    #view-join .perk-icon.teal { background: var(--teal-bg); }
+    #view-join .perk-icon.amber { background: var(--warning-bg); }
+    #view-join .perk-text {
+      min-width: 0;
+      flex: 1;
+    }
+    #view-join .perk-title {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--text-primary);
+      line-height: 1.3;
+    }
+    #view-join .perk-sub {
+      margin-top: 2px;
+      font-size: 12px;
+      color: var(--text-secondary);
+      line-height: 1.35;
+    }
+    #view-join .join-btn-primary {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 100%;
+      margin-top: 4px;
+      padding: 14px 16px;
+      border-radius: 14px;
+      border: none;
+      background: var(--accent);
+      color: var(--text-on-accent);
+      font-size: 15px;
+      font-weight: 700;
+      text-decoration: none;
+      cursor: pointer;
+      box-shadow: 0 8px 24px var(--shadow-accent);
+    }
+    #view-join .join-btn-primary:disabled {
+      opacity: 0.55;
+      cursor: not-allowed;
+      box-shadow: none;
+    }
+    #view-join .join-btn-secondary {
+      width: 100%;
+      padding: 12px 16px;
+      border-radius: 14px;
+      border: 1px solid var(--border-strong);
+      background: transparent;
+      color: var(--text-secondary);
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    #view-join .join-footer-note {
+      margin: 0;
+      font-size: 11px;
+      line-height: 1.45;
+      color: var(--text-muted);
+      max-width: 300px;
     }
     #view-home {
       display: flex;
@@ -343,16 +471,6 @@
       border-radius: 50%;
       user-select: none;
       -webkit-user-drag: none;
-    }
-    #view-join .brand-mark {
-      width: min(84px, 23vw);
-      height: min(84px, 23vw);
-      max-width: min(84px, 23vw);
-      margin-bottom: 14px;
-      filter: drop-shadow(0 7px 20px rgba(127, 119, 221, 0.34));
-    }
-    [data-theme='light'] #view-join .brand-mark {
-      filter: drop-shadow(0 5px 14px rgba(95, 75, 185, 0.18));
     }
     .bot-desc {
       font-size: 13px;
@@ -1373,26 +1491,61 @@
     </div>
 
     <div id="view-join" class="view hidden">
-      <div class="hero">
-        <div class="brand-mark" aria-hidden="true">
+      <div class="join-screen">
+        <div class="join-avatar" aria-hidden="true">
           <img
-            class="brand-mark-img"
+            class="join-avatar-img"
             src="brand-logo.png"
-            width="600"
-            height="600"
+            width="80"
+            height="80"
             alt=""
             decoding="async"
+            onerror="this.style.display='none';this.parentElement.textContent='\uD83D\uDCAC';"
           />
         </div>
-        <h1 class="join-title">Уведомления о комментариях</h1>
-        <p class="join-lead" id="joinLead">
-          Для подключения уведомлений — напишите любое сообщение боту
+
+        <div class="join-channel-badge">
+          <span class="join-channel-dot" aria-hidden="true"></span>
+          <span class="join-channel-name" id="joinChannelName">Канал</span>
+        </div>
+
+        <h1 class="join-heading">Вас приглашают как администратора</h1>
+        <p class="join-desc">
+          Подключите уведомления — получайте сообщения о новых комментариях
+          и отвечайте от имени канала
+        </p>
+
+        <div class="join-perks">
+          <div class="perk-card">
+            <div class="perk-icon purple" aria-hidden="true">🔔</div>
+            <div class="perk-text">
+              <div class="perk-title">Мгновенные уведомления</div>
+              <div class="perk-sub">О каждом новом комментарии</div>
+            </div>
+          </div>
+          <div class="perk-card">
+            <div class="perk-icon teal" aria-hidden="true">💬</div>
+            <div class="perk-text">
+              <div class="perk-title">Ответы от канала</div>
+              <div class="perk-sub">Отвечайте подписчикам в Mini App</div>
+            </div>
+          </div>
+          <div class="perk-card">
+            <div class="perk-icon amber" aria-hidden="true">✅</div>
+            <div class="perk-text">
+              <div class="perk-title">Статус в команде</div>
+              <div class="perk-sub">Видно кто из команды ответил</div>
+            </div>
+          </div>
+        </div>
+
+        <a class="join-btn-primary" id="joinLaunchBtn" href="#">🚀 Подключить уведомления</a>
+        <button type="button" class="join-btn-secondary" id="joinLearnBtn">Узнать подробнее</button>
+        <p class="join-footer-note">
+          После нажатия откроется чат с ботом.
+          Напишите любое сообщение для активации.
         </p>
       </div>
-      <div class="join-err" id="joinErr" aria-live="polite"></div>
-      <button type="button" class="btn-primary" id="joinConfirmBtn" style="width:100%;margin-top:4px;">
-        💬 Написать боту
-      </button>
     </div>
 
     <div id="view-gate" class="view hidden">
@@ -1572,6 +1725,18 @@
       </ol>
       <button type="button" class="overlay-close" id="instructionClose">Понятно</button>
     </div>
+
+  <div id="joinHowOverlay" class="overlay hidden" aria-hidden="true">
+    <div class="overlay-card">
+      <h2>Как это работает</h2>
+      <ol>
+        <li>Нажмите «Подключить» — откроется чат с ботом</li>
+        <li>Напишите любое сообщение боту</li>
+        <li>Получите подтверждение и начните получать уведомления</li>
+      </ol>
+      <button type="button" class="overlay-close" id="joinHowClose">Понятно</button>
+    </div>
+  </div>
   </div>
 
   <script>
@@ -1759,24 +1924,29 @@
       }
 
     /* ——— JOIN (admin invite) ——— */
-    function showJoinPage() {
-      if (!joinChannelId) return;
+    function showJoinPage(channelId) {
+      var cid = channelId || joinChannelId;
+      if (!cid) return;
 
-      var joinErr = document.getElementById('joinErr');
-      var joinBtn = document.getElementById('joinConfirmBtn');
-      var joinLead = document.getElementById('joinLead');
+      document.querySelectorAll('.view').forEach(function (v) {
+        v.classList.add('hidden');
+      });
+      var viewJoin = document.getElementById('view-join');
+      if (viewJoin) viewJoin.classList.remove('hidden');
 
-      if (joinLead) {
-        joinLead.textContent = 'Для подключения уведомлений — напишите любое сообщение боту';
-      }
-      if (joinErr) joinErr.textContent = '';
-      if (joinBtn) {
-        joinBtn.disabled = false;
-        joinBtn.textContent = '💬 Написать боту';
-      }
+      var channelNameEl = document.getElementById('joinChannelName');
+      if (channelNameEl) channelNameEl.textContent = 'Канал';
 
-      var absId = Math.abs(parseInt(joinChannelId, 10));
-      var startPayload = Number.isFinite(absId) && absId > 0 ? 'join' + absId : '';
+      fetch('/api/channel-info?chat_id=' + encodeURIComponent(cid))
+        .then(function (r) {
+          return r.json();
+        })
+        .then(function (data) {
+          if (channelNameEl) {
+            channelNameEl.textContent = (data && data.title) || 'Канал';
+          }
+        })
+        .catch(function () {});
 
       fetch('/api/config')
         .then(function (r) {
@@ -1784,28 +1954,47 @@
         })
         .then(function (cfg) {
           var nick = String((cfg && cfg.bot_nickname) || '').replace(/^@/, '');
-          if (!nick) {
-            if (joinErr) joinErr.textContent = 'Бот не настроен.';
-            if (joinBtn) joinBtn.disabled = true;
-            return;
-          }
-          var botUrl = startPayload
-            ? 'https://max.ru/' + nick + '?start=' + encodeURIComponent(startPayload)
-            : 'https://max.ru/' + nick;
-          if (!joinBtn) return;
-          joinBtn.onclick = function () {
+          var launchBtn = document.getElementById('joinLaunchBtn');
+          if (!nick || !launchBtn) return;
+          var absId = Math.abs(parseInt(cid, 10));
+          if (!Number.isFinite(absId) || absId <= 0) return;
+          var url = 'https://max.ru/' + nick + '?start=' + encodeURIComponent('join' + absId);
+          launchBtn.href = url;
+          launchBtn.onclick = function (e) {
+            e.preventDefault();
             try {
               if (window.WebApp && typeof window.WebApp.openMaxLink === 'function') {
-                window.WebApp.openMaxLink(botUrl);
+                window.WebApp.openMaxLink(url);
                 return;
               }
-            } catch (e) {}
-            window.location.href = botUrl;
+            } catch (err) {}
+            window.location.href = url;
           };
         })
-        .catch(function () {
-          if (joinErr) joinErr.textContent = 'Не удалось загрузить настройки бота.';
+        .catch(function () {});
+
+      var learnBtn = document.getElementById('joinLearnBtn');
+      var howOverlay = document.getElementById('joinHowOverlay');
+      var howClose = document.getElementById('joinHowClose');
+      if (learnBtn && howOverlay && learnBtn.dataset.bound !== '1') {
+        learnBtn.dataset.bound = '1';
+        learnBtn.addEventListener('click', function () {
+          howOverlay.classList.remove('hidden');
+          howOverlay.setAttribute('aria-hidden', 'false');
         });
+        if (howClose) {
+          howClose.addEventListener('click', function () {
+            howOverlay.classList.add('hidden');
+            howOverlay.setAttribute('aria-hidden', 'true');
+          });
+        }
+        howOverlay.addEventListener('click', function (e) {
+          if (e.target === howOverlay) {
+            howOverlay.classList.add('hidden');
+            howOverlay.setAttribute('aria-hidden', 'true');
+          }
+        });
+      }
     }
 
     /* ——— HOME ——— */
