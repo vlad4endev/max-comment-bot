@@ -6,21 +6,58 @@
  * logger.debug('Переменные окружения загружены')
  */
 
-import { appendFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { existsSync, renameSync, statSync } from 'node:fs'
+import { appendFile, mkdir } from 'node:fs/promises'
+import { dirname, join } from 'node:path'
 
 const RUNTIME_LOG_PATH = join(process.cwd(), 'data', 'runtime.log')
+const MAX_LOG_SIZE = 50 * 1024 * 1024
 const ADMIN_LOG_BUFFER_MAX = 500
 const adminLogLines: string[] = []
+
+export function rotateRuntimeLogIfNeeded(): void {
+  try {
+    if (!existsSync(RUNTIME_LOG_PATH)) {
+      return
+    }
+    if (statSync(RUNTIME_LOG_PATH).size > MAX_LOG_SIZE) {
+      renameSync(RUNTIME_LOG_PATH, `${RUNTIME_LOG_PATH}.old`)
+    }
+  } catch {
+    /* ignore rotation errors */
+  }
+}
+
+const LOG_ROTATION_INTERVAL_MS = 60 * 60 * 1000
+let logRotationInterval: ReturnType<typeof setInterval> | undefined
+
+/** Проверка размера при старте и раз в час. */
+export function startRuntimeLogRotationScheduler(): void {
+  rotateRuntimeLogIfNeeded()
+  stopRuntimeLogRotationScheduler()
+  logRotationInterval = setInterval(() => {
+    rotateRuntimeLogIfNeeded()
+  }, LOG_ROTATION_INTERVAL_MS)
+}
+
+export function stopRuntimeLogRotationScheduler(): void {
+  if (logRotationInterval !== undefined) {
+    clearInterval(logRotationInterval)
+    logRotationInterval = undefined
+  }
+}
 
 function pushAdminLogLine(line: string): void {
   adminLogLines.push(line)
   if (adminLogLines.length > ADMIN_LOG_BUFFER_MAX) {
     adminLogLines.splice(0, adminLogLines.length - ADMIN_LOG_BUFFER_MAX)
   }
-  void appendFile(RUNTIME_LOG_PATH, `${line}\n`, 'utf8').catch(() => {
-    /* ignore disk errors for log tail */
-  })
+  rotateRuntimeLogIfNeeded()
+  void mkdir(dirname(RUNTIME_LOG_PATH), { recursive: true })
+    .then(() => appendFile(RUNTIME_LOG_PATH, `${line}\n`, 'utf8'))
+    .catch(() => {
+      /* ignore disk errors for log tail */
+    })
 }
 
 /** Последние строки консольного лога (и дубль в data/runtime.log при возможности). */

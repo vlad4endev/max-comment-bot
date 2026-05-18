@@ -16,23 +16,17 @@ export interface ChannelSaveInput {
     title: string | null;
     type: ChatType;
 }
-/**
- * JSON-backed registry of chats the bot participates in.
- * Keeps an in-memory map synchronized with {@link DEFAULT_CHANNELS_PATH}.
- */
 export declare class ChannelRegistry {
-    private readonly channels;
-    private readonly filePath;
-    private persistChain;
-    constructor(filePath?: string);
-    /**
-     * Читает `channels.json` и заполняет память. Повторные вызовы перезаписывают кэш.
-     */
+    private statements;
     loadFromDisk(): Promise<void>;
     /**
      * Сохраняет или обновляет канал. Для уже известного `chat_id` поле {@link ChannelRecord.date_added} не меняется.
      */
     saveChannel(chatId: number, chatData: ChannelSaveInput): void;
+    /**
+     * Исключает канал из поллера и реестра без удаления постов/комментариев (повторные ошибки API).
+     */
+    deactivate(chatId: number): ChannelRecord | null;
     /**
      * Удаляет канал из реестра. Возвращает удалённую запись (для текста уведомления) или `null`, если чата не было.
      */
@@ -45,7 +39,7 @@ export declare class ChannelRegistry {
      * Все каналы из текущего реестра, отсортированные по `chat_id`.
      */
     getAllChannels(): ChannelRecord[];
-    private queuePersist;
-    private persist;
+    private parseRow;
+    private getStatements;
 }
 export declare const channelRegistry: ChannelRegistry;

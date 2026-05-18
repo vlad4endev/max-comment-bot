@@ -1,0 +1,88 @@
+"use strict";
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.getDb = getDb;
+exports.closeDb = closeDb;
+const node_fs_1 = __importDefault(require("node:fs"));
+const node_path_1 = __importDefault(require("node:path"));
+const better_sqlite3_1 = __importDefault(require("better-sqlite3"));
+const DATA_DIR = node_path_1.default.resolve(__dirname, '../../data');
+const DB_PATH = node_path_1.default.join(DATA_DIR, 'bot.db');
+let db = null;
+function getDb() {
+    if (db) {
+        return db;
+    }
+    node_fs_1.default.mkdirSync(DATA_DIR, { recursive: true });
+    db = new better_sqlite3_1.default(DB_PATH);
+    db.pragma('journal_mode = WAL');
+    db.pragma('synchronous = NORMAL');
+    db.pragma('foreign_keys = ON');
+    initSchema(db);
+    return db;
+}
+function initSchema(targetDb) {
+    targetDb.exec(`
+    CREATE TABLE IF NOT EXISTS channels (
+      chat_id     INTEGER PRIMARY KEY,
+      title       TEXT,
+      type        TEXT NOT NULL,
+      date_added  TEXT NOT NULL,
+      active      INTEGER NOT NULL DEFAULT 1,
+      settings    TEXT,
+      created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_channels_type ON channels(type);
+    CREATE INDEX IF NOT EXISTS idx_channels_active ON channels(active);
+
+    CREATE TABLE IF NOT EXISTS posts (
+      post_id                  TEXT PRIMARY KEY,
+      chat_id                  INTEGER NOT NULL,
+      message_mid              TEXT NOT NULL,
+      comments_ui_message_mid  TEXT,
+      sender_name              TEXT,
+      text                     TEXT NOT NULL,
+      photo_url                TEXT,
+      media_attachments        TEXT,
+      comment_count            INTEGER NOT NULL,
+      timestamp                TEXT NOT NULL,
+      data                     TEXT NOT NULL,
+      created_at               TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (chat_id) REFERENCES channels(chat_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_posts_chat_id ON posts(chat_id);
+    CREATE INDEX IF NOT EXISTS idx_posts_message_mid ON posts(chat_id, message_mid);
+
+    CREATE TABLE IF NOT EXISTS comments (
+      comment_id         TEXT PRIMARY KEY,
+      post_id            TEXT NOT NULL,
+      user_id            INTEGER NOT NULL,
+      username           TEXT NOT NULL,
+      text               TEXT NOT NULL,
+      timestamp          TEXT NOT NULL,
+      reply              TEXT,
+      notification_text  TEXT,
+      notification_mids  TEXT,
+      data               TEXT NOT NULL,
+      created_at         TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_comments_post_id ON comments(post_id);
+    CREATE INDEX IF NOT EXISTS idx_comments_user_id ON comments(user_id);
+
+    CREATE TABLE IF NOT EXISTS subscribers (
+      user_id     INTEGER PRIMARY KEY,
+      data        TEXT NOT NULL,
+      created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+  `);
+}
+function closeDb() {
+    if (!db) {
+        return;
+    }
+    db.close();
+    db = null;
+}
+//# sourceMappingURL=database.js.map

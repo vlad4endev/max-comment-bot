@@ -1,25 +1,79 @@
 "use strict";
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.POLL_CONCURRENCY = void 0;
 exports.runChannelPollerForChat = runChannelPollerForChat;
 exports.runChannelPollerTick = runChannelPollerTick;
 exports.startChannelPostPoller = startChannelPostPoller;
 exports.restartChannelPostPoller = restartChannelPostPoller;
 exports.stopChannelPostPoller = stopChannelPostPoller;
+const p_limit_1 = __importDefault(require("p-limit"));
 const adminRuntimeSettingsStore_1 = require("./adminRuntimeSettingsStore");
+const channelRegistry_1 = require("./channelRegistry");
 const logger_1 = require("../utils/logger");
+const maxApiRetry_1 = require("../utils/maxApiRetry");
 const channelPostActions_1 = require("./channelPostActions");
 const postStore_1 = require("./postStore");
-const channelRegistry_1 = require("./channelRegistry");
 const MIN_POLL_INTERVAL_MS = 3_000;
 const FETCH_COUNT = 10;
+/** Exported for startup diagnostics. */
+exports.POLL_CONCURRENCY = 5;
+const DISABLE_AFTER_ERRORS = 5;
 let intervalId;
 let tickInFlight = false;
+const errorCount = new Map();
 function logTickFired() {
     const channels = channelRegistry_1.channelRegistry.getAllChannels();
     logger_1.logger.info('channelPoller: tick fired', {
         channelCount: channels.length,
         channels: channels.map((c) => c.chat_id),
     });
+}
+async function pollChannel(bot, channel, botUid) {
+    const { messages } = await (0, maxApiRetry_1.apiCallWithRetry)(() => bot.api.getMessages(channel.chat_id, { count: FETCH_COUNT }));
+    logger_1.logger.info('channelPoller: getMessages result', {
+        chatId: channel.chat_id,
+        messageCount: messages.length,
+        mids: messages.map((m) => m.body?.mid),
+    });
+    if (messages.length === 0) {
+        logger_1.logger.info('channelPoller: no messages returned for channel', { chatId: channel.chat_id });
+    }
+    for (const message of messages) {
+        const r = await (0, channelPostActions_1.tryAttachCommentsToChannelPost)(bot, message, {
+            botUserId: botUid,
+            channelChatIdOverride: channel.chat_id,
+        });
+        logger_1.logger.info('channelPoller: tryAttach result', {
+            chatId: channel.chat_id,
+            mid: message.body?.mid,
+            result: r,
+        });
+        if (r.ok) {
+            logger_1.logger.info('channelPoller: button attached to new post', {
+                channelChatId: channel.chat_id,
+                mid: message.body.mid,
+            });
+        }
+    }
+}
+async function pollChannelSafe(bot, channel, botUid) {
+    try {
+        await pollChannel(bot, channel, botUid);
+        errorCount.delete(channel.chat_id);
+    }
+    catch (err) {
+        const count = (errorCount.get(channel.chat_id) ?? 0) + 1;
+        errorCount.set(channel.chat_id, count);
+        logger_1.logger.error(`channelPoller: error for ${channel.chat_id} (${count}/${DISABLE_AFTER_ERRORS})`, err);
+        if (count >= DISABLE_AFTER_ERRORS) {
+            logger_1.logger.warn(`channelPoller: disabling channel ${channel.chat_id} after ${count} errors`);
+            channelRegistry_1.channelRegistry.deactivate(channel.chat_id);
+            errorCount.delete(channel.chat_id);
+        }
+    }
 }
 /**
  * One sweep for a single channel (admin «обновить кнопки»).
@@ -34,7 +88,7 @@ async function runChannelPollerForChat(bot, chatId) {
     }
     const botUid = bot.botInfo?.user_id;
     try {
-        const { messages } = await bot.api.getMessages(chatId, { count: FETCH_COUNT });
+        const { messages } = await (0, maxApiRetry_1.apiCallWithRetry)(() => bot.api.getMessages(chatId, { count: FETCH_COUNT }));
         for (const message of messages) {
             await (0, channelPostActions_1.tryAttachCommentsToChannelPost)(bot, message, {
                 botUserId: botUid,
@@ -55,39 +109,8 @@ async function runChannelPollerTick(bot) {
     }
     const channels = channelRegistry_1.channelRegistry.getAllChannels().filter((c) => c.type === 'channel');
     const botUid = bot.botInfo?.user_id;
-    for (const c of channels) {
-        try {
-            const { messages } = await bot.api.getMessages(c.chat_id, { count: FETCH_COUNT });
-            logger_1.logger.info('channelPoller: getMessages result', {
-                chatId: c.chat_id,
-                messageCount: messages.length,
-                mids: messages.map((m) => m.body?.mid),
-            });
-            if (messages.length === 0) {
-                logger_1.logger.info('channelPoller: no messages returned for channel', { chatId: c.chat_id });
-            }
-            for (const message of messages) {
-                const r = await (0, channelPostActions_1.tryAttachCommentsToChannelPost)(bot, message, {
-                    botUserId: botUid,
-                    channelChatIdOverride: c.chat_id,
-                });
-                logger_1.logger.info('channelPoller: tryAttach result', {
-                    chatId: c.chat_id,
-                    mid: message.body?.mid,
-                    result: r,
-                });
-                if (r.ok) {
-                    logger_1.logger.info('channelPoller: button attached to new post', {
-                        channelChatId: c.chat_id,
-                        mid: message.body.mid,
-                    });
-                }
-            }
-        }
-        catch (err) {
-            logger_1.logger.warn('channelPoller: failed for channel', { chatId: c.chat_id, err });
-        }
-    }
+    const limit = (0, p_limit_1.default)(exports.POLL_CONCURRENCY);
+    await Promise.all(channels.map((c) => limit(() => pollChannelSafe(bot, c, botUid))));
 }
 /**
  * Starts periodic polling of registered channels. No-op if Mini App open URL is not configured.
@@ -102,6 +125,9 @@ function startChannelPostPoller(bot, intervalMs) {
         : adminRuntimeSettingsStore_1.adminRuntimeSettingsStore.getPollIntervalMs();
     const ms = Math.max(MIN_POLL_INTERVAL_MS, fromStoreOrArg);
     stopChannelPostPoller();
+    const channelCount = channelRegistry_1.channelRegistry
+        .getAllChannels()
+        .filter((c) => c.type === 'channel').length;
     logTickFired();
     void (async () => {
         try {
@@ -130,7 +156,12 @@ function startChannelPostPoller(bot, intervalMs) {
             }
         })();
     }, ms);
-    logger_1.logger.info(`channelPoller: started (interval ${ms / 1000}s, count=${FETCH_COUNT})`);
+    logger_1.logger.info('channelPoller: started', {
+        channelCount,
+        concurrency: exports.POLL_CONCURRENCY,
+        intervalMs: ms,
+        fetchCount: FETCH_COUNT,
+    });
 }
 /**
  * Перезапуск таймера с разрешением из {@link adminRuntimeSettingsStore}.

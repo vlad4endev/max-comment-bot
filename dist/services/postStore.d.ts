@@ -21,45 +21,15 @@ export interface Post {
     comment_count: number;
     timestamp: string;
 }
-/**
- * JSON-backed map of posts by `post_id`, with async persistence under `data/posts.json`.
- */
 export declare class PostStore {
-    private readonly byId;
-    private readonly filePath;
-    private persistChain;
-    constructor(filePath?: string);
-    /**
-     * Loads posts from disk into memory (replaces cache).
-     */
+    private statements;
     loadFromDisk(): Promise<void>;
-    /**
-     * Persists or replaces a post in memory and queues disk write.
-     */
     savePost(post: Post): void;
-    /**
-     * Returns a post by id or `null`.
-     */
     getPost(postId: string): Post | null;
-    /**
-     * All posts in a channel (for /status counts).
-     */
     getPostsByChatId(chatId: number): Post[];
-    /**
-     * Whether we already track this channel message (same {@link Post.message_mid}).
-     */
     findPostByChannelMessage(chatId: number, messageMid: string): Post | null;
-    /**
-     * Increments {@link Post.comment_count} and persists. Returns new count or `null` if unknown post.
-     */
     incrementCommentCount(postId: string): number | null;
-    /**
-     * Decrements {@link Post.comment_count} (floored at 0). Returns new count or `null` if unknown post.
-     */
     decrementCommentCount(postId: string): number | null;
-    /**
-     * Удаляет все посты канала, возвращает затронутые post_id (для чистки комментариев).
-     */
     removePostsForChatId(chatId: number): string[];
     clearAllPosts(): void;
     getTotalPostCount(): number;
@@ -67,8 +37,8 @@ export declare class PostStore {
      * Updates the channel message inline keyboard to show the current comment count.
      */
     updateButtonCaption(bot: Bot, post: Post): Promise<void>;
-    private queuePersist;
-    private persist;
+    private parsePost;
+    private getStatements;
 }
 /**
  * Non-keyboard parts of {@link Message.body.attachments} for merging into {@link Bot.api.editMessage}.

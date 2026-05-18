@@ -10,7 +10,8 @@ import {
   deleteWebhookSubscription,
 } from './maxPlatform/subscriptions'
 import { stopChannelPostPoller } from './services/channelPoller'
-import { logger } from './utils/logger'
+import { stateManager } from './services/stateManager'
+import { logger, stopRuntimeLogRotationScheduler } from './utils/logger'
 
 function initializeBot(): Bot {
   logger.info('🤖 Инициализация бота...')
@@ -52,6 +53,8 @@ function setupGracefulShutdown(bot: Bot, options: GracefulShutdownOptions): void
     void (async () => {
       logger.info('👋 Получен сигнал выключения...')
       stopChannelPostPoller()
+      stopRuntimeLogRotationScheduler()
+      stateManager.destroy()
       if (options.receiveMode === 'polling') {
         bot.stop()
       }

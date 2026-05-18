@@ -9,6 +9,7 @@ const config_1 = require("./config");
 const events_1 = require("./handlers/events");
 const subscriptions_1 = require("./maxPlatform/subscriptions");
 const channelPoller_1 = require("./services/channelPoller");
+const stateManager_1 = require("./services/stateManager");
 const logger_1 = require("./utils/logger");
 function initializeBot() {
     logger_1.logger.info('🤖 Инициализация бота...');
@@ -43,6 +44,8 @@ function setupGracefulShutdown(bot, options) {
         void (async () => {
             logger_1.logger.info('👋 Получен сигнал выключения...');
             (0, channelPoller_1.stopChannelPostPoller)();
+            (0, logger_1.stopRuntimeLogRotationScheduler)();
+            stateManager_1.stateManager.destroy();
             if (options.receiveMode === 'polling') {
                 bot.stop();
             }

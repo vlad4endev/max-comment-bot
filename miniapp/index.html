@@ -1222,6 +1222,7 @@
       color: var(--teal);
     }
     #view-comments .bubble-u {
+      position: relative;
       flex: 1;
       min-width: 0;
       max-width: calc(100% - 60px);
@@ -1229,6 +1230,68 @@
       border-radius: 4px 16px 16px 16px;
       background: var(--bubble-user);
       border: 1px solid var(--surface-border);
+    }
+    #view-comments .delete-comment-btn {
+      position: absolute;
+      top: -8px;
+      left: -8px;
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      background: rgba(255, 80, 80, 0.15);
+      border: 1px solid rgba(255, 80, 80, 0.3);
+      color: var(--danger);
+      font-size: 11px;
+      cursor: pointer;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      line-height: 1;
+      z-index: 10;
+      padding: 0;
+    }
+    #view-comments .comment-group:hover .delete-comment-btn {
+      display: flex;
+    }
+    #view-comments .comment-group.show-actions .delete-comment-btn {
+      display: flex;
+    }
+    #view-comments .delete-confirm {
+      position: absolute;
+      top: -8px;
+      left: -8px;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      background: var(--bg-secondary);
+      border: 1px solid rgba(255, 80, 80, 0.4);
+      border-radius: 12px;
+      padding: 4px 8px;
+      z-index: 20;
+      white-space: nowrap;
+    }
+    #view-comments .delete-confirm span {
+      font-size: 11px;
+      color: var(--text-secondary);
+    }
+    #view-comments .delete-confirm-yes {
+      font-size: 11px;
+      padding: 2px 7px;
+      border-radius: 8px;
+      background: rgba(255, 80, 80, 0.2);
+      border: 1px solid rgba(255, 80, 80, 0.4);
+      color: var(--danger);
+      cursor: pointer;
+      font-weight: 600;
+    }
+    #view-comments .delete-confirm-no {
+      font-size: 11px;
+      padding: 2px 7px;
+      border-radius: 8px;
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      color: var(--text-secondary);
+      cursor: pointer;
     }
     #view-comments .bubble-u .uname {
       font-size: 12px;
@@ -3338,6 +3401,11 @@
         return (
           '<div class="reply-block">' +
           '<div class="reply-inner">' +
+          (isAdmin
+            ? '<button type="button" class="delete-comment-btn" data-delete-reply="' +
+              esc(c.comment_id) +
+              '" title="Удалить ответ">✕</button>'
+            : '') +
           '<div class="reply-tag"><div class="reply-dot"></div><span>' +
           replyLabel +
           '</span></div>' +
@@ -3388,6 +3456,11 @@
           esc(av) +
           '</div>' +
           '<div class="bubble-u">' +
+          (isAdmin
+            ? '<button type="button" class="delete-comment-btn" data-delete-comment="' +
+              esc(c.comment_id) +
+              '" title="Удалить комментарий">✕</button>'
+            : '') +
           '<div class="uname">' +
           esc(c.username) +
           '</div>' +
@@ -3404,7 +3477,96 @@
         );
       }
 
+      var commentActionsTouchBound = false;
+
+      function wireCommentDeleteConfirm(node) {
+        if (!isAdmin) return;
+        node.querySelectorAll('.delete-comment-btn').forEach(function (btn) {
+          if (btn.dataset.confirmWired === '1') return;
+          btn.dataset.confirmWired = '1';
+          var host =
+            btn.closest('.bubble-u') || btn.closest('.reply-inner');
+          if (!host) return;
+          btn.addEventListener('click', function (e) {
+            if (btn.dataset.confirmedDelete === '1') return;
+            e.stopImmediatePropagation();
+            e.preventDefault();
+            var existing = node.querySelector('.delete-confirm');
+            if (existing) {
+              existing.remove();
+              btn.style.display = '';
+              return;
+            }
+            var confirm = document.createElement('div');
+            confirm.className = 'delete-confirm';
+            confirm.innerHTML =
+              '<span>Удалить?</span>' +
+              '<button type="button" class="delete-confirm-yes">Да</button>' +
+              '<button type="button" class="delete-confirm-no">Нет</button>';
+            btn.style.display = 'none';
+            host.appendChild(confirm);
+            confirm.querySelector('.delete-confirm-no').onclick = function () {
+              confirm.remove();
+              btn.style.display = '';
+            };
+            confirm.querySelector('.delete-confirm-yes').onclick = function () {
+              confirm.remove();
+              btn.style.display = '';
+              btn.dataset.confirmedDelete = '1';
+              btn.click();
+              delete btn.dataset.confirmedDelete;
+            };
+            setTimeout(function () {
+              if (confirm.parentNode) {
+                confirm.remove();
+                btn.style.display = '';
+              }
+            }, 3000);
+          });
+        });
+      }
+
       function wireCommentNode(node) {
+        if (isAdmin) {
+          var pressTimer = null;
+          var msgEl = node.querySelector('.msg-user');
+          if (msgEl) {
+            msgEl.addEventListener('touchstart', function () {
+              pressTimer = setTimeout(function () {
+                node.classList.add('show-actions');
+              }, 500);
+            });
+            msgEl.addEventListener('touchend', function () {
+              clearTimeout(pressTimer);
+            });
+            msgEl.addEventListener('touchmove', function () {
+              clearTimeout(pressTimer);
+            });
+          }
+          var replyEl = node.querySelector('.reply-block');
+          if (replyEl) {
+            replyEl.addEventListener('touchstart', function () {
+              pressTimer = setTimeout(function () {
+                node.classList.add('show-actions');
+              }, 500);
+            });
+            replyEl.addEventListener('touchend', function () {
+              clearTimeout(pressTimer);
+            });
+            replyEl.addEventListener('touchmove', function () {
+              clearTimeout(pressTimer);
+            });
+          }
+          if (!commentActionsTouchBound) {
+            commentActionsTouchBound = true;
+            document.addEventListener('touchstart', function (e) {
+              feedEl.querySelectorAll('.comment-group.show-actions').forEach(function (g) {
+                if (!g.contains(e.target)) g.classList.remove('show-actions');
+              });
+            });
+          }
+        }
+        wireCommentDeleteConfirm(node);
         wireAdminModeration(node);
       }
 

@@ -1,16 +1,23 @@
 import type { Bot } from '@maxhub/max-bot-api'
+import pLimit from 'p-limit'
 
 import { adminRuntimeSettingsStore } from './adminRuntimeSettingsStore'
+import type { ChannelRecord } from './channelRegistry'
+import { channelRegistry } from './channelRegistry'
 import { logger } from '../utils/logger'
+import { apiCallWithRetry } from '../utils/maxApiRetry'
 import { tryAttachCommentsToChannelPost } from './channelPostActions'
 import { isMiniAppOpenUrlConfigured } from './postStore'
-import { channelRegistry } from './channelRegistry'
 
 const MIN_POLL_INTERVAL_MS = 3_000
 const FETCH_COUNT = 10
+/** Exported for startup diagnostics. */
+export const POLL_CONCURRENCY = 5
+const DISABLE_AFTER_ERRORS = 5
 
 let intervalId: ReturnType<typeof setInterval> | undefined
 let tickInFlight = false
+const errorCount = new Map<number, number>()
 
 function logTickFired(): void {
   const channels = channelRegistry.getAllChannels()
@@ -18,6 +25,63 @@ function logTickFired(): void {
     channelCount: channels.length,
     channels: channels.map((c) => c.chat_id),
   })
+}
+
+async function pollChannel(
+  bot: Bot,
+  channel: ChannelRecord,
+  botUid: number | undefined,
+): Promise<void> {
+  const { messages } = await apiCallWithRetry(() =>
+    bot.api.getMessages(channel.chat_id, { count: FETCH_COUNT }),
+  )
+  logger.info('channelPoller: getMessages result', {
+    chatId: channel.chat_id,
+    messageCount: messages.length,
+    mids: messages.map((m) => m.body?.mid),
+  })
+  if (messages.length === 0) {
+    logger.info('channelPoller: no messages returned for channel', { chatId: channel.chat_id })
+  }
+  for (const message of messages) {
+    const r = await tryAttachCommentsToChannelPost(bot, message, {
+      botUserId: botUid,
+      channelChatIdOverride: channel.chat_id,
+    })
+    logger.info('channelPoller: tryAttach result', {
+      chatId: channel.chat_id,
+      mid: message.body?.mid,
+      result: r,
+    })
+    if (r.ok) {
+      logger.info('channelPoller: button attached to new post', {
+        channelChatId: channel.chat_id,
+        mid: message.body.mid,
+      })
+    }
+  }
+}
+
+async function pollChannelSafe(bot: Bot, channel: ChannelRecord, botUid: number | undefined): Promise<void> {
+  try {
+    await pollChannel(bot, channel, botUid)
+    errorCount.delete(channel.chat_id)
+  } catch (err: unknown) {
+    const count = (errorCount.get(channel.chat_id) ?? 0) + 1
+    errorCount.set(channel.chat_id, count)
+    logger.error(
+      `channelPoller: error for ${channel.chat_id} (${count}/${DISABLE_AFTER_ERRORS})`,
+      err,
+    )
+
+    if (count >= DISABLE_AFTER_ERRORS) {
+      logger.warn(
+        `channelPoller: disabling channel ${channel.chat_id} after ${count} errors`,
+      )
+      channelRegistry.deactivate(channel.chat_id)
+      errorCount.delete(channel.chat_id)
+    }
+  }
 }
 
 /**
@@ -35,7 +99,9 @@ export async function runChannelPollerForChat(bot: Bot, chatId: number): Promise
 
   const botUid = bot.botInfo?.user_id
   try {
-    const { messages } = await bot.api.getMessages(chatId, { count: FETCH_COUNT })
+    const { messages } = await apiCallWithRetry(() =>
+      bot.api.getMessages(chatId, { count: FETCH_COUNT }),
+    )
     for (const message of messages) {
       await tryAttachCommentsToChannelPost(bot, message, {
         botUserId: botUid,
@@ -57,39 +123,9 @@ export async function runChannelPollerTick(bot: Bot): Promise<void> {
 
   const channels = channelRegistry.getAllChannels().filter((c) => c.type === 'channel')
   const botUid = bot.botInfo?.user_id
+  const limit = pLimit(POLL_CONCURRENCY)
 
-  for (const c of channels) {
-    try {
-      const { messages } = await bot.api.getMessages(c.chat_id, { count: FETCH_COUNT })
-      logger.info('channelPoller: getMessages result', {
-        chatId: c.chat_id,
-        messageCount: messages.length,
-        mids: messages.map((m) => m.body?.mid),
-      })
-      if (messages.length === 0) {
-        logger.info('channelPoller: no messages returned for channel', { chatId: c.chat_id })
-      }
-      for (const message of messages) {
-        const r = await tryAttachCommentsToChannelPost(bot, message, {
-          botUserId: botUid,
-          channelChatIdOverride: c.chat_id,
-        })
-        logger.info('channelPoller: tryAttach result', {
-          chatId: c.chat_id,
-          mid: message.body?.mid,
-          result: r,
-        })
-        if (r.ok) {
-          logger.info('channelPoller: button attached to new post', {
-            channelChatId: c.chat_id,
-            mid: message.body.mid,
-          })
-        }
-      }
-    } catch (err: unknown) {
-      logger.warn('channelPoller: failed for channel', { chatId: c.chat_id, err })
-    }
-  }
+  await Promise.all(channels.map((c) => limit(() => pollChannelSafe(bot, c, botUid))))
 }
 
 /**
@@ -108,6 +144,10 @@ export function startChannelPostPoller(bot: Bot, intervalMs?: number): void {
   const ms = Math.max(MIN_POLL_INTERVAL_MS, fromStoreOrArg)
 
   stopChannelPostPoller()
+
+  const channelCount = channelRegistry
+    .getAllChannels()
+    .filter((c) => c.type === 'channel').length
 
   logTickFired()
   void (async () => {
@@ -136,7 +176,12 @@ export function startChannelPostPoller(bot: Bot, intervalMs?: number): void {
     })()
   }, ms)
 
-  logger.info(`channelPoller: started (interval ${ms / 1000}s, count=${FETCH_COUNT})`)
+  logger.info('channelPoller: started', {
+    channelCount,
+    concurrency: POLL_CONCURRENCY,
+    intervalMs: ms,
+    fetchCount: FETCH_COUNT,
+  })
 }
 
 /**
