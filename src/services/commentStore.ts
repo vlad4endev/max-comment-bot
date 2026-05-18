@@ -1,11 +1,11 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
-import { dirname, join } from 'node:path'
-
 import { v4 as uuidv4 } from 'uuid'
+import type Database from 'better-sqlite3'
+
+import { getDb } from '../db/database'
+import { logger } from '../utils/logger'
 
 import { postStore } from './postStore'
 import { pushAdminActivity } from './adminActivityStore'
-import { logger } from '../utils/logger'
 
 export interface CommentReply {
   text: string
@@ -36,12 +36,6 @@ export interface Comment {
   /** One entry per admin who received the new-comment DM. */
   notification_mids?: CommentAdminNotificationMid[]
 }
-
-interface CommentsFileShape {
-  comments: Comment[]
-}
-
-const DEFAULT_COMMENTS_PATH = join(process.cwd(), 'data', 'comments.json')
 
 function isCommentReply(value: unknown): value is CommentReply {
   if (typeof value !== 'object' || value === null) {
@@ -126,64 +120,28 @@ function normalizeCommentFromDisk(raw: unknown): Comment | null {
   }
 }
 
-/**
- * JSON-backed comment list with async persistence under `data/comments.json`.
- */
 export class CommentStore {
-  private readonly comments: Comment[] = []
-  private readonly filePath: string
-  private persistChain: Promise<void> = Promise.resolve()
+  private statements: {
+    getById: Database.Statement
+    listByPost: Database.Statement
+    listAllNewest: Database.Statement
+    upsert: Database.Statement
+    deleteById: Database.Statement
+    deleteAll: Database.Statement
+    countAll: Database.Statement
+  } | null = null
 
-  constructor(filePath: string = DEFAULT_COMMENTS_PATH) {
-    this.filePath = filePath
-  }
-
-  /**
-   * Loads comments from disk (replaces in-memory list).
-   */
   async loadFromDisk(): Promise<void> {
-    try {
-      const raw = await readFile(this.filePath, 'utf8')
-      const parsed: unknown = JSON.parse(raw) as unknown
-      if (typeof parsed !== 'object' || parsed === null || !('comments' in parsed)) {
-        logger.warn('commentStore: invalid comments.json shape, starting empty')
-        this.comments.length = 0
-        return
-      }
-      const list = (parsed as CommentsFileShape).comments
-      if (!Array.isArray(list)) {
-        this.comments.length = 0
-        return
-      }
-      this.comments.length = 0
-      for (const item of list) {
-        const normalized = normalizeCommentFromDisk(item)
-        if (normalized) {
-          this.comments.push(normalized)
-        }
-      }
-      logger.info(`commentStore: loaded ${this.comments.length} comment(s)`)
-    } catch (e) {
-      const err = e as NodeJS.ErrnoException
-      if (err.code === 'ENOENT') {
-        logger.debug('commentStore: comments.json missing, empty store')
-        return
-      }
-      logger.error('commentStore: failed to read comments.json', e)
-    }
+    logger.debug('commentStore: SQLite backend active, loadFromDisk noop')
   }
 
-  /**
-   * Appends a new comment (assigns id and ISO timestamp) and persists.
-   */
   saveComment(input: Omit<Comment, 'comment_id' | 'timestamp'>): Comment {
     const comment: Comment = {
       ...input,
       comment_id: uuidv4(),
       timestamp: new Date().toISOString(),
     }
-    this.comments.push(comment)
-    this.queuePersist()
+    this.saveRow(comment)
     logger.info(`commentStore: saved ${comment.comment_id}`)
     const post = postStore.getPost(comment.post_id)
     pushAdminActivity('new_comment', {
@@ -195,13 +153,9 @@ export class CommentStore {
     return comment
   }
 
-  /**
-   * Returns comments for a post, oldest first.
-   */
   getComments(postId: string): Comment[] {
-    return this.comments
-      .filter((c) => c.post_id === postId)
-      .sort((a, b) => a.timestamp.localeCompare(b.timestamp))
+    const rows = this.getStatements().listByPost.all(postId) as { data: string }[]
+    return rows.map((row) => this.parseRow(row.data))
   }
 
   /**
@@ -209,7 +163,7 @@ export class CommentStore {
    * @param replyAdminName optional display name of the replying admin (non-empty trimmed string is stored).
    */
   addReply(commentId: string, replyText: string, replyAdminName?: string): Comment | null {
-    const c = this.comments.find((x) => x.comment_id === commentId)
+    const c = this.getComment(commentId)
     if (!c) {
       return null
     }
@@ -219,7 +173,7 @@ export class CommentStore {
       reply.admin_name = trimmedName
     }
     c.reply = reply
-    this.queuePersist()
+    this.saveRow(c)
     logger.info(`commentStore: reply on ${commentId}`)
     const post = postStore.getPost(c.post_id)
     pushAdminActivity('admin_reply', {
@@ -234,12 +188,12 @@ export class CommentStore {
    * Updates comment body text. Returns updated comment or `null`.
    */
   updateCommentText(commentId: string, text: string): Comment | null {
-    const c = this.comments.find((x) => x.comment_id === commentId)
+    const c = this.getComment(commentId)
     if (!c) {
       return null
     }
     c.text = text
-    this.queuePersist()
+    this.saveRow(c)
     logger.info(`commentStore: updated text ${commentId}`)
     return c
   }
@@ -248,7 +202,7 @@ export class CommentStore {
    * Updates an existing admin reply (preserves original timestamp). Returns `null` if missing.
    */
   updateReply(commentId: string, replyText: string, replyAdminName?: string): Comment | null {
-    const c = this.comments.find((x) => x.comment_id === commentId)
+    const c = this.getComment(commentId)
     if (!c?.reply) {
       return null
     }
@@ -259,7 +213,7 @@ export class CommentStore {
     } else {
       delete c.reply.admin_name
     }
-    this.queuePersist()
+    this.saveRow(c)
     logger.info(`commentStore: updated reply ${commentId}`)
     return c
   }
@@ -268,12 +222,12 @@ export class CommentStore {
    * Removes the admin reply from a comment. Returns updated comment or `null`.
    */
   deleteReply(commentId: string): Comment | null {
-    const c = this.comments.find((x) => x.comment_id === commentId)
+    const c = this.getComment(commentId)
     if (!c?.reply) {
       return null
     }
     delete c.reply
-    this.queuePersist()
+    this.saveRow(c)
     logger.info(`commentStore: deleted reply ${commentId}`)
     return c
   }
@@ -282,12 +236,11 @@ export class CommentStore {
    * Deletes a comment entirely. Returns removed comment or `null`.
    */
   deleteComment(commentId: string): Comment | null {
-    const idx = this.comments.findIndex((x) => x.comment_id === commentId)
-    if (idx < 0) {
+    const removed = this.getComment(commentId)
+    if (!removed) {
       return null
     }
-    const [removed] = this.comments.splice(idx, 1)
-    this.queuePersist()
+    this.getStatements().deleteById.run(commentId)
     logger.info(`commentStore: deleted ${commentId}`)
     return removed
   }
@@ -296,26 +249,27 @@ export class CommentStore {
    * Returns a single comment or `null`.
    */
   getComment(commentId: string): Comment | null {
-    return this.comments.find((c) => c.comment_id === commentId) ?? null
+    const row = this.getStatements().getById.get(commentId) as { data: string } | undefined
+    return row ? this.parseRow(row.data) : null
   }
 
   /**
    * Persists the admin DM template text for this comment (used when editing notifications after reply).
    */
   saveNotificationText(commentId: string, text: string): void {
-    const c = this.comments.find((x) => x.comment_id === commentId)
+    const c = this.getComment(commentId)
     if (!c) {
       return
     }
     c.notification_text = text
-    this.queuePersist()
+    this.saveRow(c)
   }
 
   /**
    * Records the DM `message_mid` for one admin (upserts by `admin_id`).
    */
   saveNotificationMid(commentId: string, adminId: number, mid: string): void {
-    const c = this.comments.find((x) => x.comment_id === commentId)
+    const c = this.getComment(commentId)
     if (!c) {
       return
     }
@@ -328,11 +282,11 @@ export class CommentStore {
       list.push(entry)
     }
     c.notification_mids = list
-    this.queuePersist()
+    this.saveRow(c)
   }
 
   getNotificationMids(commentId: string): CommentAdminNotificationMid[] {
-    const c = this.comments.find((x) => x.comment_id === commentId)
+    const c = this.getComment(commentId)
     return c?.notification_mids ? [...c.notification_mids] : []
   }
 
@@ -343,14 +297,19 @@ export class CommentStore {
     if (postIds.size === 0) {
       return 0
     }
-    return this.comments.filter((c) => postIds.has(c.post_id)).length
+    const ids = [...postIds]
+    const placeholders = ids.map(() => '?').join(', ')
+    const stmt = getDb().prepare(`SELECT COUNT(*) AS n FROM comments WHERE post_id IN (${placeholders})`)
+    const row = stmt.get(...ids) as { n: number }
+    return Number(row.n) || 0
   }
 
   /**
    * All comments, newest first (admin list).
    */
   listAllCommentsNewestFirst(): Comment[] {
-    return [...this.comments].sort((a, b) => b.timestamp.localeCompare(a.timestamp))
+    const rows = this.getStatements().listAllNewest.all() as { data: string }[]
+    return rows.map((row) => this.parseRow(row.data))
   }
 
   /**
@@ -364,26 +323,19 @@ export class CommentStore {
   }
 
   removeCommentsByPostIds(postIds: Set<string>): number {
-    let removed = 0
-    for (let i = this.comments.length - 1; i >= 0; i -= 1) {
-      if (postIds.has(this.comments[i]!.post_id)) {
-        this.comments.splice(i, 1)
-        removed += 1
-      }
+    if (postIds.size === 0) {
+      return 0
     }
-    if (removed > 0) {
-      this.queuePersist()
-    }
-    return removed
+    const ids = [...postIds]
+    const placeholders = ids.map(() => '?').join(', ')
+    const stmt = getDb().prepare(`DELETE FROM comments WHERE post_id IN (${placeholders})`)
+    const result = stmt.run(...ids)
+    return Number(result.changes) || 0
   }
 
   /** Очистка comments.json (опасная зона / сброс постов). */
   clearAllComments(): void {
-    if (this.comments.length === 0) {
-      return
-    }
-    this.comments.length = 0
-    this.queuePersist()
+    this.getStatements().deleteAll.run()
     logger.warn('commentStore: clearAllComments')
   }
 
@@ -391,22 +343,48 @@ export class CommentStore {
    * Total comment count.
    */
   get totalCount(): number {
-    return this.comments.length
+    const row = this.getStatements().countAll.get() as { n: number }
+    return Number(row.n) || 0
   }
 
-  private queuePersist(): void {
-    this.persistChain = this.persistChain
-      .then(() => this.persist())
-      .catch((e: unknown) => {
-        logger.error('commentStore: persist error', e)
-      })
+  private parseRow(raw: string): Comment {
+    return JSON.parse(raw) as Comment
   }
 
-  private async persist(): Promise<void> {
-    const dir = dirname(this.filePath)
-    await mkdir(dir, { recursive: true })
-    const body: CommentsFileShape = { comments: [...this.comments] }
-    await writeFile(this.filePath, `${JSON.stringify(body, null, 2)}\n`, 'utf8')
+  private saveRow(comment: Comment): void {
+    this.getStatements().upsert.run(
+      comment.comment_id,
+      comment.post_id,
+      comment.user_id,
+      comment.username,
+      comment.text,
+      comment.timestamp,
+      comment.reply ? JSON.stringify(comment.reply) : null,
+      comment.notification_text ?? null,
+      comment.notification_mids ? JSON.stringify(comment.notification_mids) : null,
+      JSON.stringify(comment),
+    )
+  }
+
+  private getStatements(): NonNullable<CommentStore['statements']> {
+    if (this.statements) {
+      return this.statements
+    }
+    const db = getDb()
+    this.statements = {
+      getById: db.prepare('SELECT data FROM comments WHERE comment_id = ?'),
+      listByPost: db.prepare('SELECT data FROM comments WHERE post_id = ? ORDER BY timestamp ASC'),
+      listAllNewest: db.prepare('SELECT data FROM comments ORDER BY timestamp DESC'),
+      upsert: db.prepare(
+        `INSERT OR REPLACE INTO comments (
+          comment_id, post_id, user_id, username, text, timestamp, reply, notification_text, notification_mids, data
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ),
+      deleteById: db.prepare('DELETE FROM comments WHERE comment_id = ?'),
+      deleteAll: db.prepare('DELETE FROM comments'),
+      countAll: db.prepare('SELECT COUNT(*) AS n FROM comments'),
+    }
+    return this.statements
   }
 }
 

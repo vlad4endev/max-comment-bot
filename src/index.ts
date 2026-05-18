@@ -7,6 +7,7 @@ import {
   startBotLongPolling,
 } from './bot'
 import { config } from './config'
+import { migrateFromJson } from './db/migrate'
 import {
   BOT_WEBHOOK_UPDATE_TYPES,
   setWebhookSubscription,
@@ -18,13 +19,15 @@ import { commentStore } from './services/commentStore'
 import { adminRuntimeSettingsStore } from './services/adminRuntimeSettingsStore'
 import { disabledAdminStore } from './services/disabledAdminStore'
 import { subscriberStore } from './services/subscriberStore'
-import { startChannelPostPoller } from './services/channelPoller'
+import { POLL_CONCURRENCY, startChannelPostPoller } from './services/channelPoller'
 import { postStore } from './services/postStore'
 import { userMiniappSettingsStore } from './services/userMiniappSettingsStore'
-import { logger } from './utils/logger'
+import { logger, startRuntimeLogRotationScheduler } from './utils/logger'
+import { WEBHOOK_CONCURRENCY } from './utils/updateQueue'
 import { createHttpApp, createWebhookApp } from './webhook/createWebhookApp'
 
 async function main(): Promise<void> {
+  migrateFromJson()
   const bot = initializeBot()
   await channelRegistry.loadFromDisk()
   await channelSettingsStore.loadFromDisk()
@@ -36,7 +39,19 @@ async function main(): Promise<void> {
   await adminRuntimeSettingsStore.loadFromDisk()
   await disabledAdminStore.loadFromDisk()
   await ensureBotProfile(bot)
+  startRuntimeLogRotationScheduler()
   startChannelPostPoller(bot)
+
+  const channelCount = channelRegistry
+    .getAllChannels()
+    .filter((c) => c.type === 'channel').length
+  logger.info('🚀 Бот запущен', {
+    channelCount,
+    pollerConcurrency: POLL_CONCURRENCY,
+    webhookConcurrency: WEBHOOK_CONCURRENCY,
+    logRotation: true,
+    receiveMode: config.receiveMode,
+  })
 
   const listenPort = config.listenPort
 

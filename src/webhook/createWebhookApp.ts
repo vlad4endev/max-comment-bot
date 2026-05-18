@@ -8,6 +8,7 @@ import { createAdminRouter } from '../api/adminRoutes'
 import { createCommentApiRouter } from '../api/routes'
 import { isAdminPanelSessionValid } from '../middleware/adminAuth'
 import { logger } from '../utils/logger'
+import { enqueueUpdate } from '../utils/updateQueue'
 import { dispatchBotUpdate } from './dispatchUpdate'
 
 const MAX_SECRET_HEADER = 'x-max-bot-api-secret'
@@ -122,7 +123,7 @@ export function createHttpApp(options: HttpAppOptions): express.Express {
         }
 
         try {
-          await dispatchBotUpdate(options.bot, req.body)
+          await enqueueUpdate(() => dispatchBotUpdate(options.bot, req.body))
           res.status(200).end()
         } catch (err) {
           logger.error('Webhook: ошибка обработки update', err)

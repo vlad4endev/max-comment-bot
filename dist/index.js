@@ -3,6 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const node_http_1 = require("node:http");
 const bot_1 = require("./bot");
 const config_1 = require("./config");
+const migrate_1 = require("./db/migrate");
 const subscriptions_1 = require("./maxPlatform/subscriptions");
 const channelNotifyLinkStore_1 = require("./services/channelNotifyLinkStore");
 const channelRegistry_1 = require("./services/channelRegistry");
@@ -15,8 +16,10 @@ const channelPoller_1 = require("./services/channelPoller");
 const postStore_1 = require("./services/postStore");
 const userMiniappSettingsStore_1 = require("./services/userMiniappSettingsStore");
 const logger_1 = require("./utils/logger");
+const updateQueue_1 = require("./utils/updateQueue");
 const createWebhookApp_1 = require("./webhook/createWebhookApp");
 async function main() {
+    (0, migrate_1.migrateFromJson)();
     const bot = (0, bot_1.initializeBot)();
     await channelRegistry_1.channelRegistry.loadFromDisk();
     await channelSettingsStore_1.channelSettingsStore.loadFromDisk();
@@ -28,7 +31,18 @@ async function main() {
     await adminRuntimeSettingsStore_1.adminRuntimeSettingsStore.loadFromDisk();
     await disabledAdminStore_1.disabledAdminStore.loadFromDisk();
     await (0, bot_1.ensureBotProfile)(bot);
+    (0, logger_1.startRuntimeLogRotationScheduler)();
     (0, channelPoller_1.startChannelPostPoller)(bot);
+    const channelCount = channelRegistry_1.channelRegistry
+        .getAllChannels()
+        .filter((c) => c.type === 'channel').length;
+    logger_1.logger.info('🚀 Бот запущен', {
+        channelCount,
+        pollerConcurrency: channelPoller_1.POLL_CONCURRENCY,
+        webhookConcurrency: updateQueue_1.WEBHOOK_CONCURRENCY,
+        logRotation: true,
+        receiveMode: config_1.config.receiveMode,
+    });
     const listenPort = config_1.config.listenPort;
     if (config_1.config.receiveMode === 'webhook') {
         const webhookPath = config_1.config.webhookPath;

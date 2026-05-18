@@ -1,4 +1,6 @@
 import type { Bot } from '@maxhub/max-bot-api';
+/** Exported for startup diagnostics. */
+export declare const POLL_CONCURRENCY = 5;
 /**
  * One sweep for a single channel (admin «обновить кнопки»).
  */

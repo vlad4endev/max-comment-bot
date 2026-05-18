@@ -23,6 +23,7 @@ const subscriberStore_1 = require("../services/subscriberStore");
 const userAccessCleanup_1 = require("../services/userAccessCleanup");
 const userMiniappSettingsStore_1 = require("../services/userMiniappSettingsStore");
 const adminPanelSession_1 = require("../utils/adminPanelSession");
+const analyticsService_1 = require("../services/analyticsService");
 const logger_1 = require("../utils/logger");
 const RUNTIME_LOG_PATH = (0, node_path_1.join)(process.cwd(), 'data', 'runtime.log');
 function isRecord(value) {
@@ -165,6 +166,12 @@ function createAdminRouter(deps) {
             comment_count: commentStore_1.commentStore.totalCount,
             post_count: postStore_1.postStore.getTotalPostCount(),
         });
+    });
+    secured.get('/dashboard', async (req, res) => {
+        await (0, channelFullDisconnect_1.pruneRegisteredChannelsNotAccessibleByBot)(deps.bot);
+        const periodDays = (0, analyticsService_1.parseDashboardPeriodDays)(req.query.days);
+        const payload = (0, analyticsService_1.buildDashboardAnalytics)(periodDays);
+        res.json(payload);
     });
     secured.get('/channels', async (_req, res) => {
         const snapshot = [...channelRegistry_1.channelRegistry.getAllChannels()].filter((c) => c.type === 'channel');

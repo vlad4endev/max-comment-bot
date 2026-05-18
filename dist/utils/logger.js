@@ -8,18 +8,55 @@
  */
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.logger = exports.Logger = void 0;
+exports.rotateRuntimeLogIfNeeded = rotateRuntimeLogIfNeeded;
+exports.startRuntimeLogRotationScheduler = startRuntimeLogRotationScheduler;
+exports.stopRuntimeLogRotationScheduler = stopRuntimeLogRotationScheduler;
 exports.getAdminLogTail = getAdminLogTail;
+const node_fs_1 = require("node:fs");
 const promises_1 = require("node:fs/promises");
 const node_path_1 = require("node:path");
 const RUNTIME_LOG_PATH = (0, node_path_1.join)(process.cwd(), 'data', 'runtime.log');
+const MAX_LOG_SIZE = 50 * 1024 * 1024;
 const ADMIN_LOG_BUFFER_MAX = 500;
 const adminLogLines = [];
+function rotateRuntimeLogIfNeeded() {
+    try {
+        if (!(0, node_fs_1.existsSync)(RUNTIME_LOG_PATH)) {
+            return;
+        }
+        if ((0, node_fs_1.statSync)(RUNTIME_LOG_PATH).size > MAX_LOG_SIZE) {
+            (0, node_fs_1.renameSync)(RUNTIME_LOG_PATH, `${RUNTIME_LOG_PATH}.old`);
+        }
+    }
+    catch {
+        /* ignore rotation errors */
+    }
+}
+const LOG_ROTATION_INTERVAL_MS = 60 * 60 * 1000;
+let logRotationInterval;
+/** Проверка размера при старте и раз в час. */
+function startRuntimeLogRotationScheduler() {
+    rotateRuntimeLogIfNeeded();
+    stopRuntimeLogRotationScheduler();
+    logRotationInterval = setInterval(() => {
+        rotateRuntimeLogIfNeeded();
+    }, LOG_ROTATION_INTERVAL_MS);
+}
+function stopRuntimeLogRotationScheduler() {
+    if (logRotationInterval !== undefined) {
+        clearInterval(logRotationInterval);
+        logRotationInterval = undefined;
+    }
+}
 function pushAdminLogLine(line) {
     adminLogLines.push(line);
     if (adminLogLines.length > ADMIN_LOG_BUFFER_MAX) {
         adminLogLines.splice(0, adminLogLines.length - ADMIN_LOG_BUFFER_MAX);
     }
-    void (0, promises_1.appendFile)(RUNTIME_LOG_PATH, `${line}\n`, 'utf8').catch(() => {
+    rotateRuntimeLogIfNeeded();
+    void (0, promises_1.mkdir)((0, node_path_1.dirname)(RUNTIME_LOG_PATH), { recursive: true })
+        .then(() => (0, promises_1.appendFile)(RUNTIME_LOG_PATH, `${line}\n`, 'utf8'))
+        .catch(() => {
         /* ignore disk errors for log tail */
     });
 }

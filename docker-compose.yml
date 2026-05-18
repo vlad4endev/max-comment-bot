@@ -22,3 +22,8 @@ services:
     # Слушает API_PORT или PORT из .env — оба значения в пробросе должны совпадать с портом процесса в контейнере.
     ports:
       - "${PORT:-3000}:${PORT:-3000}"
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"

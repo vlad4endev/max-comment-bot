@@ -5,6 +5,10 @@
  * logger.warn('Большой payload', { size: 150 })
  * logger.debug('Переменные окружения загружены')
  */
+export declare function rotateRuntimeLogIfNeeded(): void;
+/** Проверка размера при старте и раз в час. */
+export declare function startRuntimeLogRotationScheduler(): void;
+export declare function stopRuntimeLogRotationScheduler(): void;
 /** Последние строки консольного лога (и дубль в data/runtime.log при возможности). */
 export declare function getAdminLogTail(maxLines: number): string[];
 export declare class Logger {

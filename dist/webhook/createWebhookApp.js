@@ -11,6 +11,7 @@ const adminRoutes_1 = require("../api/adminRoutes");
 const routes_1 = require("../api/routes");
 const adminAuth_1 = require("../middleware/adminAuth");
 const logger_1 = require("../utils/logger");
+const updateQueue_1 = require("../utils/updateQueue");
 const dispatchUpdate_1 = require("./dispatchUpdate");
 const MAX_SECRET_HEADER = 'x-max-bot-api-secret';
 /** Корень `admin-panel/` рядом с `dist/` (в Docker: `/app/admin-panel`). */
@@ -89,7 +90,7 @@ function createHttpApp(options) {
                 return;
             }
             try {
-                await (0, dispatchUpdate_1.dispatchBotUpdate)(options.bot, req.body);
+                await (0, updateQueue_1.enqueueUpdate)(() => (0, dispatchUpdate_1.dispatchBotUpdate)(options.bot, req.body));
                 res.status(200).end();
             }
             catch (err) {

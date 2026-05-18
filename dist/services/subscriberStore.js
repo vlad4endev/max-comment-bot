@@ -1,11 +1,9 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.subscriberStore = exports.SubscriberStore = void 0;
-const promises_1 = require("node:fs/promises");
-const node_path_1 = require("node:path");
+const database_1 = require("../db/database");
 const logger_1 = require("../utils/logger");
 const adminActivityStore_1 = require("./adminActivityStore");
-const DEFAULT_PATH = (0, node_path_1.join)(process.cwd(), 'data', 'subscribers.json');
 function isPositiveIntId(value) {
     return typeof value === 'number' && Number.isInteger(value) && value > 0;
 }
@@ -13,52 +11,17 @@ function isPositiveIntId(value) {
  * Users who pressed Start in the bot — eligible for DM when a channel replies to their comment.
  */
 class SubscriberStore {
-    subscribers = new Set();
-    filePath;
-    persistChain = Promise.resolve();
-    constructor(filePath = DEFAULT_PATH) {
-        this.filePath = filePath;
-    }
     async loadFromDisk() {
-        try {
-            const raw = await (0, promises_1.readFile)(this.filePath, 'utf8');
-            const parsed = JSON.parse(raw);
-            if (typeof parsed !== 'object' || parsed === null || !('subscribers' in parsed)) {
-                logger_1.logger.warn('subscriberStore: invalid file shape, starting empty');
-                this.subscribers.clear();
-                return;
-            }
-            const list = parsed.subscribers;
-            if (!Array.isArray(list)) {
-                this.subscribers.clear();
-                return;
-            }
-            this.subscribers.clear();
-            for (const id of list) {
-                if (isPositiveIntId(id)) {
-                    this.subscribers.add(id);
-                }
-            }
-            logger_1.logger.info(`subscriberStore: loaded ${this.subscribers.size} subscriber(s)`);
-        }
-        catch (e) {
-            const err = e;
-            if (err.code === 'ENOENT') {
-                logger_1.logger.debug('subscriberStore: file missing, empty store');
-                return;
-            }
-            logger_1.logger.error('subscriberStore: failed to read file', e);
-        }
+        logger_1.logger.debug('subscriberStore: SQLite backend active, loadFromDisk noop');
     }
     addSubscriber(userId) {
         if (!isPositiveIntId(userId)) {
             return;
         }
-        if (this.subscribers.has(userId)) {
+        if (this.hasSubscriber(userId)) {
             return;
         }
-        this.subscribers.add(userId);
-        this.queuePersist();
+        this.getStatements().insert.run(userId, JSON.stringify({ user_id: userId }));
         logger_1.logger.info('subscriberStore: addSubscriber', { userId });
         (0, adminActivityStore_1.pushAdminActivity)('new_subscriber', { user_id: userId });
     }
@@ -66,42 +29,42 @@ class SubscriberStore {
         if (!isPositiveIntId(userId)) {
             return false;
         }
-        return this.subscribers.has(userId);
+        const row = this.getStatements().getById.get(userId);
+        return row !== undefined;
     }
     removeSubscriber(userId) {
         if (!isPositiveIntId(userId)) {
             return;
         }
-        if (!this.subscribers.delete(userId)) {
+        const result = this.getStatements().deleteById.run(userId);
+        if ((result.changes ?? 0) === 0) {
             return;
         }
-        this.queuePersist();
         logger_1.logger.info('subscriberStore: removeSubscriber', { userId });
     }
     getAllSubscribers() {
-        return [...this.subscribers].sort((a, b) => a - b);
+        const rows = this.getStatements().listAll.all();
+        return rows.map((row) => row.user_id);
     }
     /** Очистка файла подписчиков (опасная зона в админке). */
     clearAllSubscribers() {
-        if (this.subscribers.size === 0) {
-            return;
-        }
-        this.subscribers.clear();
-        this.queuePersist();
+        this.getStatements().deleteAll.run();
         logger_1.logger.warn('subscriberStore: clearAllSubscribers');
     }
-    queuePersist() {
-        this.persistChain = this.persistChain
-            .then(() => this.persist())
-            .catch((e) => {
-            logger_1.logger.error('subscriberStore: persist error', e);
-        });
-    }
-    async persist() {
-        const dir = (0, node_path_1.dirname)(this.filePath);
-        await (0, promises_1.mkdir)(dir, { recursive: true });
-        const body = { subscribers: this.getAllSubscribers() };
-        await (0, promises_1.writeFile)(this.filePath, `${JSON.stringify(body, null, 2)}\n`, 'utf8');
+    statements = null;
+    getStatements() {
+        if (this.statements) {
+            return this.statements;
+        }
+        const db = (0, database_1.getDb)();
+        this.statements = {
+            getById: db.prepare('SELECT user_id FROM subscribers WHERE user_id = ?'),
+            listAll: db.prepare('SELECT user_id FROM subscribers ORDER BY user_id ASC'),
+            insert: db.prepare('INSERT OR IGNORE INTO subscribers (user_id, data) VALUES (?, ?)'),
+            deleteById: db.prepare('DELETE FROM subscribers WHERE user_id = ?'),
+            deleteAll: db.prepare('DELETE FROM subscribers'),
+        };
+        return this.statements;
     }
 }
 exports.SubscriberStore = SubscriberStore;

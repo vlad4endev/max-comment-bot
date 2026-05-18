@@ -5,165 +5,63 @@ exports.mediaAttachmentRequestsFromMessageBody = mediaAttachmentRequestsFromMess
 exports.attachCommentButtonToChannelPost = attachCommentButtonToChannelPost;
 exports.isMiniAppOpenUrlConfigured = isMiniAppOpenUrlConfigured;
 exports.buildMiniAppUrl = buildMiniAppUrl;
-const promises_1 = require("node:fs/promises");
-const node_path_1 = require("node:path");
 const max_bot_api_1 = require("@maxhub/max-bot-api");
 const config_1 = require("../config");
+const database_1 = require("../db/database");
 const logger_1 = require("../utils/logger");
-const DEFAULT_POSTS_PATH = (0, node_path_1.join)(process.cwd(), 'data', 'posts.json');
-function isPost(value) {
-    if (typeof value !== 'object' || value === null) {
-        return false;
-    }
-    const o = value;
-    return (typeof o.post_id === 'string' &&
-        typeof o.chat_id === 'number' &&
-        Number.isInteger(o.chat_id) &&
-        typeof o.message_mid === 'string' &&
-        (o.comments_ui_message_mid === undefined || typeof o.comments_ui_message_mid === 'string') &&
-        (o.sender_name === undefined || typeof o.sender_name === 'string') &&
-        typeof o.text === 'string' &&
-        (o.photo_url === undefined || typeof o.photo_url === 'string') &&
-        (o.media_attachments === undefined ||
-            (Array.isArray(o.media_attachments) &&
-                o.media_attachments.every((x) => typeof x === 'object' &&
-                    x !== null &&
-                    'type' in x &&
-                    typeof x.type === 'string'))) &&
-        typeof o.comment_count === 'number' &&
-        Number.isInteger(o.comment_count) &&
-        o.comment_count >= 0 &&
-        typeof o.timestamp === 'string');
-}
-/**
- * JSON-backed map of posts by `post_id`, with async persistence under `data/posts.json`.
- */
 class PostStore {
-    byId = new Map();
-    filePath;
-    persistChain = Promise.resolve();
-    constructor(filePath = DEFAULT_POSTS_PATH) {
-        this.filePath = filePath;
-    }
-    /**
-     * Loads posts from disk into memory (replaces cache).
-     */
+    statements = null;
     async loadFromDisk() {
-        try {
-            const raw = await (0, promises_1.readFile)(this.filePath, 'utf8');
-            const parsed = JSON.parse(raw);
-            if (typeof parsed !== 'object' || parsed === null || !('posts' in parsed)) {
-                logger_1.logger.warn('postStore: invalid posts.json shape, starting empty');
-                this.byId.clear();
-                return;
-            }
-            const list = parsed.posts;
-            if (!Array.isArray(list)) {
-                this.byId.clear();
-                return;
-            }
-            this.byId.clear();
-            for (const item of list) {
-                if (isPost(item)) {
-                    this.byId.set(item.post_id, item);
-                }
-            }
-            logger_1.logger.info(`postStore: loaded ${this.byId.size} post(s)`);
-        }
-        catch (e) {
-            const err = e;
-            if (err.code === 'ENOENT') {
-                logger_1.logger.debug('postStore: posts.json missing, empty store');
-                return;
-            }
-            logger_1.logger.error('postStore: failed to read posts.json', e);
-        }
+        logger_1.logger.debug('postStore: SQLite backend active, loadFromDisk noop');
     }
-    /**
-     * Persists or replaces a post in memory and queues disk write.
-     */
     savePost(post) {
-        this.byId.set(post.post_id, post);
-        this.queuePersist();
+        this.getStatements().upsert.run(post.post_id, post.chat_id, post.message_mid, post.comments_ui_message_mid ?? null, post.sender_name ?? null, post.text, post.photo_url ?? null, post.media_attachments ? JSON.stringify(post.media_attachments) : null, post.comment_count, post.timestamp, JSON.stringify(post));
     }
-    /**
-     * Returns a post by id or `null`.
-     */
     getPost(postId) {
-        return this.byId.get(postId) ?? null;
+        const row = this.getStatements().getPost.get(postId);
+        return row ? this.parsePost(row.data) : null;
     }
-    /**
-     * All posts in a channel (for /status counts).
-     */
     getPostsByChatId(chatId) {
-        return [...this.byId.values()].filter((p) => p.chat_id === chatId);
+        const rows = this.getStatements().listByChatId.all(chatId);
+        return rows.map((row) => this.parsePost(row.data));
     }
-    /**
-     * Whether we already track this channel message (same {@link Post.message_mid}).
-     */
     findPostByChannelMessage(chatId, messageMid) {
-        for (const p of this.byId.values()) {
-            if (p.chat_id === chatId && p.message_mid === messageMid) {
-                return p;
-            }
-        }
-        return null;
+        const row = this.getStatements().findByChatAndMid.get(chatId, messageMid);
+        return row ? this.parsePost(row.data) : null;
     }
-    /**
-     * Increments {@link Post.comment_count} and persists. Returns new count or `null` if unknown post.
-     */
     incrementCommentCount(postId) {
-        const p = this.byId.get(postId);
-        if (!p) {
+        const post = this.getPost(postId);
+        if (!post) {
             return null;
         }
-        const next = { ...p, comment_count: p.comment_count + 1 };
-        this.byId.set(postId, next);
-        this.queuePersist();
+        const next = { ...post, comment_count: post.comment_count + 1 };
+        this.savePost(next);
         return next.comment_count;
     }
-    /**
-     * Decrements {@link Post.comment_count} (floored at 0). Returns new count or `null` if unknown post.
-     */
     decrementCommentCount(postId) {
-        const p = this.byId.get(postId);
-        if (!p) {
+        const post = this.getPost(postId);
+        if (!post) {
             return null;
         }
-        const next = { ...p, comment_count: Math.max(0, p.comment_count - 1) };
-        this.byId.set(postId, next);
-        this.queuePersist();
+        const next = { ...post, comment_count: Math.max(0, post.comment_count - 1) };
+        this.savePost(next);
         return next.comment_count;
     }
-    /**
-     * Удаляет все посты канала, возвращает затронутые post_id (для чистки комментариев).
-     */
     removePostsForChatId(chatId) {
-        const removedIds = [];
-        for (const [id, p] of this.byId) {
-            if (p.chat_id === chatId) {
-                removedIds.push(id);
-            }
-        }
-        if (removedIds.length === 0) {
+        const rows = this.getStatements().selectIdsByChatId.all(chatId);
+        if (rows.length === 0) {
             return [];
         }
-        for (const id of removedIds) {
-            this.byId.delete(id);
-        }
-        this.queuePersist();
-        return removedIds;
+        this.getStatements().deleteByChatId.run(chatId);
+        return rows.map((row) => row.post_id);
     }
     clearAllPosts() {
-        if (this.byId.size === 0) {
-            return;
-        }
-        this.byId.clear();
-        this.queuePersist();
+        this.getStatements().deleteAll.run();
         logger_1.logger.warn('postStore: clearAllPosts');
     }
     getTotalPostCount() {
-        return this.byId.size;
+        const row = this.getStatements().countAll.get();
+        return Number(row.n) || 0;
     }
     /**
      * Updates the channel message inline keyboard to show the current comment count.
@@ -200,20 +98,28 @@ class PostStore {
             });
         }
     }
-    queuePersist() {
-        this.persistChain = this.persistChain
-            .then(() => this.persist())
-            .catch((e) => {
-            logger_1.logger.error('postStore: persist error', e);
-        });
+    parsePost(raw) {
+        return JSON.parse(raw);
     }
-    async persist() {
-        const dir = (0, node_path_1.dirname)(this.filePath);
-        await (0, promises_1.mkdir)(dir, { recursive: true });
-        const body = {
-            posts: [...this.byId.values()].sort((a, b) => a.post_id.localeCompare(b.post_id)),
+    getStatements() {
+        if (this.statements) {
+            return this.statements;
+        }
+        const db = (0, database_1.getDb)();
+        this.statements = {
+            getPost: db.prepare('SELECT data FROM posts WHERE post_id = ?'),
+            listByChatId: db.prepare('SELECT data FROM posts WHERE chat_id = ? ORDER BY timestamp ASC, post_id ASC'),
+            findByChatAndMid: db.prepare('SELECT data FROM posts WHERE chat_id = ? AND message_mid = ?'),
+            upsert: db.prepare(`INSERT OR REPLACE INTO posts (
+          post_id, chat_id, message_mid, comments_ui_message_mid, sender_name, text,
+          photo_url, media_attachments, comment_count, timestamp, data
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
+            selectIdsByChatId: db.prepare('SELECT post_id FROM posts WHERE chat_id = ?'),
+            deleteByChatId: db.prepare('DELETE FROM posts WHERE chat_id = ?'),
+            deleteAll: db.prepare('DELETE FROM posts'),
+            countAll: db.prepare('SELECT COUNT(*) AS n FROM posts'),
         };
-        await (0, promises_1.writeFile)(this.filePath, `${JSON.stringify(body, null, 2)}\n`, 'utf8');
+        return this.statements;
     }
 }
 exports.PostStore = PostStore;

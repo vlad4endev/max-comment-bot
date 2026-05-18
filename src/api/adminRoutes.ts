@@ -28,6 +28,7 @@ import {
   adminPanelLogoutCookieHeader,
   adminPanelSessionCookieHeader,
 } from '../utils/adminPanelSession'
+import { buildDashboardAnalytics, parseDashboardPeriodDays } from '../services/analyticsService'
 import { getAdminLogTail, logger } from '../utils/logger'
 
 const RUNTIME_LOG_PATH = join(process.cwd(), 'data', 'runtime.log')
@@ -204,6 +205,13 @@ export function createAdminRouter(deps: AdminRouterDeps): express.Router {
       comment_count: commentStore.totalCount,
       post_count: postStore.getTotalPostCount(),
     })
+  })
+
+  secured.get('/dashboard', async (req, res) => {
+    await pruneRegisteredChannelsNotAccessibleByBot(deps.bot)
+    const periodDays = parseDashboardPeriodDays(req.query.days)
+    const payload = buildDashboardAnalytics(periodDays)
+    res.json(payload)
   })
 
   secured.get('/channels', async (_req, res) => {

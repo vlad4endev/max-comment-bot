@@ -1,12 +1,9 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.channelRegistry = exports.ChannelRegistry = void 0;
-const promises_1 = require("node:fs/promises");
-const node_path_1 = require("node:path");
 const adminActivityStore_1 = require("./adminActivityStore");
+const database_1 = require("../db/database");
 const logger_1 = require("../utils/logger");
-/** Same volume as posts/comments: `./data` → `/app/data` in Docker. */
-const DEFAULT_CHANNELS_PATH = (0, node_path_1.join)(process.cwd(), 'data', 'channels.json');
 function isChatType(value) {
     return value === 'dialog' || value === 'chat' || value === 'channel';
 }
@@ -21,56 +18,16 @@ function isChannelRecord(value) {
         isChatType(o.type) &&
         typeof o.date_added === 'string');
 }
-/**
- * JSON-backed registry of chats the bot participates in.
- * Keeps an in-memory map synchronized with {@link DEFAULT_CHANNELS_PATH}.
- */
 class ChannelRegistry {
-    channels = new Map();
-    filePath;
-    persistChain = Promise.resolve();
-    constructor(filePath = DEFAULT_CHANNELS_PATH) {
-        this.filePath = filePath;
-    }
-    /**
-     * Читает `channels.json` и заполняет память. Повторные вызовы перезаписывают кэш.
-     */
+    statements = null;
     async loadFromDisk() {
-        try {
-            const raw = await (0, promises_1.readFile)(this.filePath, 'utf8');
-            const parsed = JSON.parse(raw);
-            if (typeof parsed !== 'object' || parsed === null || !('channels' in parsed)) {
-                logger_1.logger.warn('channelRegistry: неверный формат channels.json, очищаю память');
-                this.channels.clear();
-                return;
-            }
-            const list = parsed.channels;
-            if (!Array.isArray(list)) {
-                this.channels.clear();
-                return;
-            }
-            this.channels.clear();
-            for (const item of list) {
-                if (isChannelRecord(item)) {
-                    this.channels.set(item.chat_id, item);
-                }
-            }
-            logger_1.logger.info(`channelRegistry: загружено ${this.channels.size} канал(ов)`);
-        }
-        catch (e) {
-            const err = e;
-            if (err.code === 'ENOENT') {
-                logger_1.logger.debug('channelRegistry: файл channels.json отсутствует, начинаем с пустого реестра');
-                return;
-            }
-            logger_1.logger.error('channelRegistry: не удалось прочитать channels.json', e);
-        }
+        logger_1.logger.debug('channelRegistry: SQLite backend active, loadFromDisk noop');
     }
     /**
      * Сохраняет или обновляет канал. Для уже известного `chat_id` поле {@link ChannelRecord.date_added} не меняется.
      */
     saveChannel(chatId, chatData) {
-        const existing = this.channels.get(chatId);
+        const existing = this.getChannel(chatId);
         const record = existing
             ? {
                 ...existing,
@@ -84,8 +41,7 @@ class ChannelRegistry {
                 date_added: new Date().toISOString(),
             };
         const isNew = !existing;
-        this.channels.set(chatId, record);
-        this.queuePersist();
+        this.getStatements().upsert.run(record.chat_id, record.title, record.type, record.date_added, 1, JSON.stringify(record));
         if (isNew) {
             (0, adminActivityStore_1.pushAdminActivity)('channel_added', {
                 chat_id: chatId,
@@ -94,43 +50,54 @@ class ChannelRegistry {
         }
     }
     /**
+     * Исключает канал из поллера и реестра без удаления постов/комментариев (повторные ошибки API).
+     */
+    deactivate(chatId) {
+        return this.removeChannel(chatId);
+    }
+    /**
      * Удаляет канал из реестра. Возвращает удалённую запись (для текста уведомления) или `null`, если чата не было.
      */
     removeChannel(chatId) {
-        const prev = this.channels.get(chatId) ?? null;
+        const prev = this.getChannel(chatId);
         if (prev === null) {
             return null;
         }
-        this.channels.delete(chatId);
-        this.queuePersist();
+        this.getStatements().deleteById.run(chatId);
         return prev;
     }
     /**
      * Возвращает запись по `chat_id` или `null`.
      */
     getChannel(chatId) {
-        return this.channels.get(chatId) ?? null;
+        const row = this.getStatements().getById.get(chatId);
+        if (!row) {
+            return null;
+        }
+        return this.parseRow(row.data);
     }
     /**
      * Все каналы из текущего реестра, отсортированные по `chat_id`.
      */
     getAllChannels() {
-        return [...this.channels.values()].sort((a, b) => a.chat_id - b.chat_id);
+        const rows = this.getStatements().listAll.all();
+        return rows.map((row) => this.parseRow(row.data));
     }
-    queuePersist() {
-        this.persistChain = this.persistChain
-            .then(() => this.persist())
-            .catch((e) => {
-            logger_1.logger.error('channelRegistry: ошибка записи channels.json', e);
-        });
+    parseRow(raw) {
+        return JSON.parse(raw);
     }
-    async persist() {
-        const dir = (0, node_path_1.dirname)(this.filePath);
-        await (0, promises_1.mkdir)(dir, { recursive: true });
-        const body = {
-            channels: this.getAllChannels(),
+    getStatements() {
+        if (this.statements) {
+            return this.statements;
+        }
+        const db = (0, database_1.getDb)();
+        this.statements = {
+            getById: db.prepare('SELECT data FROM channels WHERE chat_id = ?'),
+            listAll: db.prepare('SELECT data FROM channels ORDER BY chat_id ASC'),
+            upsert: db.prepare('INSERT OR REPLACE INTO channels (chat_id, title, type, date_added, active, settings) VALUES (?, ?, ?, ?, ?, ?)'),
+            deleteById: db.prepare('DELETE FROM channels WHERE chat_id = ?'),
         };
-        await (0, promises_1.writeFile)(this.filePath, `${JSON.stringify(body, null, 2)}\n`, 'utf8');
+        return this.statements;
     }
 }
 exports.ChannelRegistry = ChannelRegistry;
