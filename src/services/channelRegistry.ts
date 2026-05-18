@@ -111,23 +111,61 @@ export class ChannelRegistry {
    * Возвращает запись по `chat_id` или `null`.
    */
   getChannel(chatId: number): ChannelRecord | null {
-    const row = this.getStatements().getById.get(chatId) as { data: string } | undefined
+    const row = this.getStatements().getById.get(chatId) as
+      | {
+          chat_id: number
+          title: string | null
+          type: ChatType
+          date_added: string
+          settings: string | null
+        }
+      | undefined
     if (!row) {
       return null
     }
-    return this.parseRow(row.data)
+    return this.parseRow(row)
   }
 
   /**
    * Все каналы из текущего реестра, отсортированные по `chat_id`.
    */
   getAllChannels(): ChannelRecord[] {
-    const rows = this.getStatements().listAll.all() as { data: string }[]
-    return rows.map((row) => this.parseRow(row.data))
+    const rows = this.getStatements().listAll.all() as Array<{
+      chat_id: number
+      title: string | null
+      type: ChatType
+      date_added: string
+      settings: string | null
+    }>
+    return rows.map((row) => this.parseRow(row))
   }
 
-  private parseRow(raw: string): ChannelRecord {
-    return JSON.parse(raw) as ChannelRecord
+  private parseRow(row: {
+    chat_id: number
+    title: string | null
+    type: ChatType
+    date_added: string
+    settings: string | null
+  }): ChannelRecord {
+    if (row.settings) {
+      try {
+        const parsed = JSON.parse(row.settings) as unknown
+        if (isChannelRecord(parsed)) {
+          return parsed
+        }
+      } catch (error) {
+        logger.warn('channelRegistry: failed to parse settings JSON, fallback to columns', {
+          chatId: row.chat_id,
+          error,
+        })
+      }
+    }
+    return {
+      chat_id: row.chat_id,
+      title: row.title,
+      type: row.type,
+      date_added: row.date_added,
+    }
   }
 
   private getStatements(): NonNullable<ChannelRegistry['statements']> {
@@ -136,8 +174,10 @@ export class ChannelRegistry {
     }
     const db = getDb()
     this.statements = {
-      getById: db.prepare('SELECT data FROM channels WHERE chat_id = ?'),
-      listAll: db.prepare('SELECT data FROM channels ORDER BY chat_id ASC'),
+      getById: db.prepare(
+        'SELECT chat_id, title, type, date_added, settings FROM channels WHERE chat_id = ?',
+      ),
+      listAll: db.prepare('SELECT chat_id, title, type, date_added, settings FROM channels ORDER BY chat_id ASC'),
       upsert: db.prepare(
         'INSERT OR REPLACE INTO channels (chat_id, title, type, date_added, active, settings) VALUES (?, ?, ?, ?, ?, ?)',
       ),

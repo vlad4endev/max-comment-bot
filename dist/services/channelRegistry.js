@@ -74,17 +74,36 @@ class ChannelRegistry {
         if (!row) {
             return null;
         }
-        return this.parseRow(row.data);
+        return this.parseRow(row);
     }
     /**
      * Все каналы из текущего реестра, отсортированные по `chat_id`.
      */
     getAllChannels() {
         const rows = this.getStatements().listAll.all();
-        return rows.map((row) => this.parseRow(row.data));
+        return rows.map((row) => this.parseRow(row));
     }
-    parseRow(raw) {
-        return JSON.parse(raw);
+    parseRow(row) {
+        if (row.settings) {
+            try {
+                const parsed = JSON.parse(row.settings);
+                if (isChannelRecord(parsed)) {
+                    return parsed;
+                }
+            }
+            catch (error) {
+                logger_1.logger.warn('channelRegistry: failed to parse settings JSON, fallback to columns', {
+                    chatId: row.chat_id,
+                    error,
+                });
+            }
+        }
+        return {
+            chat_id: row.chat_id,
+            title: row.title,
+            type: row.type,
+            date_added: row.date_added,
+        };
     }
     getStatements() {
         if (this.statements) {
@@ -92,8 +111,8 @@ class ChannelRegistry {
         }
         const db = (0, database_1.getDb)();
         this.statements = {
-            getById: db.prepare('SELECT data FROM channels WHERE chat_id = ?'),
-            listAll: db.prepare('SELECT data FROM channels ORDER BY chat_id ASC'),
+            getById: db.prepare('SELECT chat_id, title, type, date_added, settings FROM channels WHERE chat_id = ?'),
+            listAll: db.prepare('SELECT chat_id, title, type, date_added, settings FROM channels ORDER BY chat_id ASC'),
             upsert: db.prepare('INSERT OR REPLACE INTO channels (chat_id, title, type, date_added, active, settings) VALUES (?, ?, ?, ?, ?, ?)'),
             deleteById: db.prepare('DELETE FROM channels WHERE chat_id = ?'),
         };
