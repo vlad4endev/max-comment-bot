@@ -91,6 +91,16 @@ function parseNonEmptyString(value: unknown): string | null {
   return t === '' ? null : t
 }
 
+function extractChatAvatarUrl(chat: { icon?: { url?: unknown } | null | undefined }): string | null {
+  const icon = chat.icon
+  const iconRaw = icon && typeof icon === 'object' ? icon.url : undefined
+  if (typeof iconRaw !== 'string') {
+    return null
+  }
+  const trimmed = iconRaw.trim()
+  return trimmed === '' ? null : trimmed
+}
+
 function isChannelAdminOrOwnerMember(m: ChatMember): boolean {
   return !m.is_bot && (m.is_admin || m.is_owner)
 }
@@ -242,6 +252,7 @@ export function createAdminRouter(deps: AdminRouterDeps): express.Router {
       comment_count: number
       date_added: string
       status: 'pending' | 'active'
+      avatar_url: string | null
     }[] = []
     for (const c of snapshot) {
       if (channelRegistry.getChannel(c.chat_id) === null) {
@@ -257,8 +268,10 @@ export function createAdminRouter(deps: AdminRouterDeps): express.Router {
         continue
       }
       let subscribers: number | null = null
+      let avatar_url: string | null = null
       try {
         const chat = await deps.bot.api.getChat(c.chat_id)
+        avatar_url = extractChatAvatarUrl(chat)
         const raw = (chat as { participants_count?: unknown }).participants_count
         if (typeof raw === 'number' && Number.isFinite(raw) && raw >= 0) {
           subscribers = raw
@@ -280,6 +293,7 @@ export function createAdminRouter(deps: AdminRouterDeps): express.Router {
         comment_count: commentCount,
         date_added: c.date_added,
         status: access === 'ok' ? 'active' : 'pending',
+        avatar_url,
       })
     }
     res.json({ channels: rows })
@@ -580,20 +594,40 @@ export function createAdminRouter(deps: AdminRouterDeps): express.Router {
     }
     const posts = postStore.getPostsByChatId(chatId)
     const postIds = new Set(posts.map((p) => p.post_id))
-    const comments = commentStore
-      .listCommentsForChannelChatId(chatId)
-      .slice(0, 5)
-      .map((c) => ({
+    const comments = commentStore.listCommentsForChannelChatId(chatId).slice(0, 8).map((c) => {
+      const post = postStore.getPost(c.post_id)
+      const answered = Boolean(c.reply?.text)
+      return {
         comment_id: c.comment_id,
+        post_id: c.post_id,
         username: c.username,
         text: c.text,
         timestamp: c.timestamp,
-      }))
+        reply_status: answered ? ('answered' as const) : ('unanswered' as const),
+        reply: answered
+          ? {
+              text: c.reply!.text,
+              timestamp: c.reply!.timestamp,
+              admin_name: c.reply!.admin_name ?? null,
+            }
+          : null,
+        post_context: post
+          ? {
+              text: post.text,
+              sender_name: post.sender_name ?? null,
+              photo_url: post.photo_url ?? null,
+              timestamp: post.timestamp,
+            }
+          : null,
+      }
+    })
     const extras = await getChannelExtras(chatId)
     const chains = (await listTgChains()).filter((c) => c.max_chat_id === chatId)
     let subscribers: number | null = null
+    let avatar_url: string | null = null
     try {
       const chat = await deps.bot.api.getChat(chatId)
+      avatar_url = extractChatAvatarUrl(chat)
       const raw = (chat as { participants_count?: unknown }).participants_count
       if (typeof raw === 'number' && Number.isFinite(raw) && raw >= 0) {
         subscribers = raw
@@ -610,6 +644,7 @@ export function createAdminRouter(deps: AdminRouterDeps): express.Router {
         post_count: posts.length,
         comment_count: commentStore.countForPostIds(postIds),
         date_added: ch.date_added,
+        avatar_url,
       },
       recent_comments: comments,
       settings: extras,

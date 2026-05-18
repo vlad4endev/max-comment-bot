@@ -134,8 +134,7 @@ export async function fullyDisconnectRegisteredChannel(
 ): Promise<boolean> {
   const reg = channelRegistry.getChannel(chatId)
   const displayTitle = reg?.title?.trim() || 'без названия'
-  const shouldNotify =
-    reason !== 'manual_admin_panel' && reason !== 'registry_stale_removed'
+  const shouldNotify = reason !== 'registry_stale_removed'
 
   let recipientIds: number[] = []
   if (shouldNotify && reg) {
@@ -146,13 +145,24 @@ export async function fullyDisconnectRegisteredChannel(
     }
   }
 
+  if (reason === 'manual_admin_panel') {
+    try {
+      await bot.api.leaveChat(chatId)
+      logger.info('channelFullDisconnect: bot left channel (manual disconnect)', { chatId })
+    } catch (err: unknown) {
+      logger.warn('channelFullDisconnect: leaveChat failed (manual disconnect)', { chatId, err })
+    }
+  }
+
   await purgeAllChannelData(chatId)
 
   if (shouldNotify && recipientIds.length > 0) {
     const reasonBlock =
-      reason === 'lost_admin_rights'
-        ? 'С бота сняли права администратора в канале. Без них CommentBot не может показывать кнопки комментариев и обрабатывать обсуждения.\n\nКанал отключён: все данные канала и привязки пользователей удалены из базы.\n\nЧтобы снова включить комментарии, добавьте бота заново и выдайте права администратора.'
-        : 'Бот удалён из канала или потерял к нему доступ.\n\nКанал отключён: все данные канала и привязки пользователей удалены из базы.'
+      reason === 'manual_admin_panel'
+        ? 'Канал отключён вручную через панель SuperAdmin.\n\nCommentBot покинул канал. Все данные канала (посты, комментарии, привязки пользователей) удалены из базы.\n\nЧтобы снова подключить комментарии, добавьте бота в канал заново и выдайте права администратора.'
+        : reason === 'lost_admin_rights'
+          ? 'С бота сняли права администратора в канале. Без них CommentBot не может показывать кнопки комментариев и обрабатывать обсуждения.\n\nКанал отключён: все данные канала и привязки пользователей удалены из базы.\n\nЧтобы снова включить комментарии, добавьте бота заново и выдайте права администратора.'
+          : 'Бот удалён из канала или потерял к нему доступ.\n\nКанал отключён: все данные канала и привязки пользователей удалены из базы.'
 
     const message =
       `🔌 CommentBot отключён\n` +

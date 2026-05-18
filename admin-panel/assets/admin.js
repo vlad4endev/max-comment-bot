@@ -16,6 +16,8 @@
   var channelsCache = [];
   var selectedChannelId = null;
   var channelDetailTab = 'stats';
+  var channelSettingsEditing = false;
+  var channelAntispamEditing = false;
   var commentsChatId = null;
   var commentsQuery = '';
   var usersCache = [];
@@ -86,6 +88,201 @@
       .replace(/</g, '&lt;')
       .replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;');
+  }
+
+  function channelInitials(title) {
+    var t = String(title || '').trim();
+    if (!t) return '?';
+    var parts = t.split(/\s+/).filter(Boolean);
+    if (parts.length >= 2) {
+      return (parts[0].charAt(0) + parts[1].charAt(0)).toUpperCase();
+    }
+    return t.slice(0, 2).toUpperCase();
+  }
+
+  function channelAvatarHtml(url, title, extraClass) {
+    var cls = 'channel-avatar' + (extraClass ? ' ' + extraClass : '');
+    var avUrl = url && String(url).trim() ? String(url).trim() : '';
+    if (avUrl) {
+      return (
+        '<span class="' +
+        esc(cls) +
+        ' with-photo"><img src="' +
+        esc(avUrl) +
+        '" alt="" loading="lazy" /></span>'
+      );
+    }
+    return '<span class="' + esc(cls) + '">' + esc(channelInitials(title)) + '</span>';
+  }
+
+  function truncateText(text, maxLen) {
+    var s = String(text || '').trim();
+    if (!s) return '';
+    if (s.length <= maxLen) return s;
+    return s.slice(0, maxLen - 1) + '…';
+  }
+
+  function boolLabel(on) {
+    return on ? 'Включено' : 'Выключено';
+  }
+
+  function renderRecentComments(comments) {
+    if (!comments || !comments.length) {
+      return '<p class="muted">Нет комментариев</p>';
+    }
+    var html = '<div class="recent-comments">';
+    comments.forEach(function (c) {
+      var answered = c.reply_status === 'answered' || (c.reply && c.reply.text);
+      var post = c.post_context || {};
+      var postText = truncateText(post.text || 'Пост без текста', 140);
+      var postAuthor = post.sender_name ? String(post.sender_name).trim() : '';
+      html += '<article class="comment-card">';
+      html += '<div class="comment-card-head">';
+      html += '<div class="comment-card-user"><strong>' + esc(c.username || 'Пользователь') + '</strong>';
+      html += '<span class="comment-card-time">' + esc(formatRelativeTime(c.timestamp)) + '</span></div>';
+      html +=
+        '<span class="comment-status ' +
+        (answered ? 'answered' : 'pending') +
+        '">' +
+        esc(answered ? 'Отвечено' : 'Без ответа') +
+        '</span>';
+      html += '</div>';
+      html += '<div class="comment-card-text">' + esc(c.text || '') + '</div>';
+      html += '<div class="comment-post-context">';
+      html += '<span class="comment-post-label">К посту</span>';
+      if (post.photo_url) {
+        html +=
+          '<img class="comment-post-thumb" src="' +
+          esc(post.photo_url) +
+          '" alt="" loading="lazy" />';
+      }
+      html += '<div class="comment-post-body">';
+      if (postAuthor) {
+        html += '<div class="comment-post-author">' + esc(postAuthor) + '</div>';
+      }
+      html += '<div class="comment-post-text">' + esc(postText) + '</div>';
+      if (post.timestamp) {
+        html +=
+          '<span class="comment-post-time">' +
+          esc(formatRelativeTime(post.timestamp)) +
+          '</span>';
+      }
+      html += '</div></div>';
+      if (answered && c.reply) {
+        var adminName = c.reply.admin_name ? String(c.reply.admin_name).trim() : '';
+        html += '<div class="comment-reply-block">';
+        html += '<div class="comment-reply-label">Ответ администратора';
+        if (adminName) html += ' · ' + esc(adminName);
+        html += '</div>';
+        html += '<div class="comment-reply-text">' + esc(c.reply.text || '') + '</div>';
+        html +=
+          '<span class="comment-reply-time">' +
+          esc(formatRelativeTime(c.reply.timestamp)) +
+          '</span>';
+        html += '</div>';
+      }
+      html += '</article>';
+    });
+    html += '</div>';
+    return html;
+  }
+
+  function settingsSummaryRow(label, value) {
+    return (
+      '<div class="settings-summary-row"><dt>' +
+      esc(label) +
+      '</dt><dd>' +
+      esc(value) +
+      '</dd></div>'
+    );
+  }
+
+  function renderChannelSettingsPanel(settings, editing) {
+    if (!editing) {
+      var html = '<div class="settings-summary">';
+      html += '<h3 class="settings-summary-title">Текущие настройки</h3>';
+      html += '<dl class="settings-summary-list">';
+      html += settingsSummaryRow(
+        'Текст кнопки',
+        settings.button_text && String(settings.button_text).trim()
+          ? String(settings.button_text).trim()
+          : '—',
+      );
+      html += settingsSummaryRow(
+        'Приветствие',
+        settings.welcome_message && String(settings.welcome_message).trim()
+          ? truncateText(settings.welcome_message, 200)
+          : '—',
+      );
+      html += settingsSummaryRow('Уведомлять админа', boolLabel(!!settings.notify_admin));
+      html += settingsSummaryRow('Показывать реакции', boolLabel(!!settings.show_reactions));
+      html += settingsSummaryRow('Режим модерации', boolLabel(!!settings.moderation_mode));
+      html += '</dl>';
+      html +=
+        '<button type="button" class="btn btn-primary mt-sm" id="btnEditChannelSettings">Изменить</button>';
+      html += '</div>';
+      return html;
+    }
+    var form =
+      '<div class="settings-editor"><p class="muted text-sm mb-sm">Подтвердите сохранение — изменения применятся к каналу.</p>';
+    form += '<div id="chSettingsForm">';
+    form += '<div class="form-group"><label>Текст кнопки</label>';
+    form +=
+      '<input class="input" id="f_btn_text" value="' + esc(settings.button_text || '') + '"/></div>';
+    form += '<div class="form-group"><label>Приветствие</label>';
+    form +=
+      '<textarea class="textarea" id="f_welcome">' +
+      esc(settings.welcome_message || '') +
+      '</textarea></div>';
+    form += '<div id="setToggles">';
+    form += toggleRow('notify_admin', 'Уведомлять админа', 'О новых комментариях', !!settings.notify_admin);
+    form += toggleRow('show_reactions', 'Показывать реакции', '', !!settings.show_reactions);
+    form += toggleRow('moderation_mode', 'Режим модерации', '', !!settings.moderation_mode);
+    form += '</div>';
+    form += '<div class="flex gap-sm mt-sm">';
+    form +=
+      '<button type="button" class="btn btn-ghost" id="btnCancelChannelSettings">Отмена</button>';
+    form +=
+      '<button type="button" class="btn btn-primary" id="btnSaveChannel">Сохранить</button>';
+    form += '</div></div></div>';
+    return form;
+  }
+
+  function renderChannelAntispamPanel(settings, editing) {
+    if (!editing) {
+      var words = Array.isArray(settings.stopwords) ? settings.stopwords : [];
+      var html = '<div class="settings-summary">';
+      html += '<h3 class="settings-summary-title">Текущий антиспам</h3>';
+      html += '<dl class="settings-summary-list">';
+      html += settingsSummaryRow(
+        'Стоп-слова',
+        words.length ? words.join(', ') : '—',
+      );
+      html += settingsSummaryRow('Блокировать ссылки', boolLabel(!!settings.block_links));
+      html += settingsSummaryRow('Защита от флуда', boolLabel(!!settings.flood_protection));
+      html += settingsSummaryRow('Авто-мут', boolLabel(!!settings.auto_mute));
+      html += '</dl>';
+      html +=
+        '<button type="button" class="btn btn-primary mt-sm" id="btnEditChannelAntispam">Изменить</button>';
+      html += '</div>';
+      return html;
+    }
+    var form = '<div class="settings-editor" id="chAntispamForm">';
+    form += '<p class="muted text-sm mb-sm">Подтвердите сохранение — правила применятся к каналу.</p>';
+    form += '<div class="form-group"><label>Стоп-слова канала</label>';
+    form += '<div class="tags-input-wrap" id="chStopwords"></div></div>';
+    form += '<div id="asToggles">';
+    form += toggleRow('block_links', 'Блокировать ссылки', '', !!settings.block_links);
+    form += toggleRow('flood_protection', 'Защита от флуда', '', !!settings.flood_protection);
+    form += toggleRow('auto_mute', 'Авто-мут', '', !!settings.auto_mute);
+    form += '</div>';
+    form += '<div class="flex gap-sm mt-sm">';
+    form +=
+      '<button type="button" class="btn btn-ghost" id="btnCancelChannelAntispam">Отмена</button>';
+    form +=
+      '<button type="button" class="btn btn-primary" id="btnSaveAntispamCh">Сохранить</button>';
+    form += '</div></div>';
+    return form;
   }
 
   function apiPath(path) {
@@ -872,18 +1069,23 @@
           channelsCache.forEach(function (c) {
             var active = c.chat_id === selectedChannelId;
             html +=
-              '<button type="button" class="list-item' +
+              '<button type="button" class="list-item list-item-channel' +
               (active ? ' active' : '') +
               '" data-cid="' +
               esc(String(c.chat_id)) +
               '">';
-            html += '<div class="list-item-title">' + esc(c.title || 'Канал ' + c.chat_id) + '</div>';
+            var title = c.title || 'Канал ' + c.chat_id;
+            html += '<div class="list-item-row">';
+            html += channelAvatarHtml(c.avatar_url, title, 'list-avatar');
+            html += '<div class="list-item-body">';
+            html += '<div class="list-item-title">' + esc(title) + '</div>';
             html +=
               '<div class="list-item-sub">' +
               esc(c.status === 'pending' ? 'Ожидает прав' : 'Активен') +
               ' · ' +
               esc(fmtNum(c.comment_count)) +
-              ' коммент.</div></button>';
+              ' коммент.</div>';
+            html += '</div></div></button>';
           });
         }
         html += '</div><div class="split-detail" id="channelDetail">';
@@ -898,6 +1100,8 @@
           btn.addEventListener('click', function () {
             selectedChannelId = Number(btn.getAttribute('data-cid'));
             channelDetailTab = 'stats';
+            channelSettingsEditing = false;
+            channelAntispamEditing = false;
             renderChannels();
           });
         });
@@ -922,8 +1126,20 @@
         if (currentRoute !== 'channels' || selectedChannelId !== chatId) return;
         var ch = detail.channel || {};
         var settings = detail.settings || {};
-        var html = '<div class="flex-between mb-md">';
-        html += '<h2 style="margin:0">' + esc(ch.title || 'Канал ' + chatId) + '</h2>';
+        var channelTitle = ch.title || 'Канал ' + chatId;
+        var statusLabel = ch.status === 'pending' ? 'Ожидает прав' : 'Активен';
+        var html = '<div class="channel-detail-head flex-between mb-md">';
+        html += '<div class="channel-detail-intro">';
+        html += channelAvatarHtml(ch.avatar_url, channelTitle, 'channel-detail-avatar');
+        html += '<div class="channel-detail-head-text">';
+        html += '<h2 style="margin:0">' + esc(channelTitle) + '</h2>';
+        html +=
+          '<span class="channel-detail-status ' +
+          esc(ch.status === 'pending' ? 'pending' : 'active') +
+          '">' +
+          esc(statusLabel) +
+          '</span>';
+        html += '</div></div>';
         html += '<div class="flex gap-sm">';
         html +=
           '<button type="button" class="btn btn-ghost btn-sm" id="btnRefreshBtns">Обновить кнопки</button>';
@@ -963,58 +1179,22 @@
             esc(ch.date_added || '—') +
             '</div></div>';
           html += '</div>';
-          html += '<h3>Последние комментарии</h3><ul class="insights-list">';
-          (detail.recent_comments || []).forEach(function (c) {
-            html +=
-              '<li><strong>' +
-              esc(c.username) +
-              '</strong> — ' +
-              esc(c.text) +
-              ' <span class="muted text-sm">(' +
-              esc(c.timestamp || '') +
-              ')</span></li>';
-          });
-          if (!(detail.recent_comments || []).length) {
-            html += '<li class="muted">Нет данных</li>';
-          }
-          html += '</ul>';
+          html += '<h3 class="section-title">Последние комментарии</h3>';
+          html += renderRecentComments(detail.recent_comments || []);
         } else if (channelDetailTab === 'settings') {
-          html += '<div id="chSettingsForm">';
-          html += '<div class="form-group"><label>Текст кнопки</label>';
-          html +=
-            '<input class="input" id="f_btn_text" value="' +
-            esc(settings.button_text || '') +
-            '"/></div>';
-          html += '<div class="form-group"><label>Приветствие</label>';
-          html +=
-            '<textarea class="textarea" id="f_welcome">' +
-            esc(settings.welcome_message || '') +
-            '</textarea></div>';
-          html += '<div id="setToggles">';
-          html += toggleRow('notify_admin', 'Уведомлять админа', 'О новых комментариях', !!settings.notify_admin);
-          html += toggleRow('show_reactions', 'Показывать реакции', '', !!settings.show_reactions);
-          html += toggleRow('moderation_mode', 'Режим модерации', '', !!settings.moderation_mode);
-          html += '</div>';
-          html +=
-            '<button type="button" class="btn btn-primary mt-sm" id="btnSaveChannel">Сохранить</button>';
-          html += '</div>';
+          html += renderChannelSettingsPanel(settings, channelSettingsEditing);
         } else {
-          html += '<div id="chAntispamForm">';
-          html += '<div class="form-group"><label>Стоп-слова канала</label>';
-          html += '<div class="tags-input-wrap" id="chStopwords"></div></div>';
-          html += '<div id="asToggles">';
-          html += toggleRow('block_links', 'Блокировать ссылки', '', !!settings.block_links);
-          html += toggleRow('flood_protection', 'Защита от флуда', '', !!settings.flood_protection);
-          html += toggleRow('auto_mute', 'Авто-мут', '', !!settings.auto_mute);
-          html += '</div>';
-          html +=
-            '<button type="button" class="btn btn-primary mt-sm" id="btnSaveAntispamCh">Сохранить</button>';
-          html += '</div>';
+          html += renderChannelAntispamPanel(settings, channelAntispamEditing);
         }
         slot.innerHTML = html;
         qsa('#chTabs .tab', slot).forEach(function (t) {
           t.addEventListener('click', function () {
-            channelDetailTab = t.getAttribute('data-tab') || 'stats';
+            var nextTab = t.getAttribute('data-tab') || 'stats';
+            if (nextTab !== channelDetailTab) {
+              channelSettingsEditing = false;
+              channelAntispamEditing = false;
+            }
+            channelDetailTab = nextTab;
             loadChannelDetail(chatId);
           });
         });
@@ -1035,7 +1215,7 @@
           btnRm.addEventListener('click', function () {
             showConfirm(
               'Отключить канал?',
-              'Бот перестанет обслуживать этот канал. Продолжить?',
+              'CommentBot покинет канал, все данные (посты, комментарии, привязки) будут удалены. Администраторам канала придёт уведомление. Продолжить?',
               function () {
                 postJson('/remove-channel', { chat_id: chatId })
                   .then(function () {
@@ -1050,30 +1230,65 @@
             );
           });
         }
+        var btnEditSettings = qs('#btnEditChannelSettings', slot);
+        if (btnEditSettings) {
+          btnEditSettings.addEventListener('click', function () {
+            channelSettingsEditing = true;
+            loadChannelDetail(chatId);
+          });
+        }
+        var btnCancelSettings = qs('#btnCancelChannelSettings', slot);
+        if (btnCancelSettings) {
+          btnCancelSettings.addEventListener('click', function () {
+            channelSettingsEditing = false;
+            loadChannelDetail(chatId);
+          });
+        }
         var setRoot = qs('#chSettingsForm', slot);
         if (setRoot) {
           bindToggleRows(setRoot, null);
           var save = qs('#btnSaveChannel', slot);
           if (save) {
             save.addEventListener('click', function () {
-              var sw = readSwitches(setRoot);
-              var body = {
-                button_text: (qs('#f_btn_text', slot) && qs('#f_btn_text', slot).value) || '',
-                welcome_message: (qs('#f_welcome', slot) && qs('#f_welcome', slot).value) || '',
-                notify_admin: !!sw.notify_admin,
-                show_reactions: !!sw.show_reactions,
-                moderation_mode: !!sw.moderation_mode,
-              };
-              postJson('/channel/' + encodeURIComponent(String(chatId)) + '/settings', body)
-                .then(function () {
-                  showToast('Сохранено', 'success');
-                  loadChannelDetail(chatId);
-                })
-                .catch(function (e) {
-                  showToast(e.message || 'Ошибка', 'error');
-                });
+              showConfirm(
+                'Сохранить настройки?',
+                'Изменения будут применены к каналу.',
+                function () {
+                  var sw = readSwitches(setRoot);
+                  var body = {
+                    button_text: (qs('#f_btn_text', slot) && qs('#f_btn_text', slot).value) || '',
+                    welcome_message: (qs('#f_welcome', slot) && qs('#f_welcome', slot).value) || '',
+                    notify_admin: !!sw.notify_admin,
+                    show_reactions: !!sw.show_reactions,
+                    moderation_mode: !!sw.moderation_mode,
+                  };
+                  postJson('/channel/' + encodeURIComponent(String(chatId)) + '/settings', body)
+                    .then(function () {
+                      showToast('Сохранено', 'success');
+                      channelSettingsEditing = false;
+                      loadChannelDetail(chatId);
+                    })
+                    .catch(function (e) {
+                      showToast(e.message || 'Ошибка', 'error');
+                    });
+                },
+              );
             });
           }
+        }
+        var btnEditAntispam = qs('#btnEditChannelAntispam', slot);
+        if (btnEditAntispam) {
+          btnEditAntispam.addEventListener('click', function () {
+            channelAntispamEditing = true;
+            loadChannelDetail(chatId);
+          });
+        }
+        var btnCancelAntispam = qs('#btnCancelChannelAntispam', slot);
+        if (btnCancelAntispam) {
+          btnCancelAntispam.addEventListener('click', function () {
+            channelAntispamEditing = false;
+            loadChannelDetail(chatId);
+          });
         }
         var asRoot = qs('#chAntispamForm', slot);
         if (asRoot) {
@@ -1085,25 +1300,34 @@
           var saveAs = qs('#btnSaveAntispamCh', slot);
           if (saveAs) {
             saveAs.addEventListener('click', function () {
-              var sw2 = readSwitches(asRoot);
-              var tags = [];
-              qsa('.tag', wrap).forEach(function (tg) {
-                var txt = tg.firstChild;
-                if (txt && txt.nodeType === 3) tags.push(String(txt.textContent || '').trim());
-              });
-              postJson('/antispam/channel/' + encodeURIComponent(String(chatId)), {
-                stopwords: tags,
-                block_links: !!sw2.block_links,
-                flood_protection: !!sw2.flood_protection,
-                auto_mute: !!sw2.auto_mute,
-              })
-                .then(function () {
-                  showToast('Сохранено', 'success');
-                  loadChannelDetail(chatId);
-                })
-                .catch(function (e) {
-                  showToast(e.message || 'Ошибка', 'error');
-                });
+              showConfirm(
+                'Сохранить антиспам?',
+                'Правила будут применены к каналу.',
+                function () {
+                  var sw2 = readSwitches(asRoot);
+                  var tags = [];
+                  if (wrap) {
+                    qsa('.tag', wrap).forEach(function (tg) {
+                      var txt = tg.firstChild;
+                      if (txt && txt.nodeType === 3) tags.push(String(txt.textContent || '').trim());
+                    });
+                  }
+                  postJson('/antispam/channel/' + encodeURIComponent(String(chatId)), {
+                    stopwords: tags,
+                    block_links: !!sw2.block_links,
+                    flood_protection: !!sw2.flood_protection,
+                    auto_mute: !!sw2.auto_mute,
+                  })
+                    .then(function () {
+                      showToast('Сохранено', 'success');
+                      channelAntispamEditing = false;
+                      loadChannelDetail(chatId);
+                    })
+                    .catch(function (e) {
+                      showToast(e.message || 'Ошибка', 'error');
+                    });
+                },
+              );
             });
           }
         }
