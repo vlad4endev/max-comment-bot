@@ -2,6 +2,7 @@ import type { Bot } from '@maxhub/max-bot-api'
 import pLimit from 'p-limit'
 
 import { adminRuntimeSettingsStore } from './adminRuntimeSettingsStore'
+import { clearAdminJoinNotifiedForChannel } from './channelAdminJoinNotified'
 import type { ChannelRecord } from './channelRegistry'
 import { channelRegistry } from './channelRegistry'
 import { logger } from '../utils/logger'
@@ -83,6 +84,7 @@ async function pollChannelSafe(bot: Bot, channel: ChannelRecord, botUid: number 
       logger.warn(
         `channelPoller: disabling channel ${channel.chat_id} after ${count} errors`,
       )
+      clearAdminJoinNotifiedForChannel(channel.chat_id)
       channelRegistry.deactivate(channel.chat_id)
       errorCount.delete(channel.chat_id)
     }
@@ -194,6 +196,16 @@ export function startChannelPostPoller(bot: Bot, intervalMs?: number): void {
  */
 export function restartChannelPostPoller(bot: Bot): void {
   startChannelPostPoller(bot)
+}
+
+/** Сбрасывает счётчик ошибок поллера для канала (после полного отключения). */
+export function clearChannelPollerErrors(chatId: number): void {
+  const abs = Math.abs(chatId)
+  for (const key of [...errorCount.keys()]) {
+    if (Math.abs(key) === abs) {
+      errorCount.delete(key)
+    }
+  }
 }
 
 export function stopChannelPostPoller(): void {

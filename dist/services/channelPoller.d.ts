@@ -17,4 +17,6 @@ export declare function startChannelPostPoller(bot: Bot, intervalMs?: number): v
  * Перезапуск таймера с разрешением из {@link adminRuntimeSettingsStore}.
  */
 export declare function restartChannelPostPoller(bot: Bot): void;
+/** Сбрасывает счётчик ошибок поллера для канала (после полного отключения). */
+export declare function clearChannelPollerErrors(chatId: number): void;
 export declare function stopChannelPostPoller(): void;

@@ -298,3 +298,19 @@ export function countAntispamBlocksToday(log: AntispamLogEntry[]): number {
   const today = new Date().toISOString().slice(0, 10)
   return log.filter((e) => e.created_at.slice(0, 10) === today).length
 }
+
+/** Удаляет все настройки админки, привязанные к каналу. */
+export async function purgeChannelFromAdminState(chatId: number): Promise<void> {
+  const s = await loadState()
+  const targetAbs = Math.abs(chatId)
+  for (const key of Object.keys(s.channel_extras)) {
+    const id = Number.parseInt(key, 10)
+    if (Number.isInteger(id) && Math.abs(id) === targetAbs) {
+      delete s.channel_extras[key]
+    }
+  }
+  s.tg_chains = s.tg_chains.filter((c) => Math.abs(c.max_chat_id) !== targetAbs)
+  s.autoposts = s.autoposts.filter((p) => Math.abs(p.chat_id) !== targetAbs)
+  s.antispam_log = s.antispam_log.filter((e) => Math.abs(e.channel_chat_id) !== targetAbs)
+  await persist()
+}

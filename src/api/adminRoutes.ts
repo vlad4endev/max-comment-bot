@@ -10,6 +10,7 @@ import { checkAdminAuth } from '../middleware/adminAuth'
 import {
   fullyDisconnectRegisteredChannel,
   pruneRegisteredChannelsNotAccessibleByBot,
+  resolveRegisteredChannelAccess,
 } from '../services/channelFullDisconnect'
 import { getRecentAdminActivity } from '../services/adminActivityStore'
 import { adminRuntimeSettingsStore } from '../services/adminRuntimeSettingsStore'
@@ -230,6 +231,7 @@ export function createAdminRouter(deps: AdminRouterDeps): express.Router {
   })
 
   secured.get('/channels', async (_req, res) => {
+    await pruneRegisteredChannelsNotAccessibleByBot(deps.bot)
     const snapshot = [...channelRegistry.getAllChannels()].filter((c) => c.type === 'channel')
     const rows: {
       chat_id: number
@@ -245,6 +247,15 @@ export function createAdminRouter(deps: AdminRouterDeps): express.Router {
       if (channelRegistry.getChannel(c.chat_id) === null) {
         continue
       }
+      const access = await resolveRegisteredChannelAccess(deps.bot, c.chat_id)
+      if (access === 'chat_unreachable') {
+        await fullyDisconnectRegisteredChannel(deps.bot, c.chat_id, 'registry_stale_removed')
+        continue
+      }
+      if (access === 'bot_not_in_chat') {
+        await fullyDisconnectRegisteredChannel(deps.bot, c.chat_id, 'removed_from_chat')
+        continue
+      }
       let subscribers: number | null = null
       try {
         const chat = await deps.bot.api.getChat(c.chat_id)
@@ -253,14 +264,13 @@ export function createAdminRouter(deps: AdminRouterDeps): express.Router {
           subscribers = raw
         }
       } catch (err: unknown) {
-        logger.warn('admin GET /channels: getChat failed, pruning channel', { chatId: c.chat_id, err })
+        logger.warn('admin GET /channels: getChat failed after access check', { chatId: c.chat_id, err })
         await fullyDisconnectRegisteredChannel(deps.bot, c.chat_id, 'registry_stale_removed')
         continue
       }
       const posts = postStore.getPostsByChatId(c.chat_id)
       const postIds = new Set(posts.map((p) => p.post_id))
       const commentCount = commentStore.countForPostIds(postIds)
-      const pending = stateManager.isChannelPendingAdminRights(c.chat_id)
       rows.push({
         chat_id: c.chat_id,
         title: c.title,
@@ -269,7 +279,7 @@ export function createAdminRouter(deps: AdminRouterDeps): express.Router {
         post_count: posts.length,
         comment_count: commentCount,
         date_added: c.date_added,
-        status: pending ? 'pending' : 'active',
+        status: access === 'ok' ? 'active' : 'pending',
       })
     }
     res.json({ channels: rows })
@@ -557,6 +567,17 @@ export function createAdminRouter(deps: AdminRouterDeps): express.Router {
       res.status(404).json({ error: 'channel not found' })
       return
     }
+    const access = await resolveRegisteredChannelAccess(deps.bot, chatId)
+    if (access === 'chat_unreachable') {
+      await fullyDisconnectRegisteredChannel(deps.bot, chatId, 'registry_stale_removed')
+      res.status(404).json({ error: 'channel not found' })
+      return
+    }
+    if (access === 'bot_not_in_chat') {
+      await fullyDisconnectRegisteredChannel(deps.bot, chatId, 'removed_from_chat')
+      res.status(404).json({ error: 'channel not found' })
+      return
+    }
     const posts = postStore.getPostsByChatId(chatId)
     const postIds = new Set(posts.map((p) => p.post_id))
     const comments = commentStore
@@ -584,7 +605,7 @@ export function createAdminRouter(deps: AdminRouterDeps): express.Router {
       channel: {
         chat_id: chatId,
         title: ch.title,
-        status: stateManager.isChannelPendingAdminRights(chatId) ? 'pending' : 'active',
+        status: access === 'ok' ? 'active' : 'pending',
         subscribers,
         post_count: posts.length,
         comment_count: commentStore.countForPostIds(postIds),

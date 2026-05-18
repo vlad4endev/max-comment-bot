@@ -74,6 +74,18 @@ export declare class StateManager {
      * Snapshot of all channel ids pending admin-based registration (for `/connect` sweep).
      */
     getPendingAdminChannelIds(): number[];
+    /**
+     * Удаляет все transient-состояния в чате (комментирование, ответы и т.д.).
+     */
+    clearAllStatesInChat(chatId: number): void;
+    /** userId → channelChatId: ожидание подтверждения join из deep link. */
+    private readonly pendingAdminJoinByUserId;
+    setPendingAdminJoin(userId: number, channelChatId: number): void;
+    getPendingAdminJoin(userId: number): number | undefined;
+    clearPendingAdminJoinForUser(userId: number): void;
+    clearPendingAdminJoinsForChannel(channelChatId: number): void;
+    /** user_id, ожидающие подтверждения join к этому каналу. */
+    getUserIdsPendingJoinToChannel(channelChatId: number): number[];
     destroy(): void;
     private runCleanup;
 }

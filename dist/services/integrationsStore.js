@@ -332,6 +332,33 @@ class IntegrationsStore {
             },
         });
     }
+    /** Удаляет потоки, у которых источник или назначение — этот MAX-канал. */
+    async removeFlowsForMaxChatId(chatId) {
+        await this.load();
+        const targetAbs = Math.abs(chatId);
+        const matches = (channelId) => {
+            if (!channelId) {
+                return false;
+            }
+            const parsed = Number.parseInt(channelId, 10);
+            return Number.isFinite(parsed) && Math.abs(parsed) === targetAbs;
+        };
+        const before = this.data.flows.length;
+        this.data.flows = this.data.flows.filter((f) => {
+            const destHit = f.destination.platform === 'max' && matches(f.destination.channelId);
+            const srcHit = f.source.platform === 'max' && matches(f.source.channelId);
+            return !destHit && !srcHit;
+        });
+        const removed = before - this.data.flows.length;
+        if (removed > 0) {
+            this.data.forwardedLog = this.data.forwardedLog.filter((e) => {
+                const flow = this.data.flows.find((f) => f.id === e.flowId);
+                return flow !== undefined;
+            });
+            await this.persist();
+        }
+        return removed;
+    }
 }
 exports.integrationsStore = new IntegrationsStore();
 function maskToken(token) {

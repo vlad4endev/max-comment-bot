@@ -119,6 +119,42 @@ class StateManager {
     getPendingAdminChannelIds() {
         return [...this.pendingAdminChannelIds];
     }
+    /**
+     * Удаляет все transient-состояния в чате (комментирование, ответы и т.д.).
+     */
+    clearAllStatesInChat(chatId) {
+        this.states.delete(chatId);
+    }
+    /** userId → channelChatId: ожидание подтверждения join из deep link. */
+    pendingAdminJoinByUserId = new Map();
+    setPendingAdminJoin(userId, channelChatId) {
+        this.pendingAdminJoinByUserId.set(userId, channelChatId);
+    }
+    getPendingAdminJoin(userId) {
+        return this.pendingAdminJoinByUserId.get(userId);
+    }
+    clearPendingAdminJoinForUser(userId) {
+        this.pendingAdminJoinByUserId.delete(userId);
+    }
+    clearPendingAdminJoinsForChannel(channelChatId) {
+        const targetAbs = Math.abs(channelChatId);
+        for (const [userId, ch] of this.pendingAdminJoinByUserId) {
+            if (Math.abs(ch) === targetAbs) {
+                this.pendingAdminJoinByUserId.delete(userId);
+            }
+        }
+    }
+    /** user_id, ожидающие подтверждения join к этому каналу. */
+    getUserIdsPendingJoinToChannel(channelChatId) {
+        const targetAbs = Math.abs(channelChatId);
+        const out = [];
+        for (const [userId, ch] of this.pendingAdminJoinByUserId) {
+            if (Math.abs(ch) === targetAbs) {
+                out.push(userId);
+            }
+        }
+        return out;
+    }
     destroy() {
         if (this.cleanupTimer !== null) {
             clearInterval(this.cleanupTimer);

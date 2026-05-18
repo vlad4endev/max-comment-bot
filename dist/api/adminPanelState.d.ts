@@ -79,4 +79,6 @@ export declare function listAutoposts(): Promise<AutopostRecord[]>;
 export declare function createAutopost(input: Omit<AutopostRecord, 'id' | 'created_at' | 'status'>): Promise<AutopostRecord>;
 export declare function deleteAutopost(id: string): Promise<boolean>;
 export declare function countAntispamBlocksToday(log: AntispamLogEntry[]): number;
+/** Удаляет все настройки админки, привязанные к каналу. */
+export declare function purgeChannelFromAdminState(chatId: number): Promise<void>;
 export {};

@@ -96,6 +96,8 @@ declare class IntegrationsStore {
     setLinkedChats(integrationId: string, chats: PlatformChannelInfo[]): Promise<IntegrationRecord | undefined>;
     getTelegramIntegration(): IntegrationRecord | undefined;
     bumpIntegrationActivity(integrationId: string, posts?: number): Promise<void>;
+    /** Удаляет потоки, у которых источник или назначение — этот MAX-канал. */
+    removeFlowsForMaxChatId(chatId: number): Promise<number>;
 }
 export declare const integrationsStore: IntegrationsStore;
 export declare function maskToken(token: string): string;

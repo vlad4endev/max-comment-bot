@@ -164,8 +164,10 @@ export class ChannelNotifyLinkStore {
 
   /** When the bot leaves a channel, drop all opt-ins for that chat. */
   removeAllForChannel(channelChatId: number): void {
+    const canonical = resolveCanonicalChannelChatId(channelChatId) ?? channelChatId
+    const targetAbs = Math.abs(canonical)
     const before = this.links.length
-    const next = this.links.filter((r) => r.channel_chat_id !== channelChatId)
+    const next = this.links.filter((r) => Math.abs(r.channel_chat_id) !== targetAbs)
     if (next.length === before) {
       return
     }

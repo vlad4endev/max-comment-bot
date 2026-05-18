@@ -175,10 +175,20 @@ function createAdminRouter(deps) {
         res.json(payload);
     });
     secured.get('/channels', async (_req, res) => {
+        await (0, channelFullDisconnect_1.pruneRegisteredChannelsNotAccessibleByBot)(deps.bot);
         const snapshot = [...channelRegistry_1.channelRegistry.getAllChannels()].filter((c) => c.type === 'channel');
         const rows = [];
         for (const c of snapshot) {
             if (channelRegistry_1.channelRegistry.getChannel(c.chat_id) === null) {
+                continue;
+            }
+            const access = await (0, channelFullDisconnect_1.resolveRegisteredChannelAccess)(deps.bot, c.chat_id);
+            if (access === 'chat_unreachable') {
+                await (0, channelFullDisconnect_1.fullyDisconnectRegisteredChannel)(deps.bot, c.chat_id, 'registry_stale_removed');
+                continue;
+            }
+            if (access === 'bot_not_in_chat') {
+                await (0, channelFullDisconnect_1.fullyDisconnectRegisteredChannel)(deps.bot, c.chat_id, 'removed_from_chat');
                 continue;
             }
             let subscribers = null;
@@ -190,14 +200,13 @@ function createAdminRouter(deps) {
                 }
             }
             catch (err) {
-                logger_1.logger.warn('admin GET /channels: getChat failed, pruning channel', { chatId: c.chat_id, err });
+                logger_1.logger.warn('admin GET /channels: getChat failed after access check', { chatId: c.chat_id, err });
                 await (0, channelFullDisconnect_1.fullyDisconnectRegisteredChannel)(deps.bot, c.chat_id, 'registry_stale_removed');
                 continue;
             }
             const posts = postStore_1.postStore.getPostsByChatId(c.chat_id);
             const postIds = new Set(posts.map((p) => p.post_id));
             const commentCount = commentStore_1.commentStore.countForPostIds(postIds);
-            const pending = stateManager_1.stateManager.isChannelPendingAdminRights(c.chat_id);
             rows.push({
                 chat_id: c.chat_id,
                 title: c.title,
@@ -206,7 +215,7 @@ function createAdminRouter(deps) {
                 post_count: posts.length,
                 comment_count: commentCount,
                 date_added: c.date_added,
-                status: pending ? 'pending' : 'active',
+                status: access === 'ok' ? 'active' : 'pending',
             });
         }
         res.json({ channels: rows });
@@ -464,6 +473,17 @@ function createAdminRouter(deps) {
             res.status(404).json({ error: 'channel not found' });
             return;
         }
+        const access = await (0, channelFullDisconnect_1.resolveRegisteredChannelAccess)(deps.bot, chatId);
+        if (access === 'chat_unreachable') {
+            await (0, channelFullDisconnect_1.fullyDisconnectRegisteredChannel)(deps.bot, chatId, 'registry_stale_removed');
+            res.status(404).json({ error: 'channel not found' });
+            return;
+        }
+        if (access === 'bot_not_in_chat') {
+            await (0, channelFullDisconnect_1.fullyDisconnectRegisteredChannel)(deps.bot, chatId, 'removed_from_chat');
+            res.status(404).json({ error: 'channel not found' });
+            return;
+        }
         const posts = postStore_1.postStore.getPostsByChatId(chatId);
         const postIds = new Set(posts.map((p) => p.post_id));
         const comments = commentStore_1.commentStore
@@ -492,7 +512,7 @@ function createAdminRouter(deps) {
             channel: {
                 chat_id: chatId,
                 title: ch.title,
-                status: stateManager_1.stateManager.isChannelPendingAdminRights(chatId) ? 'pending' : 'active',
+                status: access === 'ok' ? 'active' : 'pending',
                 subscribers,
                 post_count: posts.length,
                 comment_count: commentStore_1.commentStore.countForPostIds(postIds),

@@ -78,6 +78,20 @@ class ChannelSettingsStore {
     getManagerUrl(chatId) {
         return this.getSettings(chatId).manager_url;
     }
+    removeChannel(chatId) {
+        const abs = Math.abs(chatId);
+        let removed = false;
+        for (const key of [...this.byChatId.keys()]) {
+            if (Math.abs(key) === abs) {
+                this.byChatId.delete(key);
+                removed = true;
+            }
+        }
+        if (removed) {
+            this.queuePersist();
+            logger_1.logger.info('channelSettingsStore: removeChannel', { chatId });
+        }
+    }
     setManagerUrl(chatId, managerUrl) {
         const prev = this.byChatId.get(chatId) ?? {};
         const next = { ...prev };

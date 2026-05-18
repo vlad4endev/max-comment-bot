@@ -95,6 +95,21 @@ export class ChannelSettingsStore {
     return this.getSettings(chatId).manager_url
   }
 
+  removeChannel(chatId: number): void {
+    const abs = Math.abs(chatId)
+    let removed = false
+    for (const key of [...this.byChatId.keys()]) {
+      if (Math.abs(key) === abs) {
+        this.byChatId.delete(key)
+        removed = true
+      }
+    }
+    if (removed) {
+      this.queuePersist()
+      logger.info('channelSettingsStore: removeChannel', { chatId })
+    }
+  }
+
   setManagerUrl(chatId: number, managerUrl: string | null): ChannelSettings {
     const prev = this.byChatId.get(chatId) ?? {}
     const next: ChannelSettingsRow = { ...prev }

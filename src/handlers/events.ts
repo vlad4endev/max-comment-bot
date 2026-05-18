@@ -3,11 +3,17 @@ import type { ChatType } from '@maxhub/max-bot-api/types'
 import type { Chat, Message, User } from '@maxhub/max-bot-api/types'
 
 import { config } from '../config'
-import { fetchBotChatMember, isBotAdminOrOwner } from '../services/botChannelMembership'
 import {
+  fetchBotChatMember,
+  fetchBotChatMemberWithRetry,
+  isBotAdminOrOwner,
+} from '../services/botChannelMembership'
+import {
+  clearAdminJoinNotifiedForChannel,
   hasChannelAdminJoinNotified,
   markChannelAdminJoinNotified,
 } from '../services/channelAdminJoinNotified'
+import { runChannelPollerForChat } from '../services/channelPoller'
 import {
   isLikelyChannelPost,
   isUserChannelAdmin,
@@ -15,6 +21,7 @@ import {
   tryAttachCommentsToChannelPost,
 } from '../services/channelPostActions'
 import { channelRegistry } from '../services/channelRegistry'
+import { fullyDisconnectRegisteredChannel } from '../services/channelFullDisconnect'
 import { resolveChannelChatIdFromInviteParam } from '../services/resolveChannelChatId'
 import { commentStore } from '../services/commentStore'
 import { notifyAllAdmins, type SendMessageExtra } from '../services/notificationService'
@@ -35,8 +42,6 @@ const BOT_ACTIVATION_WELCOME_TEXT =
   '✅ Бот активирован!\n\n' +
   'Теперь когда вам ответят на комментарий — я сразу пришлю вам сообщение.\n\n' +
   'Вернитесь в канал и напишите комментарий!'
-
-const pendingAdminJoins = new Map<number, number>() // userId -> channelChatId
 
 async function trySendBotActivationWelcome(bot: Bot, chatId: number): Promise<void> {
   try {
@@ -298,8 +303,8 @@ async function runChannelConnectAttempt(
     const display = regTitle ? `«${regTitle}»` : `канал (номер чата: ${channelChatId})`
     if (outcome.status === 'registered') {
       lines.push(`✅ ${display} — подключение выполнено.`)
-    } else if (outcome.status === 'already_registered') {
-      lines.push(`ℹ️ ${display} — канал уже подключён.`)
+    } else if (outcome.status === 'reconnected') {
+      lines.push(`✅ ${display} — канал снова подключён, кнопки комментариев обновляются.`)
     } else if (outcome.status === 'pending') {
       lines.push(
         `⏳ ${display} — пока нет прав администратора у бота или не удалось проверить доступ. Выдайте боту админ-права в канале и снова нажмите «Подтвердить подключение».`,
@@ -337,7 +342,7 @@ function parseAddButtonInput(raw: string): ParsedAddButton | undefined {
 
 type ChannelActivationOutcome =
   | { status: 'registered' }
-  | { status: 'already_registered' }
+  | { status: 'reconnected' }
   | { status: 'pending'; shouldNotifyMissingAdmin: boolean }
 
 /**
@@ -412,24 +417,31 @@ async function tryActivateChannelRegistration(
 ): Promise<ChannelActivationOutcome> {
   await ensureChannelPersisted(ctx, channelChatId, isChannel)
 
-  const member = await fetchBotChatMember(bot, channelChatId)
+  const member = await fetchBotChatMemberWithRetry(bot, channelChatId)
   if (!member) {
+    clearAdminJoinNotifiedForChannel(channelChatId)
     stateManager.markChannelPendingAdminRights(channelChatId)
-    return { status: 'pending', shouldNotifyMissingAdmin: false }
+    return { status: 'pending', shouldNotifyMissingAdmin: true }
   }
   if (!isBotAdminOrOwner(member)) {
+    clearAdminJoinNotifiedForChannel(channelChatId)
     stateManager.markChannelPendingAdminRights(channelChatId)
     return { status: 'pending', shouldNotifyMissingAdmin: true }
   }
 
   stateManager.clearChannelPendingAdminRights(channelChatId)
-  if (hasChannelAdminJoinNotified(channelChatId)) {
-    return { status: 'already_registered' }
+
+  const wasConnectedBefore = hasChannelAdminJoinNotified(channelChatId)
+  if (!wasConnectedBefore) {
+    await notifyAdminsChannelJoined(bot, channelChatId)
+    markChannelAdminJoinNotified(channelChatId)
+    void runChannelPollerForChat(bot, channelChatId)
+    return { status: 'registered' }
   }
 
-  await notifyAdminsChannelJoined(bot, channelChatId)
-  markChannelAdminJoinNotified(channelChatId)
-  return { status: 'registered' }
+  logger.info('tryActivateChannelRegistration: reconnecting channel', { channelChatId })
+  void runChannelPollerForChat(bot, channelChatId)
+  return { status: 'reconnected' }
 }
 
 async function dmInviterAboutMissingAdmin(
@@ -461,57 +473,30 @@ async function dmInviterAboutMissingAdmin(
 type BotDisconnectReason = 'bot_removed' | 'admin_rights_removed'
 
 /**
- * Bot left the channel or lost admin: drop registry entry only, notify linked users, log.
- * Does not delete posts, comments, notify links, or subscribers.
+ * Бот удалён из канала — полная очистка БД и сброс пользователей без других каналов.
+ * Снятие только прав админа (бот ещё в канале) — помечаем «ожидает прав», данные не трогаем.
  */
 async function handleBotDisconnected(
   bot: Bot,
   chatId: number,
   reason: BotDisconnectReason,
 ): Promise<void> {
-  const channel = channelRegistry.getChannel(chatId)
-  if (!channel) {
-    logger.info('handleBotDisconnected: channel not in registry', { chatId })
+  if (reason === 'bot_removed') {
+    logger.info('handleBotDisconnected: bot removed from channel, full purge', { chatId })
+    await fullyDisconnectRegisteredChannel(bot, chatId, 'removed_from_chat')
     return
   }
 
-  const channelTitle = channel.title ?? `ID ${chatId}`
-  logger.info('handleBotDisconnected: disconnecting', { chatId, channelTitle, reason })
-
-  const linkedAdmins = settingsStore.getUsersLinkedToChannel(chatId)
-
-  channelRegistry.removeChannel(chatId)
-  logger.info('handleBotDisconnected: removed from registry', { chatId })
-
-  const reasonText =
-    reason === 'bot_removed' ? 'был удалён из канала' : 'потерял права администратора'
-
-  const message =
-    `⚠️ Бот отключён от канала\n\n` +
-    `Канал: «${channelTitle}»\n` +
-    `Причина: бот ${reasonText}.\n\n` +
-    `Чтобы переподключить — добавьте бота снова как администратора.`
-
-  for (const adminId of linkedAdmins) {
-    try {
-      await bot.api.sendMessageToUser(adminId, message)
-      logger.info('handleBotDisconnected: notified admin', { adminId, chatId })
-    } catch (err: unknown) {
-      logger.warn('handleBotDisconnected: failed to notify admin', { adminId, chatId, err })
-    }
+  const member = await fetchBotChatMember(bot, chatId)
+  if (!member) {
+    logger.info('handleBotDisconnected: bot no longer in channel, full purge', { chatId })
+    await fullyDisconnectRegisteredChannel(bot, chatId, 'removed_from_chat')
+    return
   }
 
-  const ownerChatId = config.ADMIN_CHAT_ID
-  if (ownerChatId && !linkedAdmins.includes(ownerChatId)) {
-    try {
-      await bot.api.sendMessageToChat(ownerChatId, message)
-      logger.info('handleBotDisconnected: notified owner', { ownerChatId, chatId })
-    } catch (err: unknown) {
-      logger.warn('handleBotDisconnected: failed to notify owner', { err })
-    }
-  }
-
-  logger.info('handleBotDisconnected: done', { chatId, channelTitle })
+  logger.info('handleBotDisconnected: bot lost admin only, pending rights', { chatId })
+  clearAdminJoinNotifiedForChannel(chatId)
+  stateManager.markChannelPendingAdminRights(chatId)
 }
 
 export { clearAdminJoinNotifiedForChannel } from '../services/channelAdminJoinNotified'
@@ -556,10 +541,8 @@ export function registerEventHandlers(bot: Bot): void {
     ) {
       return
     }
-    if (channelRegistry.getChannel(channelChatId) !== null) {
-      return
-    }
-    logger.info(`user_added (self): chat_id=${channelChatId}`)
+    const inRegistry = channelRegistry.getChannel(channelChatId) !== null
+    logger.info(`user_added (self): chat_id=${channelChatId}`, { inRegistry })
 
     const outcome = await tryActivateChannelRegistration(ctx, bot, channelChatId, isChannel)
     if (outcome.status === 'pending' && outcome.shouldNotifyMissingAdmin) {
@@ -655,7 +638,7 @@ export function registerEventHandlers(bot: Bot): void {
 
         logger.info('bot_started: join payload detected', { userId, channelChatId, payload: startPayload })
 
-        pendingAdminJoins.set(userId, channelChatId)
+        stateManager.setPendingAdminJoin(userId, channelChatId)
         subscriberStore.addSubscriber(userId)
         settingsStore.linkUserToChannel(userId, channelChatId)
 
@@ -678,7 +661,7 @@ export function registerEventHandlers(bot: Bot): void {
           }
         }
 
-        pendingAdminJoins.delete(userId)
+        stateManager.clearPendingAdminJoinForUser(userId)
         logger.info('bot_started: admin linked to channel', { userId, channelChatId, title })
         return
       }
@@ -874,9 +857,9 @@ ${inviteUrl}
       !/^\/addbutton\b/i.test(text) &&
       !/^\/connect\b/i.test(text)
     ) {
-      const pendingChannelId = pendingAdminJoins.get(user.user_id)
+      const pendingChannelId = stateManager.getPendingAdminJoin(user.user_id)
       if (pendingChannelId !== undefined) {
-        pendingAdminJoins.delete(user.user_id)
+        stateManager.clearPendingAdminJoinForUser(user.user_id)
         settingsStore.linkUserToChannel(user.user_id, pendingChannelId)
         subscriberStore.addSubscriber(user.user_id)
 

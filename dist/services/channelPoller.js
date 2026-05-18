@@ -8,9 +8,11 @@ exports.runChannelPollerForChat = runChannelPollerForChat;
 exports.runChannelPollerTick = runChannelPollerTick;
 exports.startChannelPostPoller = startChannelPostPoller;
 exports.restartChannelPostPoller = restartChannelPostPoller;
+exports.clearChannelPollerErrors = clearChannelPollerErrors;
 exports.stopChannelPostPoller = stopChannelPostPoller;
 const p_limit_1 = __importDefault(require("p-limit"));
 const adminRuntimeSettingsStore_1 = require("./adminRuntimeSettingsStore");
+const channelAdminJoinNotified_1 = require("./channelAdminJoinNotified");
 const channelRegistry_1 = require("./channelRegistry");
 const logger_1 = require("../utils/logger");
 const maxApiRetry_1 = require("../utils/maxApiRetry");
@@ -76,6 +78,7 @@ async function pollChannelSafe(bot, channel, botUid) {
         logger_1.logger.error(`channelPoller: error for ${channel.chat_id} (${count}/${DISABLE_AFTER_ERRORS})`, err);
         if (count >= DISABLE_AFTER_ERRORS) {
             logger_1.logger.warn(`channelPoller: disabling channel ${channel.chat_id} after ${count} errors`);
+            (0, channelAdminJoinNotified_1.clearAdminJoinNotifiedForChannel)(channel.chat_id);
             channelRegistry_1.channelRegistry.deactivate(channel.chat_id);
             errorCount.delete(channel.chat_id);
         }
@@ -174,6 +177,15 @@ function startChannelPostPoller(bot, intervalMs) {
  */
 function restartChannelPostPoller(bot) {
     startChannelPostPoller(bot);
+}
+/** Сбрасывает счётчик ошибок поллера для канала (после полного отключения). */
+function clearChannelPollerErrors(chatId) {
+    const abs = Math.abs(chatId);
+    for (const key of [...errorCount.keys()]) {
+        if (Math.abs(key) === abs) {
+            errorCount.delete(key);
+        }
+    }
 }
 function stopChannelPostPoller() {
     if (intervalId !== undefined) {

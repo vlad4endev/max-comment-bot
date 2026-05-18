@@ -6,8 +6,10 @@ const max_bot_api_1 = require("@maxhub/max-bot-api");
 const config_1 = require("../config");
 const botChannelMembership_1 = require("../services/botChannelMembership");
 const channelAdminJoinNotified_1 = require("../services/channelAdminJoinNotified");
+const channelPoller_1 = require("../services/channelPoller");
 const channelPostActions_1 = require("../services/channelPostActions");
 const channelRegistry_1 = require("../services/channelRegistry");
+const channelFullDisconnect_1 = require("../services/channelFullDisconnect");
 const resolveChannelChatId_1 = require("../services/resolveChannelChatId");
 const commentStore_1 = require("../services/commentStore");
 const notificationService_1 = require("../services/notificationService");
@@ -25,7 +27,6 @@ function buildBotStartappUrl(startappPayload) {
 const BOT_ACTIVATION_WELCOME_TEXT = '✅ Бот активирован!\n\n' +
     'Теперь когда вам ответят на комментарий — я сразу пришлю вам сообщение.\n\n' +
     'Вернитесь в канал и напишите комментарий!';
-const pendingAdminJoins = new Map(); // userId -> channelChatId
 async function trySendBotActivationWelcome(bot, chatId) {
     try {
         await bot.api.sendMessageToChat(chatId, BOT_ACTIVATION_WELCOME_TEXT);
@@ -244,8 +245,8 @@ async function runChannelConnectAttempt(ctx, bot, channelChatIds) {
         if (outcome.status === 'registered') {
             lines.push(`✅ ${display} — подключение выполнено.`);
         }
-        else if (outcome.status === 'already_registered') {
-            lines.push(`ℹ️ ${display} — канал уже подключён.`);
+        else if (outcome.status === 'reconnected') {
+            lines.push(`✅ ${display} — канал снова подключён, кнопки комментариев обновляются.`);
         }
         else if (outcome.status === 'pending') {
             lines.push(`⏳ ${display} — пока нет прав администратора у бота или не удалось проверить доступ. Выдайте боту админ-права в канале и снова нажмите «Подтвердить подключение».`);
@@ -337,22 +338,28 @@ async function postChannelAdminInviteToChannel(bot, channelChatId) {
  */
 async function tryActivateChannelRegistration(ctx, bot, channelChatId, isChannel) {
     await ensureChannelPersisted(ctx, channelChatId, isChannel);
-    const member = await (0, botChannelMembership_1.fetchBotChatMember)(bot, channelChatId);
+    const member = await (0, botChannelMembership_1.fetchBotChatMemberWithRetry)(bot, channelChatId);
     if (!member) {
+        (0, channelAdminJoinNotified_1.clearAdminJoinNotifiedForChannel)(channelChatId);
         stateManager_1.stateManager.markChannelPendingAdminRights(channelChatId);
-        return { status: 'pending', shouldNotifyMissingAdmin: false };
+        return { status: 'pending', shouldNotifyMissingAdmin: true };
     }
     if (!(0, botChannelMembership_1.isBotAdminOrOwner)(member)) {
+        (0, channelAdminJoinNotified_1.clearAdminJoinNotifiedForChannel)(channelChatId);
         stateManager_1.stateManager.markChannelPendingAdminRights(channelChatId);
         return { status: 'pending', shouldNotifyMissingAdmin: true };
     }
     stateManager_1.stateManager.clearChannelPendingAdminRights(channelChatId);
-    if ((0, channelAdminJoinNotified_1.hasChannelAdminJoinNotified)(channelChatId)) {
-        return { status: 'already_registered' };
+    const wasConnectedBefore = (0, channelAdminJoinNotified_1.hasChannelAdminJoinNotified)(channelChatId);
+    if (!wasConnectedBefore) {
+        await notifyAdminsChannelJoined(bot, channelChatId);
+        (0, channelAdminJoinNotified_1.markChannelAdminJoinNotified)(channelChatId);
+        void (0, channelPoller_1.runChannelPollerForChat)(bot, channelChatId);
+        return { status: 'registered' };
     }
-    await notifyAdminsChannelJoined(bot, channelChatId);
-    (0, channelAdminJoinNotified_1.markChannelAdminJoinNotified)(channelChatId);
-    return { status: 'registered' };
+    logger_1.logger.info('tryActivateChannelRegistration: reconnecting channel', { channelChatId });
+    void (0, channelPoller_1.runChannelPollerForChat)(bot, channelChatId);
+    return { status: 'reconnected' };
 }
 async function dmInviterAboutMissingAdmin(bot, inviterUserId, channelChatId, channelTitle) {
     const title = channelTitle ?? 'ваш канал';
@@ -371,45 +378,24 @@ async function dmInviterAboutMissingAdmin(bot, inviterUserId, channelChatId, cha
     logger_1.logger.warn('dmInviterAboutMissingAdmin: no inviter user id; skipping DM', { channelChatId });
 }
 /**
- * Bot left the channel or lost admin: drop registry entry only, notify linked users, log.
- * Does not delete posts, comments, notify links, or subscribers.
+ * Бот удалён из канала — полная очистка БД и сброс пользователей без других каналов.
+ * Снятие только прав админа (бот ещё в канале) — помечаем «ожидает прав», данные не трогаем.
  */
 async function handleBotDisconnected(bot, chatId, reason) {
-    const channel = channelRegistry_1.channelRegistry.getChannel(chatId);
-    if (!channel) {
-        logger_1.logger.info('handleBotDisconnected: channel not in registry', { chatId });
+    if (reason === 'bot_removed') {
+        logger_1.logger.info('handleBotDisconnected: bot removed from channel, full purge', { chatId });
+        await (0, channelFullDisconnect_1.fullyDisconnectRegisteredChannel)(bot, chatId, 'removed_from_chat');
         return;
     }
-    const channelTitle = channel.title ?? `ID ${chatId}`;
-    logger_1.logger.info('handleBotDisconnected: disconnecting', { chatId, channelTitle, reason });
-    const linkedAdmins = settingsStore_1.settingsStore.getUsersLinkedToChannel(chatId);
-    channelRegistry_1.channelRegistry.removeChannel(chatId);
-    logger_1.logger.info('handleBotDisconnected: removed from registry', { chatId });
-    const reasonText = reason === 'bot_removed' ? 'был удалён из канала' : 'потерял права администратора';
-    const message = `⚠️ Бот отключён от канала\n\n` +
-        `Канал: «${channelTitle}»\n` +
-        `Причина: бот ${reasonText}.\n\n` +
-        `Чтобы переподключить — добавьте бота снова как администратора.`;
-    for (const adminId of linkedAdmins) {
-        try {
-            await bot.api.sendMessageToUser(adminId, message);
-            logger_1.logger.info('handleBotDisconnected: notified admin', { adminId, chatId });
-        }
-        catch (err) {
-            logger_1.logger.warn('handleBotDisconnected: failed to notify admin', { adminId, chatId, err });
-        }
+    const member = await (0, botChannelMembership_1.fetchBotChatMember)(bot, chatId);
+    if (!member) {
+        logger_1.logger.info('handleBotDisconnected: bot no longer in channel, full purge', { chatId });
+        await (0, channelFullDisconnect_1.fullyDisconnectRegisteredChannel)(bot, chatId, 'removed_from_chat');
+        return;
     }
-    const ownerChatId = config_1.config.ADMIN_CHAT_ID;
-    if (ownerChatId && !linkedAdmins.includes(ownerChatId)) {
-        try {
-            await bot.api.sendMessageToChat(ownerChatId, message);
-            logger_1.logger.info('handleBotDisconnected: notified owner', { ownerChatId, chatId });
-        }
-        catch (err) {
-            logger_1.logger.warn('handleBotDisconnected: failed to notify owner', { err });
-        }
-    }
-    logger_1.logger.info('handleBotDisconnected: done', { chatId, channelTitle });
+    logger_1.logger.info('handleBotDisconnected: bot lost admin only, pending rights', { chatId });
+    (0, channelAdminJoinNotified_1.clearAdminJoinNotifiedForChannel)(chatId);
+    stateManager_1.stateManager.markChannelPendingAdminRights(chatId);
 }
 var channelAdminJoinNotified_2 = require("../services/channelAdminJoinNotified");
 Object.defineProperty(exports, "clearAdminJoinNotifiedForChannel", { enumerable: true, get: function () { return channelAdminJoinNotified_2.clearAdminJoinNotifiedForChannel; } });
@@ -448,10 +434,8 @@ function registerEventHandlers(bot) {
             addedUserId !== botNumericId) {
             return;
         }
-        if (channelRegistry_1.channelRegistry.getChannel(channelChatId) !== null) {
-            return;
-        }
-        logger_1.logger.info(`user_added (self): chat_id=${channelChatId}`);
+        const inRegistry = channelRegistry_1.channelRegistry.getChannel(channelChatId) !== null;
+        logger_1.logger.info(`user_added (self): chat_id=${channelChatId}`, { inRegistry });
         const outcome = await tryActivateChannelRegistration(ctx, bot, channelChatId, isChannel);
         if (outcome.status === 'pending' && outcome.shouldNotifyMissingAdmin) {
             const inviter = resolveInviterUserId(ctx.update.update_type, ctx.user, inviterId);
@@ -532,7 +516,7 @@ function registerEventHandlers(bot) {
                     return;
                 }
                 logger_1.logger.info('bot_started: join payload detected', { userId, channelChatId, payload: startPayload });
-                pendingAdminJoins.set(userId, channelChatId);
+                stateManager_1.stateManager.setPendingAdminJoin(userId, channelChatId);
                 subscriberStore_1.subscriberStore.addSubscriber(userId);
                 settingsStore_1.settingsStore.linkUserToChannel(userId, channelChatId);
                 const channel = channelRegistry_1.channelRegistry.getChannel(channelChatId);
@@ -552,7 +536,7 @@ function registerEventHandlers(bot) {
                         logger_1.logger.warn('bot_started: join confirm send failed', { userId, channelChatId, err });
                     }
                 }
-                pendingAdminJoins.delete(userId);
+                stateManager_1.stateManager.clearPendingAdminJoinForUser(userId);
                 logger_1.logger.info('bot_started: admin linked to channel', { userId, channelChatId, title });
                 return;
             }
@@ -715,9 +699,9 @@ ${inviteUrl}
         if (isPrivateDialog &&
             !/^\/addbutton\b/i.test(text) &&
             !/^\/connect\b/i.test(text)) {
-            const pendingChannelId = pendingAdminJoins.get(user.user_id);
+            const pendingChannelId = stateManager_1.stateManager.getPendingAdminJoin(user.user_id);
             if (pendingChannelId !== undefined) {
-                pendingAdminJoins.delete(user.user_id);
+                stateManager_1.stateManager.clearPendingAdminJoinForUser(user.user_id);
                 settingsStore_1.settingsStore.linkUserToChannel(user.user_id, pendingChannelId);
                 subscriberStore_1.subscriberStore.addSubscriber(user.user_id);
                 const channel = channelRegistry_1.channelRegistry.getChannel(pendingChannelId);

@@ -15,6 +15,7 @@ exports.listAutoposts = listAutoposts;
 exports.createAutopost = createAutopost;
 exports.deleteAutopost = deleteAutopost;
 exports.countAntispamBlocksToday = countAntispamBlocksToday;
+exports.purgeChannelFromAdminState = purgeChannelFromAdminState;
 const promises_1 = require("node:fs/promises");
 const node_path_1 = require("node:path");
 const node_crypto_1 = require("node:crypto");
@@ -219,5 +220,20 @@ async function deleteAutopost(id) {
 function countAntispamBlocksToday(log) {
     const today = new Date().toISOString().slice(0, 10);
     return log.filter((e) => e.created_at.slice(0, 10) === today).length;
+}
+/** Удаляет все настройки админки, привязанные к каналу. */
+async function purgeChannelFromAdminState(chatId) {
+    const s = await loadState();
+    const targetAbs = Math.abs(chatId);
+    for (const key of Object.keys(s.channel_extras)) {
+        const id = Number.parseInt(key, 10);
+        if (Number.isInteger(id) && Math.abs(id) === targetAbs) {
+            delete s.channel_extras[key];
+        }
+    }
+    s.tg_chains = s.tg_chains.filter((c) => Math.abs(c.max_chat_id) !== targetAbs);
+    s.autoposts = s.autoposts.filter((p) => Math.abs(p.chat_id) !== targetAbs);
+    s.antispam_log = s.antispam_log.filter((e) => Math.abs(e.channel_chat_id) !== targetAbs);
+    await persist();
 }
 //# sourceMappingURL=adminPanelState.js.map

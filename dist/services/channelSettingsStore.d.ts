@@ -12,6 +12,7 @@ export declare class ChannelSettingsStore {
     loadFromDisk(): Promise<void>;
     getSettings(chatId: number): ChannelSettings;
     getManagerUrl(chatId: number): string | null;
+    removeChannel(chatId: number): void;
     setManagerUrl(chatId: number, managerUrl: string | null): ChannelSettings;
     private queuePersist;
     private persist;
