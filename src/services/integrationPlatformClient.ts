@@ -9,10 +9,21 @@ export interface PlatformTestResult {
   error?: string
 }
 
+export type TelegramChatType = 'channel' | 'group' | 'supergroup' | 'private' | 'unknown'
+
 export interface PlatformChannelInfo {
   id: string
   title: string
   username?: string
+  type?: TelegramChatType
+  /** Бот — администратор (для каналов/групп). */
+  botIsAdmin?: boolean
+}
+
+/** @deprecated используйте {@link listTelegramBotChats} */
+export type TelegramLinkedChat = PlatformChannelInfo & {
+  type: TelegramChatType
+  botIsAdmin: boolean
 }
 
 const TG_API = 'https://api.telegram.org'
@@ -91,41 +102,131 @@ export async function testIntegration(
   return validateVkToken(token, groupId)
 }
 
-export async function listTelegramAdminChannels(token: string): Promise<PlatformChannelInfo[]> {
+function normalizeTelegramChatType(raw: unknown): TelegramChatType {
+  if (raw === 'channel' || raw === 'group' || raw === 'supergroup' || raw === 'private') {
+    return raw
+  }
+  return 'unknown'
+}
+
+function chatTitleFromTelegramChat(chat: Record<string, unknown>, fallbackId: string): string {
+  if (typeof chat.title === 'string' && chat.title.trim() !== '') {
+    return chat.title.trim()
+  }
+  const first = typeof chat.first_name === 'string' ? chat.first_name : ''
+  const last = typeof chat.last_name === 'string' ? chat.last_name : ''
+  const combined = `${first} ${last}`.trim()
+  return combined !== '' ? combined : fallbackId
+}
+
+function mergeTelegramChat(
+  seen: Map<string, PlatformChannelInfo>,
+  chat: Record<string, unknown>,
+  botIsAdmin: boolean,
+): void {
+  if (typeof chat.id !== 'number' && typeof chat.id !== 'string') {
+    return
+  }
+  const id = String(chat.id)
+  const type = normalizeTelegramChatType(chat.type)
+  const username =
+    typeof chat.username === 'string' && chat.username.trim() !== ''
+      ? chat.username.startsWith('@')
+        ? chat.username
+        : `@${chat.username}`
+      : undefined
+  const title = chatTitleFromTelegramChat(chat, id)
+  const existing = seen.get(id)
+  if (!existing) {
+    seen.set(id, { id, title, username, type, botIsAdmin })
+    return
+  }
+  seen.set(id, {
+    id,
+    title: title.length > existing.title.length ? title : existing.title,
+    username: username ?? existing.username,
+    type: type !== 'unknown' ? type : existing.type,
+    botIsAdmin: existing.botIsAdmin === true || botIsAdmin,
+  })
+}
+
+function ingestTelegramUpdate(seen: Map<string, PlatformChannelInfo>, upd: Record<string, unknown>): void {
+  const mcm = upd.my_chat_member as Record<string, unknown> | undefined
+  if (mcm) {
+    const chat = mcm.chat as Record<string, unknown> | undefined
+    const member = mcm.new_chat_member as Record<string, unknown> | undefined
+    const status = typeof member?.status === 'string' ? member.status : ''
+    const isAdmin = status === 'administrator' || status === 'creator'
+    const isMember = isAdmin || status === 'member'
+    if (chat && isMember) {
+      mergeTelegramChat(seen, chat, isAdmin)
+    }
+  }
+
+  for (const key of ['channel_post', 'edited_channel_post', 'message', 'edited_message']) {
+    const msg = upd[key] as Record<string, unknown> | undefined
+    const chat = msg?.chat as Record<string, unknown> | undefined
+    if (chat) {
+      mergeTelegramChat(seen, chat, false)
+    }
+  }
+}
+
+/** Чаты/каналы, с которыми бот взаимодействовал (из getUpdates + my_chat_member). */
+export async function listTelegramBotChats(token: string): Promise<PlatformChannelInfo[]> {
+  const seen = new Map<string, PlatformChannelInfo>()
+  let offset: number | undefined
+
   try {
-    const { data } = await axios.get<{
-      ok: boolean
-      result?: Array<{
-        id: number
-        title?: string
-        username?: string
-        type?: string
-      }>
-    }>(`${TG_API}/bot${token}/getUpdates`, {
-      params: { limit: 100, allowed_updates: ['channel_post', 'my_chat_member'] },
-      timeout: 15_000,
-    })
-    if (!data.ok || !data.result) return []
-    const seen = new Map<string, PlatformChannelInfo>()
-    for (const upd of data.result) {
-      const post = (upd as Record<string, unknown>).channel_post as Record<string, unknown> | undefined
-      const chat = post?.chat as Record<string, unknown> | undefined
-      if (chat && typeof chat.id === 'number') {
-        const id = String(chat.id)
-        if (!seen.has(id)) {
-          seen.set(id, {
-            id,
-            title: typeof chat.title === 'string' ? chat.title : id,
-            username: typeof chat.username === 'string' ? `@${chat.username}` : undefined,
-          })
+    for (let page = 0; page < 8; page++) {
+      const params: Record<string, number> = { limit: 100, timeout: 0 }
+      if (offset !== undefined) {
+        params.offset = offset
+      }
+      const { data } = await axios.get<{
+        ok: boolean
+        result?: Array<Record<string, unknown>>
+      }>(`${TG_API}/bot${token}/getUpdates`, { params, timeout: 20_000 })
+
+      if (!data.ok || !data.result?.length) {
+        break
+      }
+
+      for (const upd of data.result) {
+        const updateId = typeof upd.update_id === 'number' ? upd.update_id : 0
+        if (updateId >= (offset ?? 0)) {
+          offset = updateId + 1
         }
+        ingestTelegramUpdate(seen, upd)
+      }
+
+      if (data.result.length < 100) {
+        break
       }
     }
-    return [...seen.values()]
   } catch (err: unknown) {
-    logger.debug('listTelegramAdminChannels failed', err)
-    return []
+    logger.warn('listTelegramBotChats: getUpdates failed', err)
   }
+
+  const typeOrder: Record<TelegramChatType, number> = {
+    channel: 0,
+    supergroup: 1,
+    group: 2,
+    private: 3,
+    unknown: 4,
+  }
+
+  return [...seen.values()].sort((a, b) => {
+    const adminDiff = Number(b.botIsAdmin === true) - Number(a.botIsAdmin === true)
+    if (adminDiff !== 0) return adminDiff
+    const typeDiff = (typeOrder[a.type ?? 'unknown'] ?? 9) - (typeOrder[b.type ?? 'unknown'] ?? 9)
+    if (typeDiff !== 0) return typeDiff
+    return a.title.localeCompare(b.title, 'ru')
+  })
+}
+
+export async function listTelegramAdminChannels(token: string): Promise<PlatformChannelInfo[]> {
+  return listTelegramBotChats(token)
 }
 
 export async function listVkGroups(token: string, groupId?: string): Promise<PlatformChannelInfo[]> {

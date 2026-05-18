@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { dirname, join } from 'node:path'
 
 import { logger } from '../utils/logger'
+import type { PlatformChannelInfo, TelegramChatType } from './integrationPlatformClient'
 
 const DATA_PATH = join(process.cwd(), 'data', 'integrations.json')
 
@@ -14,6 +15,14 @@ export interface IntegrationStats {
   lastActivity: string | null
 }
 
+export interface IntegrationLinkedChat {
+  id: string
+  title: string
+  username?: string
+  type?: string
+  botIsAdmin?: boolean
+}
+
 export interface IntegrationRecord {
   id: string
   platform: IntegrationPlatform
@@ -23,6 +32,9 @@ export interface IntegrationRecord {
   status: 'connected' | 'disconnected' | 'error'
   connectedAt: string
   stats: IntegrationStats
+  /** Каналы/чаты TG (или сообщества VK), доступные боту — для потоков, цепочек и автопостинга. */
+  linkedChats?: IntegrationLinkedChat[]
+  linkedChatsUpdatedAt?: string
 }
 
 export interface FlowFilters {
@@ -165,12 +177,28 @@ function parseFlow(raw: unknown): FlowRecord | null {
   }
 }
 
+function parseLinkedChat(raw: unknown): IntegrationLinkedChat | null {
+  if (typeof raw !== 'object' || raw === null) return null
+  const o = raw as Record<string, unknown>
+  if (typeof o.id !== 'string' || typeof o.title !== 'string') return null
+  return {
+    id: o.id,
+    title: o.title,
+    username: typeof o.username === 'string' ? o.username : undefined,
+    type: typeof o.type === 'string' ? o.type : undefined,
+    botIsAdmin: o.botIsAdmin === true,
+  }
+}
+
 function parseIntegration(raw: unknown): IntegrationRecord | null {
   if (typeof raw !== 'object' || raw === null) return null
   const o = raw as Record<string, unknown>
   if (typeof o.id !== 'string' || !isIntegrationPlatform(o.platform)) return null
   if (typeof o.name !== 'string' || typeof o.token !== 'string') return null
   const statsRaw = o.stats as Record<string, unknown> | undefined
+  const linkedChats = Array.isArray(o.linkedChats)
+    ? o.linkedChats.map(parseLinkedChat).filter((x): x is IntegrationLinkedChat => x !== null)
+    : undefined
   return {
     id: o.id,
     platform: o.platform,
@@ -187,6 +215,9 @@ function parseIntegration(raw: unknown): IntegrationRecord | null {
       lastActivity:
         typeof statsRaw?.lastActivity === 'string' ? statsRaw.lastActivity : null,
     },
+    linkedChats: linkedChats?.length ? linkedChats : undefined,
+    linkedChatsUpdatedAt:
+      typeof o.linkedChatsUpdatedAt === 'string' ? o.linkedChatsUpdatedAt : undefined,
   }
 }
 
@@ -359,6 +390,37 @@ class IntegrationsStore {
     return list.slice(0, limit)
   }
 
+  async setLinkedChats(
+    integrationId: string,
+    chats: PlatformChannelInfo[],
+  ): Promise<IntegrationRecord | undefined> {
+    const integ = this.getIntegration(integrationId)
+    if (!integ) return undefined
+    const linkedChats: IntegrationLinkedChat[] = chats.map((c) => ({
+      id: c.id,
+      title: c.title,
+      username: c.username,
+      type: c.type,
+      botIsAdmin: c.botIsAdmin === true,
+    }))
+    const record: IntegrationRecord = {
+      ...integ,
+      linkedChats,
+      linkedChatsUpdatedAt: new Date().toISOString(),
+    }
+    this.data.integrations = this.data.integrations.map((i) =>
+      i.id === record.id ? record : i,
+    )
+    await this.persist()
+    return record
+  }
+
+  getTelegramIntegration(): IntegrationRecord | undefined {
+    return this.data.integrations.find(
+      (i) => i.platform === 'telegram' && i.status === 'connected',
+    )
+  }
+
   async bumpIntegrationActivity(integrationId: string, posts = 1): Promise<void> {
     const integ = this.getIntegration(integrationId)
     if (!integ) return
@@ -389,5 +451,7 @@ export function integrationPublicView(i: IntegrationRecord): Record<string, unkn
     connectedAt: i.connectedAt,
     stats: i.stats,
     tokenPreview: maskToken(i.token),
+    linkedChats: i.linkedChats ?? [],
+    linkedChatsUpdatedAt: i.linkedChatsUpdatedAt ?? null,
   }
 }

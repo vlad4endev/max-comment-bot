@@ -89,6 +89,20 @@ function parseFlow(raw) {
         createdAt: typeof o.createdAt === 'string' ? o.createdAt : new Date().toISOString(),
     };
 }
+function parseLinkedChat(raw) {
+    if (typeof raw !== 'object' || raw === null)
+        return null;
+    const o = raw;
+    if (typeof o.id !== 'string' || typeof o.title !== 'string')
+        return null;
+    return {
+        id: o.id,
+        title: o.title,
+        username: typeof o.username === 'string' ? o.username : undefined,
+        type: typeof o.type === 'string' ? o.type : undefined,
+        botIsAdmin: o.botIsAdmin === true,
+    };
+}
 function parseIntegration(raw) {
     if (typeof raw !== 'object' || raw === null)
         return null;
@@ -98,6 +112,9 @@ function parseIntegration(raw) {
     if (typeof o.name !== 'string' || typeof o.token !== 'string')
         return null;
     const statsRaw = o.stats;
+    const linkedChats = Array.isArray(o.linkedChats)
+        ? o.linkedChats.map(parseLinkedChat).filter((x) => x !== null)
+        : undefined;
     return {
         id: o.id,
         platform: o.platform,
@@ -112,6 +129,8 @@ function parseIntegration(raw) {
             totalPosts: typeof statsRaw?.totalPosts === 'number' ? statsRaw.totalPosts : 0,
             lastActivity: typeof statsRaw?.lastActivity === 'string' ? statsRaw.lastActivity : null,
         },
+        linkedChats: linkedChats?.length ? linkedChats : undefined,
+        linkedChatsUpdatedAt: typeof o.linkedChatsUpdatedAt === 'string' ? o.linkedChatsUpdatedAt : undefined,
     };
 }
 class IntegrationsStore {
@@ -265,6 +284,29 @@ class IntegrationsStore {
         }
         return list.slice(0, limit);
     }
+    async setLinkedChats(integrationId, chats) {
+        const integ = this.getIntegration(integrationId);
+        if (!integ)
+            return undefined;
+        const linkedChats = chats.map((c) => ({
+            id: c.id,
+            title: c.title,
+            username: c.username,
+            type: c.type,
+            botIsAdmin: c.botIsAdmin === true,
+        }));
+        const record = {
+            ...integ,
+            linkedChats,
+            linkedChatsUpdatedAt: new Date().toISOString(),
+        };
+        this.data.integrations = this.data.integrations.map((i) => i.id === record.id ? record : i);
+        await this.persist();
+        return record;
+    }
+    getTelegramIntegration() {
+        return this.data.integrations.find((i) => i.platform === 'telegram' && i.status === 'connected');
+    }
     async bumpIntegrationActivity(integrationId, posts = 1) {
         const integ = this.getIntegration(integrationId);
         if (!integ)
@@ -294,6 +336,8 @@ function integrationPublicView(i) {
         connectedAt: i.connectedAt,
         stats: i.stats,
         tokenPreview: maskToken(i.token),
+        linkedChats: i.linkedChats ?? [],
+        linkedChatsUpdatedAt: i.linkedChatsUpdatedAt ?? null,
     };
 }
 //# sourceMappingURL=integrationsStore.js.map

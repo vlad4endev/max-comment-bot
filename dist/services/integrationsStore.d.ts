@@ -1,8 +1,16 @@
+import type { PlatformChannelInfo } from './integrationPlatformClient';
 export type IntegrationPlatform = 'telegram' | 'vk';
 export type FlowPlatform = 'telegram' | 'vk' | 'max';
 export interface IntegrationStats {
     totalPosts: number;
     lastActivity: string | null;
+}
+export interface IntegrationLinkedChat {
+    id: string;
+    title: string;
+    username?: string;
+    type?: string;
+    botIsAdmin?: boolean;
 }
 export interface IntegrationRecord {
     id: string;
@@ -13,6 +21,9 @@ export interface IntegrationRecord {
     status: 'connected' | 'disconnected' | 'error';
     connectedAt: string;
     stats: IntegrationStats;
+    /** Каналы/чаты TG (или сообщества VK), доступные боту — для потоков, цепочек и автопостинга. */
+    linkedChats?: IntegrationLinkedChat[];
+    linkedChatsUpdatedAt?: string;
 }
 export interface FlowFilters {
     keywords: string[];
@@ -82,6 +93,8 @@ declare class IntegrationsStore {
     }): Promise<void>;
     appendForwardedLog(entry: Omit<ForwardedLogEntry, 'id' | 'forwardedAt'>): Promise<void>;
     getForwardedLog(limit: number, flowId?: string): ForwardedLogEntry[];
+    setLinkedChats(integrationId: string, chats: PlatformChannelInfo[]): Promise<IntegrationRecord | undefined>;
+    getTelegramIntegration(): IntegrationRecord | undefined;
     bumpIntegrationActivity(integrationId: string, posts?: number): Promise<void>;
 }
 export declare const integrationsStore: IntegrationsStore;

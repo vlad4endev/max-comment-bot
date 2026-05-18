@@ -11,7 +11,7 @@ import { channelRegistry } from '../services/channelRegistry'
 import { flowStateStore } from '../services/flowStateStore'
 import { buildIntegrationsAnalytics, flowProcessor } from '../services/flowProcessor'
 import {
-  listTelegramAdminChannels,
+  listTelegramBotChats,
   listVkGroups,
   testIntegration,
 } from '../services/integrationPlatformClient'
@@ -63,6 +63,30 @@ function buildFlowName(sourceLabel: string, destLabel: string): string {
   return `${sourceLabel} → ${destLabel}`
 }
 
+function wantsRefresh(query: express.Request['query']): boolean {
+  const raw = query.refresh
+  if (raw === '1' || raw === 'true') return true
+  if (Array.isArray(raw) && (raw[0] === '1' || raw[0] === 'true')) return true
+  return false
+}
+
+async function resolveTelegramLinkedChats(
+  refresh: boolean,
+): Promise<{ integrationId: string | null; channels: Awaited<ReturnType<typeof listTelegramBotChats>> }> {
+  await integrationsStore.load()
+  const integ = integrationsStore.getTelegramIntegration()
+  if (!integ) {
+    return { integrationId: null, channels: [] }
+  }
+  const token = getTelegramToken() || integ.token
+  if (!refresh && integ.linkedChats && integ.linkedChats.length > 0) {
+    return { integrationId: integ.id, channels: integ.linkedChats }
+  }
+  const channels = await listTelegramBotChats(token)
+  await integrationsStore.setLinkedChats(integ.id, channels)
+  return { integrationId: integ.id, channels }
+}
+
 export function createIntegrationsRouter(deps: IntegrationsRouterDeps): express.Router {
   const router = express.Router()
   router.use(express.json({ limit: '256kb' }))
@@ -73,6 +97,24 @@ export function createIntegrationsRouter(deps: IntegrationsRouterDeps): express.
     res.json({
       integrations: integrationsStore.getIntegrations().map(integrationPublicView),
     })
+  })
+
+  router.get('/telegram/linked-chats', async (req, res) => {
+    try {
+      const { integrationId, channels } = await resolveTelegramLinkedChats(wantsRefresh(req.query))
+      res.json({
+        connected: integrationId !== null,
+        integrationId,
+        channels,
+        hint:
+          channels.length === 0
+            ? 'Добавьте бота администратором в канал/группу и отправьте туда сообщение, затем нажмите «Обновить».'
+            : null,
+      })
+    } catch (err: unknown) {
+      logger.error('GET /telegram/linked-chats failed', err)
+      res.status(500).json({ error: 'Не удалось получить список чатов Telegram' })
+    }
   })
 
   router.get('/meta/max', (_req, res) => {
@@ -139,7 +181,22 @@ export function createIntegrationsRouter(deps: IntegrationsRouterDeps): express.
       }
     }
 
-    res.json({ ok: true, integration: integrationPublicView(record) })
+    let channels: Awaited<ReturnType<typeof listTelegramBotChats>> = []
+    if (platform === 'telegram') {
+      channels = await listTelegramBotChats(token)
+      await integrationsStore.setLinkedChats(record.id, channels)
+    }
+
+    const updated = integrationsStore.getIntegration(record.id) ?? record
+    res.json({
+      ok: true,
+      integration: integrationPublicView(updated),
+      channels,
+      hint:
+        platform === 'telegram' && channels.length === 0
+          ? 'Бот подключён. Добавьте его в канал/чат как администратора и отправьте сообщение — затем обновите список.'
+          : null,
+    })
   })
 
   router.delete('/:id', async (req, res) => {
@@ -181,12 +238,22 @@ export function createIntegrationsRouter(deps: IntegrationsRouterDeps): express.
       res.status(404).json({ error: 'not found' })
       return
     }
+    const refresh = wantsRefresh(req.query)
     const token =
       integ.platform === 'telegram' ? getTelegramToken() || integ.token : integ.token
-    const channels =
-      integ.platform === 'telegram'
-        ? await listTelegramAdminChannels(token)
-        : await listVkGroups(token, integ.groupId)
+
+    if (integ.platform === 'telegram') {
+      if (!refresh && integ.linkedChats && integ.linkedChats.length > 0) {
+        res.json({ channels: integ.linkedChats })
+        return
+      }
+      const channels = await listTelegramBotChats(token)
+      await integrationsStore.setLinkedChats(integ.id, channels)
+      res.json({ channels })
+      return
+    }
+
+    const channels = await listVkGroups(token, integ.groupId)
     res.json({ channels })
   })
 
