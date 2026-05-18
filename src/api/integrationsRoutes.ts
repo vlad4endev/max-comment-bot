@@ -8,6 +8,7 @@ import { config, getTelegramToken } from '../config'
 import { logger } from '../utils/logger'
 import { removeRootEnvVar, upsertRootEnvVar } from '../utils/envFile'
 import { channelRegistry } from '../services/channelRegistry'
+import { flowStateStore } from '../services/flowStateStore'
 import { buildIntegrationsAnalytics, flowProcessor } from '../services/flowProcessor'
 import {
   listTelegramAdminChannels,
@@ -404,6 +405,53 @@ export function createFlowsRouter(_deps: IntegrationsRouterDeps): express.Router
       flowProcessor.stopFlowPoller(updated.id)
     }
     res.json({ flow: updated })
+  })
+
+  router.get('/:id/status', async (req, res) => {
+    await integrationsStore.load()
+    await flowStateStore.load()
+    const flow = integrationsStore.getFlow(req.params.id)
+    if (!flow) {
+      res.status(404).json({ error: 'not found' })
+      return
+    }
+    const cursor = flowStateStore.getCursorMeta(flow.id)
+    const recentActivity = integrationsStore.getForwardedLog(5, flow.id)
+    res.json({
+      flowId: flow.id,
+      enabled: flow.enabled,
+      source: `${flow.source.platform}:${flow.source.channelUsername ?? flow.source.channelId ?? '?'}`,
+      destination: `${flow.destination.platform}:${flow.destination.channelId}`,
+      cursor: {
+        lastMessageId: cursor.lastMessageId,
+        updatedAt: cursor.updatedAt,
+      },
+      stats: flow.stats,
+      recentActivity,
+    })
+  })
+
+  router.post('/:id/test', async (req, res) => {
+    await integrationsStore.load()
+    const flow = integrationsStore.getFlow(req.params.id)
+    if (!flow) {
+      res.status(404).json({ error: 'not found' })
+      return
+    }
+    try {
+      const result = await flowProcessor.runFlowOnce(flow.id)
+      res.json({
+        ok: true,
+        fetchedPosts: result.fetchedPosts,
+        filtered: result.filtered,
+        forwarded: result.forwarded,
+        cursorBefore: result.cursorBefore,
+        cursorAfter: result.lastMessageId,
+      })
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'flow test failed'
+      res.json({ ok: false, error: message })
+    }
   })
 
   router.get('/:id/stats', async (req, res) => {

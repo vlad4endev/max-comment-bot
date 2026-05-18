@@ -13,6 +13,7 @@ const config_1 = require("../config");
 const logger_1 = require("../utils/logger");
 const envFile_1 = require("../utils/envFile");
 const channelRegistry_1 = require("../services/channelRegistry");
+const flowStateStore_1 = require("../services/flowStateStore");
 const flowProcessor_1 = require("../services/flowProcessor");
 const integrationPlatformClient_1 = require("../services/integrationPlatformClient");
 const integrationsStore_1 = require("../services/integrationsStore");
@@ -340,6 +341,52 @@ function createFlowsRouter(_deps) {
             flowProcessor_1.flowProcessor.stopFlowPoller(updated.id);
         }
         res.json({ flow: updated });
+    });
+    router.get('/:id/status', async (req, res) => {
+        await integrationsStore_1.integrationsStore.load();
+        await flowStateStore_1.flowStateStore.load();
+        const flow = integrationsStore_1.integrationsStore.getFlow(req.params.id);
+        if (!flow) {
+            res.status(404).json({ error: 'not found' });
+            return;
+        }
+        const cursor = flowStateStore_1.flowStateStore.getCursorMeta(flow.id);
+        const recentActivity = integrationsStore_1.integrationsStore.getForwardedLog(5, flow.id);
+        res.json({
+            flowId: flow.id,
+            enabled: flow.enabled,
+            source: `${flow.source.platform}:${flow.source.channelUsername ?? flow.source.channelId ?? '?'}`,
+            destination: `${flow.destination.platform}:${flow.destination.channelId}`,
+            cursor: {
+                lastMessageId: cursor.lastMessageId,
+                updatedAt: cursor.updatedAt,
+            },
+            stats: flow.stats,
+            recentActivity,
+        });
+    });
+    router.post('/:id/test', async (req, res) => {
+        await integrationsStore_1.integrationsStore.load();
+        const flow = integrationsStore_1.integrationsStore.getFlow(req.params.id);
+        if (!flow) {
+            res.status(404).json({ error: 'not found' });
+            return;
+        }
+        try {
+            const result = await flowProcessor_1.flowProcessor.runFlowOnce(flow.id);
+            res.json({
+                ok: true,
+                fetchedPosts: result.fetchedPosts,
+                filtered: result.filtered,
+                forwarded: result.forwarded,
+                cursorBefore: result.cursorBefore,
+                cursorAfter: result.lastMessageId,
+            });
+        }
+        catch (err) {
+            const message = err instanceof Error ? err.message : 'flow test failed';
+            res.json({ ok: false, error: message });
+        }
     });
     router.get('/:id/stats', async (req, res) => {
         await integrationsStore_1.integrationsStore.load();

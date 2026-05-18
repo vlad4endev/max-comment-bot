@@ -27,13 +27,13 @@
         { id: 'channels', label: 'Каналы', icon: 'radio' },
         { id: 'tgchains', label: 'TG-цепочки', icon: 'link-2' },
         { id: 'autoposts', label: 'Автопосты', icon: 'calendar-clock' },
-        { id: 'integrations', label: 'Интеграции', icon: 'plug', badge: 'NEW' },
         { id: 'comments', label: 'Комментарии', icon: 'message-square' },
       ],
     },
     {
       group: 'Модерация',
       items: [
+        { id: 'integrations', label: 'Интеграции', icon: 'plug', badge: 'NEW' },
         { id: 'antispam', label: 'Антиспам', icon: 'shield' },
         { id: 'users', label: 'Пользователи', icon: 'users' },
       ],
@@ -1245,6 +1245,7 @@
     if (!main) return;
     main.innerHTML = '<div class="dash-loading muted">Загрузка…</div>';
     Promise.all([
+      getJson('/channels').catch(function () { return { channels: [] }; }),
       getJsonAbs(API_INTEGRATIONS),
       getJsonAbs(API_FLOWS),
       getJsonAbs(API_INTEGRATIONS + '/meta/max'),
@@ -1253,11 +1254,12 @@
     ])
       .then(function (bundle) {
         if (currentRoute !== 'integrations') return;
-        integrationsCache = bundle[0].integrations || [];
-        flowsCache = bundle[1].flows || [];
-        intMaxMeta = bundle[2];
-        var analytics = bundle[3];
-        var logItems = bundle[4].items || [];
+        channelsCache = (bundle[0].channels || channelsCache).length ? bundle[0].channels : channelsCache;
+        integrationsCache = bundle[1].integrations || [];
+        flowsCache = bundle[2].flows || [];
+        intMaxMeta = bundle[3];
+        var analytics = bundle[4];
+        var logItems = bundle[5].items || [];
         var tg = integrationsCache.find(function (i) { return i.platform === 'telegram'; });
         var vk = integrationsCache.find(function (i) { return i.platform === 'vk'; });
 
@@ -1335,14 +1337,14 @@
       (connected ? 'connected' : 'disconnected') +
       '">' +
       (connected ? '<i data-lucide="circle-check"></i> Подключён' : 'Не подключён') +
-      '</span><div class="int-body hidden" id="' +
+      '</span></div><div class="int-body hidden" id="' +
       prefix +
       '-form"><div class="form-group"><label>' +
       (platform === 'vk' ? 'Access Token' : 'Bot Token') +
       '</label><input class="input mono" type="password" id="' +
       prefix +
       '-token"/></div>';
-    html = html.replace('', '</div>');
+
     if (platform === 'vk') {
       html +=
         '<div class="form-group"><label>ID сообщества</label><input class="input" id="vk-group" value="' +
@@ -1371,6 +1373,38 @@
     return html;
   }
 
+  function testFlow(flowId, btn) {
+    if (!flowId) return;
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = 'Проверяю...';
+    }
+    postJsonAbs(API_FLOWS + '/' + encodeURIComponent(flowId) + '/test', {})
+      .then(function (data) {
+        if (data.ok) {
+          showToast(
+            'Тест: найдено ' +
+              String(data.fetchedPosts ?? 0) +
+              ', переслано ' +
+              String(data.forwarded ?? 0),
+            'success',
+          );
+        } else {
+          showToast('Ошибка: ' + (data.error || 'неизвестно'), 'error');
+        }
+      })
+      .catch(function () {
+        showToast('Сетевая ошибка', 'error');
+      })
+      .finally(function () {
+        if (btn) {
+          btn.disabled = false;
+          btn.innerHTML = '<i data-lucide="activity"></i> Проверить';
+          if (window.lucide) window.lucide.createIcons();
+        }
+      });
+  }
+
   function flowCardHtml(f) {
     var srcName = f.source.channelUsername || f.source.channelId || f.source.platform;
     var destName = channelRegistryTitle(f.destination.channelId) || f.destination.channelId;
@@ -1393,7 +1427,9 @@
       (f.enabled ? ' on' : '') +
       '" data-flow-toggle="' +
       esc(f.id) +
-      '" role="switch" tabindex="0"></span><button type="button" class="btn btn-ghost btn-sm" data-del-flow="' +
+      '" role="switch" tabindex="0"></span><button type="button" class="btn btn-ghost btn-sm" data-test-flow="' +
+      esc(f.id) +
+      '"><i data-lucide="activity"></i> Проверить</button><button type="button" class="btn btn-ghost btn-sm" data-del-flow="' +
       esc(f.id) +
       '"><i data-lucide="trash-2"></i></button></div></div>';
     return html;
@@ -1412,12 +1448,12 @@
       platformIconClass(platform) +
       '">' +
       icon +
-      '</div><div class="flow-node-info">' +
+      '</div><div class="flow-node-info"><div class="flow-node-platform">' +
       esc(platformLabel(platform)) +
       '</div><div class="flow-node-name">' +
       esc(name) +
       '</div></div></div>'
-    ).replace('', '<div class="flow-node-platform">');
+    );
   }
 
   function analyticsCardHtml(platform, stats) {
@@ -1436,7 +1472,7 @@
       (connected ? 'подключён' : 'не подключён') +
       '</span></div>';
     if (!connected) {
-      return html + '<div class="analytics-empty"><i data-lucide="plug"></i><span>Подключите платформу</span></div>';
+      return html + '<div class="analytics-empty"><i data-lucide="plug"></i><span>Подключите платформу</span></div></div>';
     }
     return (
       html +
@@ -1446,8 +1482,7 @@
       esc(String(stats.forwarded)) +
       '</div><div class="a-stat-label">переслано</div></div><div class="a-stat"><div class="a-stat-val">' +
       esc(String(stats.channels)) +
-      '</div><div class="a-stat-label">каналов</div></div></div></div>'
-    ).replace('', '</div>');
+      '</div><div class="a-stat-label">каналов</div></div></div></div>';
   }
 
   function forwardedItemHtml(item) {
@@ -1516,6 +1551,11 @@
         patchJsonAbs(API_FLOWS + '/' + encodeURIComponent(id) + '/toggle', { enabled: next })
           .then(function () { sw.classList.toggle('on', next); })
           .catch(function (e) { showToast(e.message || 'Ошибка', 'error'); });
+      });
+    });
+    qsa('[data-test-flow]', main).forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        testFlow(btn.getAttribute('data-test-flow'), btn);
       });
     });
     qsa('[data-del-flow]', main).forEach(function (btn) {
@@ -1984,6 +2024,8 @@
       renderTgChains();
     } else if (currentRoute === 'autoposts') {
       renderAutoposts();
+    } else if (currentRoute === 'integrations') {
+      renderIntegrations();
     } else if (currentRoute === 'antispam') {
       renderAntispam();
     } else if (currentRoute === 'comments') {

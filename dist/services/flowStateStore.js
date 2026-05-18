@@ -39,9 +39,17 @@ class FlowStateStore {
     getLastMessageId(flowId) {
         return this.data.flows[flowId]?.lastMessageId ?? 0;
     }
+    getCursorMeta(flowId) {
+        const cur = this.data.flows[flowId];
+        return {
+            lastMessageId: cur?.lastMessageId ?? 0,
+            updatedAt: cur?.updatedAt ?? null,
+        };
+    }
     async setLastMessageId(flowId, lastMessageId) {
         const cur = this.data.flows[flowId] ?? { lastMessageId: 0, pendingPosts: [] };
         cur.lastMessageId = lastMessageId;
+        cur.updatedAt = new Date().toISOString();
         this.data.flows[flowId] = cur;
         await this.persist();
     }

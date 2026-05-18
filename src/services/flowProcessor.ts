@@ -19,10 +19,25 @@ import { logger } from '../utils/logger'
 
 const POLL_MS = 60_000
 
+export interface FlowTickResult {
+  fetchedPosts: number
+  filtered: number
+  forwarded: number
+  cursorBefore: number
+  lastMessageId: number
+}
+
+interface FetchFlowPostsResult {
+  posts: ExternalPost[]
+  lastMessageId: number
+  cursorBefore: number
+}
+
 export class FlowProcessor {
   private bot: Bot | null = null
   private pollers = new Map<string, NodeJS.Timeout>()
   private started = false
+  private emptyTickCount = new Map<string, number>()
 
   setBot(bot: Bot): void {
     this.bot = bot
@@ -88,26 +103,120 @@ export class FlowProcessor {
     this.pollers.clear()
   }
 
-  private async processFlow(flow: FlowRecord): Promise<void> {
-    const posts = await this.fetchNewPosts(flow)
-    if (!posts.length) return
+  async runFlowOnce(flowId: string): Promise<FlowTickResult> {
+    await integrationsStore.load()
+    await flowStateStore.load()
+    const flow = integrationsStore.getFlow(flowId)
+    if (!flow) {
+      throw new Error('flow not found')
+    }
+    return this.processFlow(flow)
+  }
+
+  private async processFlow(flow: FlowRecord): Promise<FlowTickResult> {
+    const tickStart = Date.now()
+    const sourceLabel = `${flow.source.platform}:${flow.source.channelUsername ?? flow.source.channelId ?? '?'}`
+    const destLabel = `${flow.destination.platform}:${flow.destination.channelId}`
+
+    const { posts, lastMessageId, cursorBefore } = await this.fetchNewPosts(flow)
+
+    logger.info('flowProcessor: tick', {
+      flowId: flow.id,
+      source: sourceLabel,
+      dest: destLabel,
+      fetchedPosts: posts.length,
+      cursorBefore,
+      cursorAfter: lastMessageId,
+    })
+
+    if (!posts.length) {
+      const count = (this.emptyTickCount.get(flow.id) ?? 0) + 1
+      this.emptyTickCount.set(flow.id, count)
+      if (count === 5) {
+        logger.warn('flowProcessor: 5 empty ticks in a row', {
+          flowId: flow.id,
+          hint: 'Убедитесь что бот является администратором TG-канала с правом публикации сообщений',
+        })
+      }
+      return {
+        fetchedPosts: 0,
+        filtered: 0,
+        forwarded: 0,
+        cursorBefore,
+        lastMessageId,
+      }
+    }
+
+    this.emptyTickCount.delete(flow.id)
 
     const filtered = posts.filter((p) => this.applyFilters(p, flow.filters))
+
+    logger.info('flowProcessor: after filters', {
+      flowId: flow.id,
+      total: posts.length,
+      passed: filtered.length,
+      dropped: posts.length - filtered.length,
+    })
+
+    let forwarded = 0
     for (const post of filtered) {
       if (flow.filters.delaySeconds > 0) {
         const readyAt = Date.now() + flow.filters.delaySeconds * 1000
         await flowStateStore.scheduleDelayedPost(flow.id, post.externalId, readyAt)
         continue
       }
-      await this.forwardPost(flow, post)
+      try {
+        await this.forwardPost(flow, post)
+        forwarded += 1
+        logger.info('flowProcessor: forwarded', {
+          flowId: flow.id,
+          postId: post.externalId,
+          from: flow.source.channelUsername ?? flow.source.channelId,
+          to: flow.destination.channelId,
+          ms: Date.now() - tickStart,
+        })
+      } catch (err: unknown) {
+        logger.error('flowProcessor: send failed', {
+          flowId: flow.id,
+          postId: post.externalId,
+          err,
+        })
+        await integrationsStore.updateFlowStats(flow.id, { incrementErrors: 1 })
+      }
     }
 
     const readyIds = flowStateStore.popReadyDelayedPosts(flow.id, Date.now())
     for (const postId of readyIds) {
       const post = posts.find((p) => p.externalId === postId)
       if (post && this.applyFilters(post, flow.filters)) {
-        await this.forwardPost(flow, post)
+        try {
+          await this.forwardPost(flow, post)
+          forwarded += 1
+          logger.info('flowProcessor: forwarded', {
+            flowId: flow.id,
+            postId: post.externalId,
+            from: flow.source.channelUsername ?? flow.source.channelId,
+            to: flow.destination.channelId,
+            delayed: true,
+            ms: Date.now() - tickStart,
+          })
+        } catch (err: unknown) {
+          logger.error('flowProcessor: send failed', {
+            flowId: flow.id,
+            postId: post.externalId,
+            err,
+          })
+          await integrationsStore.updateFlowStats(flow.id, { incrementErrors: 1 })
+        }
       }
+    }
+
+    return {
+      fetchedPosts: posts.length,
+      filtered: filtered.length,
+      forwarded,
+      cursorBefore,
+      lastMessageId,
     }
   }
 
@@ -132,37 +241,38 @@ export class FlowProcessor {
     })
   }
 
-  private async fetchNewPosts(flow: FlowRecord): Promise<ExternalPost[]> {
+  private async fetchNewPosts(flow: FlowRecord): Promise<FetchFlowPostsResult> {
+    const cursorBefore = flowStateStore.getLastMessageId(flow.id)
     const integ = integrationsStore.getIntegration(flow.source.integrationId)
-    if (!integ || integ.status !== 'connected') return []
-
-    const cursor = flowStateStore.getLastMessageId(flow.id)
+    if (!integ || integ.status !== 'connected') {
+      return { posts: [], lastMessageId: cursorBefore, cursorBefore }
+    }
 
     if (flow.source.platform === 'telegram') {
       const tgToken = getTelegramToken() || integ.token
-      if (!tgToken) return []
+      if (!tgToken) return { posts: [], lastMessageId: cursorBefore, cursorBefore }
       const channelKey = flow.source.channelId ?? flow.source.channelUsername ?? ''
       const { posts, lastMessageId } = await fetchTelegramChannelPosts(
         tgToken,
         channelKey,
-        cursor,
+        cursorBefore,
       )
-      if (lastMessageId > cursor) {
+      if (lastMessageId > cursorBefore) {
         await flowStateStore.setLastMessageId(flow.id, lastMessageId)
       }
-      return posts
+      return { posts, lastMessageId, cursorBefore }
     }
 
     if (flow.source.platform === 'vk') {
       const groupKey = flow.source.channelId ?? integ.groupId ?? ''
-      const { posts, lastPostId } = await fetchVkWallPosts(integ.token, groupKey, cursor)
-      if (lastPostId > cursor) {
+      const { posts, lastPostId } = await fetchVkWallPosts(integ.token, groupKey, cursorBefore)
+      if (lastPostId > cursorBefore) {
         await flowStateStore.setLastMessageId(flow.id, lastPostId)
       }
-      return posts
+      return { posts, lastMessageId: lastPostId, cursorBefore }
     }
 
-    return []
+    return { posts: [], lastMessageId: cursorBefore, cursorBefore }
   }
 
   private async sendToDestination(post: ExternalPost, flow: FlowRecord): Promise<void> {

@@ -13,6 +13,7 @@ class FlowProcessor {
     bot = null;
     pollers = new Map();
     started = false;
+    emptyTickCount = new Map();
     setBot(bot) {
         this.bot = bot;
     }
@@ -74,26 +75,113 @@ class FlowProcessor {
             clearInterval(timer);
         this.pollers.clear();
     }
+    async runFlowOnce(flowId) {
+        await integrationsStore_1.integrationsStore.load();
+        await flowStateStore_1.flowStateStore.load();
+        const flow = integrationsStore_1.integrationsStore.getFlow(flowId);
+        if (!flow) {
+            throw new Error('flow not found');
+        }
+        return this.processFlow(flow);
+    }
     async processFlow(flow) {
-        const posts = await this.fetchNewPosts(flow);
-        if (!posts.length)
-            return;
+        const tickStart = Date.now();
+        const sourceLabel = `${flow.source.platform}:${flow.source.channelUsername ?? flow.source.channelId ?? '?'}`;
+        const destLabel = `${flow.destination.platform}:${flow.destination.channelId}`;
+        const { posts, lastMessageId, cursorBefore } = await this.fetchNewPosts(flow);
+        logger_1.logger.info('flowProcessor: tick', {
+            flowId: flow.id,
+            source: sourceLabel,
+            dest: destLabel,
+            fetchedPosts: posts.length,
+            cursorBefore,
+            cursorAfter: lastMessageId,
+        });
+        if (!posts.length) {
+            const count = (this.emptyTickCount.get(flow.id) ?? 0) + 1;
+            this.emptyTickCount.set(flow.id, count);
+            if (count === 5) {
+                logger_1.logger.warn('flowProcessor: 5 empty ticks in a row', {
+                    flowId: flow.id,
+                    hint: 'Убедитесь что бот является администратором TG-канала с правом публикации сообщений',
+                });
+            }
+            return {
+                fetchedPosts: 0,
+                filtered: 0,
+                forwarded: 0,
+                cursorBefore,
+                lastMessageId,
+            };
+        }
+        this.emptyTickCount.delete(flow.id);
         const filtered = posts.filter((p) => this.applyFilters(p, flow.filters));
+        logger_1.logger.info('flowProcessor: after filters', {
+            flowId: flow.id,
+            total: posts.length,
+            passed: filtered.length,
+            dropped: posts.length - filtered.length,
+        });
+        let forwarded = 0;
         for (const post of filtered) {
             if (flow.filters.delaySeconds > 0) {
                 const readyAt = Date.now() + flow.filters.delaySeconds * 1000;
                 await flowStateStore_1.flowStateStore.scheduleDelayedPost(flow.id, post.externalId, readyAt);
                 continue;
             }
-            await this.forwardPost(flow, post);
+            try {
+                await this.forwardPost(flow, post);
+                forwarded += 1;
+                logger_1.logger.info('flowProcessor: forwarded', {
+                    flowId: flow.id,
+                    postId: post.externalId,
+                    from: flow.source.channelUsername ?? flow.source.channelId,
+                    to: flow.destination.channelId,
+                    ms: Date.now() - tickStart,
+                });
+            }
+            catch (err) {
+                logger_1.logger.error('flowProcessor: send failed', {
+                    flowId: flow.id,
+                    postId: post.externalId,
+                    err,
+                });
+                await integrationsStore_1.integrationsStore.updateFlowStats(flow.id, { incrementErrors: 1 });
+            }
         }
         const readyIds = flowStateStore_1.flowStateStore.popReadyDelayedPosts(flow.id, Date.now());
         for (const postId of readyIds) {
             const post = posts.find((p) => p.externalId === postId);
             if (post && this.applyFilters(post, flow.filters)) {
-                await this.forwardPost(flow, post);
+                try {
+                    await this.forwardPost(flow, post);
+                    forwarded += 1;
+                    logger_1.logger.info('flowProcessor: forwarded', {
+                        flowId: flow.id,
+                        postId: post.externalId,
+                        from: flow.source.channelUsername ?? flow.source.channelId,
+                        to: flow.destination.channelId,
+                        delayed: true,
+                        ms: Date.now() - tickStart,
+                    });
+                }
+                catch (err) {
+                    logger_1.logger.error('flowProcessor: send failed', {
+                        flowId: flow.id,
+                        postId: post.externalId,
+                        err,
+                    });
+                    await integrationsStore_1.integrationsStore.updateFlowStats(flow.id, { incrementErrors: 1 });
+                }
             }
         }
+        return {
+            fetchedPosts: posts.length,
+            filtered: filtered.length,
+            forwarded,
+            cursorBefore,
+            lastMessageId,
+        };
     }
     async forwardPost(flow, post) {
         await this.sendToDestination(post, flow);
@@ -112,30 +200,31 @@ class FlowProcessor {
         });
     }
     async fetchNewPosts(flow) {
+        const cursorBefore = flowStateStore_1.flowStateStore.getLastMessageId(flow.id);
         const integ = integrationsStore_1.integrationsStore.getIntegration(flow.source.integrationId);
-        if (!integ || integ.status !== 'connected')
-            return [];
-        const cursor = flowStateStore_1.flowStateStore.getLastMessageId(flow.id);
+        if (!integ || integ.status !== 'connected') {
+            return { posts: [], lastMessageId: cursorBefore, cursorBefore };
+        }
         if (flow.source.platform === 'telegram') {
             const tgToken = (0, config_1.getTelegramToken)() || integ.token;
             if (!tgToken)
-                return [];
+                return { posts: [], lastMessageId: cursorBefore, cursorBefore };
             const channelKey = flow.source.channelId ?? flow.source.channelUsername ?? '';
-            const { posts, lastMessageId } = await (0, integrationPlatformClient_1.fetchTelegramChannelPosts)(tgToken, channelKey, cursor);
-            if (lastMessageId > cursor) {
+            const { posts, lastMessageId } = await (0, integrationPlatformClient_1.fetchTelegramChannelPosts)(tgToken, channelKey, cursorBefore);
+            if (lastMessageId > cursorBefore) {
                 await flowStateStore_1.flowStateStore.setLastMessageId(flow.id, lastMessageId);
             }
-            return posts;
+            return { posts, lastMessageId, cursorBefore };
         }
         if (flow.source.platform === 'vk') {
             const groupKey = flow.source.channelId ?? integ.groupId ?? '';
-            const { posts, lastPostId } = await (0, integrationPlatformClient_1.fetchVkWallPosts)(integ.token, groupKey, cursor);
-            if (lastPostId > cursor) {
+            const { posts, lastPostId } = await (0, integrationPlatformClient_1.fetchVkWallPosts)(integ.token, groupKey, cursorBefore);
+            if (lastPostId > cursorBefore) {
                 await flowStateStore_1.flowStateStore.setLastMessageId(flow.id, lastPostId);
             }
-            return posts;
+            return { posts, lastMessageId: lastPostId, cursorBefore };
         }
-        return [];
+        return { posts: [], lastMessageId: cursorBefore, cursorBefore };
     }
     async sendToDestination(post, flow) {
         const dest = flow.destination;

@@ -163,6 +163,68 @@ export interface ExternalPost {
   createdAt?: number
 }
 
+function mapTelegramChannelPost(msg: Record<string, unknown>): ExternalPost {
+  const messageId = typeof msg.message_id === 'number' ? msg.message_id : 0
+  const text =
+    typeof msg.text === 'string'
+      ? msg.text
+      : typeof msg.caption === 'string'
+        ? msg.caption
+        : ''
+  const hasMedia = Array.isArray(msg.photo) || msg.video != null || msg.document != null
+  return {
+    externalId: String(messageId),
+    text,
+    hasMedia,
+    createdAt: typeof msg.date === 'number' ? msg.date * 1000 : undefined,
+  }
+}
+
+function channelPostMatchesTarget(
+  chat: Record<string, unknown>,
+  channelId: string,
+): boolean {
+  const targetId = channelId.replace(/^@/, '')
+  const chatKey =
+    typeof chat.username === 'string' ? chat.username.toLowerCase() : String(chat.id)
+  return targetId.startsWith('-') || /^\d+$/.test(targetId)
+    ? String(chat.id) === targetId
+    : chatKey === targetId.toLowerCase().replace(/^@/, '')
+}
+
+async function probeTelegramChannelAccess(
+  token: string,
+  channelId: string,
+  afterMessageId: number,
+): Promise<void> {
+  logger.warn('fetchTelegramChannelPosts: getUpdates empty, checking channel access', {
+    channelId,
+    afterMessageId,
+  })
+  try {
+    const { data } = await axios.get<{
+      ok: boolean
+      result?: { title?: string; type?: string }
+    }>(`${TG_API}/bot${token}/getChat`, {
+      params: { chat_id: channelId },
+      timeout: 15_000,
+    })
+    if (data.ok && data.result) {
+      logger.info('fetchTelegramChannelPosts: channel accessible via getChat', {
+        channelId,
+        title: data.result.title,
+        type: data.result.type,
+      })
+    }
+  } catch (err: unknown) {
+    const axErr = axios.isAxiosError(err) ? err : null
+    logger.error('fetchTelegramChannelPosts: channel not accessible', {
+      channelId,
+      error: axErr?.response?.data,
+    })
+  }
+}
+
 export async function fetchTelegramChannelPosts(
   token: string,
   channelId: string,
@@ -179,46 +241,37 @@ export async function fetchTelegramChannelPosts(
     if (!data.ok || !data.result) return { posts: [], lastMessageId: afterMessageId }
 
     const posts: ExternalPost[] = []
-    let maxId = afterMessageId
-    const targetId = channelId.replace(/^@/, '')
+    let maxMessageId = afterMessageId
+    let maxUpdateId = 0
 
     for (const upd of data.result) {
       const updateId = typeof upd.update_id === 'number' ? upd.update_id : 0
-      if (updateId > maxId) maxId = updateId
+      if (updateId > maxUpdateId) maxUpdateId = updateId
 
       const msg = upd.channel_post as Record<string, unknown> | undefined
       if (!msg) continue
       const chat = msg.chat as Record<string, unknown> | undefined
-      if (!chat) continue
-      const chatKey =
-        typeof chat.username === 'string'
-          ? chat.username.toLowerCase()
-          : String(chat.id)
-      const match =
-        targetId.startsWith('-') || /^\d+$/.test(targetId)
-          ? String(chat.id) === targetId
-          : chatKey === targetId.toLowerCase().replace(/^@/, '')
-      if (!match) continue
+      if (!chat || !channelPostMatchesTarget(chat, channelId)) continue
 
       const messageId = typeof msg.message_id === 'number' ? msg.message_id : 0
       if (messageId <= afterMessageId) continue
 
-      const text =
-        typeof msg.text === 'string'
-          ? msg.text
-          : typeof msg.caption === 'string'
-            ? msg.caption
-            : ''
-      const hasMedia = Array.isArray(msg.photo) || msg.video != null || msg.document != null
-      posts.push({
-        externalId: String(messageId),
-        text,
-        hasMedia,
-        createdAt: typeof msg.date === 'number' ? msg.date * 1000 : undefined,
+      maxMessageId = Math.max(maxMessageId, messageId)
+      posts.push(mapTelegramChannelPost(msg))
+    }
+
+    if (maxUpdateId > 0) {
+      await axios.get(`${TG_API}/bot${token}/getUpdates`, {
+        params: { offset: maxUpdateId + 1, limit: 1 },
+        timeout: 15_000,
       })
     }
 
-    return { posts, lastMessageId: maxId }
+    if (posts.length === 0 && afterMessageId > 0) {
+      await probeTelegramChannelAccess(token, channelId, afterMessageId)
+    }
+
+    return { posts, lastMessageId: maxMessageId }
   } catch (err: unknown) {
     logger.warn('fetchTelegramChannelPosts failed', err)
     return { posts: [], lastMessageId: afterMessageId }

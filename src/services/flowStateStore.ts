@@ -7,6 +7,7 @@ const STATE_PATH = join(process.cwd(), 'data', 'flow-state.json')
 
 interface FlowCursor {
   lastMessageId: number
+  updatedAt?: string
   pendingPosts: Array<{ postId: string; readyAt: number }>
 }
 
@@ -51,9 +52,18 @@ class FlowStateStore {
     return this.data.flows[flowId]?.lastMessageId ?? 0
   }
 
+  getCursorMeta(flowId: string): { lastMessageId: number; updatedAt: string | null } {
+    const cur = this.data.flows[flowId]
+    return {
+      lastMessageId: cur?.lastMessageId ?? 0,
+      updatedAt: cur?.updatedAt ?? null,
+    }
+  }
+
   async setLastMessageId(flowId: string, lastMessageId: number): Promise<void> {
     const cur = this.data.flows[flowId] ?? { lastMessageId: 0, pendingPosts: [] }
     cur.lastMessageId = lastMessageId
+    cur.updatedAt = new Date().toISOString()
     this.data.flows[flowId] = cur
     await this.persist()
   }
