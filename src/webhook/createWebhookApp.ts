@@ -66,6 +66,14 @@ export function createHttpApp(options: HttpAppOptions): express.Express {
     })
   })
 
+  app.use(
+    '/admin/assets',
+    express.static(join(adminPanelRoot, 'assets'), {
+      etag: true,
+      lastModified: true,
+    }),
+  )
+
   app.get('/admin', (req, res) => {
     if (!isAdminPanelSessionValid(req)) {
       res.redirect(302, '/admin/login')

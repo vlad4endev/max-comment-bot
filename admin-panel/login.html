@@ -3,239 +3,68 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Вход — CommentBot</title>
-  <script>
-    (function() {
-      var STORAGE_KEY = 'commentbot_theme'
-
-      function getSystemTheme() {
-        return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
-      }
-
-      function getEffectiveTheme(pref) {
-        if (pref === 'auto' || !pref) return getSystemTheme()
-        return pref
-      }
-
-      function getStoredPref() {
-        try { return localStorage.getItem(STORAGE_KEY) || 'auto' } catch (e) { return 'auto' }
-      }
-
-      function applyTheme(pref) {
-        var safePref = (pref === 'light' || pref === 'dark' || pref === 'auto') ? pref : 'auto'
-        var effective = getEffectiveTheme(safePref)
-        document.documentElement.setAttribute('data-theme', effective)
-        try { localStorage.setItem(STORAGE_KEY, safePref) } catch (e) {}
-      }
-
-      applyTheme(getStoredPref())
-
-      var media = window.matchMedia('(prefers-color-scheme: dark)')
-      if (typeof media.addEventListener === 'function') {
-        media.addEventListener('change', function() {
-          if (getStoredPref() === 'auto') applyTheme('auto')
-        })
-      } else if (typeof media.addListener === 'function') {
-        media.addListener(function() {
-          if (getStoredPref() === 'auto') applyTheme('auto')
-        })
-      }
-
-      window.ThemeManager = {
-        set: function(pref) { applyTheme(pref) },
-        get: function() { return getStoredPref() },
-        getEffective: function() { return getEffectiveTheme(getStoredPref()) }
-      }
-    })()
-  </script>
+  <title>Вход — CommentBot SuperAdmin</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/admin/assets/admin.css" />
   <style>
-    :root {
-      --bg-primary: #0d0d18;
-      --bg-secondary: #161625;
-      --bg-surface: rgba(255,255,255,0.04);
-      --bg-surface-hover: rgba(255,255,255,0.07);
-
-      --text-primary: rgba(255,255,255,0.92);
-      --text-secondary: rgba(255,255,255,0.55);
-      --text-muted: rgba(255,255,255,0.3);
-      --text-on-accent: #ffffff;
-
-      --border: rgba(255,255,255,0.08);
-      --border-strong: rgba(255,255,255,0.15);
-
-      --accent: #7F77DD;
-      --accent-bg: rgba(127,119,221,0.12);
-      --accent-border: rgba(127,119,221,0.25);
-      --teal: #5DCAA5;
-      --teal-bg: rgba(93,202,165,0.12);
-
-      --danger: #ff8a80;
-      --warning: #EF9F27;
-      --success: #5DCAA5;
-
-      --bubble-user: rgba(255,255,255,0.06);
-      --bubble-admin: rgba(127,119,221,0.10);
-      --bubble-admin-border: rgba(127,119,221,0.20);
-
-      --input-bg: rgba(255,255,255,0.06);
-      --input-border: rgba(255,255,255,0.10);
-      --send-bg: #7F77DD;
-
-      --bg: var(--bg-primary);
-      --surface: var(--bg-secondary);
-      --text: var(--text-primary);
-      --muted: var(--text-secondary);
-      --radius: 12px;
-      --font: system-ui, -apple-system, Segoe UI, sans-serif;
-    }
-    [data-theme="light"] {
-      --bg-primary: #f5f5f7;
-      --bg-secondary: #ffffff;
-      --bg-surface: rgba(0,0,0,0.04);
-      --bg-surface-hover: rgba(0,0,0,0.07);
-
-      --text-primary: rgba(0,0,0,0.88);
-      --text-secondary: rgba(0,0,0,0.55);
-      --text-muted: rgba(0,0,0,0.35);
-      --text-on-accent: #ffffff;
-
-      --border: rgba(0,0,0,0.08);
-      --border-strong: rgba(0,0,0,0.15);
-
-      --accent: #6C64CC;
-      --accent-bg: rgba(108,100,204,0.10);
-      --accent-border: rgba(108,100,204,0.25);
-      --teal: #1D9E75;
-      --teal-bg: rgba(29,158,117,0.10);
-
-      --danger: #E53935;
-      --warning: #F57C00;
-      --success: #1D9E75;
-
-      --bubble-user: rgba(0,0,0,0.05);
-      --bubble-admin: rgba(108,100,204,0.08);
-      --bubble-admin-border: rgba(108,100,204,0.20);
-
-      --input-bg: rgba(0,0,0,0.05);
-      --input-border: rgba(0,0,0,0.12);
-      --send-bg: #6C64CC;
-    }
-    [data-theme="dark"] {}
-    * { box-sizing: border-box; }
-    *, *::before, *::after {
-      transition: background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease;
-    }
-    .no-transition,
-    input, textarea, button {
-      transition: none;
-    }
-    body { margin: 0; font-family: var(--font); background: var(--bg); color: var(--text); min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 1.5rem; }
-    .card {
-      width: 100%; max-width: 400px; background: var(--surface); border: 1px solid var(--border);
-      border-radius: var(--radius); padding: 2rem;
-    }
-    h1 { margin: 0 0 0.5rem; font-size: 1.35rem; }
-    p { color: var(--muted); margin: 0 0 1.25rem; font-size: 0.95rem; line-height: 1.45; }
-    label { display: block; font-size: 0.8rem; color: var(--muted); margin-bottom: 0.35rem; }
-    input {
-      width: 100%; padding: 0.65rem 0.85rem; border-radius: 8px; border: 1px solid var(--border);
-      background: var(--input-bg); color: var(--text); font-size: 1rem; margin-bottom: 0.85rem;
-    }
-    .btn {
-      width: 100%; padding: 0.65rem; border-radius: 8px; border: none; font-weight: 600; font-size: 0.95rem;
-      cursor: pointer; font-family: inherit; background: var(--accent); color: var(--text-on-accent); margin-top: 0.25rem;
-    }
-    .btn:hover { filter: brightness(1.08); }
-    .err { color: var(--danger); font-size: 0.85rem; margin-top: 0.75rem; min-height: 1.2em; }
-    .theme-toggle-wrap {
-      position: fixed;
-      top: 14px;
-      right: 14px;
-      z-index: 10;
-    }
-    .theme-toggle-btn {
-      background: var(--bg-surface);
-      border: 1px solid var(--border);
-      border-radius: 20px;
-      padding: 6px 12px;
-      cursor: pointer;
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      color: var(--text-secondary);
-      font-size: 12px;
-      font-weight: 500;
-    }
+    body { display: flex; align-items: center; justify-content: center; min-height: 100vh; padding: 1.5rem; }
+    .login-wrap { width: 100%; max-width: 400px; }
+    .login-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius); padding: 2rem; }
+    .login-card h1 { margin: 0 0 0.35rem; font-size: 1.35rem; }
+    .login-card p { color: var(--text-secondary); margin: 0 0 1.25rem; font-size: 0.92rem; line-height: 1.45; }
+    .login-error { color: var(--danger); font-size: 0.85rem; min-height: 1.2em; margin-top: 0.75rem; }
+    label { display: block; font-size: 0.78rem; color: var(--text-secondary); margin-bottom: 0.35rem; }
+    input { width: 100%; margin-bottom: 0.85rem; }
+    .brand-row { display: flex; align-items: center; gap: 0.65rem; margin-bottom: 1.25rem; }
+    .brand-row span { font-size: 1.75rem; }
   </style>
 </head>
 <body>
-  <div class="theme-toggle-wrap">
-    <button id="themeToggle" class="theme-toggle-btn no-transition" type="button" onclick="cycleTheme()">
-      <span id="themeIcon">🌙</span>
-      <span id="themeLabel">Авто</span>
-    </button>
-  </div>
-  <div class="card">
-    <h1>Панель CommentBot</h1>
-    <p>Войдите, чтобы открыть панель управления.</p>
-    <form id="f">
-      <label for="u">Логин</label>
-      <input id="u" name="username" type="text" autocomplete="username" required />
-      <label for="p">Пароль</label>
-      <input id="p" name="password" type="password" autocomplete="current-password" required />
-      <button type="submit" class="btn">Войти</button>
-      <div id="e" class="err"></div>
-    </form>
+  <div class="login-wrap">
+    <div class="login-card">
+      <div class="brand-row">
+        <span>💬</span>
+        <div>
+          <strong style="display:block;font-size:1.1rem;">CommentBot</strong>
+          <span class="muted" style="font-size:0.8rem;">SuperAdmin</span>
+        </div>
+      </div>
+      <h1>Вход в панель</h1>
+      <p>Учётные данные из переменных <span class="mono">ADMIN_PANEL_USER</span> и <span class="mono">ADMIN_PANEL_PASSWORD</span>.</p>
+      <form id="loginForm">
+        <label for="username">Логин</label>
+        <input type="text" id="username" name="username" autocomplete="username" required />
+        <label for="password">Пароль</label>
+        <input type="password" id="password" name="password" autocomplete="current-password" required />
+        <button type="submit" class="btn btn-primary" style="width:100%;margin-top:0.5rem;">Войти</button>
+      </form>
+      <p id="loginError" class="login-error" role="alert"></p>
+    </div>
   </div>
   <script>
-(function () {
-  fetch('/api/admin/settings', { credentials: 'same-origin' })
-    .then(function (r) {
-      if (r.ok) window.location.replace('/admin')
-    })
-    .catch(function () {})
-
-  document.getElementById('f').addEventListener('submit', function (ev) {
-    ev.preventDefault()
-    var err = document.getElementById('e')
-    err.textContent = ''
-    var u = document.getElementById('u').value
-    var p = document.getElementById('p').value
-    fetch('/api/admin/panel-login', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      credentials: 'same-origin',
-      body: JSON.stringify({ username: u, password: p }),
-    })
-      .then(function (r) { return r.json().then(function (j) { return { r: r, j: j } }) })
-      .then(function (x) {
-        if (!x.r.ok) {
-          err.textContent = x.j.error === 'invalid credentials' ? 'Неверный логин или пароль' : (x.j.error || 'Ошибка')
-          return
-        }
-        window.location.replace('/admin')
+    document.getElementById('loginForm').addEventListener('submit', function (e) {
+      e.preventDefault();
+      var err = document.getElementById('loginError');
+      err.textContent = '';
+      fetch('/api/admin/panel-login', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          username: document.getElementById('username').value.trim(),
+          password: document.getElementById('password').value,
+        }),
       })
-      .catch(function () { err.textContent = 'Сеть недоступна' })
-  })
-})()
-
-function updateToggleUI() {
-  var pref = window.ThemeManager.get()
-  var icons = { auto: '✨', light: '☀️', dark: '🌙' }
-  var labels = { auto: 'Авто', light: 'Светлая', dark: 'Тёмная' }
-  document.getElementById('themeIcon').textContent = icons[pref] || '✨'
-  document.getElementById('themeLabel').textContent = labels[pref] || 'Авто'
-}
-
-function cycleTheme() {
-  var order = ['auto', 'light', 'dark']
-  var current = window.ThemeManager.get()
-  var next = order[(order.indexOf(current) + 1) % order.length]
-  window.ThemeManager.set(next)
-  updateToggleUI()
-}
-
-updateToggleUI()
+        .then(function (r) {
+          if (!r.ok) throw new Error('Неверный логин или пароль');
+          window.location.href = '/admin#dashboard';
+        })
+        .catch(function (ex) {
+          err.textContent = ex.message || 'Ошибка входа';
+        });
+    });
   </script>
 </body>
 </html>

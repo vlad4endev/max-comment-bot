@@ -45,6 +45,10 @@ function createHttpApp(options) {
             }
         });
     });
+    app.use('/admin/assets', express_1.default.static((0, node_path_1.join)(adminPanelRoot, 'assets'), {
+        etag: true,
+        lastModified: true,
+    }));
     app.get('/admin', (req, res) => {
         if (!(0, adminAuth_1.isAdminPanelSessionValid)(req)) {
             res.redirect(302, '/admin/login');

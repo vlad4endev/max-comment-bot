@@ -23,6 +23,7 @@ const subscriberStore_1 = require("../services/subscriberStore");
 const userAccessCleanup_1 = require("../services/userAccessCleanup");
 const userMiniappSettingsStore_1 = require("../services/userMiniappSettingsStore");
 const adminPanelSession_1 = require("../utils/adminPanelSession");
+const adminPanelState_1 = require("./adminPanelState");
 const analyticsService_1 = require("../services/analyticsService");
 const logger_1 = require("../utils/logger");
 const RUNTIME_LOG_PATH = (0, node_path_1.join)(process.cwd(), 'data', 'runtime.log');
@@ -210,8 +211,40 @@ function createAdminRouter(deps) {
         }
         res.json({ channels: rows });
     });
-    secured.get('/activity', (_req, res) => {
-        res.json({ events: (0, adminActivityStore_1.getRecentAdminActivity)(10) });
+    secured.get('/bot-status', (_req, res) => {
+        res.json({ active: true, label: 'Бот активен' });
+    });
+    secured.get('/activity', (req, res) => {
+        const limitRaw = typeof req.query.limit === 'string' ? Number.parseInt(req.query.limit, 10) : 15;
+        const limit = Number.isInteger(limitRaw) && limitRaw > 0 ? Math.min(limitRaw, 50) : 15;
+        const raw = (0, adminActivityStore_1.getRecentAdminActivity)(limit);
+        const events = raw.map((ev) => {
+            const chatId = typeof ev.payload.chat_id === 'number'
+                ? ev.payload.chat_id
+                : typeof ev.payload.channel_chat_id === 'number'
+                    ? ev.payload.channel_chat_id
+                    : null;
+            const channelName = chatId !== null ? (channelRegistry_1.channelRegistry.getChannel(chatId)?.title ?? `Канал ${chatId}`) : null;
+            let preview = null;
+            if (typeof ev.payload.text === 'string') {
+                preview = ev.payload.text;
+            }
+            else if (typeof ev.payload.username === 'string') {
+                preview = ev.payload.username;
+            }
+            else if (typeof ev.payload.user_id === 'number') {
+                preview = `user ${ev.payload.user_id}`;
+            }
+            return {
+                type: ev.type,
+                timestamp: ev.timestamp,
+                channel_id: chatId,
+                channel_name: channelName,
+                preview,
+                payload: ev.payload,
+            };
+        });
+        res.json({ events });
     });
     secured.get('/users', async (_req, res) => {
         await (0, channelFullDisconnect_1.pruneRegisteredChannelsNotAccessibleByBot)(deps.bot);
@@ -398,6 +431,9 @@ function createAdminRouter(deps) {
     secured.get('/logs', async (req, res) => {
         const levelRaw = typeof req.query.level === 'string' ? req.query.level.toUpperCase() : '';
         const level = levelRaw === 'INFO' || levelRaw === 'WARN' || levelRaw === 'ERROR' ? levelRaw : null;
+        const filter = typeof req.query.filter === 'string' ? req.query.filter.trim().toLowerCase() : '';
+        const limitRaw = typeof req.query.limit === 'string' ? Number.parseInt(req.query.limit, 10) : 200;
+        const limit = Number.isInteger(limitRaw) && limitRaw > 0 ? Math.min(limitRaw, 500) : 200;
         let lines = (0, logger_1.getAdminLogTail)(500);
         try {
             const file = await (0, promises_1.readFile)(RUNTIME_LOG_PATH, 'utf8');
@@ -412,8 +448,243 @@ function createAdminRouter(deps) {
         if (level) {
             lines = lines.filter((l) => l.includes(` [${level}] `));
         }
-        const last = lines.slice(-100);
-        res.json({ lines: last });
+        if (filter) {
+            lines = lines.filter((l) => l.toLowerCase().includes(filter));
+        }
+        res.json({ lines: lines.slice(-limit) });
+    });
+    secured.get('/channel/:chatId', async (req, res) => {
+        const chatId = parseNonZeroInt(req.params.chatId);
+        if (chatId === null) {
+            res.status(400).json({ error: 'invalid chat_id' });
+            return;
+        }
+        const ch = channelRegistry_1.channelRegistry.getChannel(chatId);
+        if (!ch || ch.type !== 'channel') {
+            res.status(404).json({ error: 'channel not found' });
+            return;
+        }
+        const posts = postStore_1.postStore.getPostsByChatId(chatId);
+        const postIds = new Set(posts.map((p) => p.post_id));
+        const comments = commentStore_1.commentStore
+            .listCommentsForChannelChatId(chatId)
+            .slice(0, 5)
+            .map((c) => ({
+            comment_id: c.comment_id,
+            username: c.username,
+            text: c.text,
+            timestamp: c.timestamp,
+        }));
+        const extras = await (0, adminPanelState_1.getChannelExtras)(chatId);
+        const chains = (await (0, adminPanelState_1.listTgChains)()).filter((c) => c.max_chat_id === chatId);
+        let subscribers = null;
+        try {
+            const chat = await deps.bot.api.getChat(chatId);
+            const raw = chat.participants_count;
+            if (typeof raw === 'number' && Number.isFinite(raw) && raw >= 0) {
+                subscribers = raw;
+            }
+        }
+        catch {
+            /* ignore */
+        }
+        res.json({
+            channel: {
+                chat_id: chatId,
+                title: ch.title,
+                status: stateManager_1.stateManager.isChannelPendingAdminRights(chatId) ? 'pending' : 'active',
+                subscribers,
+                post_count: posts.length,
+                comment_count: commentStore_1.commentStore.countForPostIds(postIds),
+                date_added: ch.date_added,
+            },
+            recent_comments: comments,
+            settings: extras,
+            tg_chain: chains[0] ?? null,
+        });
+    });
+    secured.post('/channel/:chatId/settings', async (req, res) => {
+        const chatId = parseNonZeroInt(req.params.chatId);
+        if (chatId === null || !isRecord(req.body)) {
+            res.status(400).json({ error: 'invalid request' });
+            return;
+        }
+        const saved = await (0, adminPanelState_1.saveChannelExtras)(chatId, req.body);
+        res.json({ ok: true, settings: saved });
+    });
+    secured.get('/antispam/words', async (_req, res) => {
+        const data = await (0, adminPanelState_1.getAntispamWords)();
+        const log = await (0, adminPanelState_1.getAntispamLog)(200);
+        res.json({
+            global: data.global,
+            byChannel: data.byChannel,
+            rules: data.rules,
+            blocked_today: (0, adminPanelState_1.countAntispamBlocksToday)(log),
+        });
+    });
+    secured.post('/antispam/words', async (req, res) => {
+        if (!isRecord(req.body)) {
+            res.status(400).json({ error: 'invalid body' });
+            return;
+        }
+        const global = Array.isArray(req.body.global)
+            ? req.body.global.filter((w) => typeof w === 'string')
+            : undefined;
+        const rules = isRecord(req.body.rules)
+            ? req.body.rules
+            : undefined;
+        const rulesPatch = {};
+        if (rules) {
+            if (typeof rules.block_links === 'boolean')
+                rulesPatch.block_links = rules.block_links;
+            if (typeof rules.flood_protection === 'boolean') {
+                rulesPatch.flood_protection = rules.flood_protection;
+            }
+            if (typeof rules.caps_protection === 'boolean') {
+                rulesPatch.caps_protection = rules.caps_protection;
+            }
+            if (typeof rules.emoji_spam === 'boolean')
+                rulesPatch.emoji_spam = rules.emoji_spam;
+        }
+        await (0, adminPanelState_1.saveAntispamWords)({
+            global,
+            rules: Object.keys(rulesPatch).length > 0 ? rulesPatch : undefined,
+        });
+        res.json({ ok: true });
+    });
+    secured.post('/antispam/channel/:chatId', async (req, res) => {
+        const chatId = parseNonZeroInt(req.params.chatId);
+        if (chatId === null || !isRecord(req.body)) {
+            res.status(400).json({ error: 'invalid request' });
+            return;
+        }
+        const body = req.body;
+        const patch = {};
+        if (Array.isArray(body.stopwords)) {
+            patch.stopwords = body.stopwords.filter((w) => typeof w === 'string');
+        }
+        if (typeof body.block_links === 'boolean')
+            patch.block_links = body.block_links;
+        if (typeof body.flood_protection === 'boolean')
+            patch.flood_protection = body.flood_protection;
+        if (typeof body.auto_mute === 'boolean')
+            patch.auto_mute = body.auto_mute;
+        const saved = await (0, adminPanelState_1.saveChannelExtras)(chatId, patch);
+        res.json({ ok: true, settings: saved });
+    });
+    secured.get('/antispam/log', async (req, res) => {
+        const limitRaw = typeof req.query.limit === 'string' ? Number.parseInt(req.query.limit, 10) : 50;
+        const limit = Number.isInteger(limitRaw) && limitRaw > 0 ? Math.min(limitRaw, 200) : 50;
+        const entries = await (0, adminPanelState_1.getAntispamLog)(limit);
+        res.json({ entries });
+    });
+    secured.get('/tg-chains', async (_req, res) => {
+        const chains = await (0, adminPanelState_1.listTgChains)();
+        const active = chains.filter((c) => c.active).length;
+        const forwardedToday = chains.reduce((s, c) => s + c.forwarded_today, 0);
+        const errorsToday = chains.reduce((s, c) => s + c.errors_today, 0);
+        res.json({ chains, stats: { active, forwarded_today: forwardedToday, errors_today: errorsToday } });
+    });
+    secured.post('/tg-chains', async (req, res) => {
+        if (!isRecord(req.body)) {
+            res.status(400).json({ error: 'invalid body' });
+            return;
+        }
+        const maxChatId = parseNonZeroInt(req.body.max_chat_id);
+        const tgUsername = parseNonEmptyString(req.body.tg_username);
+        if (maxChatId === null || !tgUsername) {
+            res.status(400).json({ error: 'max_chat_id and tg_username required' });
+            return;
+        }
+        const ch = channelRegistry_1.channelRegistry.getChannel(maxChatId);
+        const row = await (0, adminPanelState_1.createTgChain)({
+            max_chat_id: maxChatId,
+            max_title: ch?.title ?? null,
+            tg_username: tgUsername.replace(/^@/, ''),
+            bot_token: parseNonEmptyString(req.body.bot_token) ?? '',
+            forward_posts: Boolean(req.body.forward_posts),
+            forward_comments: Boolean(req.body.forward_comments),
+            add_signature: Boolean(req.body.add_signature),
+            active: true,
+        });
+        res.json({ ok: true, chain: row });
+    });
+    secured.patch('/tg-chains/:id', async (req, res) => {
+        if (!isRecord(req.body)) {
+            res.status(400).json({ error: 'invalid body' });
+            return;
+        }
+        const id = parseNonEmptyString(req.params.id);
+        if (!id) {
+            res.status(400).json({ error: 'invalid id' });
+            return;
+        }
+        const patch = {};
+        if (typeof req.body.active === 'boolean')
+            patch.active = req.body.active;
+        if (typeof req.body.forward_posts === 'boolean')
+            patch.forward_posts = req.body.forward_posts;
+        if (typeof req.body.forward_comments === 'boolean')
+            patch.forward_comments = req.body.forward_comments;
+        const updated = await (0, adminPanelState_1.updateTgChain)(id, patch);
+        if (!updated) {
+            res.status(404).json({ error: 'not found' });
+            return;
+        }
+        res.json({ ok: true, chain: updated });
+    });
+    secured.delete('/tg-chains/:id', async (req, res) => {
+        const id = parseNonEmptyString(req.params.id);
+        if (!id) {
+            res.status(400).json({ error: 'invalid id' });
+            return;
+        }
+        const ok = await (0, adminPanelState_1.deleteTgChain)(id);
+        if (!ok) {
+            res.status(404).json({ error: 'not found' });
+            return;
+        }
+        res.json({ ok: true });
+    });
+    secured.get('/autoposts', async (_req, res) => {
+        res.json({ posts: await (0, adminPanelState_1.listAutoposts)() });
+    });
+    secured.post('/autoposts', async (req, res) => {
+        if (!isRecord(req.body)) {
+            res.status(400).json({ error: 'invalid body' });
+            return;
+        }
+        const chatId = parseNonZeroInt(req.body.chat_id);
+        const text = parseNonEmptyString(req.body.text);
+        const scheduledAt = parseNonEmptyString(req.body.scheduled_at);
+        if (chatId === null || !text || !scheduledAt) {
+            res.status(400).json({ error: 'chat_id, text, scheduled_at required' });
+            return;
+        }
+        const repeatRaw = parseNonEmptyString(req.body.repeat) ?? 'none';
+        const repeat = repeatRaw === 'daily' || repeatRaw === 'weekly' || repeatRaw === 'monthly' ? repeatRaw : 'none';
+        const ch = channelRegistry_1.channelRegistry.getChannel(chatId);
+        const row = await (0, adminPanelState_1.createAutopost)({
+            chat_id: chatId,
+            channel_title: ch?.title ?? null,
+            text,
+            scheduled_at: scheduledAt,
+            repeat,
+        });
+        res.json({ ok: true, post: row });
+    });
+    secured.delete('/autoposts/:id', async (req, res) => {
+        const id = parseNonEmptyString(req.params.id);
+        if (!id) {
+            res.status(400).json({ error: 'invalid id' });
+            return;
+        }
+        const ok = await (0, adminPanelState_1.deleteAutopost)(id);
+        if (!ok) {
+            res.status(404).json({ error: 'not found' });
+            return;
+        }
+        res.json({ ok: true });
     });
     secured.post('/refresh-buttons', async (req, res) => {
         const body = req.body;
