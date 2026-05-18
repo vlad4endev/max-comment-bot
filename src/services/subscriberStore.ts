@@ -1,15 +1,8 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
-import { dirname, join } from 'node:path'
-
+import { getDb } from '../db/database'
+import type Database from 'better-sqlite3'
 import { logger } from '../utils/logger'
 
 import { pushAdminActivity } from './adminActivityStore'
-
-interface FileShape {
-  subscribers: number[]
-}
-
-const DEFAULT_PATH = join(process.cwd(), 'data', 'subscribers.json')
 
 function isPositiveIntId(value: unknown): value is number {
   return typeof value === 'number' && Number.isInteger(value) && value > 0
@@ -19,54 +12,18 @@ function isPositiveIntId(value: unknown): value is number {
  * Users who pressed Start in the bot — eligible for DM when a channel replies to their comment.
  */
 export class SubscriberStore {
-  private readonly subscribers = new Set<number>()
-  private readonly filePath: string
-  private persistChain: Promise<void> = Promise.resolve()
-
-  constructor(filePath: string = DEFAULT_PATH) {
-    this.filePath = filePath
-  }
-
   async loadFromDisk(): Promise<void> {
-    try {
-      const raw = await readFile(this.filePath, 'utf8')
-      const parsed: unknown = JSON.parse(raw) as unknown
-      if (typeof parsed !== 'object' || parsed === null || !('subscribers' in parsed)) {
-        logger.warn('subscriberStore: invalid file shape, starting empty')
-        this.subscribers.clear()
-        return
-      }
-      const list = (parsed as FileShape).subscribers
-      if (!Array.isArray(list)) {
-        this.subscribers.clear()
-        return
-      }
-      this.subscribers.clear()
-      for (const id of list) {
-        if (isPositiveIntId(id)) {
-          this.subscribers.add(id)
-        }
-      }
-      logger.info(`subscriberStore: loaded ${this.subscribers.size} subscriber(s)`)
-    } catch (e) {
-      const err = e as NodeJS.ErrnoException
-      if (err.code === 'ENOENT') {
-        logger.debug('subscriberStore: file missing, empty store')
-        return
-      }
-      logger.error('subscriberStore: failed to read file', e)
-    }
+    logger.debug('subscriberStore: SQLite backend active, loadFromDisk noop')
   }
 
   addSubscriber(userId: number): void {
     if (!isPositiveIntId(userId)) {
       return
     }
-    if (this.subscribers.has(userId)) {
+    if (this.hasSubscriber(userId)) {
       return
     }
-    this.subscribers.add(userId)
-    this.queuePersist()
+    this.getStatements().insert.run(userId, JSON.stringify({ user_id: userId }))
     logger.info('subscriberStore: addSubscriber', { userId })
     pushAdminActivity('new_subscriber', { user_id: userId })
   }
@@ -75,47 +32,55 @@ export class SubscriberStore {
     if (!isPositiveIntId(userId)) {
       return false
     }
-    return this.subscribers.has(userId)
+    const row = this.getStatements().getById.get(userId) as { user_id: number } | undefined
+    return row !== undefined
   }
 
   removeSubscriber(userId: number): void {
     if (!isPositiveIntId(userId)) {
       return
     }
-    if (!this.subscribers.delete(userId)) {
+    const result = this.getStatements().deleteById.run(userId)
+    if ((result.changes ?? 0) === 0) {
       return
     }
-    this.queuePersist()
     logger.info('subscriberStore: removeSubscriber', { userId })
   }
 
   getAllSubscribers(): number[] {
-    return [...this.subscribers].sort((a, b) => a - b)
+    const rows = this.getStatements().listAll.all() as { user_id: number }[]
+    return rows.map((row) => row.user_id)
   }
 
   /** Очистка файла подписчиков (опасная зона в админке). */
   clearAllSubscribers(): void {
-    if (this.subscribers.size === 0) {
-      return
-    }
-    this.subscribers.clear()
-    this.queuePersist()
+    this.getStatements().deleteAll.run()
     logger.warn('subscriberStore: clearAllSubscribers')
   }
 
-  private queuePersist(): void {
-    this.persistChain = this.persistChain
-      .then(() => this.persist())
-      .catch((e: unknown) => {
-        logger.error('subscriberStore: persist error', e)
-      })
-  }
+  private statements:
+    | {
+        getById: Database.Statement
+        listAll: Database.Statement
+        insert: Database.Statement
+        deleteById: Database.Statement
+        deleteAll: Database.Statement
+      }
+    | null = null
 
-  private async persist(): Promise<void> {
-    const dir = dirname(this.filePath)
-    await mkdir(dir, { recursive: true })
-    const body: FileShape = { subscribers: this.getAllSubscribers() }
-    await writeFile(this.filePath, `${JSON.stringify(body, null, 2)}\n`, 'utf8')
+  private getStatements(): NonNullable<SubscriberStore['statements']> {
+    if (this.statements) {
+      return this.statements
+    }
+    const db = getDb()
+    this.statements = {
+      getById: db.prepare('SELECT user_id FROM subscribers WHERE user_id = ?'),
+      listAll: db.prepare('SELECT user_id FROM subscribers ORDER BY user_id ASC'),
+      insert: db.prepare('INSERT OR IGNORE INTO subscribers (user_id, data) VALUES (?, ?)'),
+      deleteById: db.prepare('DELETE FROM subscribers WHERE user_id = ?'),
+      deleteAll: db.prepare('DELETE FROM subscribers'),
+    }
+    return this.statements
   }
 }
 

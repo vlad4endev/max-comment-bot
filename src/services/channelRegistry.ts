@@ -1,9 +1,8 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
-import { dirname, join } from 'node:path'
-
 import type { ChatType } from '@maxhub/max-bot-api/types'
+import type Database from 'better-sqlite3'
 
 import { pushAdminActivity } from './adminActivityStore'
+import { getDb } from '../db/database'
 import { logger } from '../utils/logger'
 
 /**
@@ -25,13 +24,6 @@ export interface ChannelSaveInput {
   type: ChatType
 }
 
-interface ChannelsFileShape {
-  channels: ChannelRecord[]
-}
-
-/** Same volume as posts/comments: `./data` → `/app/data` in Docker. */
-const DEFAULT_CHANNELS_PATH = join(process.cwd(), 'data', 'channels.json')
-
 function isChatType(value: unknown): value is ChatType {
   return value === 'dialog' || value === 'chat' || value === 'channel'
 }
@@ -50,58 +42,23 @@ function isChannelRecord(value: unknown): value is ChannelRecord {
   )
 }
 
-/**
- * JSON-backed registry of chats the bot participates in.
- * Keeps an in-memory map synchronized with {@link DEFAULT_CHANNELS_PATH}.
- */
 export class ChannelRegistry {
-  private readonly channels = new Map<number, ChannelRecord>()
-  private readonly filePath: string
-  private persistChain: Promise<void> = Promise.resolve()
+  private statements: {
+    getById: Database.Statement
+    listAll: Database.Statement
+    upsert: Database.Statement
+    deleteById: Database.Statement
+  } | null = null
 
-  constructor(filePath: string = DEFAULT_CHANNELS_PATH) {
-    this.filePath = filePath
-  }
-
-  /**
-   * Читает `channels.json` и заполняет память. Повторные вызовы перезаписывают кэш.
-   */
   async loadFromDisk(): Promise<void> {
-    try {
-      const raw = await readFile(this.filePath, 'utf8')
-      const parsed: unknown = JSON.parse(raw) as unknown
-      if (typeof parsed !== 'object' || parsed === null || !('channels' in parsed)) {
-        logger.warn('channelRegistry: неверный формат channels.json, очищаю память')
-        this.channels.clear()
-        return
-      }
-      const list = (parsed as ChannelsFileShape).channels
-      if (!Array.isArray(list)) {
-        this.channels.clear()
-        return
-      }
-      this.channels.clear()
-      for (const item of list) {
-        if (isChannelRecord(item)) {
-          this.channels.set(item.chat_id, item)
-        }
-      }
-      logger.info(`channelRegistry: загружено ${this.channels.size} канал(ов)`)
-    } catch (e) {
-      const err = e as NodeJS.ErrnoException
-      if (err.code === 'ENOENT') {
-        logger.debug('channelRegistry: файл channels.json отсутствует, начинаем с пустого реестра')
-        return
-      }
-      logger.error('channelRegistry: не удалось прочитать channels.json', e)
-    }
+    logger.debug('channelRegistry: SQLite backend active, loadFromDisk noop')
   }
 
   /**
    * Сохраняет или обновляет канал. Для уже известного `chat_id` поле {@link ChannelRecord.date_added} не меняется.
    */
   saveChannel(chatId: number, chatData: ChannelSaveInput): void {
-    const existing = this.channels.get(chatId)
+    const existing = this.getChannel(chatId)
     const record: ChannelRecord = existing
       ? {
           ...existing,
@@ -115,8 +72,14 @@ export class ChannelRegistry {
           date_added: new Date().toISOString(),
         }
     const isNew = !existing
-    this.channels.set(chatId, record)
-    this.queuePersist()
+    this.getStatements().upsert.run(
+      record.chat_id,
+      record.title,
+      record.type,
+      record.date_added,
+      1,
+      JSON.stringify(record),
+    )
     if (isNew) {
       pushAdminActivity('channel_added', {
         chat_id: chatId,
@@ -126,15 +89,21 @@ export class ChannelRegistry {
   }
 
   /**
+   * Исключает канал из поллера и реестра без удаления постов/комментариев (повторные ошибки API).
+   */
+  deactivate(chatId: number): ChannelRecord | null {
+    return this.removeChannel(chatId)
+  }
+
+  /**
    * Удаляет канал из реестра. Возвращает удалённую запись (для текста уведомления) или `null`, если чата не было.
    */
   removeChannel(chatId: number): ChannelRecord | null {
-    const prev = this.channels.get(chatId) ?? null
+    const prev = this.getChannel(chatId)
     if (prev === null) {
       return null
     }
-    this.channels.delete(chatId)
-    this.queuePersist()
+    this.getStatements().deleteById.run(chatId)
     return prev
   }
 
@@ -142,31 +111,39 @@ export class ChannelRegistry {
    * Возвращает запись по `chat_id` или `null`.
    */
   getChannel(chatId: number): ChannelRecord | null {
-    return this.channels.get(chatId) ?? null
+    const row = this.getStatements().getById.get(chatId) as { data: string } | undefined
+    if (!row) {
+      return null
+    }
+    return this.parseRow(row.data)
   }
 
   /**
    * Все каналы из текущего реестра, отсортированные по `chat_id`.
    */
   getAllChannels(): ChannelRecord[] {
-    return [...this.channels.values()].sort((a, b) => a.chat_id - b.chat_id)
+    const rows = this.getStatements().listAll.all() as { data: string }[]
+    return rows.map((row) => this.parseRow(row.data))
   }
 
-  private queuePersist(): void {
-    this.persistChain = this.persistChain
-      .then(() => this.persist())
-      .catch((e: unknown) => {
-        logger.error('channelRegistry: ошибка записи channels.json', e)
-      })
+  private parseRow(raw: string): ChannelRecord {
+    return JSON.parse(raw) as ChannelRecord
   }
 
-  private async persist(): Promise<void> {
-    const dir = dirname(this.filePath)
-    await mkdir(dir, { recursive: true })
-    const body: ChannelsFileShape = {
-      channels: this.getAllChannels(),
+  private getStatements(): NonNullable<ChannelRegistry['statements']> {
+    if (this.statements) {
+      return this.statements
     }
-    await writeFile(this.filePath, `${JSON.stringify(body, null, 2)}\n`, 'utf8')
+    const db = getDb()
+    this.statements = {
+      getById: db.prepare('SELECT data FROM channels WHERE chat_id = ?'),
+      listAll: db.prepare('SELECT data FROM channels ORDER BY chat_id ASC'),
+      upsert: db.prepare(
+        'INSERT OR REPLACE INTO channels (chat_id, title, type, date_added, active, settings) VALUES (?, ?, ?, ?, ?, ?)',
+      ),
+      deleteById: db.prepare('DELETE FROM channels WHERE chat_id = ?'),
+    }
+    return this.statements
   }
 }
 
