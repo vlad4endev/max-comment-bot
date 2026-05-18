@@ -16,7 +16,11 @@ const channelPoller_1 = require("./services/channelPoller");
 const postStore_1 = require("./services/postStore");
 const userMiniappSettingsStore_1 = require("./services/userMiniappSettingsStore");
 const logger_1 = require("./utils/logger");
+const envFile_1 = require("./utils/envFile");
+const config_2 = require("./config");
 const updateQueue_1 = require("./utils/updateQueue");
+const flowProcessor_1 = require("./services/flowProcessor");
+const integrationsStore_1 = require("./services/integrationsStore");
 const createWebhookApp_1 = require("./webhook/createWebhookApp");
 async function main() {
     (0, migrate_1.migrateFromJson)();
@@ -31,6 +35,19 @@ async function main() {
     await adminRuntimeSettingsStore_1.adminRuntimeSettingsStore.loadFromDisk();
     await disabledAdminStore_1.disabledAdminStore.loadFromDisk();
     await (0, bot_1.ensureBotProfile)(bot);
+    await integrationsStore_1.integrationsStore.load();
+    const tgIntegration = integrationsStore_1.integrationsStore
+        .getIntegrations()
+        .find((i) => i.platform === 'telegram' && i.status === 'connected');
+    if (tgIntegration?.token && !(0, config_2.getTelegramToken)()) {
+        try {
+            await (0, envFile_1.upsertRootEnvVar)('TG_TOKEN', tgIntegration.token);
+        }
+        catch (err) {
+            logger_1.logger.warn('Не удалось синхронизировать TG_TOKEN из integrations.json в .env', err);
+        }
+    }
+    flowProcessor_1.flowProcessor.setBot(bot);
     (0, logger_1.startRuntimeLogRotationScheduler)();
     (0, channelPoller_1.startChannelPostPoller)(bot);
     const channelCount = channelRegistry_1.channelRegistry
@@ -58,6 +75,7 @@ async function main() {
             server.once('error', reject);
         });
         logger_1.logger.info(`HTTP слушает 0.0.0.0:${listenPort}, webhook: POST ${webhookPath}, /api, /miniapp`);
+        await flowProcessor_1.flowProcessor.start();
         try {
             await (0, subscriptions_1.setWebhookSubscription)({
                 token: config_1.config.BOT_TOKEN,
@@ -86,6 +104,7 @@ async function main() {
             server.once('error', reject);
         });
         logger_1.logger.info(`HTTP слушает 0.0.0.0:${listenPort} (/api, /miniapp); long polling для updates`);
+        await flowProcessor_1.flowProcessor.start();
         (0, bot_1.setupGracefulShutdown)(bot, {
             receiveMode: 'polling',
             httpServer: server,

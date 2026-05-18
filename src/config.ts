@@ -15,8 +15,16 @@ function computeAdminToken(ownerUserId: number, botToken: string): string {
     .slice(0, 16)
 }
 
+/** Токен Telegram-бота (из `.env`, синхронизируется из админ-панели). */
+export function getTelegramToken(): string {
+  return (process.env.TG_TOKEN ?? process.env.TELEGRAM_TOKEN ?? process.env.TG_BOT_TOKEN ?? '')
+    .trim()
+}
+
 export interface Config {
   BOT_TOKEN: string
+  /** Опционально: TG_TOKEN из .env (дублирует getTelegramToken на старте). */
+  TG_TOKEN: string
   /**
    * Единственный владелец панели /admin (числовой user_id в MAX).
    */
@@ -130,8 +138,11 @@ function getConfig(): Config {
     }
   }
 
+  const TG_TOKEN = getTelegramToken()
+
   const base: Config = {
     BOT_TOKEN,
+    TG_TOKEN,
     ownerUserId: ownerParsed,
     adminToken: computeAdminToken(ownerParsed, BOT_TOKEN),
     adminPanelUser,

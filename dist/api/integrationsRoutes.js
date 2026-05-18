@@ -1,0 +1,364 @@
+"use strict";
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.createIntegrationsRouter = createIntegrationsRouter;
+exports.createFlowsRouter = createFlowsRouter;
+exports.createIntegrationsAnalyticsRouter = createIntegrationsAnalyticsRouter;
+const node_crypto_1 = require("node:crypto");
+const express_1 = __importDefault(require("express"));
+const adminAuth_1 = require("../middleware/adminAuth");
+const config_1 = require("../config");
+const logger_1 = require("../utils/logger");
+const envFile_1 = require("../utils/envFile");
+const channelRegistry_1 = require("../services/channelRegistry");
+const flowProcessor_1 = require("../services/flowProcessor");
+const integrationPlatformClient_1 = require("../services/integrationPlatformClient");
+const integrationsStore_1 = require("../services/integrationsStore");
+function isRecord(value) {
+    return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+function parsePlatform(value) {
+    return value === 'telegram' || value === 'vk' ? value : null;
+}
+function parseKeywords(raw) {
+    if (typeof raw === 'string') {
+        return raw
+            .split(',')
+            .map((s) => s.trim())
+            .filter(Boolean);
+    }
+    if (Array.isArray(raw)) {
+        return raw.filter((k) => typeof k === 'string' && k.trim() !== '');
+    }
+    return [];
+}
+function parseFiltersBody(body) {
+    return {
+        keywords: parseKeywords(body.keywords),
+        excludeKeywords: parseKeywords(body.excludeKeywords),
+        mediaOnly: body.mediaOnly === true,
+        delaySeconds: typeof body.delaySeconds === 'number' && Number.isFinite(body.delaySeconds)
+            ? body.delaySeconds
+            : 0,
+    };
+}
+function buildFlowName(sourceLabel, destLabel) {
+    return `${sourceLabel} → ${destLabel}`;
+}
+function createIntegrationsRouter(deps) {
+    const router = express_1.default.Router();
+    router.use(express_1.default.json({ limit: '256kb' }));
+    router.use(adminAuth_1.checkAdminAuth);
+    router.get('/', async (_req, res) => {
+        await integrationsStore_1.integrationsStore.load();
+        res.json({
+            integrations: integrationsStore_1.integrationsStore.getIntegrations().map(integrationsStore_1.integrationPublicView),
+        });
+    });
+    router.get('/meta/max', (_req, res) => {
+        const channels = channelRegistry_1.channelRegistry
+            .getAllChannels()
+            .filter((c) => c.type === 'channel')
+            .map((c) => ({ id: String(c.chat_id), title: c.title ?? String(c.chat_id) }));
+        res.json({
+            channelCount: channels.length,
+            tokenPreview: config_1.config.BOT_TOKEN.slice(-4),
+            channels,
+        });
+    });
+    router.post('/connect', async (req, res) => {
+        const body = req.body;
+        if (!isRecord(body)) {
+            res.status(400).json({ error: 'invalid body' });
+            return;
+        }
+        const platform = parsePlatform(body.platform);
+        const token = typeof body.token === 'string' ? body.token.trim() : '';
+        if (!platform || token === '') {
+            res.status(400).json({ error: 'platform and token required' });
+            return;
+        }
+        const name = typeof body.name === 'string' && body.name.trim() !== ''
+            ? body.name.trim()
+            : platform === 'telegram'
+                ? 'Telegram Bot'
+                : 'VK';
+        const groupId = typeof body.groupId === 'string' && body.groupId.trim() !== ''
+            ? body.groupId.trim()
+            : undefined;
+        const test = await (0, integrationPlatformClient_1.testIntegration)(platform, token, groupId);
+        if (!test.ok) {
+            res.status(400).json({ error: test.error ?? 'connection failed' });
+            return;
+        }
+        await integrationsStore_1.integrationsStore.load();
+        const existing = integrationsStore_1.integrationsStore
+            .getIntegrations()
+            .find((i) => i.platform === platform);
+        const record = await integrationsStore_1.integrationsStore.upsertIntegration({
+            id: existing?.id,
+            platform,
+            name: test.info ?? name,
+            token,
+            groupId,
+            status: 'connected',
+        });
+        if (platform === 'telegram') {
+            try {
+                await (0, envFile_1.upsertRootEnvVar)('TG_TOKEN', token);
+            }
+            catch (err) {
+                logger_1.logger.error('integrations: failed to sync TG_TOKEN to .env', err);
+                res.status(500).json({ error: 'Не удалось сохранить TG_TOKEN в .env' });
+                return;
+            }
+        }
+        res.json({ ok: true, integration: (0, integrationsStore_1.integrationPublicView)(record) });
+    });
+    router.delete('/:id', async (req, res) => {
+        await integrationsStore_1.integrationsStore.load();
+        const removed = integrationsStore_1.integrationsStore.getIntegration(req.params.id);
+        const ok = await integrationsStore_1.integrationsStore.deleteIntegration(req.params.id);
+        if (!ok) {
+            res.status(404).json({ error: 'not found' });
+            return;
+        }
+        if (removed?.platform === 'telegram') {
+            try {
+                await (0, envFile_1.removeRootEnvVar)('TG_TOKEN');
+            }
+            catch (err) {
+                logger_1.logger.warn('integrations: failed to remove TG_TOKEN from .env', err);
+            }
+        }
+        await flowProcessor_1.flowProcessor.reload();
+        res.json({ ok: true });
+    });
+    router.post('/:id/test', async (req, res) => {
+        await integrationsStore_1.integrationsStore.load();
+        const integ = integrationsStore_1.integrationsStore.getIntegration(req.params.id);
+        if (!integ) {
+            res.status(404).json({ error: 'not found' });
+            return;
+        }
+        const token = integ.platform === 'telegram' ? (0, config_1.getTelegramToken)() || integ.token : integ.token;
+        const result = await (0, integrationPlatformClient_1.testIntegration)(integ.platform, token, integ.groupId);
+        res.json(result);
+    });
+    router.get('/:id/channels', async (req, res) => {
+        await integrationsStore_1.integrationsStore.load();
+        const integ = integrationsStore_1.integrationsStore.getIntegration(req.params.id);
+        if (!integ) {
+            res.status(404).json({ error: 'not found' });
+            return;
+        }
+        const token = integ.platform === 'telegram' ? (0, config_1.getTelegramToken)() || integ.token : integ.token;
+        const channels = integ.platform === 'telegram'
+            ? await (0, integrationPlatformClient_1.listTelegramAdminChannels)(token)
+            : await (0, integrationPlatformClient_1.listVkGroups)(token, integ.groupId);
+        res.json({ channels });
+    });
+    return router;
+}
+function createFlowsRouter(_deps) {
+    const router = express_1.default.Router();
+    router.use(express_1.default.json({ limit: '256kb' }));
+    router.use(adminAuth_1.checkAdminAuth);
+    router.get('/log', async (req, res) => {
+        await integrationsStore_1.integrationsStore.load();
+        const limitRaw = req.query.limit;
+        const limit = typeof limitRaw === 'string' ? Math.min(100, Math.max(1, Number(limitRaw) || 50)) : 50;
+        const flowId = typeof req.query.flowId === 'string' ? req.query.flowId : undefined;
+        res.json({ items: integrationsStore_1.integrationsStore.getForwardedLog(limit, flowId) });
+    });
+    router.get('/', async (_req, res) => {
+        await integrationsStore_1.integrationsStore.load();
+        res.json({ flows: integrationsStore_1.integrationsStore.getFlows() });
+    });
+    router.post('/', async (req, res) => {
+        const body = req.body;
+        if (!isRecord(body)) {
+            res.status(400).json({ error: 'invalid body' });
+            return;
+        }
+        await integrationsStore_1.integrationsStore.load();
+        const source = body.source;
+        const destination = body.destination;
+        if (!isRecord(source) || !isRecord(destination)) {
+            res.status(400).json({ error: 'source and destination required' });
+            return;
+        }
+        const integrationId = typeof source.integrationId === 'string' ? source.integrationId : '';
+        const integ = integrationsStore_1.integrationsStore.getIntegration(integrationId);
+        if (!integ) {
+            res.status(400).json({ error: 'integration not found' });
+            return;
+        }
+        const sourcePlatform = source.platform;
+        const destPlatform = destination.platform;
+        if (sourcePlatform !== 'telegram' &&
+            sourcePlatform !== 'vk' &&
+            sourcePlatform !== 'max') {
+            res.status(400).json({ error: 'invalid source platform' });
+            return;
+        }
+        if (destPlatform !== 'telegram' &&
+            destPlatform !== 'vk' &&
+            destPlatform !== 'max') {
+            res.status(400).json({ error: 'invalid destination platform' });
+            return;
+        }
+        const channelId = typeof destination.channelId === 'string' ? destination.channelId : '';
+        if (channelId === '') {
+            res.status(400).json({ error: 'destination.channelId required' });
+            return;
+        }
+        const sourceLabel = typeof source.channelUsername === 'string'
+            ? source.channelUsername
+            : typeof source.channelId === 'string'
+                ? source.channelId
+                : sourcePlatform;
+        const destTitle = destPlatform === 'max'
+            ? channelRegistry_1.channelRegistry.getChannel(Number(channelId))?.title ?? channelId
+            : channelId;
+        const name = typeof body.name === 'string' && body.name.trim() !== ''
+            ? body.name.trim()
+            : buildFlowName(sourceLabel, destTitle);
+        const flow = {
+            id: `flow_${(0, node_crypto_1.randomUUID)().slice(0, 8)}`,
+            name,
+            enabled: body.enabled !== false,
+            source: {
+                integrationId,
+                platform: sourcePlatform,
+                channelUsername: typeof source.channelUsername === 'string' ? source.channelUsername : undefined,
+                channelId: typeof source.channelId === 'string' ? source.channelId : undefined,
+                contentTypes: Array.isArray(source.contentTypes)
+                    ? source.contentTypes.filter((c) => typeof c === 'string')
+                    : undefined,
+            },
+            filters: parseFiltersBody(isRecord(body.filters) ? body.filters : {}),
+            destination: {
+                platform: destPlatform,
+                channelId,
+                integrationId: typeof destination.integrationId === 'string'
+                    ? destination.integrationId
+                    : undefined,
+                addCommentsButton: destination.addCommentsButton === true,
+                signature: typeof destination.signature === 'string' ? destination.signature : undefined,
+            },
+            stats: { totalForwarded: 0, lastForwardedAt: null, errors: 0 },
+            createdAt: new Date().toISOString(),
+        };
+        await integrationsStore_1.integrationsStore.saveFlow(flow);
+        if (flow.enabled) {
+            flowProcessor_1.flowProcessor.startFlowPoller(flow);
+        }
+        res.status(201).json({ flow });
+    });
+    router.put('/:id', async (req, res) => {
+        await integrationsStore_1.integrationsStore.load();
+        const existing = integrationsStore_1.integrationsStore.getFlow(req.params.id);
+        if (!existing) {
+            res.status(404).json({ error: 'not found' });
+            return;
+        }
+        const body = req.body;
+        if (!isRecord(body)) {
+            res.status(400).json({ error: 'invalid body' });
+            return;
+        }
+        const flow = {
+            ...existing,
+            name: typeof body.name === 'string' ? body.name : existing.name,
+            enabled: typeof body.enabled === 'boolean' ? body.enabled : existing.enabled,
+            source: isRecord(body.source)
+                ? {
+                    ...existing.source,
+                    channelUsername: typeof body.source.channelUsername === 'string'
+                        ? body.source.channelUsername
+                        : existing.source.channelUsername,
+                    channelId: typeof body.source.channelId === 'string'
+                        ? body.source.channelId
+                        : existing.source.channelId,
+                }
+                : existing.source,
+            filters: isRecord(body.filters)
+                ? parseFiltersBody(body.filters)
+                : existing.filters,
+            destination: isRecord(body.destination)
+                ? {
+                    ...existing.destination,
+                    channelId: typeof body.destination.channelId === 'string'
+                        ? body.destination.channelId
+                        : existing.destination.channelId,
+                    addCommentsButton: typeof body.destination.addCommentsButton === 'boolean'
+                        ? body.destination.addCommentsButton
+                        : existing.destination.addCommentsButton,
+                    signature: typeof body.destination.signature === 'string'
+                        ? body.destination.signature
+                        : existing.destination.signature,
+                }
+                : existing.destination,
+        };
+        await integrationsStore_1.integrationsStore.saveFlow(flow);
+        flowProcessor_1.flowProcessor.stopFlowPoller(flow.id);
+        if (flow.enabled) {
+            flowProcessor_1.flowProcessor.startFlowPoller(flow);
+        }
+        res.json({ flow });
+    });
+    router.delete('/:id', async (req, res) => {
+        await integrationsStore_1.integrationsStore.load();
+        flowProcessor_1.flowProcessor.stopFlowPoller(req.params.id);
+        const ok = await integrationsStore_1.integrationsStore.deleteFlow(req.params.id);
+        if (!ok) {
+            res.status(404).json({ error: 'not found' });
+            return;
+        }
+        res.json({ ok: true });
+    });
+    router.patch('/:id/toggle', async (req, res) => {
+        await integrationsStore_1.integrationsStore.load();
+        const flow = integrationsStore_1.integrationsStore.getFlow(req.params.id);
+        if (!flow) {
+            res.status(404).json({ error: 'not found' });
+            return;
+        }
+        const body = req.body;
+        const enabled = isRecord(body) && typeof body.enabled === 'boolean'
+            ? body.enabled
+            : !flow.enabled;
+        const updated = { ...flow, enabled };
+        await integrationsStore_1.integrationsStore.saveFlow(updated);
+        if (enabled) {
+            flowProcessor_1.flowProcessor.startFlowPoller(updated);
+        }
+        else {
+            flowProcessor_1.flowProcessor.stopFlowPoller(updated.id);
+        }
+        res.json({ flow: updated });
+    });
+    router.get('/:id/stats', async (req, res) => {
+        await integrationsStore_1.integrationsStore.load();
+        const flow = integrationsStore_1.integrationsStore.getFlow(req.params.id);
+        if (!flow) {
+            res.status(404).json({ error: 'not found' });
+            return;
+        }
+        res.json(flow.stats);
+    });
+    return router;
+}
+function createIntegrationsAnalyticsRouter() {
+    const router = express_1.default.Router();
+    router.use(adminAuth_1.checkAdminAuth);
+    router.get('/', async (_req, res) => {
+        await integrationsStore_1.integrationsStore.load();
+        res.json((0, flowProcessor_1.buildIntegrationsAnalytics)());
+    });
+    return router;
+}
+//# sourceMappingURL=integrationsRoutes.js.map

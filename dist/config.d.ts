@@ -1,6 +1,10 @@
 export type ReceiveMode = 'webhook' | 'polling';
+/** Токен Telegram-бота (из `.env`, синхронизируется из админ-панели). */
+export declare function getTelegramToken(): string;
 export interface Config {
     BOT_TOKEN: string;
+    /** Опционально: TG_TOKEN из .env (дублирует getTelegramToken на старте). */
+    TG_TOKEN: string;
     /**
      * Единственный владелец панели /admin (числовой user_id в MAX).
      */

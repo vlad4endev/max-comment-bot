@@ -23,7 +23,11 @@ import { POLL_CONCURRENCY, startChannelPostPoller } from './services/channelPoll
 import { postStore } from './services/postStore'
 import { userMiniappSettingsStore } from './services/userMiniappSettingsStore'
 import { logger, startRuntimeLogRotationScheduler } from './utils/logger'
+import { upsertRootEnvVar } from './utils/envFile'
+import { getTelegramToken } from './config'
 import { WEBHOOK_CONCURRENCY } from './utils/updateQueue'
+import { flowProcessor } from './services/flowProcessor'
+import { integrationsStore } from './services/integrationsStore'
 import { createHttpApp, createWebhookApp } from './webhook/createWebhookApp'
 
 async function main(): Promise<void> {
@@ -39,6 +43,18 @@ async function main(): Promise<void> {
   await adminRuntimeSettingsStore.loadFromDisk()
   await disabledAdminStore.loadFromDisk()
   await ensureBotProfile(bot)
+  await integrationsStore.load()
+  const tgIntegration = integrationsStore
+    .getIntegrations()
+    .find((i) => i.platform === 'telegram' && i.status === 'connected')
+  if (tgIntegration?.token && !getTelegramToken()) {
+    try {
+      await upsertRootEnvVar('TG_TOKEN', tgIntegration.token)
+    } catch (err: unknown) {
+      logger.warn('Не удалось синхронизировать TG_TOKEN из integrations.json в .env', err)
+    }
+  }
+  flowProcessor.setBot(bot)
   startRuntimeLogRotationScheduler()
   startChannelPostPoller(bot)
 
@@ -76,6 +92,8 @@ async function main(): Promise<void> {
       `HTTP слушает 0.0.0.0:${listenPort}, webhook: POST ${webhookPath}, /api, /miniapp`,
     )
 
+    await flowProcessor.start()
+
     try {
       await setWebhookSubscription({
         token: config.BOT_TOKEN,
@@ -107,6 +125,8 @@ async function main(): Promise<void> {
     logger.info(
       `HTTP слушает 0.0.0.0:${listenPort} (/api, /miniapp); long polling для updates`,
     )
+
+    await flowProcessor.start()
 
     setupGracefulShutdown(bot, {
       receiveMode: 'polling',

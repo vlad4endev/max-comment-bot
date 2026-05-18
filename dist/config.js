@@ -4,6 +4,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.config = void 0;
+exports.getTelegramToken = getTelegramToken;
 const node_crypto_1 = require("node:crypto");
 const dotenv_1 = __importDefault(require("dotenv"));
 const logger_1 = require("./utils/logger");
@@ -13,6 +14,11 @@ function computeAdminToken(ownerUserId, botToken) {
         .update(`${ownerUserId}${botToken}`, 'utf8')
         .digest('hex')
         .slice(0, 16);
+}
+/** Токен Telegram-бота (из `.env`, синхронизируется из админ-панели). */
+function getTelegramToken() {
+    return (process.env.TG_TOKEN ?? process.env.TELEGRAM_TOKEN ?? process.env.TG_BOT_TOKEN ?? '')
+        .trim();
 }
 const WEBHOOK_SECRET_RE = /^[a-zA-Z0-9_-]{5,256}$/;
 function parseReceiveMode(raw, nodeEnv) {
@@ -71,8 +77,10 @@ function getConfig() {
             listenPort = apiParsed;
         }
     }
+    const TG_TOKEN = getTelegramToken();
     const base = {
         BOT_TOKEN,
+        TG_TOKEN,
         ownerUserId: ownerParsed,
         adminToken: computeAdminToken(ownerParsed, BOT_TOKEN),
         adminPanelUser,

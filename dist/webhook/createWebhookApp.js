@@ -8,6 +8,7 @@ exports.createWebhookApp = createWebhookApp;
 const node_path_1 = require("node:path");
 const express_1 = __importDefault(require("express"));
 const adminRoutes_1 = require("../api/adminRoutes");
+const integrationsRoutes_1 = require("../api/integrationsRoutes");
 const routes_1 = require("../api/routes");
 const adminAuth_1 = require("../middleware/adminAuth");
 const logger_1 = require("../utils/logger");
@@ -64,6 +65,10 @@ function createHttpApp(options) {
         });
     });
     app.use('/api/admin', (0, adminRoutes_1.createAdminRouter)({ bot: options.bot }));
+    const integrationsDeps = { bot: options.bot };
+    app.use('/api/integrations', (0, integrationsRoutes_1.createIntegrationsRouter)(integrationsDeps));
+    app.use('/api/flows', (0, integrationsRoutes_1.createFlowsRouter)(integrationsDeps));
+    app.use('/api/integrations-analytics', (0, integrationsRoutes_1.createIntegrationsAnalyticsRouter)());
     app.use('/api', (0, routes_1.createCommentApiRouter)({ bot: options.bot }));
     const miniappRoot = (0, node_path_1.join)(process.cwd(), 'miniapp');
     app.use('/miniapp', express_1.default.static(miniappRoot, {

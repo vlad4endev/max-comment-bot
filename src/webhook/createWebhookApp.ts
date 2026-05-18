@@ -5,6 +5,11 @@ import type { Update } from '@maxhub/max-bot-api/types'
 import express from 'express'
 
 import { createAdminRouter } from '../api/adminRoutes'
+import {
+  createFlowsRouter,
+  createIntegrationsAnalyticsRouter,
+  createIntegrationsRouter,
+} from '../api/integrationsRoutes'
 import { createCommentApiRouter } from '../api/routes'
 import { isAdminPanelSessionValid } from '../middleware/adminAuth'
 import { logger } from '../utils/logger'
@@ -90,6 +95,11 @@ export function createHttpApp(options: HttpAppOptions): express.Express {
   })
 
   app.use('/api/admin', createAdminRouter({ bot: options.bot }))
+
+  const integrationsDeps = { bot: options.bot }
+  app.use('/api/integrations', createIntegrationsRouter(integrationsDeps))
+  app.use('/api/flows', createFlowsRouter(integrationsDeps))
+  app.use('/api/integrations-analytics', createIntegrationsAnalyticsRouter())
 
   app.use('/api', createCommentApiRouter({ bot: options.bot }))
 

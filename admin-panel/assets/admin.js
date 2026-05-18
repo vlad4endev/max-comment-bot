@@ -2,6 +2,13 @@
   'use strict';
 
   var API_BASE = '/api/admin';
+  var API_INTEGRATIONS = '/api/integrations';
+  var API_FLOWS = '/api/flows';
+  var API_INT_ANALYTICS = '/api/integrations-analytics';
+  var integrationsTab = 'connections';
+  var integrationsCache = [];
+  var flowsCache = [];
+  var intMaxMeta = null;
   var currentRoute = '';
   var dashRefreshTimer = null;
   var dashPeriodDays = 7;
@@ -20,6 +27,7 @@
         { id: 'channels', label: 'Каналы', icon: 'radio' },
         { id: 'tgchains', label: 'TG-цепочки', icon: 'link-2' },
         { id: 'autoposts', label: 'Автопосты', icon: 'calendar-clock' },
+        { id: 'integrations', label: 'Интеграции', icon: 'plug', badge: 'NEW' },
         { id: 'comments', label: 'Комментарии', icon: 'message-square' },
       ],
     },
@@ -44,6 +52,7 @@
     channels: 'Каналы',
     tgchains: 'TG-цепочки',
     autoposts: 'Автопосты',
+    integrations: 'Интеграции',
     antispam: 'Антиспам',
     comments: 'Комментарии',
     users: 'Пользователи',
@@ -131,6 +140,71 @@
       if (!r.ok) throw new Error('Ошибка');
       return r.json();
     });
+  }
+
+  function putJsonAbs(url, body) {
+    return authFetch(url, { method: 'PUT', body: body || {} }).then(function (r) {
+      if (!r.ok) throw new Error('Ошибка');
+      return r.json();
+    });
+  }
+
+  function getJsonAbs(url) {
+    return authFetch(url).then(function (r) {
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return r.json();
+    });
+  }
+
+  function postJsonAbs(url, body) {
+    return authFetch(url, { method: 'POST', body: body || {} }).then(function (r) {
+      if (!r.ok) {
+        return r.json().then(function (j) {
+          throw new Error(j.error || 'Ошибка');
+        });
+      }
+      return r.json();
+    });
+  }
+
+  function deleteAbs(url) {
+    return authFetch(url, { method: 'DELETE' }).then(function (r) {
+      if (!r.ok) throw new Error('Ошибка');
+      return r.json();
+    });
+  }
+
+  function patchJsonAbs(url, body) {
+    return authFetch(url, { method: 'PATCH', body: body || {} }).then(function (r) {
+      if (!r.ok) throw new Error('Ошибка');
+      return r.json();
+    });
+  }
+
+  function fmtRelativeTime(iso) {
+    if (!iso) return '—';
+    var t = new Date(iso).getTime();
+    if (!t) return '—';
+    var diff = Date.now() - t;
+    var min = Math.floor(diff / 60000);
+    if (min < 1) return 'только что';
+    if (min < 60) return min + ' мин назад';
+    var h = Math.floor(min / 60);
+    if (h < 24) return h + ' ч назад';
+    var d = Math.floor(h / 24);
+    return d + ' дн назад';
+  }
+
+  function platformIconClass(p) {
+    if (p === 'telegram') return 'telegram';
+    if (p === 'vk') return 'vk';
+    return 'max';
+  }
+
+  function platformLabel(p) {
+    if (p === 'telegram') return 'Telegram';
+    if (p === 'vk') return 'ВКонтакте';
+    return 'MAX';
   }
   function showToast(msg, type) {
     var root = qs('#toastRoot');
@@ -306,6 +380,7 @@
       channels: 1,
       tgchains: 1,
       autoposts: 1,
+      integrations: 1,
       antispam: 1,
       comments: 1,
       users: 1,
@@ -340,6 +415,9 @@
           esc(it.icon) +
           '"></i>' +
           esc(it.label) +
+          (it.badge
+            ? '<span class="nav-badge">' + esc(it.badge) + '</span>'
+            : '') +
           '</button>';
       });
     });
@@ -1153,6 +1231,376 @@
       });
   }
 
+  function bindIntTabs(main) {
+    qsa('[data-int-tab]', main).forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        integrationsTab = btn.getAttribute('data-int-tab') || 'connections';
+        renderIntegrations();
+      });
+    });
+  }
+
+  function renderIntegrations() {
+    var main = qs('#mainContent');
+    if (!main) return;
+    main.innerHTML = '<div class="dash-loading muted">Загрузка…</div>';
+    Promise.all([
+      getJsonAbs(API_INTEGRATIONS),
+      getJsonAbs(API_FLOWS),
+      getJsonAbs(API_INTEGRATIONS + '/meta/max'),
+      getJsonAbs(API_INT_ANALYTICS),
+      getJsonAbs(API_FLOWS + '/log?limit=50'),
+    ])
+      .then(function (bundle) {
+        if (currentRoute !== 'integrations') return;
+        integrationsCache = bundle[0].integrations || [];
+        flowsCache = bundle[1].flows || [];
+        intMaxMeta = bundle[2];
+        var analytics = bundle[3];
+        var logItems = bundle[4].items || [];
+        var tg = integrationsCache.find(function (i) { return i.platform === 'telegram'; });
+        var vk = integrationsCache.find(function (i) { return i.platform === 'vk'; });
+
+        var html = '<div class="int-page"><div class="int-tabs">';
+        ['connections', 'flows', 'analytics'].forEach(function (tab) {
+          var labels = { connections: 'Подключения', flows: 'Потоки данных', analytics: 'Аналитика' };
+          html +=
+            '<button type="button" class="int-tab' +
+            (integrationsTab === tab ? ' active' : '') +
+            '" data-int-tab="' +
+            tab +
+            '">' +
+            esc(labels[tab]) +
+            '</button>';
+        });
+        html += '</div>';
+
+        if (integrationsTab === 'connections') {
+          html += '<div class="integrations-grid">';
+          html += integrationCardHtml('telegram', 'Telegram Bot', 'Получение постов из каналов, отправка в MAX', tg, 'tg');
+          html += integrationCardHtml('vk', 'ВКонтакте', 'Сообщества: посты, комментарии, аналитика', vk, 'vk');
+          html +=
+            '<div class="integration-card connected"><div class="int-card-header"><div class="int-logo max">М</div><div class="int-info"><div class="int-name">MAX</div><div class="int-desc">Основная платформа — подключён</div></div><span class="int-status connected"><i data-lucide="circle-check"></i> Подключён</span></div><div class="int-meta"><span>Каналов: <strong>' +
+            esc(String((intMaxMeta && intMaxMeta.channelCount) || 0)) +
+            '</strong></span><span>Bot Token: <code>••••••••' +
+            esc((intMaxMeta && intMaxMeta.tokenPreview) || '') +
+            '</code></span></div></div></div>';
+        } else if (integrationsTab === 'flows') {
+          html += '<div class="flows-list">';
+          flowsCache.forEach(function (f) { html += flowCardHtml(f); });
+          if (!flowsCache.length) html += '<p class="muted">Потоков пока нет.</p>';
+          html += '</div><button type="button" class="btn btn-primary mt-md" id="btnOpenFlowBuilder"><i data-lucide="plus"></i> Новый поток</button>';
+          html += '<div class="flow-builder hidden" id="flow-builder"></div>';
+        } else {
+          html += '<div class="analytics-grid">';
+          html += analyticsCardHtml('telegram', analytics.telegram);
+          html += analyticsCardHtml('vk', analytics.vk);
+          html += '</div><div class="card-like mt-md"><div class="card-header flex-between"><span>Последние переданные посты</span>';
+          html += '<select class="select" id="flow-filter-select"><option value="">Все потоки</option>';
+          flowsCache.forEach(function (f) { html += '<option value="' + esc(f.id) + '">' + esc(f.name) + '</option>'; });
+          html += '</select></div>';
+          html = html.replace('', '');
+          html = html.replace('', '<div class="forwarded-list">');
+          logItems.forEach(function (item) { html += forwardedItemHtml(item); });
+          if (!logItems.length) html += '<p class="muted" style="padding:12px">Пока нет пересланных постов</p>';
+          html += '</div></div>';
+        }
+        html += '</div>';
+        main.innerHTML = html;
+        bindIntTabs(main);
+        bindIntegrationsPage(main);
+        refreshIcons();
+      })
+      .catch(function (err) {
+        if (err && err.message === 'auth') return;
+        main.innerHTML = '<p class="muted">Ошибка: ' + esc(err.message || '') + '</p>';
+      });
+  }
+
+  function integrationCardHtml(platform, title, desc, record, prefix) {
+    var connected = record && record.status === 'connected';
+    var logo = platform === 'vk' ? 'VK' : 'TG';
+    var html =
+      '<div class="integration-card' +
+      (connected ? ' connected' : '') +
+      '"><div class="int-card-header"><div class="int-logo ' +
+      platform +
+      '">' +
+      logo +
+      '</div><div class="int-info"><div class="int-name">' +
+      esc(title) +
+      '</div><div class="int-desc">' +
+      esc(desc) +
+      '</div></div><span class="int-status ' +
+      (connected ? 'connected' : 'disconnected') +
+      '">' +
+      (connected ? '<i data-lucide="circle-check"></i> Подключён' : 'Не подключён') +
+      '</span><div class="int-body hidden" id="' +
+      prefix +
+      '-form"><div class="form-group"><label>' +
+      (platform === 'vk' ? 'Access Token' : 'Bot Token') +
+      '</label><input class="input mono" type="password" id="' +
+      prefix +
+      '-token"/></div>';
+    html = html.replace('', '</div>');
+    if (platform === 'vk') {
+      html +=
+        '<div class="form-group"><label>ID сообщества</label><input class="input" id="vk-group" value="' +
+        esc((record && record.groupId) || '') +
+        '"/></div>';
+    } else {
+      html +=
+        '<div class="form-group"><label>Имя бота</label><input class="input" id="tg-name" value="' +
+        esc((record && record.name) || '') +
+        '"/></div>';
+    }
+    html +=
+      '<div class="int-actions"><button type="button" class="btn btn-primary" data-connect="' +
+      platform +
+      '"><i data-lucide="plug"></i> Подключить</button>';
+    if (record) {
+      html +=
+        '<button type="button" class="btn btn-ghost" data-test-int="' +
+        esc(record.id) +
+        '"><i data-lucide="activity"></i> Проверить</button>';
+    }
+    html +=
+      '</div></div><button type="button" class="int-expand-btn" data-expand="' +
+      prefix +
+      '-form">Настроить <i data-lucide="chevron-down"></i></button></div>';
+    return html;
+  }
+
+  function flowCardHtml(f) {
+    var srcName = f.source.channelUsername || f.source.channelId || f.source.platform;
+    var destName = channelRegistryTitle(f.destination.channelId) || f.destination.channelId;
+    var filterCount =
+      (f.filters.keywords && f.filters.keywords.length ? 1 : 0) +
+      (f.filters.excludeKeywords && f.filters.excludeKeywords.length ? 1 : 0) +
+      (f.filters.mediaOnly ? 1 : 0) +
+      (f.filters.delaySeconds > 0 ? 1 : 0);
+    var html = '<div class="flow-card" data-flow-id="' + esc(f.id) + '"><div class="flow-pipeline">';
+    html += flowNodeHtml(f.source.platform, srcName);
+    html += '<div class="flow-arrow"><i data-lucide="arrow-right"></i>';
+    if (filterCount) html += '<span class="flow-filter-badge"><i data-lucide="filter"></i> ' + filterCount + '</span>';
+    html += '</div>' + flowNodeHtml(f.destination.platform, destName);
+    html +=
+      '</div><div class="flow-meta"><span class="flow-stat">Переслано: <strong>' +
+      esc(String(f.stats.totalForwarded || 0)) +
+      '</strong></span><span class="flow-stat">Последний: <strong>' +
+      esc(fmtRelativeTime(f.stats.lastForwardedAt)) +
+      '</strong></span></div><div class="flow-actions"><span class="switch' +
+      (f.enabled ? ' on' : '') +
+      '" data-flow-toggle="' +
+      esc(f.id) +
+      '" role="switch" tabindex="0"></span><button type="button" class="btn btn-ghost btn-sm" data-del-flow="' +
+      esc(f.id) +
+      '"><i data-lucide="trash-2"></i></button></div></div>';
+    return html;
+  }
+
+  function channelRegistryTitle(chatId) {
+    var id = Number(chatId);
+    var c = channelsCache.find(function (x) { return Number(x.chat_id) === id; });
+    return c ? c.title || String(c.chat_id) : null;
+  }
+
+  function flowNodeHtml(platform, name) {
+    var icon = platform === 'max' ? 'М' : platform === 'vk' ? 'VK' : 'TG';
+    return (
+      '<div class="flow-node"><div class="flow-node-icon ' +
+      platformIconClass(platform) +
+      '">' +
+      icon +
+      '</div><div class="flow-node-info">' +
+      esc(platformLabel(platform)) +
+      '</div><div class="flow-node-name">' +
+      esc(name) +
+      '</div></div></div>'
+    ).replace('', '<div class="flow-node-platform">');
+  }
+
+  function analyticsCardHtml(platform, stats) {
+    var connected = stats && stats.connected;
+    var icon = platform === 'vk' ? 'VK' : 'TG';
+    var html =
+      '<div class="analytics-card"><div class="analytics-header"><div class="int-logo ' +
+      platformIconClass(platform) +
+      '" style="width:28px;height:28px;font-size:12px">' +
+      icon +
+      '</div><span>' +
+      esc(platformLabel(platform)) +
+      '</span><span class="badge ' +
+      (connected ? 'success' : 'disconnected') +
+      '">' +
+      (connected ? 'подключён' : 'не подключён') +
+      '</span></div>';
+    if (!connected) {
+      return html + '<div class="analytics-empty"><i data-lucide="plug"></i><span>Подключите платформу</span></div>';
+    }
+    return (
+      html +
+      '<div class="analytics-stats"><div class="a-stat"><div class="a-stat-val">' +
+      esc(String(stats.totalPosts)) +
+      '</div><div class="a-stat-label">постов</div></div><div class="a-stat"><div class="a-stat-val">' +
+      esc(String(stats.forwarded)) +
+      '</div><div class="a-stat-label">переслано</div></div><div class="a-stat"><div class="a-stat-val">' +
+      esc(String(stats.channels)) +
+      '</div><div class="a-stat-label">каналов</div></div></div></div>'
+    ).replace('', '</div>');
+  }
+
+  function forwardedItemHtml(item) {
+    var fromTag = item.fromPlatform === 'telegram' ? 'TG' : item.fromPlatform === 'vk' ? 'VK' : 'MAX';
+    var toTag = item.toPlatform === 'telegram' ? 'TG' : item.toPlatform === 'vk' ? 'VK' : 'MAX';
+    return (
+      '<div class="forwarded-item" data-flow-id="' +
+      esc(item.flowId) +
+      '"><div class="fwd-from"><span class="fwd-platform ' +
+      platformIconClass(item.fromPlatform) +
+      '">' +
+      fromTag +
+      '</span><span class="fwd-channel">' +
+      esc(item.fromChannel) +
+      '</span></div><i data-lucide="arrow-right"></i><div class="fwd-to"><span class="fwd-platform ' +
+      platformIconClass(item.toPlatform) +
+      '">' +
+      toTag +
+      '</span><span class="fwd-channel">' +
+      esc(item.toChannel) +
+      '</span></div><div class="fwd-preview">' +
+      esc(item.preview) +
+      '</div><div class="fwd-time">' +
+      esc(fmtRelativeTime(item.forwardedAt)) +
+      '</div></div>'
+    );
+  }
+
+  function bindIntegrationsPage(main) {
+    qsa('[data-expand]', main).forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var body = qs('#' + btn.getAttribute('data-expand'), main);
+        if (body) body.classList.toggle('hidden');
+      });
+    });
+    qsa('[data-connect]', main).forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var platform = btn.getAttribute('data-connect');
+        var el = qs('#' + (platform === 'vk' ? 'vk' : 'tg') + '-token', main);
+        var token = el ? String(el.value || '').trim() : '';
+        var body = { platform: platform, token: token };
+        if (platform === 'telegram') {
+          var n = qs('#tg-name', main);
+          if (n && n.value.trim()) body.name = n.value.trim();
+        } else {
+          var g = qs('#vk-group', main);
+          if (g && g.value.trim()) body.groupId = g.value.trim();
+        }
+        if (!token) { showToast('Укажите токен', 'error'); return; }
+        postJsonAbs(API_INTEGRATIONS + '/connect', body)
+          .then(function () { showToast('Подключено', 'success'); renderIntegrations(); })
+          .catch(function (e) { showToast(e.message || 'Ошибка', 'error'); });
+      });
+    });
+    qsa('[data-test-int]', main).forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        postJsonAbs(API_INTEGRATIONS + '/' + encodeURIComponent(btn.getAttribute('data-test-int')) + '/test', {})
+          .then(function (r) { showToast(r.ok ? r.info || 'OK' : r.error || 'Ошибка', r.ok ? 'success' : 'error'); })
+          .catch(function (e) { showToast(e.message || 'Ошибка', 'error'); });
+      });
+    });
+    qsa('[data-flow-toggle]', main).forEach(function (sw) {
+      sw.addEventListener('click', function () {
+        var id = sw.getAttribute('data-flow-toggle');
+        var next = !sw.classList.contains('on');
+        patchJsonAbs(API_FLOWS + '/' + encodeURIComponent(id) + '/toggle', { enabled: next })
+          .then(function () { sw.classList.toggle('on', next); })
+          .catch(function (e) { showToast(e.message || 'Ошибка', 'error'); });
+      });
+    });
+    qsa('[data-del-flow]', main).forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var id = btn.getAttribute('data-del-flow');
+        showConfirm('Удалить поток?', '', function () {
+          deleteAbs(API_FLOWS + '/' + encodeURIComponent(id)).then(function () {
+            showToast('Удалено', 'success');
+            renderIntegrations();
+          });
+        });
+      });
+    });
+    var ob = qs('#btnOpenFlowBuilder', main);
+    if (ob) ob.addEventListener('click', function () { openFlowBuilder(main); });
+    var ff = qs('#flow-filter-select', main);
+    if (ff) {
+      ff.addEventListener('change', function () {
+        var fid = ff.value;
+        qsa('.forwarded-item', main).forEach(function (row) {
+          row.style.display = !fid || row.getAttribute('data-flow-id') === fid ? '' : 'none';
+        });
+      });
+    }
+  }
+
+  function openFlowBuilder(main) {
+    var host = qs('#flow-builder', main);
+    if (!host) return;
+    host.classList.remove('hidden');
+    var tgBots = integrationsCache.filter(function (i) { return i.platform === 'telegram' && i.status === 'connected'; });
+    var vkGroups = integrationsCache.filter(function (i) { return i.platform === 'vk' && i.status === 'connected'; });
+    var maxChannels = (intMaxMeta && intMaxMeta.channels) || [];
+    host.innerHTML =
+      '<h3>Создать поток</h3><div class="form-group"><label>Платформа</label><select class="select" id="fb_src_platform"><option value="telegram">Telegram</option><option value="vk">VK</option></select></div>' +
+      '<div class="form-group"><label>Интеграция</label><select class="select" id="fb_src_int">' +
+      tgBots.map(function (b) { return '<option value="' + esc(b.id) + '">' + esc(b.name) + '</option>'; }).join('') +
+      '</select></div><div class="form-group"><label>Канал</label><input class="input" id="fb_src_channel" placeholder="@channel"/></div>' +
+      '<div class="form-group"><label>Слова</label><input class="input" id="fb_kw"/></div><label>Исключить</label><input class="input" id="fb_ex"/></div>' +
+      '<label class="checkbox-label"><input type="checkbox" id="fb_media"/> Только медиа</label>' +
+      '<div class="form-group"><label>MAX-канал</label><select class="select" id="fb_dest_channel">' +
+      maxChannels.map(function (c) { return '<option value="' + esc(c.id) + '">' + esc(c.title) + '</option>'; }).join('') +
+      '</select></div><div class="form-group"><label>Подпись</label><input class="input" id="fb_signature"/></div>' +
+      '<div class="builder-actions"><button type="button" class="btn btn-primary" id="fb_save">Создать</button><button type="button" class="btn btn-ghost" id="fb_cancel">Отмена</button></div>';
+    host.innerHTML = host.innerHTML.replace(//, '<div class="form-group">').replace('', '');
+    var srcPlatform = qs('#fb_src_platform', host);
+    var srcInt = qs('#fb_src_int', host);
+    if (srcPlatform) {
+      srcPlatform.addEventListener('change', function () {
+        var list = srcPlatform.value === 'vk' ? vkGroups : tgBots;
+        srcInt.innerHTML = list.map(function (b) { return '<option value="' + esc(b.id) + '">' + esc(b.name) + '</option>'; }).join('');
+      });
+    }
+    qs('#fb_cancel', host).addEventListener('click', function () { host.classList.add('hidden'); host.innerHTML = ''; });
+    qs('#fb_save', host).addEventListener('click', function () {
+      var platform = srcPlatform.value;
+      var integrationId = srcInt.value;
+      var channel = (qs('#fb_src_channel', host).value || '').trim();
+      var destId = qs('#fb_dest_channel', host).value;
+      if (!integrationId || !channel || !destId) { showToast('Заполните поля', 'error'); return; }
+      var kw = (qs('#fb_kw', host).value || '').trim();
+      var ex = (qs('#fb_ex', host).value || '').trim();
+      postJsonAbs(API_FLOWS, {
+        source: {
+          platform: platform,
+          integrationId: integrationId,
+          channelUsername: channel.startsWith('@') || !/^-?\d/.test(channel) ? channel : undefined,
+          channelId: /^-?\d/.test(channel) ? channel : undefined,
+        },
+        destination: { platform: 'max', channelId: destId, addCommentsButton: true, signature: (qs('#fb_signature', host).value || '').trim() || undefined },
+        filters: {
+          keywords: kw ? kw.split(',').map(function (s) { return s.trim(); }).filter(Boolean) : [],
+          excludeKeywords: ex ? ex.split(',').map(function (s) { return s.trim(); }).filter(Boolean) : [],
+          mediaOnly: qs('#fb_media', host).checked,
+          delaySeconds: 0,
+        },
+      }).then(function () {
+        showToast('Поток создан', 'success');
+        host.classList.add('hidden');
+        integrationsTab = 'flows';
+        renderIntegrations();
+      }).catch(function (e) { showToast(e.message || 'Ошибка', 'error'); });
+    });
+    refreshIcons();
+  }
   function renderAntispam() {
     var main = qs('#mainContent');
     if (!main) return;
