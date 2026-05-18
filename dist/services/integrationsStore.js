@@ -8,6 +8,19 @@ const node_crypto_1 = require("node:crypto");
 const node_path_1 = require("node:path");
 const logger_1 = require("../utils/logger");
 const DATA_PATH = (0, node_path_1.join)(process.cwd(), 'data', 'integrations.json');
+function parseTelegramChatType(raw) {
+    if (raw === 'channel')
+        return 'channel';
+    if (raw === 'group')
+        return 'group';
+    if (raw === 'supergroup')
+        return 'supergroup';
+    if (raw === 'private')
+        return 'private';
+    if (raw === 'unknown')
+        return 'unknown';
+    return undefined;
+}
 function defaultFile() {
     return { integrations: [], flows: [], forwardedLog: [] };
 }
@@ -99,7 +112,7 @@ function parseLinkedChat(raw) {
         id: o.id,
         title: o.title,
         username: typeof o.username === 'string' ? o.username : undefined,
-        type: typeof o.type === 'string' ? o.type : undefined,
+        type: parseTelegramChatType(o.type),
         botIsAdmin: o.botIsAdmin === true,
     };
 }

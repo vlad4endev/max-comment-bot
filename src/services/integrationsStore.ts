@@ -19,8 +19,17 @@ export interface IntegrationLinkedChat {
   id: string
   title: string
   username?: string
-  type?: string
+  type?: TelegramChatType
   botIsAdmin?: boolean
+}
+
+function parseTelegramChatType(raw: unknown): TelegramChatType | undefined {
+  if (raw === 'channel') return 'channel'
+  if (raw === 'group') return 'group'
+  if (raw === 'supergroup') return 'supergroup'
+  if (raw === 'private') return 'private'
+  if (raw === 'unknown') return 'unknown'
+  return undefined
 }
 
 export interface IntegrationRecord {
@@ -185,7 +194,7 @@ function parseLinkedChat(raw: unknown): IntegrationLinkedChat | null {
     id: o.id,
     title: o.title,
     username: typeof o.username === 'string' ? o.username : undefined,
-    type: typeof o.type === 'string' ? o.type : undefined,
+    type: parseTelegramChatType(o.type),
     botIsAdmin: o.botIsAdmin === true,
   }
 }

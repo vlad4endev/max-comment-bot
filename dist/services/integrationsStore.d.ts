@@ -1,4 +1,4 @@
-import type { PlatformChannelInfo } from './integrationPlatformClient';
+import type { PlatformChannelInfo, TelegramChatType } from './integrationPlatformClient';
 export type IntegrationPlatform = 'telegram' | 'vk';
 export type FlowPlatform = 'telegram' | 'vk' | 'max';
 export interface IntegrationStats {
@@ -9,7 +9,7 @@ export interface IntegrationLinkedChat {
     id: string;
     title: string;
     username?: string;
-    type?: string;
+    type?: TelegramChatType;
     botIsAdmin?: boolean;
 }
 export interface IntegrationRecord {
