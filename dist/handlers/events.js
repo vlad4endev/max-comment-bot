@@ -377,6 +377,21 @@ async function dmInviterAboutMissingAdmin(bot, inviterUserId, channelChatId, cha
     }
     logger_1.logger.warn('dmInviterAboutMissingAdmin: no inviter user id; skipping DM', { channelChatId });
 }
+/** Уведомление админам канала: у бота сняли права администратора. */
+async function notifyAdminsBotLostAdminRights(bot, channelChatId) {
+    const reg = channelRegistry_1.channelRegistry.getChannel(channelChatId);
+    const title = reg?.title ?? (await fetchChatTitle(bot, channelChatId)) ?? 'ваш канал';
+    const text = `⚠️ CommentBot больше не администратор канала\n\n` +
+        `Канал: «${title}»\n\n` +
+        `С бота сняли права администратора — бот не может выполнять свои функции: ` +
+        `кнопки «Комментарии» под постами, уведомления и модерация временно недоступны.\n\n` +
+        `Чтобы продолжить работу, откройте настройки канала → участники и снова назначьте CommentBot администратором.\n` +
+        `После этого нажмите кнопку ниже — я проверю доступ и возобновлю работу.`;
+    const kb = max_bot_api_1.Keyboard.inlineKeyboard([
+        [max_bot_api_1.Keyboard.button.callback('✅ Подтвердить подключение', buildConfirmChannelPayload(channelChatId))],
+    ]);
+    await (0, notificationService_1.notifyAllAdmins)(bot, channelChatId, text, { attachments: [kb] });
+}
 /**
  * Бот удалён из канала — полная очистка БД и сброс пользователей без других каналов.
  * Снятие только прав админа (бот ещё в канале) — помечаем «ожидает прав», данные не трогаем.

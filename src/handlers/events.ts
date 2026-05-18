@@ -470,6 +470,25 @@ async function dmInviterAboutMissingAdmin(
   logger.warn('dmInviterAboutMissingAdmin: no inviter user id; skipping DM', { channelChatId })
 }
 
+/** Уведомление админам канала: у бота сняли права администратора. */
+async function notifyAdminsBotLostAdminRights(bot: Bot, channelChatId: number): Promise<void> {
+  const reg = channelRegistry.getChannel(channelChatId)
+  const title = reg?.title ?? (await fetchChatTitle(bot, channelChatId)) ?? 'ваш канал'
+  const text =
+    `⚠️ CommentBot больше не администратор канала\n\n` +
+    `Канал: «${title}»\n\n` +
+    `С бота сняли права администратора — бот не может выполнять свои функции: ` +
+    `кнопки «Комментарии» под постами, уведомления и модерация временно недоступны.\n\n` +
+    `Чтобы продолжить работу, откройте настройки канала → участники и снова назначьте CommentBot администратором.\n` +
+    `После этого нажмите кнопку ниже — я проверю доступ и возобновлю работу.`
+
+  const kb = Keyboard.inlineKeyboard([
+    [Keyboard.button.callback('✅ Подтвердить подключение', buildConfirmChannelPayload(channelChatId))],
+  ])
+
+  await notifyAllAdmins(bot, channelChatId, text, { attachments: [kb] })
+}
+
 type BotDisconnectReason = 'bot_removed' | 'admin_rights_removed'
 
 /**
@@ -497,6 +516,11 @@ async function handleBotDisconnected(
   logger.info('handleBotDisconnected: bot lost admin only, pending rights', { chatId })
   clearAdminJoinNotifiedForChannel(chatId)
   stateManager.markChannelPendingAdminRights(chatId)
+  try {
+    await notifyAdminsBotLostAdminRights(bot, chatId)
+  } catch (err: unknown) {
+    logger.warn('handleBotDisconnected: notifyAdminsBotLostAdminRights failed', { chatId, err })
+  }
 }
 
 export { clearAdminJoinNotifiedForChannel } from '../services/channelAdminJoinNotified'
