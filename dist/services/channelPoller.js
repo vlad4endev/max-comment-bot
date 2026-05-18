@@ -46,11 +46,17 @@ async function pollChannel(bot, channel, botUid) {
             botUserId: botUid,
             channelChatIdOverride: channel.chat_id,
         });
-        logger_1.logger.info('channelPoller: tryAttach result', {
+        const logPayload = {
             chatId: channel.chat_id,
             mid: message.body?.mid,
             result: r,
-        });
+        };
+        if (!r.ok && r.reason === 'already_exists') {
+            logger_1.logger.debug('channelPoller: tryAttach result', logPayload);
+        }
+        else {
+            logger_1.logger.info('channelPoller: tryAttach result', logPayload);
+        }
         if (r.ok) {
             logger_1.logger.info('channelPoller: button attached to new post', {
                 channelChatId: channel.chat_id,
