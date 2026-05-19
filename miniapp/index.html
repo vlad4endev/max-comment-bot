@@ -3280,6 +3280,20 @@
           .replace(/"/g, '&quot;');
       }
 
+      /** NFKC: superscript/subscript digits etc. -> normal ASCII so system font does not look broken. */
+      function normalizeDisplayText(s) {
+        if (s == null) return '';
+        try {
+          return String(s).normalize('NFKC');
+        } catch (_) {
+          return String(s);
+        }
+      }
+
+      function escDisplay(s) {
+        return esc(normalizeDisplayText(s));
+      }
+
       function cssEsc(s) {
         var v = String(s);
         if (typeof CSS !== 'undefined' && typeof CSS.escape === 'function') {
@@ -3532,9 +3546,9 @@
           replyLabel +
           '</span></div>' +
           '<div class="reply-quote">' +
-          esc(c.text) +
+          escDisplay(c.text) +
           '</div>' +
-          (replyText ? '<div class="reply-text">' + esc(replyText) + '</div>' : '') +
+          (replyText ? '<div class="reply-text">' + escDisplay(replyText) + '</div>' : '') +
           replyMedia +
           '<div class="reply-time">' +
           esc(replyClock) +
@@ -3579,9 +3593,9 @@
           '</div>' +
           '<div class="bubble-u">' +
           '<div class="uname">' +
-          esc(c.username) +
+          escDisplay(c.username) +
           '</div>' +
-          (c.text ? '<div class="utext">' + esc(c.text) + '</div>' : '') +
+          (c.text ? '<div class="utext">' + escDisplay(c.text) + '</div>' : '') +
           commentMedia +
           '<div class="utime">' +
           esc(timeShown) +
@@ -4018,7 +4032,8 @@
           })
           .then(function (p) {
             setChannelHeader(p.channel_title, p.channel_avatar_url);
-            postPreviewTextEl.textContent = p.text && p.text.trim() ? p.text : '\u00a0';
+            postPreviewTextEl.textContent =
+              p.text && p.text.trim() ? normalizeDisplayText(p.text) : '\u00a0';
             if (p.photo_url) {
               postThumbEl.src = p.photo_url;
               postThumbEl.classList.add('show');

@@ -87,6 +87,15 @@ function parseOptionalString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : ''
 }
 
+/** NFKC: compatibility superscripts etc. → plain ASCII digits/letters for consistent rendering. */
+function normalizeUserFacingText(value: string): string {
+  try {
+    return value.normalize('NFKC')
+  } catch {
+    return value
+  }
+}
+
 function normalizePhotoUrl(value: unknown): string | null {
   if (typeof value !== 'string') {
     return null
@@ -869,7 +878,7 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
     const chatId = parseNonZeroInt(body.chat_id)
     const userId = parsePositiveInt(body.user_id)
     const username = parseNonEmptyString(body.username)
-    const text = parseOptionalString(body.text)
+    const text = normalizeUserFacingText(parseOptionalString(body.text))
     const photoUrls = parsePhotoUrls(body.photo_urls)
     const avatarFromClient =
       parseNonEmptyString(body.avatar_url) ?? parseNonEmptyString(body.photo_url)
@@ -942,7 +951,7 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
     const postId = parseNonEmptyString(body.post_id)
     const chatId = parseNonZeroInt(body.chat_id)
     const replierUserId = parsePositiveInt(body.user_id)
-    const adminText = parseOptionalString(body.admin_text)
+    const adminText = normalizeUserFacingText(parseOptionalString(body.admin_text))
     const replyPhotoUrls = parsePhotoUrls(body.photo_urls)
     if (!commentId || !postId || !chatId || !replierUserId || (adminText === '' && replyPhotoUrls.length === 0)) {
       res.status(400).json({ error: 'missing or invalid fields' })
@@ -1030,7 +1039,8 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
     const postId = parseNonEmptyString(body.post_id)
     const chatId = parseNonZeroInt(body.chat_id)
     const editorUserId = parsePositiveInt(body.user_id)
-    const text = parseNonEmptyString(body.text)
+    const rawText = parseNonEmptyString(body.text)
+    const text = rawText != null ? normalizeUserFacingText(rawText) : null
     if (!commentId || !postId || !chatId || !editorUserId || !text) {
       res.status(400).json({ error: 'missing or invalid fields' })
       return
@@ -1115,7 +1125,7 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
     const postId = parseNonEmptyString(body.post_id)
     const chatId = parseNonZeroInt(body.chat_id)
     const editorUserId = parsePositiveInt(body.user_id)
-    const adminText = parseOptionalString(body.admin_text)
+    const adminText = normalizeUserFacingText(parseOptionalString(body.admin_text))
     const photoUrlsInBody = 'photo_urls' in body
     const replyPhotoUrls = photoUrlsInBody ? parsePhotoUrls(body.photo_urls) : undefined
     if (
