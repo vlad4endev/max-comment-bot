@@ -80,6 +80,16 @@
       --bubble-admin: rgba(127,119,221,0.10);
       --bubble-admin-border: rgba(127,119,221,0.20);
 
+      --tg-chat-bg: #0e1621;
+      --tg-bubble-in: #182533;
+      --tg-bubble-out: #2b5278;
+      --tg-bubble-shadow: none;
+      --tg-name: #6ab3f3;
+      --tg-time-in: rgba(255, 255, 255, 0.45);
+      --tg-time-out: rgba(255, 255, 255, 0.6);
+      --tg-text-in: #f5f5f5;
+      --tg-text-out: #ffffff;
+
       --input-bg: rgba(255,255,255,0.06);
       --input-border: rgba(255,255,255,0.10);
       --send-bg: #7F77DD;
@@ -140,6 +150,16 @@
       --bubble-user: rgba(0,0,0,0.05);
       --bubble-admin: rgba(108,100,204,0.08);
       --bubble-admin-border: rgba(108,100,204,0.20);
+
+      --tg-chat-bg: #d9e0e8;
+      --tg-bubble-in: #ffffff;
+      --tg-bubble-out: #eeffde;
+      --tg-bubble-shadow: 0 1px 0.5px rgba(0, 0, 0, 0.08);
+      --tg-name: #2481cc;
+      --tg-time-in: rgba(0, 0, 0, 0.4);
+      --tg-time-out: rgba(0, 0, 0, 0.45);
+      --tg-text-in: #000000;
+      --tg-text-out: #000000;
 
       --input-bg: rgba(0,0,0,0.05);
       --input-border: rgba(0,0,0,0.12);
@@ -1159,10 +1179,11 @@
       overflow-x: hidden;
       -webkit-overflow-scrolling: touch;
       scroll-behavior: smooth;
-      padding: 14px 14px 0 14px;
+      padding: 8px 10px 0;
       display: flex;
       flex-direction: column;
-      gap: 16px;
+      gap: 10px;
+      background: var(--tg-chat-bg);
     }
     #view-comments .feed-empty {
       text-align: center;
@@ -1198,139 +1219,143 @@
       align-items: stretch;
       max-width: 100%;
       position: relative;
+      gap: 2px;
     }
-    #view-comments .msg-user {
+    #view-comments .feed-msg {
       display: flex;
       flex-direction: row;
-      align-items: flex-start;
-      gap: 8px;
-      max-width: 100%;
-      transition: transform .12s ease-out;
+      align-items: flex-end;
+      gap: 6px;
+      max-width: min(82%, 520px);
+      position: relative;
+      transition: transform 0.12s ease-out;
     }
-    #view-comments .comment-group.swipe-reply .msg-user {
+    #view-comments .feed-msg.msg-in {
+      align-self: flex-start;
+      margin-right: auto;
+    }
+    #view-comments .feed-msg.msg-out {
+      flex-direction: row-reverse;
+      align-self: flex-end;
+      margin-left: auto;
+    }
+    #view-comments .comment-group.swipe-reply .feed-msg.msg-user {
       transform: translateX(-24px);
     }
-    #view-comments .feed-msg.msg-channel {
-      display: flex;
-      flex-direction: row;
-      align-items: flex-start;
-      gap: 8px;
-      max-width: 100%;
-      margin-top: 8px;
-      margin-left: 38px;
-      position: relative;
-    }
-    #view-comments .feed-msg.msg-channel .av-ch {
-      width: 30px;
-      height: 30px;
+    #view-comments .feed-msg .av {
+      width: 36px;
+      height: 36px;
       border-radius: 50%;
       flex-shrink: 0;
-      font-size: 11px;
-      font-weight: 700;
+      font-size: 12px;
+      font-weight: 600;
       display: flex;
       align-items: center;
       justify-content: center;
       line-height: 1;
       overflow: hidden;
-      background: var(--accent-bg);
-      color: var(--accent-strong);
-    }
-    #view-comments .feed-msg.msg-channel .bubble-ch {
-      position: relative;
-      flex: 1;
-      min-width: 0;
-      max-width: calc(100% - 60px);
-      padding: 10px 13px;
-      border-radius: 4px 16px 16px 16px;
-      background: var(--accent-bg);
-      border: 1px solid var(--accent-border);
-    }
-    #view-comments .feed-msg.msg-channel .cname {
-      font-size: 12px;
-      font-weight: 600;
-      color: var(--accent-strong);
+      align-self: flex-end;
       margin-bottom: 2px;
     }
-    #view-comments .feed-msg.msg-channel .ctext {
-      font-size: 14px;
-      line-height: 1.45;
-      color: var(--text-strong);
-      word-break: break-word;
-      white-space: pre-wrap;
-    }
-    #view-comments .feed-msg.msg-channel .ctime {
-      font-size: 10px;
-      color: var(--text-tiny);
-      margin-top: 6px;
-    }
-    #view-comments .feed-msg.msg-channel .av-ch img {
+    #view-comments .feed-msg .av img {
       width: 100%;
       height: 100%;
       object-fit: cover;
     }
-    #view-comments .msg-user .av {
-      width: 30px;
-      height: 30px;
-      border-radius: 50%;
-      flex-shrink: 0;
-      font-size: 11px;
-      font-weight: 700;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      line-height: 1;
-      overflow: hidden;
+    #view-comments .feed-msg.msg-out .av {
+      display: none;
     }
-    #view-comments .msg-user .av-u {
-      background: var(--teal-strong-bg);
-      color: var(--teal);
+    #view-comments .feed-msg .av-u {
+      background: linear-gradient(135deg, #5b9bd5, #4a8bc2);
+      color: #fff;
     }
-    #view-comments .bubble-u {
+    #view-comments .feed-msg .av-ch {
+      background: linear-gradient(135deg, var(--accent), #5a52b8);
+      color: #fff;
+    }
+    #view-comments .feed-msg .av-spacer {
+      visibility: hidden;
+      pointer-events: none;
+    }
+    #view-comments .feed-msg.msg-channel.msg-channel-stacked {
+      margin-top: 1px;
+    }
+    #view-comments .feed-msg.msg-channel.msg-channel-stacked .av-ch {
+      visibility: hidden;
+    }
+    #view-comments .tg-bubble {
       position: relative;
-      flex: 1;
-      min-width: 0;
-      max-width: calc(100% - 60px);
-      padding: 10px 13px;
-      border-radius: 4px 16px 16px 16px;
-      background: var(--bubble-user);
-      border: 1px solid var(--surface-border);
+      min-width: 48px;
+      max-width: 100%;
+      padding: 6px 10px 5px 12px;
+      border: none;
+      box-shadow: var(--tg-bubble-shadow);
     }
-    #view-comments .bubble-u .uname {
-      font-size: 12px;
+    #view-comments .msg-in .tg-bubble {
+      background: var(--tg-bubble-in);
+      border-radius: 4px 16px 16px 16px;
+    }
+    #view-comments .msg-out .tg-bubble {
+      background: var(--tg-bubble-out);
+      border-radius: 16px 4px 16px 16px;
+    }
+    #view-comments .tg-bubble .tg-name {
+      font-size: 13px;
       font-weight: 600;
-      color: var(--teal);
+      line-height: 1.25;
+      color: var(--tg-name);
       margin-bottom: 2px;
     }
-    #view-comments .bubble-u .utext {
-      font-size: 14px;
-      line-height: 1.45;
-      color: var(--text-strong);
+    #view-comments .tg-bubble .tg-text {
+      font-size: 16px;
+      line-height: 1.3125;
+      letter-spacing: -0.01em;
       word-break: break-word;
       white-space: pre-wrap;
+    }
+    #view-comments .msg-in .tg-bubble .tg-text {
+      color: var(--tg-text-in);
+    }
+    #view-comments .msg-out .tg-bubble .tg-text {
+      color: var(--tg-text-out);
+    }
+    #view-comments .tg-bubble .tg-time {
+      float: right;
+      clear: right;
+      margin: 4px 0 0 10px;
+      font-size: 11px;
+      line-height: 1.35;
+      white-space: nowrap;
+      user-select: none;
+    }
+    #view-comments .msg-in .tg-bubble .tg-time {
+      color: var(--tg-time-in);
+    }
+    #view-comments .msg-out .tg-bubble .tg-time {
+      color: var(--tg-time-out);
     }
     #view-comments .media-grid {
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
-      gap: 6px;
-      margin-top: 8px;
+      gap: 4px;
+      margin-top: 4px;
+      border-radius: 8px;
+      overflow: hidden;
     }
     #view-comments .media-grid img {
       width: 100%;
-      max-height: 220px;
+      max-height: 240px;
       object-fit: cover;
-      border-radius: 10px;
-      border: 1px solid var(--border);
-      background: var(--bg-surface);
-    }
-    #view-comments .bubble-u .utime {
-      font-size: 10px;
-      color: var(--text-tiny);
-      margin-top: 6px;
+      border-radius: 0;
+      border: none;
+      background: rgba(0, 0, 0, 0.06);
+      display: block;
     }
     #view-comments .msg-reply-row {
-      margin-left: 38px;
-      margin-top: 4px;
-      max-width: calc(100% - 38px);
+      align-self: flex-start;
+      margin-left: 42px;
+      margin-top: 2px;
+      max-width: min(82%, 520px);
     }
     #view-comments .reply-below-btn {
       display: inline-block;
@@ -3636,7 +3661,7 @@
         return esc(initials(name));
       }
 
-      function buildChannelMsgHtml(reply, commentId, isLastReply) {
+      function buildChannelMsgHtml(reply, commentId, isLastReply, showChannelAvatar) {
         var adminTrim =
           reply && typeof reply.admin_name === 'string' ? reply.admin_name.trim() : '';
         var replyNameRaw =
@@ -3656,29 +3681,33 @@
               ? String(reply.timestamp)
               : '';
         var lastCls = isLastReply ? ' msg-channel-last' : '';
+        var stackCls = showChannelAvatar ? '' : ' msg-channel-stacked';
+        var nameHtml = showChannelAvatar
+          ? '<div class="tg-name">' + replyLabel + '</div>'
+          : '';
         return (
-          '<div class="feed-msg msg-channel' +
+          '<div class="feed-msg msg-channel msg-in' +
           lastCls +
+          stackCls +
           '" data-reply-id="' +
           esc(rid) +
           '">' +
           '<div class="av av-ch">' +
-          channelAvatarBlockHtml() +
+          (showChannelAvatar ? channelAvatarBlockHtml() : '') +
           '</div>' +
-          '<div class="bubble-ch">' +
-          '<div class="cname">' +
-          replyLabel +
-          '</div>' +
-          (replyText ? '<div class="ctext">' + escDisplay(replyText) + '</div>' : '') +
+          '<div class="tg-bubble bubble-ch">' +
+          nameHtml +
+          (replyText ? '<div class="tg-text">' + escDisplay(replyText) + '</div>' : '') +
           replyMedia +
-          '<div class="ctime">' +
+          '<span class="tg-time">' +
           esc(replyClock) +
-          '</div>' +
+          '</span>' +
           '</div>' +
           adminReplyActs +
           '</div>'
         );
       }
+
       function resolveCommentAvatarUrl(c) {
         if (c.avatar_url && String(c.avatar_url).trim()) {
           return String(c.avatar_url).trim();
@@ -3697,7 +3726,7 @@
         if (replies.length) {
           replyHtml = replies
             .map(function (r, idx) {
-              return buildChannelMsgHtml(r, c.comment_id, idx === replies.length - 1);
+              return buildChannelMsgHtml(r, c.comment_id, idx === replies.length - 1, idx === 0);
             })
             .join('');
         }
@@ -3715,25 +3744,31 @@
               '" aria-label="Ответить от имени канала">Ответить</button>' +
               '</div>'
             : '';
+        var isOwnComment =
+          c.user_id != null && String(c.user_id) === String(userId);
+        var userMsgCls = 'feed-msg msg-user ' + (isOwnComment ? 'msg-out' : 'msg-in');
+        var nameHtml = isOwnComment
+          ? ''
+          : '<div class="tg-name">' + escDisplay(c.username) + '</div>';
         return (
           '<div class="comment-group" data-comment-id="' +
           esc(c.comment_id) +
           '"' +
           dkAttr +
           '>' +
-          '<div class="msg-user">' +
+          '<div class="' +
+          userMsgCls +
+          '">' +
           '<div class="av av-u">' +
           av +
           '</div>' +
-          '<div class="bubble-u">' +
-          '<div class="uname">' +
-          escDisplay(c.username) +
-          '</div>' +
-          (c.text ? '<div class="utext">' + escDisplay(c.text) + '</div>' : '') +
+          '<div class="tg-bubble bubble-u">' +
+          nameHtml +
+          (c.text ? '<div class="tg-text">' + escDisplay(c.text) + '</div>' : '') +
           commentMedia +
-          '<div class="utime">' +
+          '<span class="tg-time">' +
           esc(timeShown) +
-          '</div>' +
+          '</span>' +
           '</div></div>' +
           commentAdminActs +
           replyBelow +
@@ -3762,7 +3797,8 @@
         if (isAdmin) {
           var pressTimer = null;
           var msgEl = node.querySelector('.msg-user');
-          if (msgEl && node.dataset.commentWired !== '1') {
+          if (msgEl && msgEl.dataset.modWired !== '1') {
+            msgEl.dataset.modWired = '1';
             var swipe = { active: false, sx: 0, sy: 0 };
             msgEl.addEventListener(
               'touchstart',
@@ -3808,7 +3844,7 @@
                   var dy = e.changedTouches[0].clientY - swipe.sy;
                   if (dx < -56 && Math.abs(dx) > Math.abs(dy) + 18) {
                     var cidSwipe = node.getAttribute('data-comment-id');
-                    var unameEl = node.querySelector('.uname');
+                    var unameEl = node.querySelector('.tg-name, .uname');
                     var unameSwipe = unameEl
                       ? String(unameEl.textContent || '').trim()
                       : 'пользователю';
@@ -3824,7 +3860,6 @@
               e.preventDefault();
               openAdminContextMenu(node, 'comment');
             });
-            node.dataset.commentWired = '1';
           }
           var replyEl = node.querySelector('.msg-channel.msg-channel-last');
           if (replyEl && replyEl.dataset.channelWired !== '1') {
@@ -3881,7 +3916,7 @@
               clearTimeout(pressTimer);
               closeAllAdminContextMenus();
               var rid = replyQuick.getAttribute('data-reply-comment');
-              var unameEl = node.querySelector('.uname');
+              var unameEl = node.querySelector('.tg-name, .uname');
               var nm = unameEl ? String(unameEl.textContent || '').trim() : '';
               activateReplyContext(rid, nm || 'пользователю');
             });
@@ -3925,7 +3960,7 @@
               '[data-admin-edit-box="' + cssEsc(cid) + '"][data-edit-kind="comment"]'
             );
             var ta = box && box.querySelector('textarea');
-            var utext = block.querySelector('.bubble-u .utext');
+            var utext = block.querySelector('.bubble-u .tg-text, .bubble-u .utext');
             if (!box || !ta) return;
             ta.value = utext ? utext.textContent || '' : '';
             box.classList.add('open');
@@ -3941,7 +3976,7 @@
             var box = block.querySelector(
               '[data-admin-edit-box="' + cssEsc(cid) + '"][data-edit-kind="reply"]'
             );
-            var rtext = block.querySelector('.msg-channel.msg-channel-last .ctext');
+            var rtext = block.querySelector('.msg-channel.msg-channel-last .tg-text, .msg-channel.msg-channel-last .ctext');
             var ta = box && box.querySelector('textarea');
             var hasReplyMedia = !!block.querySelector('.msg-channel.msg-channel-last .media-grid');
             if (!box || !ta) return;
@@ -4139,7 +4174,7 @@
           for (var i = prevCount; i < newReplies.length; i++) {
             existing.insertAdjacentHTML(
               'beforeend',
-              buildChannelMsgHtml(newReplies[i], c.comment_id, i === newReplies.length - 1)
+              buildChannelMsgHtml(newReplies[i], c.comment_id, i === newReplies.length - 1, i === prevCount)
             );
           }
           existing.querySelectorAll('.msg-channel').forEach(function (el, idx, all) {
