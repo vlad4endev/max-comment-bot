@@ -12,6 +12,7 @@
   var tgLinkedChatsCache = [];
   var currentRoute = '';
   var dashRefreshTimer = null;
+  var logsRefreshTimer = null;
   var dashPeriodDays = 7;
   var channelsCache = [];
   var selectedChannelId = null;
@@ -708,6 +709,13 @@
     if (dashRefreshTimer) {
       window.clearInterval(dashRefreshTimer);
       dashRefreshTimer = null;
+    }
+  }
+
+  function clearLogsTimer() {
+    if (logsRefreshTimer) {
+      window.clearInterval(logsRefreshTimer);
+      logsRefreshTimer = null;
     }
   }
 
@@ -2300,18 +2308,142 @@
       });
   }
 
+  var LOG_LEVEL_LABELS = {
+    INFO: 'Инфо',
+    WARN: 'Внимание',
+    ERROR: 'Ошибка',
+    DEBUG: 'Отладка',
+    UNKNOWN: 'Прочее',
+  };
+
+  function formatLogTimestamp(ts) {
+    if (!ts) return '—';
+    var d = new Date(ts);
+    if (Number.isNaN(d.getTime())) return String(ts);
+    return d.toLocaleString('ru-RU', {
+      day: '2-digit',
+      month: '2-digit',
+      year: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    });
+  }
+
+  function formatLogExtra(extra) {
+    if (extra === undefined || extra === null) return '';
+    if (typeof extra === 'string') return extra;
+    try {
+      return JSON.stringify(extra, null, 2);
+    } catch (_e) {
+      return String(extra);
+    }
+  }
+
+  function highlightLogText(text, needle) {
+    var safe = esc(String(text || ''));
+    if (!needle) return safe;
+    var n = String(needle).toLowerCase();
+    if (!n) return safe;
+    var src = String(text || '');
+    var lower = src.toLowerCase();
+    var out = '';
+    var i = 0;
+    while (true) {
+      var idx = lower.indexOf(n, i);
+      if (idx === -1) {
+        out += esc(src.slice(i));
+        break;
+      }
+      out += esc(src.slice(i, idx));
+      out += '<mark class="log-hl">' + esc(src.slice(idx, idx + n.length)) + '</mark>';
+      i = idx + n.length;
+    }
+    return out;
+  }
+
+  function logEntryHtml(entry, filter) {
+    var level = entry.level || 'UNKNOWN';
+    var label = LOG_LEVEL_LABELS[level] || level;
+    var extraText = formatLogExtra(entry.extra);
+    var html =
+      '<article class="log-entry level-' +
+      esc(level.toLowerCase()) +
+      '">' +
+      '<div class="log-entry-head">' +
+      '<time class="log-time mono" datetime="' +
+      esc(entry.ts || '') +
+      '">' +
+      esc(formatLogTimestamp(entry.ts)) +
+      '</time>' +
+      '<span class="log-badge">' +
+      esc(label) +
+      '</span>' +
+      '</div>' +
+      '<p class="log-message">' +
+      highlightLogText(entry.message || entry.raw || '', filter) +
+      '</p>';
+    if (extraText) {
+      if (extraText.length > 280) {
+        html +=
+          '<details class="log-extra-wrap"><summary class="log-extra-summary">Детали (' +
+          esc(String(extraText.split('\n').length)) +
+          ' строк)</summary><pre class="log-extra mono">' +
+          esc(extraText) +
+          '</pre></details>';
+      } else {
+        html += '<pre class="log-extra mono">' + esc(extraText) + '</pre>';
+      }
+    }
+    html += '</article>';
+    return html;
+  }
+
   function renderLogs() {
     var main = qs('#mainContent');
     if (!main) return;
+    clearLogsTimer();
     main.innerHTML =
-      '<div class="search-bar">' +
-      '<select class="select" id="log_level" style="max-width:140px"><option value="">Все уровни</option>' +
-      '<option value="INFO">INFO</option><option value="WARN">WARN</option><option value="ERROR">ERROR</option></select>' +
-      '<input class="input" id="log_filter" placeholder="Фильтр текста" style="max-width:220px"/>' +
-      '<input class="input mono" id="log_limit" style="max-width:100px" placeholder="200" value="200"/>' +
-      '<button type="button" class="btn btn-primary" id="log_run">Загрузить</button></div>' +
+      '<p class="text-sm muted">Журнал работы бота: события, предупреждения и ошибки. Новые записи сверху.</p>' +
+      '<div class="search-bar log-toolbar">' +
+      '<select class="select" id="log_level" style="max-width:150px"><option value="">Все уровни</option>' +
+      '<option value="ERROR">Ошибки</option>' +
+      '<option value="WARN">Предупреждения</option>' +
+      '<option value="INFO">Инфо</option>' +
+      '<option value="DEBUG">Отладка</option>' +
+      '</select>' +
+      '<input class="input" id="log_filter" placeholder="Поиск по тексту…" style="max-width:240px"/>' +
+      '<input class="input mono" id="log_limit" style="max-width:90px" placeholder="200" value="200" title="Сколько строк"/>' +
+      '<label class="log-auto-label"><input type="checkbox" id="log_auto" checked/> Авто 5 с</label>' +
+      '<button type="button" class="btn btn-primary" id="log_run">Обновить</button>' +
+      '</div>' +
+      '<div class="log-stats" id="log_stats"></div>' +
       '<div class="log-viewer" id="log_body"></div>';
-    function run() {
+    var loading = false;
+
+    function renderStats(stats) {
+      var el = qs('#log_stats', main);
+      if (!el || !stats) return;
+      el.innerHTML =
+        '<span class="log-stat">Всего: <strong>' +
+        esc(String(stats.total || 0)) +
+        '</strong></span>' +
+        '<span class="log-stat stat-info">Инфо: <strong>' +
+        esc(String(stats.info || 0)) +
+        '</strong></span>' +
+        '<span class="log-stat stat-warn">Внимание: <strong>' +
+        esc(String(stats.warn || 0)) +
+        '</strong></span>' +
+        '<span class="log-stat stat-error">Ошибки: <strong>' +
+        esc(String(stats.error || 0)) +
+        '</strong></span>' +
+        (stats.debug
+          ? '<span class="log-stat stat-debug">Отладка: <strong>' + esc(String(stats.debug)) + '</strong></span>'
+          : '');
+    }
+
+    function run(silent) {
+      if (loading) return;
       var level = (qs('#log_level', main) && qs('#log_level', main).value) || '';
       var filter = (qs('#log_filter', main) && qs('#log_filter', main).value) || '';
       var lim = (qs('#log_limit', main) && qs('#log_limit', main).value) || '200';
@@ -2321,29 +2453,70 @@
         (level ? '&level=' + encodeURIComponent(level) : '') +
         (filter ? '&filter=' + encodeURIComponent(filter) : '');
       var body = qs('#log_body', main);
-      body.textContent = 'Загрузка…';
+      if (!body) return;
+      var atTop = body.scrollTop <= 8;
+      if (!silent) body.innerHTML = '<p class="muted log-loading">Загрузка…</p>';
+      loading = true;
       getJson(q)
         .then(function (data) {
-          var lines = data.lines || [];
-          body.textContent = '';
-          lines.forEach(function (line) {
-            var div = document.createElement('div');
-            div.className = 'log-line';
-            if (line.indexOf(' [INFO] ') !== -1) div.className += ' level-info';
-            else if (line.indexOf(' [WARN] ') !== -1) div.className += ' level-warn';
-            else if (line.indexOf(' [ERROR] ') !== -1) div.className += ' level-error';
-            else if (line.indexOf(' [DEBUG] ') !== -1) div.className += ' level-debug';
-            div.textContent = line;
-            body.appendChild(div);
-          });
-          if (!lines.length) body.textContent = 'Нет строк';
+          if (currentRoute !== 'logs') return;
+          var entries = data.entries || [];
+          if (!entries.length && data.lines && data.lines.length) {
+            entries = data.lines.map(function (line) {
+              return { ts: '', level: 'UNKNOWN', message: line, raw: line };
+            });
+          }
+          renderStats(data.stats);
+          if (!entries.length) {
+            body.innerHTML = '<p class="muted log-empty">Нет записей по выбранным фильтрам</p>';
+            return;
+          }
+          var html = '';
+          entries
+            .slice()
+            .reverse()
+            .forEach(function (entry) {
+              html += logEntryHtml(entry, filter);
+            });
+          body.innerHTML = html;
+          if (atTop || !silent) {
+            body.scrollTop = 0;
+          }
         })
         .catch(function (e) {
-          body.textContent = e.message || 'Ошибка';
+          if (currentRoute !== 'logs') return;
+          body.innerHTML =
+            '<p class="log-empty" style="color:var(--danger)">' + esc(e.message || 'Ошибка загрузки') + '</p>';
+        })
+        .finally(function () {
+          loading = false;
         });
     }
-    qs('#log_run', main).addEventListener('click', run);
-    run();
+
+    function scheduleLogsRefresh() {
+      clearLogsTimer();
+      var auto = qs('#log_auto', main);
+      if (!auto || !auto.checked) return;
+      logsRefreshTimer = window.setInterval(function () {
+        if (currentRoute === 'logs') run(true);
+      }, 5000);
+    }
+
+    qs('#log_run', main).addEventListener('click', function () {
+      run(false);
+    });
+    var autoEl = qs('#log_auto', main);
+    if (autoEl) {
+      autoEl.addEventListener('change', scheduleLogsRefresh);
+    }
+    var filterEl = qs('#log_filter', main);
+    if (filterEl) {
+      filterEl.addEventListener('keydown', function (ev) {
+        if (ev.key === 'Enter') run(false);
+      });
+    }
+    run(false);
+    scheduleLogsRefresh();
     refreshIcons();
   }
 
@@ -2443,6 +2616,7 @@
     var next = parseHashRoute();
     if (next !== currentRoute) {
       clearDashTimer();
+      clearLogsTimer();
     }
     currentRoute = next;
     if (location.hash.replace(/^#/, '') !== currentRoute) {

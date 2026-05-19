@@ -1337,21 +1337,164 @@ tbody tr:hover td {
 }
 
 /* Log viewer */
+.log-toolbar {
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 0.65rem;
+}
+
+.log-auto-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.log-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
+  margin-bottom: 0.65rem;
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+}
+
+.log-stat strong {
+  color: var(--text-primary);
+}
+
+.log-stat.stat-warn strong {
+  color: var(--warning);
+}
+
+.log-stat.stat-error strong {
+  color: var(--danger);
+}
+
+.log-stat.stat-debug strong {
+  color: var(--text-muted);
+}
+
 .log-viewer {
   background: var(--bg-input);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  padding: 0.75rem;
+  padding: 0.5rem;
   max-height: 65vh;
   overflow: auto;
-  font-family: var(--font-mono);
-  font-size: 0.72rem;
-  line-height: 1.55;
+  font-size: 0.84rem;
+  line-height: 1.45;
 }
 
+.log-entry {
+  border-left: 3px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0.55rem 0.65rem;
+  margin-bottom: 0.45rem;
+  background: var(--bg-card);
+}
+
+.log-entry.level-info {
+  border-left-color: var(--text-muted);
+}
+
+.log-entry.level-warn {
+  border-left-color: var(--warning);
+  background: color-mix(in srgb, var(--warning) 6%, var(--bg-card));
+}
+
+.log-entry.level-error {
+  border-left-color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 7%, var(--bg-card));
+}
+
+.log-entry.level-debug {
+  border-left-color: var(--accent);
+  opacity: 0.92;
+}
+
+.log-entry-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.25rem;
+}
+
+.log-time {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.log-badge {
+  display: inline-block;
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  padding: 0.12rem 0.45rem;
+  border-radius: 999px;
+  background: var(--bg-input);
+  color: var(--text-secondary);
+}
+
+.log-entry.level-warn .log-badge {
+  background: color-mix(in srgb, var(--warning) 18%, transparent);
+  color: var(--warning);
+}
+
+.log-entry.level-error .log-badge {
+  background: color-mix(in srgb, var(--danger) 18%, transparent);
+  color: var(--danger);
+}
+
+.log-message {
+  margin: 0;
+  word-break: break-word;
+  white-space: pre-wrap;
+  color: var(--text-primary);
+}
+
+.log-extra {
+  margin: 0.4rem 0 0;
+  padding: 0.45rem 0.55rem;
+  border-radius: var(--radius-sm);
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  font-size: 0.72rem;
+  line-height: 1.45;
+  overflow-x: auto;
+  max-height: 14rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text-secondary);
+}
+
+.log-extra-wrap summary {
+  cursor: pointer;
+  font-size: 0.78rem;
+  color: var(--accent);
+  margin-top: 0.35rem;
+}
+
+.log-hl {
+  background: color-mix(in srgb, var(--accent) 35%, transparent);
+  color: inherit;
+  padding: 0 0.1em;
+  border-radius: 2px;
+}
+
+.log-loading,
+.log-empty {
+  padding: 1rem;
+  text-align: center;
+}
+
+/* Legacy one-line logs (fallback) */
 .log-line {
   padding: 0.1rem 0;
-  word-break: break-all;
+  word-break: break-word;
   white-space: pre-wrap;
 }
 

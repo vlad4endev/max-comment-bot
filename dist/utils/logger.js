@@ -15,6 +15,7 @@ exports.getAdminLogTail = getAdminLogTail;
 const node_fs_1 = require("node:fs");
 const promises_1 = require("node:fs/promises");
 const node_path_1 = require("node:path");
+const adminLogFormat_1 = require("./adminLogFormat");
 const RUNTIME_LOG_PATH = (0, node_path_1.join)(process.cwd(), 'data', 'runtime.log');
 const MAX_LOG_SIZE = 50 * 1024 * 1024;
 const ADMIN_LOG_BUFFER_MAX = 500;
@@ -104,10 +105,7 @@ class Logger {
     emit(level, color, message, write, extra) {
         const timestamp = new Date().toISOString();
         const header = `${color}${timestamp} [${level}] ${message}${RESET}`;
-        const plain = extra !== undefined
-            ? `${timestamp} [${level}] ${message} ${typeof extra === 'object' ? JSON.stringify(extra) : String(extra)}`
-            : `${timestamp} [${level}] ${message}`;
-        pushAdminLogLine(plain);
+        pushAdminLogLine((0, adminLogFormat_1.serializeAdminLogLine)(level, message, extra));
         if (extra !== undefined) {
             write(header, extra);
         }
