@@ -7,6 +7,7 @@ exports.createChannelImportRouter = createChannelImportRouter;
 const express_1 = __importDefault(require("express"));
 const adminAuth_1 = require("../middleware/adminAuth");
 const channelImportService_1 = require("../services/channelImportService");
+const telegramMtprotoAuth_1 = require("../services/telegramMtprotoAuth");
 const telegramUserArchive_1 = require("../services/telegramUserArchive");
 function parseJobId(raw) {
     if (raw === undefined) {
@@ -19,14 +20,22 @@ function createChannelImportRouter() {
     const router = express_1.default.Router();
     router.use(express_1.default.json({ limit: '512kb' }));
     router.use(adminAuth_1.checkAdminAuth);
-    router.get('/meta', (_req, res) => {
+    router.get('/meta', async (_req, res) => {
         const tokenMeta = (0, channelImportService_1.readerTokenMeta)();
+        let mtprotoStatus = null;
+        try {
+            mtprotoStatus = await (0, telegramMtprotoAuth_1.getMtprotoStatus)();
+        }
+        catch {
+            mtprotoStatus = null;
+        }
         res.json({
             scan_idle_max: channelImportService_1.SCAN_IDLE_MAX,
             scan_interval_ms: 2000,
             reader_token_ok: tokenMeta.ok,
             reader_uses_main_token: tokenMeta.usesMainToken,
             user_archive_ready: (0, telegramUserArchive_1.telegramUserArchiveConfigured)(),
+            mtproto: mtprotoStatus,
             hint: tokenMeta.ok
                 ? tokenMeta.usesMainToken
                     ? 'Используется TG_TOKEN из интеграции. Для импорта лучше задать отдельный TG_READER_BOT_TOKEN.'
@@ -34,8 +43,94 @@ function createChannelImportRouter() {
                 : 'Задайте TG_READER_BOT_TOKEN или подключите Telegram в интеграциях.',
             archive_hint: (0, telegramUserArchive_1.telegramUserArchiveConfigured)()
                 ? 'Режим «Архив канала» загрузит до N последних постов через user-аккаунт (MTProto).'
-                : 'Для архива: TG_API_ID, TG_API_HASH с my.telegram.org и TG_USER_SESSION (npm run tg:user-login).',
+                : 'Настройте MTProto ниже (api_id, api_hash и вход по телефону) или переменные в .env.',
         });
+    });
+    router.get('/mtproto', async (_req, res) => {
+        try {
+            res.json(await (0, telegramMtprotoAuth_1.getMtprotoStatus)());
+        }
+        catch (err) {
+            const msg = err instanceof Error ? err.message : 'status failed';
+            res.status(500).json({ error: msg });
+        }
+    });
+    router.put('/mtproto/credentials', (req, res) => {
+        const body = req.body;
+        const apiIdRaw = body.api_id;
+        const apiId = typeof apiIdRaw === 'number'
+            ? apiIdRaw
+            : typeof apiIdRaw === 'string'
+                ? Number.parseInt(apiIdRaw, 10)
+                : NaN;
+        const apiHash = typeof body.api_hash === 'string' ? body.api_hash : '';
+        try {
+            (0, telegramMtprotoAuth_1.saveMtprotoCredentials)(apiId, apiHash);
+            res.json({ ok: true });
+        }
+        catch (err) {
+            const msg = err instanceof Error ? err.message : 'invalid credentials';
+            res.status(400).json({ error: msg });
+        }
+    });
+    router.post('/mtproto/send-code', async (req, res) => {
+        const phone = typeof req.body?.phone === 'string'
+            ? req.body.phone
+            : req.body?.phone != null
+                ? String(req.body.phone)
+                : '';
+        try {
+            const result = await (0, telegramMtprotoAuth_1.sendMtprotoLoginCode)(phone);
+            res.json({ ok: true, ...result });
+        }
+        catch (err) {
+            const msg = err instanceof Error ? err.message : 'send code failed';
+            res.status(400).json({ error: msg });
+        }
+    });
+    router.post('/mtproto/confirm', async (req, res) => {
+        const body = req.body;
+        const loginId = typeof body.login_id === 'string' ? body.login_id : '';
+        const code = typeof body.code === 'string' ? body.code : '';
+        try {
+            const result = await (0, telegramMtprotoAuth_1.confirmMtprotoLoginCode)(loginId, code);
+            if (!result.ok) {
+                res.json({ ok: false, needs_password: true, login_id: result.login_id });
+                return;
+            }
+            res.json({ ok: true, user_display: result.user_display });
+        }
+        catch (err) {
+            const msg = err instanceof Error ? err.message : 'confirm failed';
+            res.status(400).json({ error: msg });
+        }
+    });
+    router.post('/mtproto/password', async (req, res) => {
+        const body = req.body;
+        const loginId = typeof body.login_id === 'string' ? body.login_id : '';
+        const password = typeof body.password === 'string' ? body.password : '';
+        try {
+            const result = await (0, telegramMtprotoAuth_1.confirmMtprotoPassword)(loginId, password);
+            res.json({ ok: true, user_display: result.user_display });
+        }
+        catch (err) {
+            const msg = err instanceof Error ? err.message : 'password failed';
+            res.status(400).json({ error: msg });
+        }
+    });
+    router.post('/mtproto/test', async (_req, res) => {
+        try {
+            const result = await (0, telegramMtprotoAuth_1.testMtprotoConnection)();
+            res.json({ ok: true, ...result });
+        }
+        catch (err) {
+            const msg = err instanceof Error ? err.message : 'test failed';
+            res.status(400).json({ error: msg });
+        }
+    });
+    router.delete('/mtproto/session', (_req, res) => {
+        (0, telegramMtprotoAuth_1.logoutMtprotoSession)();
+        res.json({ ok: true });
     });
     router.get('/jobs/active', (_req, res) => {
         const job = (0, channelImportService_1.getActiveChannelImportJob)();

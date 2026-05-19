@@ -14,28 +14,26 @@ const node_path_1 = __importDefault(require("node:path"));
 const telegram_1 = require("telegram");
 const sessions_1 = require("telegram/sessions");
 const logger_1 = require("../utils/logger");
+const mtprotoConfigStore_1 = require("./mtprotoConfigStore");
 function telegramUserArchiveConfigured() {
-    return getTelegramUserApiId() !== null && getTelegramUserApiHash() !== '' && getTelegramUserSession() !== '';
+    const { apiId, apiHash, session } = (0, mtprotoConfigStore_1.resolveMtprotoCredentials)();
+    return apiId !== null && apiHash !== '' && session !== '';
 }
 function getTelegramUserApiId() {
-    const raw = (process.env.TG_API_ID || '').trim();
-    if (!raw)
-        return null;
-    const n = Number.parseInt(raw, 10);
-    return Number.isFinite(n) ? n : null;
+    return (0, mtprotoConfigStore_1.resolveMtprotoCredentials)().apiId;
 }
 function getTelegramUserApiHash() {
-    return (process.env.TG_API_HASH || '').trim();
+    return (0, mtprotoConfigStore_1.resolveMtprotoCredentials)().apiHash;
 }
 function getTelegramUserSession() {
-    return (process.env.TG_USER_SESSION || '').trim();
+    return (0, mtprotoConfigStore_1.resolveMtprotoCredentials)().session;
 }
 async function createUserClient() {
     const apiId = getTelegramUserApiId();
     const apiHash = getTelegramUserApiHash();
     const session = getTelegramUserSession();
     if (apiId === null || !apiHash || !session) {
-        throw new Error('Не настроен user-аккаунт: задайте TG_API_ID, TG_API_HASH и TG_USER_SESSION (скрипт npm run tg:user-login)');
+        throw new Error('Не настроен user-аккаунт: укажите MTProto в админке (Импорт TG→MAX) или TG_API_ID, TG_API_HASH, TG_USER_SESSION в .env');
     }
     const client = new telegram_1.TelegramClient(new sessions_1.StringSession(session), apiId, apiHash, {
         connectionRetries: 3,
@@ -43,7 +41,7 @@ async function createUserClient() {
     await client.connect();
     if (!(await client.checkAuthorization())) {
         await client.disconnect();
-        throw new Error('TG_USER_SESSION недействителен — выполните npm run tg:user-login');
+        throw new Error('Сессия MTProto недействительна — войдите заново в админке');
     }
     return client;
 }

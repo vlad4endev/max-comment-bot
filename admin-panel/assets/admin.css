@@ -2026,6 +2026,42 @@ tbody tr:hover td {
 }
 
 /* Шаг 7: блок Telegram → MAX */
+.mtproto-panel {
+  border: 1px solid var(--border, #e5e7eb);
+}
+.mtproto-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+}
+.mtproto-status-badge {
+  display: inline-block;
+  padding: 6px 10px;
+  border-radius: var(--radius-md, 8px);
+  font-size: 12px;
+  font-weight: 600;
+  background: var(--surface-muted, #f3f4f6);
+  color: var(--text-muted, #6b7280);
+  max-width: min(320px, 100%);
+  line-height: 1.35;
+}
+.mtproto-status-badge.is-ok {
+  background: #ecfdf5;
+  color: #047857;
+}
+.mtproto-status-badge.is-err {
+  background: #fef2f2;
+  color: #b91c1c;
+}
+.mtproto-login-block {
+  padding-top: 12px;
+  border-top: 1px dashed var(--border, #e5e7eb);
+}
+.mtproto-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
 .forwarding-section {
   margin-top: 0;
 }

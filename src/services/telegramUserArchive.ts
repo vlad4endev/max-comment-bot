@@ -7,24 +7,23 @@ import { StringSession } from 'telegram/sessions'
 
 import { logger } from '../utils/logger'
 import type { StagedPayload } from './channelImportService'
+import { resolveMtprotoCredentials } from './mtprotoConfigStore'
 
 export function telegramUserArchiveConfigured(): boolean {
-  return getTelegramUserApiId() !== null && getTelegramUserApiHash() !== '' && getTelegramUserSession() !== ''
+  const { apiId, apiHash, session } = resolveMtprotoCredentials()
+  return apiId !== null && apiHash !== '' && session !== ''
 }
 
 export function getTelegramUserApiId(): number | null {
-  const raw = (process.env.TG_API_ID || '').trim()
-  if (!raw) return null
-  const n = Number.parseInt(raw, 10)
-  return Number.isFinite(n) ? n : null
+  return resolveMtprotoCredentials().apiId
 }
 
 export function getTelegramUserApiHash(): string {
-  return (process.env.TG_API_HASH || '').trim()
+  return resolveMtprotoCredentials().apiHash
 }
 
 export function getTelegramUserSession(): string {
-  return (process.env.TG_USER_SESSION || '').trim()
+  return resolveMtprotoCredentials().session
 }
 
 async function createUserClient(): Promise<TelegramClient> {
@@ -33,7 +32,7 @@ async function createUserClient(): Promise<TelegramClient> {
   const session = getTelegramUserSession()
   if (apiId === null || !apiHash || !session) {
     throw new Error(
-      'Не настроен user-аккаунт: задайте TG_API_ID, TG_API_HASH и TG_USER_SESSION (скрипт npm run tg:user-login)',
+      'Не настроен user-аккаунт: укажите MTProto в админке (Импорт TG→MAX) или TG_API_ID, TG_API_HASH, TG_USER_SESSION в .env',
     )
   }
   const client = new TelegramClient(new StringSession(session), apiId, apiHash, {
@@ -42,7 +41,7 @@ async function createUserClient(): Promise<TelegramClient> {
   await client.connect()
   if (!(await client.checkAuthorization())) {
     await client.disconnect()
-    throw new Error('TG_USER_SESSION недействителен — выполните npm run tg:user-login')
+    throw new Error('Сессия MTProto недействительна — войдите заново в админке')
   }
   return client
 }

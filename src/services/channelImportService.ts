@@ -197,7 +197,7 @@ export function createChannelImportJob(
   const useArchive = options?.archive === true
   if (useArchive && !telegramUserArchiveConfigured()) {
     throw new Error(
-      'Архив недоступен: настройте TG_API_ID, TG_API_HASH и TG_USER_SESSION (npm run tg:user-login)',
+      'Архив недоступен: настройте MTProto в блоке ниже (api_id, api_hash и вход по телефону)',
     )
   }
   const initialStatus = useArchive ? 'archive_fetch' : 'scanning'

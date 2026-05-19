@@ -2058,6 +2058,270 @@
     return '<span class="mono">' + esc(c.tg_username ? '@' + c.tg_username : '—') + '</span>';
   }
 
+  var mtprotoLoginId = null;
+  var mtprotoNeedsPassword = false;
+
+  function mtprotoStatusLabel(st) {
+    if (!st) return 'Не загружено';
+    if (st.configured && st.session_valid === true) {
+      return st.user_display ? 'Подключено: ' + st.user_display : 'Подключено';
+    }
+    if (st.has_session && st.session_valid === false) return 'Сессия недействительна';
+    if (st.configured) return st.user_display || 'Сессия сохранена';
+    if (st.has_credentials && !st.has_session) return 'Нужен вход по телефону';
+    return 'Не настроено';
+  }
+
+  function buildMtprotoPanelHtml() {
+    var html = '<div class="card-like mb-md mtproto-panel" id="ci_mtproto_panel">';
+    html += '<div class="flex-between" style="align-items:flex-start;gap:12px;flex-wrap:wrap">';
+    html += '<div><h2 class="forwarding-section-title" style="margin:0">MTProto — архив канала</h2>';
+    html +=
+      '<p class="muted text-sm" style="margin:6px 0 0;line-height:1.45">Для переноса ~30 и более старых постов нужен <strong>user-аккаунт</strong> Telegram. Ключи — на <a href="https://my.telegram.org/apps" target="_blank" rel="noopener">my.telegram.org</a>. Аккаунт должен видеть канал (участник или админ).</p></div>';
+    html += '<span class="mtproto-status-badge" id="ci_mtproto_badge">…</span></div>';
+    html += '<div id="ci_mtproto_hint" class="muted text-sm mt-sm" style="line-height:1.45"></div>';
+    html += '<div class="mtproto-grid mt-md">';
+    html +=
+      '<div class="form-group"><label>api_id</label><input class="input" id="ci_mtproto_api_id" inputmode="numeric" placeholder="12345678" /></div>';
+    html +=
+      '<div class="form-group"><label>api_hash</label><input class="input" id="ci_mtproto_api_hash" type="password" autocomplete="off" placeholder="из my.telegram.org" /></div>';
+    html += '</div>';
+    html += '<div class="mt-sm"><button type="button" class="btn btn-ghost btn-sm" id="ci_mtproto_save_creds">Сохранить ключи</button></div>';
+    html += '<div id="ci_mtproto_login_block" class="mtproto-login-block mt-md hidden">';
+    html += '<div class="mtproto-grid">';
+    html +=
+      '<div class="form-group"><label>Телефон</label><input class="input" id="ci_mtproto_phone" placeholder="+79001234567" autocomplete="tel" /></div>';
+    html +=
+      '<div class="form-group"><label>Код из Telegram</label><input class="input" id="ci_mtproto_code" inputmode="numeric" autocomplete="one-time-code" placeholder="12345" /></div>';
+    html += '</div>';
+    html +=
+      '<div class="form-group hidden" id="ci_mtproto_pw_wrap"><label>Пароль 2FA</label><input class="input" id="ci_mtproto_password" type="password" autocomplete="current-password" placeholder="если включён" /></div>';
+    html += '<div class="flex-between mt-sm" style="flex-wrap:wrap;gap:8px">';
+    html += '<button type="button" class="btn btn-ghost btn-sm" id="ci_mtproto_send_code">Отправить код</button>';
+    html += '<button type="button" class="btn btn-primary btn-sm" id="ci_mtproto_confirm">Подтвердить вход</button>';
+    html += '</div></div>';
+    html += '<div class="mtproto-actions mt-md">';
+    html += '<button type="button" class="btn btn-ghost btn-sm" id="ci_mtproto_test">Проверить подключение</button>';
+    html += '<button type="button" class="btn btn-danger btn-sm" id="ci_mtproto_logout">Выйти из аккаунта</button>';
+    html += '</div></div>';
+    return html;
+  }
+
+  function applyMtprotoStatusToPanel(main, st) {
+    var badge = qs('#ci_mtproto_badge', main);
+    var hint = qs('#ci_mtproto_hint', main);
+    var arch = qs('#ci_archive', main);
+    var loginBlock = qs('#ci_mtproto_login_block', main);
+    var pwWrap = qs('#ci_mtproto_pw_wrap', main);
+    var apiIdIn = qs('#ci_mtproto_api_id', main);
+    var apiHashIn = qs('#ci_mtproto_api_hash', main);
+    if (badge) {
+      badge.textContent = mtprotoStatusLabel(st);
+      badge.className =
+        'mtproto-status-badge' +
+        (st && st.session_valid === true
+          ? ' is-ok'
+          : st && st.session_valid === false
+            ? ' is-err'
+            : '');
+    }
+    if (hint) {
+      hint.textContent = (st && st.hint) || '';
+    }
+    if (arch && st) {
+      arch.disabled = !st.configured;
+    }
+    if (loginBlock && st) {
+      if (st.has_session) {
+        loginBlock.classList.add('hidden');
+      } else {
+        loginBlock.classList.remove('hidden');
+      }
+    }
+    if (pwWrap) {
+      if (mtprotoNeedsPassword) pwWrap.classList.remove('hidden');
+      else pwWrap.classList.add('hidden');
+    }
+    if (apiIdIn && st && st.api_id != null && !apiIdIn.value) {
+      apiIdIn.value = String(st.api_id);
+    }
+  }
+
+  function refreshMtprotoPanel(main) {
+    return getJsonAbs(API_CHANNEL_IMPORT + '/mtproto')
+      .then(function (st) {
+        applyMtprotoStatusToPanel(main, st);
+        return st;
+      })
+      .catch(function () {
+        applyMtprotoStatusToPanel(main, null);
+      });
+  }
+
+  function bindMtprotoPanel(main) {
+    refreshMtprotoPanel(main);
+    var saveCreds = qs('#ci_mtproto_save_creds', main);
+    if (saveCreds) {
+      saveCreds.addEventListener('click', function () {
+        var apiId = (qs('#ci_mtproto_api_id', main).value || '').trim();
+        var apiHash = (qs('#ci_mtproto_api_hash', main).value || '').trim();
+        if (!apiId || !apiHash) {
+          showToast('Укажите api_id и api_hash', 'error');
+          return;
+        }
+        saveCreds.disabled = true;
+        putJsonAbs(API_CHANNEL_IMPORT + '/mtproto/credentials', {
+          api_id: apiId,
+          api_hash: apiHash,
+        })
+          .then(function () {
+            showToast('Ключи сохранены', 'success');
+            mtprotoLoginId = null;
+            mtprotoNeedsPassword = false;
+            return refreshMtprotoPanel(main);
+          })
+          .catch(function (e) {
+            showToast(e.message || 'Ошибка', 'error');
+          })
+          .finally(function () {
+            saveCreds.disabled = false;
+          });
+      });
+    }
+    var sendCode = qs('#ci_mtproto_send_code', main);
+    if (sendCode) {
+      sendCode.addEventListener('click', function () {
+        var phone = (qs('#ci_mtproto_phone', main).value || '').trim();
+        if (!phone) {
+          showToast('Укажите номер телефона', 'error');
+          return;
+        }
+        sendCode.disabled = true;
+        postJsonAbs(API_CHANNEL_IMPORT + '/mtproto/send-code', { phone: phone })
+          .then(function (data) {
+            mtprotoLoginId = data.login_id || null;
+            mtprotoNeedsPassword = false;
+            var pw = qs('#ci_mtproto_pw_wrap', main);
+            if (pw) pw.classList.add('hidden');
+            showToast(
+              data.is_code_via_app
+                ? 'Код отправлен в приложение Telegram'
+                : 'Код отправлен (SMS или Telegram)',
+              'success',
+            );
+          })
+          .catch(function (e) {
+            showToast(e.message || 'Ошибка', 'error');
+          })
+          .finally(function () {
+            sendCode.disabled = false;
+          });
+      });
+    }
+    var confirmBtn = qs('#ci_mtproto_confirm', main);
+    if (confirmBtn) {
+      confirmBtn.addEventListener('click', function () {
+        if (mtprotoNeedsPassword && mtprotoLoginId) {
+          var password = (qs('#ci_mtproto_password', main).value || '').trim();
+          if (!password) {
+            showToast('Введите пароль 2FA', 'error');
+            return;
+          }
+          confirmBtn.disabled = true;
+          postJsonAbs(API_CHANNEL_IMPORT + '/mtproto/password', {
+            login_id: mtprotoLoginId,
+            password: password,
+          })
+            .then(function (data) {
+              mtprotoLoginId = null;
+              mtprotoNeedsPassword = false;
+              showToast('Вход выполнен: ' + (data.user_display || 'OK'), 'success');
+              return refreshMtprotoPanel(main);
+            })
+            .catch(function (e) {
+              showToast(e.message || 'Ошибка', 'error');
+            })
+            .finally(function () {
+              confirmBtn.disabled = false;
+            });
+          return;
+        }
+        if (!mtprotoLoginId) {
+          showToast('Сначала отправьте код', 'error');
+          return;
+        }
+        var code = (qs('#ci_mtproto_code', main).value || '').trim();
+        if (!code) {
+          showToast('Введите код', 'error');
+          return;
+        }
+        confirmBtn.disabled = true;
+        postJsonAbs(API_CHANNEL_IMPORT + '/mtproto/confirm', {
+          login_id: mtprotoLoginId,
+          code: code,
+        })
+          .then(function (data) {
+            if (data.needs_password) {
+              mtprotoNeedsPassword = true;
+              mtprotoLoginId = data.login_id || mtprotoLoginId;
+              var pw = qs('#ci_mtproto_pw_wrap', main);
+              if (pw) pw.classList.remove('hidden');
+              showToast('Нужен пароль двухфакторной аутентификации', 'info');
+              return;
+            }
+            mtprotoLoginId = null;
+            mtprotoNeedsPassword = false;
+            showToast('Вход выполнен: ' + (data.user_display || 'OK'), 'success');
+            return refreshMtprotoPanel(main);
+          })
+          .catch(function (e) {
+            showToast(e.message || 'Ошибка', 'error');
+          })
+          .finally(function () {
+            confirmBtn.disabled = false;
+          });
+      });
+    }
+    var testBtn = qs('#ci_mtproto_test', main);
+    if (testBtn) {
+      testBtn.addEventListener('click', function () {
+        testBtn.disabled = true;
+        postJsonAbs(API_CHANNEL_IMPORT + '/mtproto/test', {})
+          .then(function (data) {
+            showToast('OK: ' + (data.user_display || 'подключено'), 'success');
+            return getJsonAbs(API_CHANNEL_IMPORT + '/mtproto').then(function (st) {
+              st.session_valid = true;
+              if (data.user_display) st.user_display = data.user_display;
+              applyMtprotoStatusToPanel(main, st);
+            });
+          })
+          .catch(function (e) {
+            showToast(e.message || 'Ошибка', 'error');
+          })
+          .finally(function () {
+            testBtn.disabled = false;
+          });
+      });
+    }
+    var logoutBtn = qs('#ci_mtproto_logout', main);
+    if (logoutBtn) {
+      logoutBtn.addEventListener('click', function () {
+        showConfirm('Выйти из user-аккаунта?', 'Сессия MTProto будет удалена с сервера.', function () {
+          deleteAbs(API_CHANNEL_IMPORT + '/mtproto/session')
+            .then(function () {
+              mtprotoLoginId = null;
+              mtprotoNeedsPassword = false;
+              showToast('Сессия удалена', 'success');
+              return refreshMtprotoPanel(main);
+            })
+            .catch(function (e) {
+              showToast(e.message || 'Ошибка', 'error');
+            });
+        });
+      });
+    }
+  }
+
   function renderChannelImport() {
     var main = qs('#mainContent');
     if (!main) return;
@@ -2078,10 +2342,11 @@
         var maxChannels = bundle[0].channels || maxLinkedChatsCache || [];
         var tgChats = bundle[1].channels || tgLinkedChatsCache || [];
 
-        var html = '<div class="card-like mb-md forwarding-section" id="forwarding-section">';
+        var html = buildMtprotoPanelHtml();
+        html += '<div class="card-like mb-md forwarding-section" id="forwarding-section">';
         html += '<h2 class="forwarding-section-title">Импорт канала Telegram → MAX</h2>';
         html +=
-          '<p class="muted text-sm" style="margin:0 0 16px;line-height:1.45">Выберите Telegram-канал из интеграции и MAX-канал, где бот администратор. Reader-бот <code>TG_READER_BOT_TOKEN</code> должен быть админом в том же TG-канале. <strong>Запустить анализ</strong> соберёт посты из <em>очереди обновлений</em> Telegram (полный архив через Bot API недоступен).</p>';
+          '<p class="muted text-sm" style="margin:0 0 16px;line-height:1.45">Выберите каналы. Без «Архива» — только <em>очередь обновлений</em> reader-бота. С «Архивом» — последние посты через MTProto (блок выше). Reader-бот <code>TG_READER_BOT_TOKEN</code> — админ в TG-канале.</p>';
         html += '<div class="forwarding-add-form forwarding-add-form--picks">';
         html +=
           '<div class="form-group"><div class="flex-between" style="align-items:center;gap:8px;margin-bottom:6px"><label style="margin:0">Канал MAX</label><button type="button" class="btn btn-ghost btn-sm" id="ci_refresh_max"><i data-lucide="refresh-cw"></i> Обновить</button></div><select class="select" id="ci_max">' +
@@ -2093,7 +2358,8 @@
           '</div>';
         html += '<div class="form-group" style="margin:0"><label class="checkbox-label">';
         html += '<input type="checkbox" id="ci_archive" disabled /> <strong>Архив канала</strong> (user-аккаунт, до 100 постов)</label>';
-        html += '<span class="muted text-sm" style="display:block;margin-top:4px">Нужны TG_API_ID, TG_API_HASH, TG_USER_SESSION — npm run tg:user-login</span></div>';
+        html +=
+          '<span class="muted text-sm" style="display:block;margin-top:4px">Включите после настройки MTProto выше</span></div>';
         html += '<div class="forwarding-add-form-actions">';
         html += '<button type="button" class="btn btn-primary" id="ci_start">Запустить анализ</button>';
         html += '<button type="button" class="btn btn-ghost" id="ci_cancel_job" disabled>Отменить задачу</button>';
@@ -2172,6 +2438,7 @@
         }
 
         bindChannelImportHandlers(main);
+        bindMtprotoPanel(main);
         refreshIcons();
       })
       .catch(function (err) {
@@ -2189,9 +2456,11 @@
 
     function applyImportMeta(meta) {
       var warn = qs('#ci_meta_warn', main);
-      var arch = qs('#ci_archive', main);
-      if (arch && meta && meta.user_archive_ready) {
-        arch.disabled = false;
+      if (meta && meta.mtproto) {
+        applyMtprotoStatusToPanel(main, meta.mtproto);
+      } else if (meta && meta.user_archive_ready) {
+        var archOnly = qs('#ci_archive', main);
+        if (archOnly) archOnly.disabled = false;
       }
       if (!warn || !meta) return;
       if (!meta.reader_token_ok) {
