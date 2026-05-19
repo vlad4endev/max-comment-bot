@@ -1894,7 +1894,7 @@
       esc(String(stats.forwarded)) +
       '</div><div class="a-stat-label">переслано</div></div><div class="a-stat"><div class="a-stat-val">' +
       esc(String(stats.channels)) +
-      '</div><div class="a-stat-label">каналов</div></div></div></div>';
+      '</div><div class="a-stat-label">каналов</div></div></div></div>');
   }
 
   function forwardedItemHtml(item) {
