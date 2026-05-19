@@ -1114,14 +1114,18 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
     }
 
     const newCount = postStore.decrementCommentCount(input.postId)
+    res.json({ ok: true, comment_count: newCount })
     if (newCount !== null) {
       const updatedPost = postStore.getPost(input.postId)
       if (updatedPost) {
-        await postStore.updateButtonCaption(deps.bot, updatedPost)
+        void postStore.updateButtonCaption(deps.bot, updatedPost).catch((err: unknown) => {
+          logger.warn('adminDeleteComment: updateButtonCaption failed after response', {
+            postId: input.postId,
+            err,
+          })
+        })
       }
     }
-
-    res.json({ ok: true, comment_count: newCount })
   }
 
   router.delete('/comment', async (req, res) => {

@@ -7,6 +7,7 @@ import { channelNotifyLinkStore } from './channelNotifyLinkStore'
 import { commentStore } from './commentStore'
 import { subscriberStore } from './subscriberStore'
 import { buildMiniAppUrl, isMiniAppOpenUrlConfigured } from './postStore'
+import { stateManager } from './stateManager'
 import { logger } from '../utils/logger'
 
 export interface AdminNotificationSendResult {
@@ -97,6 +98,51 @@ function isFallbackAdminChatRecipient(recipientId: number): boolean {
   return recipientId === config.ADMIN_CHAT_ID
 }
 
+/** MAX: нет личного диалога с пользователем (часто не нажали /start боту). */
+function isDialogNotFoundError(err: unknown): boolean {
+  if (typeof err !== 'object' || err === null) {
+    return false
+  }
+  const o = err as { status?: number; response?: { code?: unknown } }
+  if (o.status !== 404) {
+    return false
+  }
+  const code = o.response && typeof o.response === 'object' ? (o.response as { code?: unknown }).code : undefined
+  return code === 'dialog.not.found'
+}
+
+/**
+ * Личка админу: сначала {@link Bot.api.sendMessageToUser}; при `dialog.not.found` — повтор в сохранённый
+ * приватный чат (`stateManager`), если пользователь уже открывал бота.
+ */
+async function sendAdminDirectMessage(
+  bot: Bot,
+  recipientId: number,
+  message: string,
+  extra?: SendMessageExtra,
+): Promise<{ body: { mid: string } }> {
+  if (isFallbackAdminChatRecipient(recipientId)) {
+    return bot.api.sendMessageToChat(config.ADMIN_CHAT_ID, message, extra)
+  }
+  try {
+    return await bot.api.sendMessageToUser(recipientId, message, extra)
+  } catch (firstErr) {
+    if (!isDialogNotFoundError(firstErr)) {
+      throw firstErr
+    }
+    const privateChatId = stateManager.getUserPrivateChatId(recipientId)
+    if (privateChatId === undefined) {
+      throw firstErr
+    }
+    try {
+      const sent = await bot.api.sendMessageToChat(privateChatId, message, extra)
+      return sent
+    } catch {
+      throw firstErr
+    }
+  }
+}
+
 export async function deliverAdminNotifications(
   bot: Bot,
   sourceChatId: number,
@@ -109,17 +155,26 @@ export async function deliverAdminNotifications(
 
   for (const recipientId of unique) {
     try {
-      const sent = isFallbackAdminChatRecipient(recipientId)
-        ? await bot.api.sendMessageToChat(config.ADMIN_CHAT_ID, message, extra)
-        : await bot.api.sendMessageToUser(recipientId, message, extra)
+      const sent = await sendAdminDirectMessage(bot, recipientId, message, extra)
       out.push({ admin_id: recipientId, message_mid: sent.body.mid })
       logger.info('Уведомление админу доставлено', { recipientId, sourceChat: sourceChatId })
     } catch (err) {
-      logger.warn('Не удалось отправить уведомление админу (пропускаем и идём дальше)', {
-        recipientId,
-        sourceChat: sourceChatId,
-        err,
-      })
+      if (isDialogNotFoundError(err)) {
+        logger.debug(
+          'Не удалось отправить уведомление админу: нет диалога с ботом (нужен /start в личке с ботом)',
+          {
+            recipientId,
+            sourceChat: sourceChatId,
+            ...loggableApiError(err),
+          },
+        )
+      } else {
+        logger.warn('Не удалось отправить уведомление админу (пропускаем и идём дальше)', {
+          recipientId,
+          sourceChat: sourceChatId,
+          err,
+        })
+      }
     }
   }
   return out

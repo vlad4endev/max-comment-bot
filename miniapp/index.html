@@ -1269,6 +1269,26 @@
       color: var(--text-tiny);
       margin-top: 6px;
     }
+    #view-comments .msg-reply-row {
+      margin-left: 38px;
+      margin-top: 4px;
+      max-width: calc(100% - 38px);
+    }
+    #view-comments .reply-below-btn {
+      display: inline-block;
+      font-size: 11px;
+      line-height: 1.25;
+      padding: 4px 10px;
+      border-radius: 999px;
+      border: 1px solid var(--accent-border);
+      background: var(--accent-bg);
+      color: var(--accent-strong);
+      cursor: pointer;
+      font-weight: 600;
+    }
+    #view-comments .reply-below-btn:active {
+      opacity: 0.88;
+    }
     #view-comments .reply-block {
       margin-left: 38px;
       margin-top: 6px;
@@ -3587,6 +3607,15 @@
         var timeShown = formatCommentClock(cts);
         var dk = cts ? dateKeyLocal(cts) : '';
         var dkAttr = dk ? ' data-date-key="' + esc(dk) + '"' : '';
+        var cidStr = String(c.comment_id || '');
+        var replyBelow =
+          isAdmin && cidStr.indexOf('temp-') !== 0
+            ? '<div class="msg-reply-row">' +
+              '<button type="button" class="reply-below-btn" data-reply-comment="' +
+              esc(c.comment_id) +
+              '" aria-label="Ответить от имени канала">Ответить</button>' +
+              '</div>'
+            : '';
         return (
           '<div class="comment-group" data-comment-id="' +
           esc(c.comment_id) +
@@ -3607,6 +3636,7 @@
           esc(timeShown) +
           '</div>' +
           '</div></div>' +
+          replyBelow +
           commentAdminActs +
           replyHtml +
           '</div>'
@@ -3741,6 +3771,19 @@
               openAdminContextMenu(node, 'reply');
             });
           }
+          var replyQuick = node.querySelector('[data-reply-comment]');
+          if (replyQuick) {
+            replyQuick.addEventListener('click', function (e) {
+              e.preventDefault();
+              e.stopPropagation();
+              clearTimeout(pressTimer);
+              closeAllAdminContextMenus();
+              var rid = replyQuick.getAttribute('data-reply-comment');
+              var unameEl = node.querySelector('.uname');
+              var nm = unameEl ? String(unameEl.textContent || '').trim() : '';
+              activateReplyContext(rid, nm || 'пользователю');
+            });
+          }
           if (!commentActionsTouchBound) {
             commentActionsTouchBound = true;
             function closeAdminMenuIfOutside(e) {
@@ -3862,11 +3905,15 @@
         block.querySelectorAll('[data-delete-comment]').forEach(function (btn) {
           if (btn.dataset.delWired === '1') return;
           btn.dataset.delWired = '1';
-          btn.addEventListener('click', function () {
-            if (!window.confirm('Удалить этот комментарий?')) return;
-            btn.disabled = true;
-            setErr('');
-            fetch('/api/comment/delete', {
+          btn.addEventListener('click', function (e) {
+            e.preventDefault();
+            e.stopPropagation();
+            block.classList.remove('admin-menu-open', 'admin-menu--comment', 'admin-menu--reply');
+            window.setTimeout(function () {
+              if (!window.confirm('Удалить этот комментарий?')) return;
+              btn.disabled = true;
+              setErr('');
+              fetch('/api/comment/delete', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify(adminApiBase(cid)),
@@ -3898,17 +3945,22 @@
               .finally(function () {
                 btn.disabled = false;
               });
+            }, 0);
           });
         });
 
         block.querySelectorAll('[data-delete-reply]').forEach(function (btn) {
           if (btn.dataset.delWired === '1') return;
           btn.dataset.delWired = '1';
-          btn.addEventListener('click', function () {
-            if (!window.confirm('Удалить ответ канала?')) return;
-            btn.disabled = true;
-            setErr('');
-            fetch('/api/reply/delete', {
+          btn.addEventListener('click', function (e) {
+            e.preventDefault();
+            e.stopPropagation();
+            block.classList.remove('admin-menu-open', 'admin-menu--comment', 'admin-menu--reply');
+            window.setTimeout(function () {
+              if (!window.confirm('Удалить ответ канала?')) return;
+              btn.disabled = true;
+              setErr('');
+              fetch('/api/reply/delete', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify(adminApiBase(cid)),
@@ -3931,6 +3983,7 @@
               .finally(function () {
                 btn.disabled = false;
               });
+            }, 0);
           });
         });
       }
