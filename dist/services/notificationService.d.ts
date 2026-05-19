@@ -30,6 +30,7 @@ export declare function notifyAdminsNewMiniappComment(bot: Bot, input: {
     channelTitle: string;
     username: string;
     commentText: string;
+    commentPhotoUrls?: string[];
     postId: string;
 }): Promise<void>;
 /**
@@ -41,6 +42,7 @@ export declare function notifyUserAboutMiniappReply(bot: Bot, input: {
     postText: string;
     userCommentText: string;
     adminReplyText: string;
+    adminReplyPhotoUrls?: string[];
     postId: string;
     channelChatId: number;
 }): Promise<void>;

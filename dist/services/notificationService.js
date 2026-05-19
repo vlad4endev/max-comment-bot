@@ -145,10 +145,18 @@ async function notifyAdminsNewMiniappComment(bot, input) {
         [max_bot_api_1.Keyboard.button.link('💬 Открыть комментарии', openUrl)],
     ]);
     const postExcerpt = preview80(input.postText);
+    const textPart = input.commentText.trim();
+    const photoCount = Array.isArray(input.commentPhotoUrls) ? input.commentPhotoUrls.length : 0;
+    const commentPreview = textPart !== ''
+        ? textPart
+        : photoCount > 0
+            ? `📷 Фото: ${photoCount}`
+            : 'без текста';
+    const photoSuffix = photoCount > 0 ? `\n📷 Фото: ${photoCount}` : '';
     const message = `📌 Новый комментарий
 Пост: «${postExcerpt}»
 Канал: ${input.channelTitle}
-👤 ${input.username}: ${input.commentText}`;
+👤 ${input.username}: ${commentPreview}${photoSuffix}`;
     commentStore_1.commentStore.saveNotificationText(input.commentId, message);
     const recipientIds = await collectAdminNotifyRecipientIds(bot, input.channelChatId);
     const sent = await deliverAdminNotifications(bot, input.channelChatId, recipientIds, message, {
@@ -188,10 +196,19 @@ async function notifyUserAboutMiniappReply(bot, input) {
     const postPreview = input.postText.slice(0, 60);
     const commentPreview = input.userCommentText.slice(0, 60);
     const replyPreview = input.adminReplyText.slice(0, 80);
+    const replyPhotoCount = Array.isArray(input.adminReplyPhotoUrls)
+        ? input.adminReplyPhotoUrls.length
+        : 0;
+    const replyBody = replyPreview.trim() !== ''
+        ? `Ответ канала: ${replyPreview}`
+        : replyPhotoCount > 0
+            ? `Ответ канала: 📷 Фото (${replyPhotoCount})`
+            : 'Ответ канала';
+    const photoSuffix = replyPhotoCount > 0 ? `\nФото в ответе: ${replyPhotoCount}` : '';
     const message = `💬 Вам ответили на комментарий\n\n` +
         `Пост: «${postPreview}»\n` +
         `Ваш комментарий: «${commentPreview}»\n\n` +
-        `Ответ канала: ${replyPreview}`;
+        `${replyBody}${photoSuffix}`;
     try {
         await bot.api.sendMessageToUser(userId, message, { attachments: [keyboard] });
         logger_1.logger.info('notifyUserAboutMiniappReply: delivered', { userId, commentId: input.commentId });

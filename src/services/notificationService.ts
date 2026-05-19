@@ -172,6 +172,7 @@ export async function notifyAdminsNewMiniappComment(
     channelTitle: string
     username: string
     commentText: string
+    commentPhotoUrls?: string[]
     postId: string
   },
 ): Promise<void> {
@@ -184,10 +185,19 @@ export async function notifyAdminsNewMiniappComment(
     [Keyboard.button.link('💬 Открыть комментарии', openUrl)],
   ])
   const postExcerpt = preview80(input.postText)
+  const textPart = input.commentText.trim()
+  const photoCount = Array.isArray(input.commentPhotoUrls) ? input.commentPhotoUrls.length : 0
+  const commentPreview =
+    textPart !== ''
+      ? textPart
+      : photoCount > 0
+        ? `📷 Фото: ${photoCount}`
+        : 'без текста'
+  const photoSuffix = photoCount > 0 ? `\n📷 Фото: ${photoCount}` : ''
   const message = `📌 Новый комментарий
 Пост: «${postExcerpt}»
 Канал: ${input.channelTitle}
-👤 ${input.username}: ${input.commentText}`
+👤 ${input.username}: ${commentPreview}${photoSuffix}`
 
   commentStore.saveNotificationText(input.commentId, message)
 
@@ -211,6 +221,7 @@ export async function notifyUserAboutMiniappReply(
     postText: string
     userCommentText: string
     adminReplyText: string
+    adminReplyPhotoUrls?: string[]
     postId: string
     channelChatId: number
   },
@@ -243,11 +254,21 @@ export async function notifyUserAboutMiniappReply(
   const postPreview = input.postText.slice(0, 60)
   const commentPreview = input.userCommentText.slice(0, 60)
   const replyPreview = input.adminReplyText.slice(0, 80)
+  const replyPhotoCount = Array.isArray(input.adminReplyPhotoUrls)
+    ? input.adminReplyPhotoUrls.length
+    : 0
+  const replyBody =
+    replyPreview.trim() !== ''
+      ? `Ответ канала: ${replyPreview}`
+      : replyPhotoCount > 0
+        ? `Ответ канала: 📷 Фото (${replyPhotoCount})`
+        : 'Ответ канала'
+  const photoSuffix = replyPhotoCount > 0 ? `\nФото в ответе: ${replyPhotoCount}` : ''
   const message =
     `💬 Вам ответили на комментарий\n\n` +
     `Пост: «${postPreview}»\n` +
     `Ваш комментарий: «${commentPreview}»\n\n` +
-    `Ответ канала: ${replyPreview}`
+    `${replyBody}${photoSuffix}`
 
   try {
     await bot.api.sendMessageToUser(userId, message, { attachments: [keyboard] })

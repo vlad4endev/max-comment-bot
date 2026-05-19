@@ -1197,6 +1197,7 @@
       flex-direction: column;
       align-items: stretch;
       max-width: 100%;
+      position: relative;
     }
     #view-comments .msg-user {
       display: flex;
@@ -1204,6 +1205,10 @@
       align-items: flex-start;
       gap: 8px;
       max-width: 100%;
+      transition: transform .12s ease-out;
+    }
+    #view-comments .comment-group.swipe-reply .msg-user {
+      transform: translateX(-24px);
     }
     #view-comments .msg-user .av {
       width: 30px;
@@ -1232,68 +1237,6 @@
       background: var(--bubble-user);
       border: 1px solid var(--surface-border);
     }
-    #view-comments .delete-comment-btn {
-      position: absolute;
-      top: -8px;
-      left: -8px;
-      width: 20px;
-      height: 20px;
-      border-radius: 50%;
-      background: rgba(255, 80, 80, 0.15);
-      border: 1px solid rgba(255, 80, 80, 0.3);
-      color: var(--danger);
-      font-size: 11px;
-      cursor: pointer;
-      display: none;
-      align-items: center;
-      justify-content: center;
-      line-height: 1;
-      z-index: 10;
-      padding: 0;
-    }
-    #view-comments .comment-group:hover .delete-comment-btn {
-      display: flex;
-    }
-    #view-comments .comment-group.show-actions .delete-comment-btn {
-      display: flex;
-    }
-    #view-comments .delete-confirm {
-      position: absolute;
-      top: -8px;
-      left: -8px;
-      display: flex;
-      align-items: center;
-      gap: 4px;
-      background: var(--bg-secondary);
-      border: 1px solid rgba(255, 80, 80, 0.4);
-      border-radius: 12px;
-      padding: 4px 8px;
-      z-index: 20;
-      white-space: nowrap;
-    }
-    #view-comments .delete-confirm span {
-      font-size: 11px;
-      color: var(--text-secondary);
-    }
-    #view-comments .delete-confirm-yes {
-      font-size: 11px;
-      padding: 2px 7px;
-      border-radius: 8px;
-      background: rgba(255, 80, 80, 0.2);
-      border: 1px solid rgba(255, 80, 80, 0.4);
-      color: var(--danger);
-      cursor: pointer;
-      font-weight: 600;
-    }
-    #view-comments .delete-confirm-no {
-      font-size: 11px;
-      padding: 2px 7px;
-      border-radius: 8px;
-      background: var(--bg-surface);
-      border: 1px solid var(--border);
-      color: var(--text-secondary);
-      cursor: pointer;
-    }
     #view-comments .bubble-u .uname {
       font-size: 12px;
       font-weight: 600;
@@ -1307,6 +1250,20 @@
       word-break: break-word;
       white-space: pre-wrap;
     }
+    #view-comments .media-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 6px;
+      margin-top: 8px;
+    }
+    #view-comments .media-grid img {
+      width: 100%;
+      max-height: 220px;
+      object-fit: cover;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      background: var(--bg-surface);
+    }
     #view-comments .bubble-u .utime {
       font-size: 10px;
       color: var(--text-tiny);
@@ -1316,6 +1273,7 @@
       margin-left: 38px;
       margin-top: 6px;
       max-width: calc(100% - 38px);
+      position: relative;
     }
     #view-comments .reply-inner {
       position: relative;
@@ -1376,34 +1334,6 @@
       color: var(--text-tiny);
       margin-top: 6px;
     }
-    #view-comments .admin-reply-wrap {
-      width: 100%;
-      margin-top: 10px;
-      padding-left: 38px;
-      padding-right: 8px;
-      box-sizing: border-box;
-    }
-    #view-comments .reply-btn {
-      display: block;
-      width: 100%;
-      margin: 0;
-      min-height: 44px;
-      padding: 12px 18px;
-      border-radius: 12px;
-      border: none;
-      background: var(--accent);
-      color: var(--text-on-accent);
-      font-size: 15px;
-      font-weight: 600;
-      letter-spacing: 0.01em;
-      text-align: center;
-      cursor: pointer;
-      box-shadow: 0 2px 10px var(--shadow-accent-strong);
-    }
-    #view-comments .reply-btn:active {
-      opacity: 0.92;
-      transform: scale(0.98);
-    }
     #view-comments .reply-banner {
       background: var(--accent-bg);
       border-top: 1px solid var(--accent-border);
@@ -1452,28 +1382,51 @@
     #view-comments .reply-banner-close:hover {
       color: var(--text-strong);
     }
-    #view-comments .admin-actions {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 6px;
-      margin: 6px 0 0 38px;
-    }
-    #view-comments .admin-actions.reply-actions {
-      margin-left: 38px;
-      margin-top: 4px;
-    }
-    #view-comments .admin-act-btn {
-      font-size: 11px;
-      padding: 4px 10px;
-      border-radius: 8px;
+    #view-comments .admin-actions.admin-context-menu {
+      display: none;
+      flex-direction: column;
+      flex-wrap: nowrap;
+      gap: 0;
+      margin: 0;
+      padding: 4px;
+      position: absolute;
+      z-index: 40;
+      right: 4px;
+      top: 4px;
+      min-width: 168px;
+      background: var(--bg-secondary);
       border: 1px solid var(--border-strong);
-      background: var(--surface);
-      color: var(--text-secondary);
+      border-radius: 12px;
+      box-shadow: 0 10px 28px rgba(0, 0, 0, 0.2);
+    }
+    #view-comments .admin-actions.admin-context-menu.reply-actions {
+      margin-left: 0;
+      margin-top: 0;
+      right: 4px;
+      top: 4px;
+    }
+    #view-comments .comment-group.admin-menu-open.admin-menu--comment > .admin-actions.admin-context-menu {
+      display: flex;
+    }
+    #view-comments .comment-group.admin-menu-open.admin-menu--reply .reply-block .admin-actions.admin-context-menu {
+      display: flex;
+    }
+    #view-comments .admin-actions.admin-context-menu .admin-act-btn {
+      width: 100%;
+      text-align: left;
+      font-size: 14px;
+      padding: 10px 12px;
+      border-radius: 8px;
+      border: none;
+      background: transparent;
+      color: var(--text-primary);
       cursor: pointer;
     }
-    #view-comments .admin-act-btn.danger {
-      border-color: var(--danger-border);
-      color: var(--danger-soft);
+    #view-comments .admin-actions.admin-context-menu .admin-act-btn:hover {
+      background: var(--bg-surface);
+    }
+    #view-comments .admin-actions.admin-context-menu .admin-act-btn.danger {
+      color: var(--danger);
     }
     #view-comments .admin-edit-inline {
       display: none;
@@ -1522,6 +1475,59 @@
       flex-direction: row;
       align-items: center;
       gap: 10px;
+    }
+    #view-comments .composer-photo-btn {
+      width: 36px;
+      height: 36px;
+      border-radius: 50%;
+      border: 1px solid var(--input-border);
+      background: var(--input-bg);
+      color: var(--text-secondary);
+      cursor: pointer;
+      flex-shrink: 0;
+      font-size: 18px;
+      line-height: 1;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+    #view-comments .composer-photo-input {
+      display: none;
+    }
+    #view-comments .composer-attachments {
+      display: none;
+      margin-top: 8px;
+      margin-left: 40px;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 6px;
+    }
+    #view-comments .composer-attachments.show {
+      display: grid;
+    }
+    #view-comments .composer-attachment {
+      position: relative;
+    }
+    #view-comments .composer-attachment img {
+      width: 100%;
+      height: 64px;
+      border-radius: 8px;
+      object-fit: cover;
+      border: 1px solid var(--border);
+    }
+    #view-comments .composer-attachment button {
+      position: absolute;
+      top: -6px;
+      right: -6px;
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      border: none;
+      background: rgba(0, 0, 0, 0.75);
+      color: #fff;
+      font-size: 12px;
+      cursor: pointer;
+      line-height: 1;
+      padding: 0;
     }
     #view-comments .composer .av-composer {
       width: 30px;
@@ -1856,6 +1862,8 @@
           </div>
           <div class="composer">
             <div class="av av-composer" id="composerAv" aria-hidden="true">?</div>
+            <button type="button" class="composer-photo-btn" id="photoBtn" aria-label="Прикрепить фото">📎</button>
+            <input type="file" id="photoInput" class="composer-photo-input" accept="image/*" multiple />
             <input type="text" id="input" placeholder="Написать комментарий…" autocomplete="off" />
             <button type="button" class="send-btn" id="sendBtn" aria-label="Отправить" disabled>
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -1864,6 +1872,7 @@
               </svg>
             </button>
           </div>
+          <div id="composerAttachments" class="composer-attachments"></div>
         </div>
       </div>
     </div>
@@ -3229,15 +3238,25 @@
       var errEl = document.getElementById('err');
       var inputEl = document.getElementById('input');
       var sendBtn = document.getElementById('sendBtn');
+      var photoBtnEl = document.getElementById('photoBtn');
+      var photoInputEl = document.getElementById('photoInput');
+      var composerAttachmentsEl = document.getElementById('composerAttachments');
       var composerAvEl = document.getElementById('composerAv');
       var currentPostId = postId;
 
       var knownIds = new Set();
       var postCommentCount = null;
       var replyContext = null; // { comment_id, username, post_id }
+      var pendingPhotoFiles = [];
 
       function setErr(msg) {
         errEl.textContent = msg || '';
+      }
+
+      function updateSendEnabled() {
+        var hasText = !!inputEl.value.trim();
+        var hasPhotos = pendingPhotoFiles.length > 0;
+        sendBtn.disabled = !hasText && !hasPhotos;
       }
 
       if (!postId) {
@@ -3297,6 +3316,66 @@
           return '<img src="' + esc(url) + '" alt="" />';
         }
         return esc(initials(fallbackName));
+      }
+
+      function normalizePhotoUrls(value) {
+        if (!Array.isArray(value)) return [];
+        var out = [];
+        value.forEach(function (v) {
+          if (typeof v !== 'string') return;
+          var t = v.trim();
+          if (!t) return;
+          out.push(t);
+        });
+        return out.slice(0, 10);
+      }
+
+      function buildMediaGridHtml(photoUrls) {
+        var urls = normalizePhotoUrls(photoUrls);
+        if (!urls.length) return '';
+        var imgs = urls
+          .map(function (u) {
+            return '<img src="' + esc(u) + '" alt="Фото" loading="lazy" />';
+          })
+          .join('');
+        return '<div class="media-grid">' + imgs + '</div>';
+      }
+
+      function renderComposerAttachments() {
+        if (!composerAttachmentsEl) return;
+        if (!pendingPhotoFiles.length) {
+          composerAttachmentsEl.classList.remove('show');
+          composerAttachmentsEl.innerHTML = '';
+          return;
+        }
+        composerAttachmentsEl.classList.add('show');
+        composerAttachmentsEl.innerHTML = pendingPhotoFiles
+          .map(function (item, idx) {
+            return (
+              '<div class="composer-attachment">' +
+              '<img src="' +
+              esc(item.previewUrl) +
+              '" alt="Фото ' +
+              (idx + 1) +
+              '" />' +
+              '<button type="button" data-remove-photo="' +
+              idx +
+              '" aria-label="Удалить фото">×</button>' +
+              '</div>'
+            );
+          })
+          .join('');
+      }
+
+      function clearComposerPhotos() {
+        pendingPhotoFiles.forEach(function (item) {
+          try {
+            URL.revokeObjectURL(item.previewUrl);
+          } catch (_) {}
+        });
+        pendingPhotoFiles = [];
+        if (photoInputEl) photoInputEl.value = '';
+        renderComposerAttachments();
       }
 
       setAvatarEl(composerAvEl, currentUserPhotoUrl, username);
@@ -3402,10 +3481,12 @@
         var editAttr = kind === 'reply' ? 'data-edit-reply' : 'data-edit-comment';
         var delAttr = kind === 'reply' ? 'data-delete-reply' : 'data-delete-comment';
         return (
-          '<div class="admin-actions' +
+          '<div class="admin-actions admin-context-menu' +
           extraClass +
           '" data-admin-actions="' +
           esc(commentId) +
+          '" data-admin-menu-kind="' +
+          (kind === 'reply' ? 'reply' : 'comment') +
           '">' +
           '<button type="button" class="admin-act-btn" ' +
           editAttr +
@@ -3421,6 +3502,7 @@
           '">' +
           labelDel +
           '</button>' +
+          '</div>' +
           '<div class="admin-edit-inline" data-admin-edit-box="' +
           esc(commentId) +
           '" data-edit-kind="' +
@@ -3432,35 +3514,28 @@
           '<button type="button" class="admin-edit-save" data-admin-edit-save="' +
           esc(commentId) +
           '">Сохранить</button>' +
-          '</div></div>'
+          '</div>'
         );
       }
 
       function buildReplyBlockHtml(c) {
-        var named =
-          c.reply && c.reply.admin_name && String(c.reply.admin_name).trim();
-        var replyLabel =
-          named && named !== 'Админ' ? 'от ' + esc(named) : 'от канала';
+        var replyLabel = 'от канала';
         var adminReplyActs = buildAdminActionsHtml(c.comment_id, 'reply');
         var replyT = c.reply && c.reply.timestamp ? parseCommentTimestamp(c.reply.timestamp) : null;
         var replyClock = formatCommentClock(replyT);
+        var replyText = c.reply && typeof c.reply.text === 'string' ? c.reply.text : '';
+        var replyMedia = buildMediaGridHtml(c.reply && c.reply.photo_urls);
         return (
           '<div class="reply-block">' +
           '<div class="reply-inner">' +
-          (isAdmin
-            ? '<button type="button" class="delete-comment-btn" data-delete-reply="' +
-              esc(c.comment_id) +
-              '" title="Удалить ответ">✕</button>'
-            : '') +
           '<div class="reply-tag"><div class="reply-dot"></div><span>' +
           replyLabel +
           '</span></div>' +
           '<div class="reply-quote">' +
           esc(c.text) +
           '</div>' +
-          '<div class="reply-text">' +
-          esc(c.reply.text) +
-          '</div>' +
+          (replyText ? '<div class="reply-text">' + esc(replyText) + '</div>' : '') +
+          replyMedia +
           '<div class="reply-time">' +
           esc(replyClock) +
           '</div>' +
@@ -3482,21 +3557,12 @@
 
       function buildUserBlock(c) {
         var av = avatarBlockHtml(resolveCommentAvatarUrl(c), c.username);
+        var commentMedia = buildMediaGridHtml(c.photo_urls);
         var replyHtml = '';
         if (c.reply) {
           replyHtml = buildReplyBlockHtml(c);
         }
         var commentAdminActs = buildAdminActionsHtml(c.comment_id, 'comment');
-        var adminHtml = '';
-        if (isAdmin && !c.reply) {
-          adminHtml =
-            '<div class="admin-reply-wrap" data-admin-slot="' +
-            esc(c.comment_id) +
-            '">' +
-            '<button type="button" class="reply-btn" data-toggle-reply="' +
-            esc(c.comment_id) +
-            '">↩ Ответить</button></div>';
-        }
         var cts = parseCommentTimestamp(c.timestamp);
         var timeShown = formatCommentClock(cts);
         var dk = cts ? dateKeyLocal(cts) : '';
@@ -3512,74 +3578,35 @@
           av +
           '</div>' +
           '<div class="bubble-u">' +
-          (isAdmin
-            ? '<button type="button" class="delete-comment-btn" data-delete-comment="' +
-              esc(c.comment_id) +
-              '" title="Удалить комментарий">✕</button>'
-            : '') +
           '<div class="uname">' +
           esc(c.username) +
           '</div>' +
-          '<div class="utext">' +
-          esc(c.text) +
-          '</div>' +
+          (c.text ? '<div class="utext">' + esc(c.text) + '</div>' : '') +
+          commentMedia +
           '<div class="utime">' +
           esc(timeShown) +
           '</div>' +
           '</div></div>' +
           commentAdminActs +
-          (c.reply ? replyHtml : adminHtml) +
+          replyHtml +
           '</div>'
         );
       }
 
       var commentActionsTouchBound = false;
 
-      function wireCommentDeleteConfirm(node) {
-        if (!isAdmin) return;
-        node.querySelectorAll('.delete-comment-btn').forEach(function (btn) {
-          if (btn.dataset.confirmWired === '1') return;
-          btn.dataset.confirmWired = '1';
-          var host =
-            btn.closest('.bubble-u') || btn.closest('.reply-inner');
-          if (!host) return;
-          btn.addEventListener('click', function (e) {
-            if (btn.dataset.confirmedDelete === '1') return;
-            e.stopImmediatePropagation();
-            e.preventDefault();
-            var existing = node.querySelector('.delete-confirm');
-            if (existing) {
-              existing.remove();
-              btn.style.display = '';
-              return;
-            }
-            var confirm = document.createElement('div');
-            confirm.className = 'delete-confirm';
-            confirm.innerHTML =
-              '<span>Удалить?</span>' +
-              '<button type="button" class="delete-confirm-yes">Да</button>' +
-              '<button type="button" class="delete-confirm-no">Нет</button>';
-            btn.style.display = 'none';
-            host.appendChild(confirm);
-            confirm.querySelector('.delete-confirm-no').onclick = function () {
-              confirm.remove();
-              btn.style.display = '';
-            };
-            confirm.querySelector('.delete-confirm-yes').onclick = function () {
-              confirm.remove();
-              btn.style.display = '';
-              btn.dataset.confirmedDelete = '1';
-              btn.click();
-              delete btn.dataset.confirmedDelete;
-            };
-            setTimeout(function () {
-              if (confirm.parentNode) {
-                confirm.remove();
-                btn.style.display = '';
-              }
-            }, 3000);
-          });
+      function closeAllAdminContextMenus() {
+        feedEl.querySelectorAll('.comment-group.admin-menu-open').forEach(function (g) {
+          g.classList.remove('admin-menu-open', 'admin-menu--comment', 'admin-menu--reply');
         });
+      }
+
+      function openAdminContextMenu(node, which) {
+        closeAllAdminContextMenus();
+        node.classList.add(
+          'admin-menu-open',
+          which === 'reply' ? 'admin-menu--reply' : 'admin-menu--comment'
+        );
       }
 
       function wireCommentNode(node) {
@@ -3587,42 +3614,126 @@
           var pressTimer = null;
           var msgEl = node.querySelector('.msg-user');
           if (msgEl) {
-            msgEl.addEventListener('touchstart', function () {
-              pressTimer = setTimeout(function () {
-                node.classList.add('show-actions');
-              }, 500);
-            });
-            msgEl.addEventListener('touchend', function () {
-              clearTimeout(pressTimer);
-            });
-            msgEl.addEventListener('touchmove', function () {
-              clearTimeout(pressTimer);
+            var swipe = { active: false, sx: 0, sy: 0 };
+            msgEl.addEventListener(
+              'touchstart',
+              function (e) {
+                clearTimeout(pressTimer);
+                if (e.touches && e.touches.length === 1) {
+                  swipe.active = true;
+                  swipe.sx = e.touches[0].clientX;
+                  swipe.sy = e.touches[0].clientY;
+                } else {
+                  swipe.active = false;
+                }
+                pressTimer = window.setTimeout(function () {
+                  openAdminContextMenu(node, 'comment');
+                }, 500);
+              },
+              { passive: true }
+            );
+            msgEl.addEventListener(
+              'touchmove',
+              function (e) {
+                if (!swipe.active || !e.touches || e.touches.length !== 1) return;
+                var dx = e.touches[0].clientX - swipe.sx;
+                var dy = e.touches[0].clientY - swipe.sy;
+                if (dx < -14 && Math.abs(dx) > Math.abs(dy) * 1.15) {
+                  clearTimeout(pressTimer);
+                  node.classList.add('swipe-reply');
+                } else {
+                  if (dx > -10) node.classList.remove('swipe-reply');
+                  if (Math.abs(dx) > 26 || Math.abs(dy) > 26) {
+                    clearTimeout(pressTimer);
+                  }
+                }
+              },
+              { passive: true }
+            );
+            msgEl.addEventListener(
+              'touchend',
+              function (e) {
+                clearTimeout(pressTimer);
+                if (swipe.active && e.changedTouches && e.changedTouches.length === 1) {
+                  var dx = e.changedTouches[0].clientX - swipe.sx;
+                  var dy = e.changedTouches[0].clientY - swipe.sy;
+                  if (dx < -56 && Math.abs(dx) > Math.abs(dy) + 18) {
+                    var cidSwipe = node.getAttribute('data-comment-id');
+                    var unameEl = node.querySelector('.uname');
+                    var unameSwipe = unameEl
+                      ? String(unameEl.textContent || '').trim()
+                      : 'пользователю';
+                    activateReplyContext(cidSwipe, unameSwipe || 'пользователю');
+                  }
+                }
+                swipe.active = false;
+                node.classList.remove('swipe-reply');
+              },
+              { passive: true }
+            );
+            msgEl.addEventListener('contextmenu', function (e) {
+              e.preventDefault();
+              openAdminContextMenu(node, 'comment');
             });
           }
           var replyEl = node.querySelector('.reply-block');
           if (replyEl) {
-            replyEl.addEventListener('touchstart', function () {
-              pressTimer = setTimeout(function () {
-                node.classList.add('show-actions');
-              }, 500);
-            });
-            replyEl.addEventListener('touchend', function () {
-              clearTimeout(pressTimer);
-            });
-            replyEl.addEventListener('touchmove', function () {
-              clearTimeout(pressTimer);
+            var replyTouch = { sx: 0, sy: 0, active: false };
+            replyEl.addEventListener(
+              'touchstart',
+              function (e) {
+                clearTimeout(pressTimer);
+                if (e.touches && e.touches.length === 1) {
+                  replyTouch.sx = e.touches[0].clientX;
+                  replyTouch.sy = e.touches[0].clientY;
+                  replyTouch.active = true;
+                } else {
+                  replyTouch.active = false;
+                }
+                pressTimer = window.setTimeout(function () {
+                  openAdminContextMenu(node, 'reply');
+                }, 500);
+              },
+              { passive: true }
+            );
+            replyEl.addEventListener(
+              'touchmove',
+              function (e) {
+                if (!replyTouch.active || !e.touches || e.touches.length !== 1) return;
+                var dx = e.touches[0].clientX - replyTouch.sx;
+                var dy = e.touches[0].clientY - replyTouch.sy;
+                if (Math.abs(dx) > 26 || Math.abs(dy) > 26) {
+                  clearTimeout(pressTimer);
+                }
+              },
+              { passive: true }
+            );
+            replyEl.addEventListener(
+              'touchend',
+              function () {
+                clearTimeout(pressTimer);
+                replyTouch.active = false;
+              },
+              { passive: true }
+            );
+            replyEl.addEventListener('contextmenu', function (e) {
+              e.preventDefault();
+              openAdminContextMenu(node, 'reply');
             });
           }
           if (!commentActionsTouchBound) {
             commentActionsTouchBound = true;
-            document.addEventListener('touchstart', function (e) {
-              feedEl.querySelectorAll('.comment-group.show-actions').forEach(function (g) {
-                if (!g.contains(e.target)) g.classList.remove('show-actions');
+            function closeAdminMenuIfOutside(e) {
+              feedEl.querySelectorAll('.comment-group.admin-menu-open').forEach(function (g) {
+                if (!g.contains(e.target)) {
+                  g.classList.remove('admin-menu-open', 'admin-menu--comment', 'admin-menu--reply');
+                }
               });
-            });
+            }
+            document.addEventListener('touchstart', closeAdminMenuIfOutside, true);
+            document.addEventListener('mousedown', closeAdminMenuIfOutside, true);
           }
         }
-        wireCommentDeleteConfirm(node);
         wireAdminModeration(node);
       }
 
@@ -3642,13 +3753,14 @@
 
         block.querySelectorAll('[data-edit-comment]').forEach(function (btn) {
           btn.addEventListener('click', function () {
+            block.classList.remove('admin-menu-open', 'admin-menu--comment', 'admin-menu--reply');
             var box = block.querySelector(
               '[data-admin-edit-box="' + cssEsc(cid) + '"][data-edit-kind="comment"]'
             );
             var ta = box && box.querySelector('textarea');
             var utext = block.querySelector('.bubble-u .utext');
-            if (!box || !ta || !utext) return;
-            ta.value = utext.textContent || '';
+            if (!box || !ta) return;
+            ta.value = utext ? utext.textContent || '' : '';
             box.classList.add('open');
             ta.focus();
           });
@@ -3656,13 +3768,21 @@
 
         block.querySelectorAll('[data-edit-reply]').forEach(function (btn) {
           btn.addEventListener('click', function () {
+            block.classList.remove('admin-menu-open', 'admin-menu--comment', 'admin-menu--reply');
             var box = block.querySelector(
               '[data-admin-edit-box="' + cssEsc(cid) + '"][data-edit-kind="reply"]'
             );
             var rtext = block.querySelector('.reply-text');
             var ta = box && box.querySelector('textarea');
-            if (!box || !ta || !rtext) return;
-            ta.value = rtext.textContent || '';
+            var hasReplyMedia = !!block.querySelector('.reply-block .media-grid');
+            if (!box || !ta) return;
+            if (rtext) {
+              ta.value = rtext.textContent || '';
+            } else if (hasReplyMedia) {
+              ta.value = '';
+            } else {
+              return;
+            }
             box.classList.add('open');
             ta.focus();
           });
@@ -3675,7 +3795,11 @@
             var kind = box.getAttribute('data-edit-kind');
             var ta = box.querySelector('textarea');
             var text = ta && ta.value.trim();
-            if (!text) return;
+            if (!text && kind !== 'reply') return;
+            if (!text && kind === 'reply') {
+              var hasReplyImg = !!block.querySelector('.reply-block .media-grid');
+              if (!hasReplyImg) return;
+            }
             btn.disabled = true;
             setErr('');
             var url = kind === 'reply' ? '/api/reply' : '/api/comment';
@@ -3702,6 +3826,7 @@
               .then(function (updated) {
                 box.classList.remove('open');
                 if (ta) ta.value = '';
+                block.classList.remove('admin-menu-open', 'admin-menu--comment', 'admin-menu--reply');
                 mergeOrUpdateComment(updated);
                 scrollToBottom();
               })
@@ -3718,6 +3843,7 @@
           if (btn.dataset.delWired === '1') return;
           btn.dataset.delWired = '1';
           btn.addEventListener('click', function () {
+            if (!window.confirm('Удалить этот комментарий?')) return;
             btn.disabled = true;
             setErr('');
             fetch('/api/comment/delete', {
@@ -3759,6 +3885,7 @@
           if (btn.dataset.delWired === '1') return;
           btn.dataset.delWired = '1';
           btn.addEventListener('click', function () {
+            if (!window.confirm('Удалить ответ канала?')) return;
             btn.disabled = true;
             setErr('');
             fetch('/api/reply/delete', {
@@ -3775,6 +3902,7 @@
                 return r.json();
               })
               .then(function (updated) {
+                block.classList.remove('admin-menu-open', 'admin-menu--comment', 'admin-menu--reply');
                 mergeOrUpdateComment(updated);
               })
               .catch(function (e) {
@@ -3790,12 +3918,25 @@
       function hideReplyBanner() {
         replyContext = null;
         if (replyBannerEl) replyBannerEl.style.display = 'none';
+        updateSendEnabled();
       }
 
       function showReplyBanner(name) {
         if (!replyBannerEl || !replyBannerNameEl) return;
         replyBannerNameEl.textContent = name || 'пользователю';
         replyBannerEl.style.display = 'block';
+      }
+
+      function activateReplyContext(commentId, targetName) {
+        if (!commentId) return;
+        replyContext = {
+          comment_id: commentId,
+          username: targetName || 'пользователю',
+          post_id: currentPostId,
+        };
+        showReplyBanner(replyContext.username);
+        inputEl.focus();
+        updateSendEnabled();
       }
 
       function mergeOrUpdateComment(c) {
@@ -3810,45 +3951,9 @@
           knownIds.add(c.comment_id);
           return;
         }
-        if (!c.reply && existing.querySelector('.reply-block')) {
-          var fresh = elFromHTML(buildUserBlock(c));
-          existing.replaceWith(fresh);
-          wireCommentNode(fresh);
-          return;
-        }
-        var utext = existing.querySelector('.bubble-u .utext');
-        if (utext) utext.textContent = c.text;
-        var utimeEl = existing.querySelector('.bubble-u .utime');
-        if (utimeEl && c.timestamp) {
-          var utd = parseCommentTimestamp(c.timestamp);
-          utimeEl.textContent = utd ? formatCommentClock(utd) : String(c.timestamp);
-        }
-        if (c.timestamp) {
-          var utd2 = parseCommentTimestamp(c.timestamp);
-          if (utd2) existing.setAttribute('data-date-key', dateKeyLocal(utd2));
-        }
-        var quote = existing.querySelector('.reply-quote');
-        if (quote) quote.textContent = c.text;
-        var rtext = existing.querySelector('.reply-text');
-        if (c.reply && rtext) rtext.textContent = c.reply.text;
-        var rtimeEl = existing.querySelector('.reply-time');
-        if (c.reply && rtimeEl && c.reply.timestamp) {
-          var rtd = parseCommentTimestamp(c.reply.timestamp);
-          rtimeEl.textContent = rtd ? formatCommentClock(rtd) : String(c.reply.timestamp);
-        }
-        if (c.reply && !existing.querySelector('.reply-block')) {
-          var btn = existing.querySelector('.reply-btn');
-          if (btn) btn.remove();
-          var slot = existing.querySelector('[data-admin-slot]');
-          var replyOuter = buildReplyBlockHtml(c);
-          if (slot) {
-            slot.outerHTML = replyOuter;
-          } else {
-            var msgUser = existing.querySelector('.msg-user');
-            if (msgUser) msgUser.insertAdjacentHTML('afterend', replyOuter);
-          }
-          wireAdminModeration(existing);
-        }
+        var fresh = elFromHTML(buildUserBlock(c));
+        existing.replaceWith(fresh);
+        wireCommentNode(fresh);
       }
 
       function renderInitial(list) {
@@ -3965,6 +4070,29 @@
         }
       }
 
+      function uploadComposerPhotos() {
+        if (!pendingPhotoFiles.length) {
+          return Promise.resolve([]);
+        }
+        var fd = new FormData();
+        pendingPhotoFiles.forEach(function (item) {
+          fd.append('photos', item.file);
+        });
+        return fetch('/api/upload-photos', {
+          method: 'POST',
+          body: fd,
+        })
+          .then(function (r) {
+            return r.json().then(function (j) {
+              if (!r.ok) throw new Error(j.error || String(r.status));
+              return j;
+            });
+          })
+          .then(function (data) {
+            return Array.isArray(data.photo_urls) ? data.photo_urls : [];
+          });
+      }
+
       function submitComment() {
         if (!postId) {
           setErr('Нет post_id');
@@ -3979,158 +4107,187 @@
           return;
         }
         var text = inputEl.value.trim();
-        if (!text) return;
+        if (!text && pendingPhotoFiles.length === 0) return;
+
         sendBtn.disabled = true;
         setErr('');
-        if (replyContext) {
-          if (!replyContext.comment_id || String(replyContext.comment_id).indexOf('temp-') === 0) {
-            setErr('Дождитесь отправки комментария');
-            sendBtn.disabled = !inputEl.value.trim();
-            return;
-          }
-          fetch('/api/reply', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              comment_id: replyContext.comment_id,
-              post_id: replyContext.post_id,
-              chat_id: Number(chatId),
-              user_id: Number(userId),
-              admin_name: username,
-              admin_text: text,
-            }),
-          })
-            .then(function (r) {
-              if (!r.ok) {
-                return r.json().then(function (j) {
-                  throw new Error(j.error || String(r.status));
-                });
-              }
-              return r.json();
-            })
-            .then(function () {
-              inputEl.value = '';
-              hideReplyBanner();
-              return loadComments(false);
-            })
-            .catch(function (e) {
-              setErr(e.message || String(e));
-            })
-            .finally(function () {
-              sendBtn.disabled = !inputEl.value.trim();
-              scrollToBottom();
-            });
-          return;
-        }
-        var tempId = 'temp-' + Date.now();
-        var optimistic = {
-          comment_id: tempId,
-          user_id: Number(userId),
-          username: username,
-          text: text,
-          timestamp: new Date().toISOString(),
-          avatar_url: currentUserPhotoUrl || undefined,
-        };
-        if (feedEl.querySelector('.feed-empty')) {
-          feedEl.innerHTML = '';
-        }
-        maybePrependDateDividerBeforeComment(parseCommentTimestamp(optimistic.timestamp));
-        var node = elFromHTML(buildUserBlock(optimistic));
-        feedEl.appendChild(node);
-        wireCommentNode(node);
-        knownIds.add(tempId);
-        bumpCommentCount(1);
-        inputEl.value = '';
-        scrollToBottom();
 
-        fetch('/api/comment', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            post_id: postId,
-            chat_id: Number(chatId),
-            user_id: Number(userId),
-            username: username,
-            text: text,
-            avatar_url: currentUserPhotoUrl || undefined,
-          }),
-        })
-          .then(function (r) {
-            if (!r.ok) {
-              return r.json().then(function (j) {
-                throw new Error(j.error || String(r.status));
+        var uploadPromise =
+          pendingPhotoFiles.length > 0 ? uploadComposerPhotos() : Promise.resolve([]);
+
+        uploadPromise
+          .then(function (photoUrls) {
+            var urls = Array.isArray(photoUrls) ? photoUrls : [];
+
+            if (replyContext) {
+              if (
+                !replyContext.comment_id ||
+                String(replyContext.comment_id).indexOf('temp-') === 0
+              ) {
+                setErr('Дождитесь отправки комментария');
+                return Promise.reject(new Error('pending'));
+              }
+              return fetch('/api/reply', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  comment_id: replyContext.comment_id,
+                  post_id: replyContext.post_id,
+                  chat_id: Number(chatId),
+                  user_id: Number(userId),
+                  admin_text: text,
+                  photo_urls: urls.length ? urls : undefined,
+                }),
+              })
+                .then(function (r) {
+                  if (!r.ok) {
+                    return r.json().then(function (j) {
+                      throw new Error(j.error || String(r.status));
+                    });
+                  }
+                  return r.json();
+                })
+                .then(function () {
+                  clearComposerPhotos();
+                  inputEl.value = '';
+                  hideReplyBanner();
+                  return loadComments(false);
+                });
+            }
+
+            clearComposerPhotos();
+            inputEl.value = '';
+            var tempId = 'temp-' + Date.now();
+            var optimistic = {
+              comment_id: tempId,
+              user_id: Number(userId),
+              username: username,
+              text: text,
+              timestamp: new Date().toISOString(),
+              avatar_url: currentUserPhotoUrl || undefined,
+              photo_urls: urls.length ? urls : undefined,
+            };
+            if (feedEl.querySelector('.feed-empty')) {
+              feedEl.innerHTML = '';
+            }
+            maybePrependDateDividerBeforeComment(parseCommentTimestamp(optimistic.timestamp));
+            var node = elFromHTML(buildUserBlock(optimistic));
+            feedEl.appendChild(node);
+            wireCommentNode(node);
+            knownIds.add(tempId);
+            bumpCommentCount(1);
+            scrollToBottom();
+
+            return fetch('/api/comment', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                post_id: postId,
+                chat_id: Number(chatId),
+                user_id: Number(userId),
+                username: username,
+                text: text,
+                photo_urls: urls.length ? urls : undefined,
+                avatar_url: currentUserPhotoUrl || undefined,
+              }),
+            })
+              .then(function (r) {
+                if (!r.ok) {
+                  return r.json().then(function (j) {
+                    throw new Error(j.error || String(r.status));
+                  });
+                }
+                return r.json();
+              })
+              .then(function (res) {
+                knownIds.delete(tempId);
+                node.setAttribute('data-comment-id', res.comment_id);
+                knownIds.add(res.comment_id);
+                var tEl = node.querySelector('.bubble-u .utime');
+                if (tEl && res.timestamp) {
+                  var tx = parseCommentTimestamp(res.timestamp);
+                  tEl.textContent = tx ? formatCommentClock(tx) : String(res.timestamp);
+                }
+                if (res.timestamp) {
+                  var tx2 = parseCommentTimestamp(res.timestamp);
+                  if (tx2) node.setAttribute('data-date-key', dateKeyLocal(tx2));
+                }
+              })
+              .catch(function (e) {
+                setErr(e.message || String(e));
+                knownIds.delete(tempId);
+                node.remove();
+                bumpCommentCount(-1);
+                inputEl.value = text;
               });
-            }
-            return r.json();
-          })
-          .then(function (res) {
-            knownIds.delete(tempId);
-            node.setAttribute('data-comment-id', res.comment_id);
-            knownIds.add(res.comment_id);
-            var tEl = node.querySelector('.bubble-u .utime');
-            if (tEl && res.timestamp) {
-              var tx = parseCommentTimestamp(res.timestamp);
-              tEl.textContent = tx ? formatCommentClock(tx) : String(res.timestamp);
-            }
-            if (res.timestamp) {
-              var tx2 = parseCommentTimestamp(res.timestamp);
-              if (tx2) node.setAttribute('data-date-key', dateKeyLocal(tx2));
-            }
-            if (isAdmin) {
-              var rep = node.querySelector('.reply-btn');
-              if (rep) rep.setAttribute('data-toggle-reply', res.comment_id);
-            }
-            var slot = node.querySelector('[data-admin-slot]');
-            if (slot) slot.setAttribute('data-admin-slot', res.comment_id);
           })
           .catch(function (e) {
-            setErr(e.message || String(e));
-            knownIds.delete(tempId);
-            node.remove();
-            bumpCommentCount(-1);
-            inputEl.value = text;
+            if (e && e.message !== 'pending') {
+              setErr(e.message || String(e));
+            }
           })
           .finally(function () {
-            sendBtn.disabled = !inputEl.value.trim();
+            updateSendEnabled();
             scrollToBottom();
           });
       }
 
       sendBtn.addEventListener('click', submitComment);
+      if (photoBtnEl && photoInputEl && !photoBtnEl.dataset.bound) {
+        photoBtnEl.dataset.bound = '1';
+        photoBtnEl.addEventListener('click', function () {
+          photoInputEl.click();
+        });
+        photoInputEl.addEventListener('change', function () {
+          var files = photoInputEl.files ? Array.from(photoInputEl.files) : [];
+          photoInputEl.value = '';
+          if (!files.length) return;
+          var maxAdd = Math.max(0, 10 - pendingPhotoFiles.length);
+          files.slice(0, maxAdd).forEach(function (file) {
+            if (!file.type || file.type.indexOf('image/') !== 0) return;
+            pendingPhotoFiles.push({
+              file: file,
+              previewUrl: URL.createObjectURL(file),
+            });
+          });
+          renderComposerAttachments();
+          updateSendEnabled();
+        });
+      }
+      if (composerAttachmentsEl && !composerAttachmentsEl.dataset.bound) {
+        composerAttachmentsEl.dataset.bound = '1';
+        composerAttachmentsEl.addEventListener('click', function (e) {
+          var rm = e.target.closest('[data-remove-photo]');
+          if (!rm) return;
+          var idx = parseInt(rm.getAttribute('data-remove-photo') || '', 10);
+          if (!Number.isFinite(idx) || idx < 0 || idx >= pendingPhotoFiles.length) return;
+          var removed = pendingPhotoFiles.splice(idx, 1)[0];
+          if (removed) {
+            try {
+              URL.revokeObjectURL(removed.previewUrl);
+            } catch (_) {}
+          }
+          renderComposerAttachments();
+          updateSendEnabled();
+        });
+      }
       if (replyBannerCloseEl && !replyBannerCloseEl.dataset.bound) {
         replyBannerCloseEl.dataset.bound = '1';
         replyBannerCloseEl.addEventListener('click', function () {
           hideReplyBanner();
         });
       }
-      if (isAdmin && !feedEl.dataset.replyToggleBound) {
-        feedEl.dataset.replyToggleBound = '1';
-        feedEl.addEventListener('click', function (e) {
-          var btn = e.target.closest('[data-toggle-reply]');
-          if (!btn) return;
-          var commentId = btn.dataset.toggleReply;
-          if (!commentId) return;
-          var commentEl = btn.closest('[data-comment-id]');
-          var usernameEl = commentEl ? commentEl.querySelector('.uname') : null;
-          var username = usernameEl ? String(usernameEl.textContent || '').trim() : 'пользователю';
-          replyContext = {
-            comment_id: commentId,
-            username: username || 'пользователю',
-            post_id: currentPostId,
-          };
-          showReplyBanner(replyContext.username);
-          inputEl.focus();
-        });
-      }
       inputEl.addEventListener('input', function () {
-        sendBtn.disabled = !inputEl.value.trim();
+        updateSendEnabled();
       });
       inputEl.addEventListener('keydown', function (e) {
         if (e.key === 'Enter' && !e.shiftKey) {
           e.preventDefault();
-          if (inputEl.value.trim()) submitComment();
+          if (inputEl.value.trim() || pendingPhotoFiles.length > 0) submitComment();
         }
       });
+
+      updateSendEnabled();
 
       loadPost().then(function () {
         fetch(

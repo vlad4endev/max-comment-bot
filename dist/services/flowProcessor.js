@@ -29,14 +29,10 @@ class FlowProcessor {
             this.startFlowPoller(flow);
         }
         this.started = true;
-<<<<<<< HEAD
-        logger_1.logger.info('flowProcessor: started', { flowCount: flows.length });
-=======
         logger_1.logger.info('flowProcessor: started', {
             flowCount: flows.length,
             pollIntervalMs: flowPollMs(),
         });
->>>>>>> origin/cursor/flow-processor-startup-fix
         if (flows.length === 0) {
             logger_1.logger.warn('flowProcessor: нет активных потоков (TG→MAX). Подключите Telegram в /admin → Интеграции и создайте поток; данные: data/integrations.json');
         }

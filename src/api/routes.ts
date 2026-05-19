@@ -1,7 +1,12 @@
+import fs from 'node:fs'
+import path from 'node:path'
+import { randomUUID } from 'node:crypto'
+
 import type { Bot } from '@maxhub/max-bot-api'
 import { Keyboard } from '@maxhub/max-bot-api'
 import type { ChatMember } from '@maxhub/max-bot-api/types'
 import express from 'express'
+import multer from 'multer'
 
 import { config } from '../config'
 import { buildBotJoinUrl } from '../utils/deeplink'
@@ -76,6 +81,38 @@ function parseNonEmptyString(value: unknown): string | null {
   }
   const t = value.trim()
   return t === '' ? null : t
+}
+
+function parseOptionalString(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : ''
+}
+
+function normalizePhotoUrl(value: unknown): string | null {
+  if (typeof value !== 'string') {
+    return null
+  }
+  const trimmed = value.trim()
+  if (!trimmed) {
+    return null
+  }
+  if (trimmed.length > 2048) {
+    return null
+  }
+  return trimmed
+}
+
+function parsePhotoUrls(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return []
+  }
+  const out: string[] = []
+  for (const raw of value) {
+    const normalized = normalizePhotoUrl(raw)
+    if (normalized) {
+      out.push(normalized)
+    }
+  }
+  return [...new Set(out)].slice(0, 10)
 }
 
 function parseBoolean(value: unknown): boolean | null {
@@ -175,7 +212,8 @@ function toWireComment(c: Comment): {
   text: string
   timestamp: string
   avatar_url?: string
-  reply?: { text: string; timestamp: string; admin_name?: string }
+  photo_urls?: string[]
+  reply?: { text: string; timestamp: string; admin_name?: string; photo_urls?: string[] }
 } {
   return {
     comment_id: c.comment_id,
@@ -185,6 +223,9 @@ function toWireComment(c: Comment): {
     text: c.text,
     timestamp: c.timestamp,
     ...(c.avatar_url ? { avatar_url: c.avatar_url } : {}),
+    ...(Array.isArray(c.photo_urls) && c.photo_urls.length > 0
+      ? { photo_urls: c.photo_urls }
+      : {}),
     reply: c.reply,
   }
 }
@@ -282,12 +323,42 @@ async function resolveAdminCommentAccess(
   return { ok: true, comment, post }
 }
 
+const MINIAPP_UPLOADS_PUBLIC_PREFIX = '/miniapp/uploads'
+const MINIAPP_UPLOADS_DIR = path.join(process.cwd(), 'miniapp', 'uploads')
+const MAX_UPLOAD_FILES = 10
+const MAX_UPLOAD_SIZE_BYTES = 8 * 1024 * 1024
+
+const miniappPhotoUpload = multer({
+  storage: multer.diskStorage({
+    destination(_req, _file, cb) {
+      fs.mkdirSync(MINIAPP_UPLOADS_DIR, { recursive: true })
+      cb(null, MINIAPP_UPLOADS_DIR)
+    },
+    filename(_req, file, cb) {
+      const ext = path.extname(file.originalname || '').toLowerCase()
+      const safeExt = ['.jpg', '.jpeg', '.png', '.webp', '.gif'].includes(ext) ? ext : '.jpg'
+      cb(null, `${Date.now()}-${randomUUID()}${safeExt}`)
+    },
+  }),
+  limits: {
+    files: MAX_UPLOAD_FILES,
+    fileSize: MAX_UPLOAD_SIZE_BYTES,
+  },
+  fileFilter(_req, file, cb) {
+    if (!file.mimetype || !file.mimetype.startsWith('image/')) {
+      cb(new Error('Можно загружать только изображения'))
+      return
+    }
+    cb(null, true)
+  },
+})
+
 /**
  * Express router for Mini App REST API (`/api/...`).
  */
 export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Router {
   const router = express.Router()
-  router.use(express.json({ limit: '512kb' }))
+  router.use(express.json({ limit: '2mb' }))
 
   router.get('/config', (_req, res) => {
     res.json({
@@ -771,6 +842,23 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
     }
   })
 
+  router.post('/upload-photos', (req, res) => {
+    miniappPhotoUpload.array('photos', MAX_UPLOAD_FILES)(req, res, (err: unknown) => {
+      if (err instanceof Error) {
+        res.status(400).json({ error: err.message || 'Ошибка загрузки фото' })
+        return
+      }
+      const files = Array.isArray(req.files) ? req.files : []
+      const urls = files
+        .map((f) => {
+          const name = path.basename(f.filename)
+          return `${MINIAPP_UPLOADS_PUBLIC_PREFIX}/${encodeURIComponent(name)}`
+        })
+        .slice(0, MAX_UPLOAD_FILES)
+      res.json({ photo_urls: urls })
+    })
+  })
+
   router.post('/comment', async (req, res) => {
     const body = req.body
     if (!isRecord(body)) {
@@ -781,10 +869,11 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
     const chatId = parseNonZeroInt(body.chat_id)
     const userId = parsePositiveInt(body.user_id)
     const username = parseNonEmptyString(body.username)
-    const text = parseNonEmptyString(body.text)
+    const text = parseOptionalString(body.text)
+    const photoUrls = parsePhotoUrls(body.photo_urls)
     const avatarFromClient =
       parseNonEmptyString(body.avatar_url) ?? parseNonEmptyString(body.photo_url)
-    if (!postId || !chatId || !userId || !username || !text) {
+    if (!postId || !chatId || !userId || !username || (text === '' && photoUrls.length === 0)) {
       res.status(400).json({ error: 'missing or invalid fields' })
       return
     }
@@ -810,6 +899,7 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
       user_id: userId,
       username,
       text,
+      ...(photoUrls.length > 0 ? { photo_urls: photoUrls } : {}),
       ...(avatarUrl ? { avatar_url: avatarUrl } : {}),
     })
 
@@ -832,6 +922,7 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
         channelTitle,
         username,
         commentText: text,
+        commentPhotoUrls: photoUrls,
         postId,
       })
     } catch (err: unknown) {
@@ -851,8 +942,9 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
     const postId = parseNonEmptyString(body.post_id)
     const chatId = parseNonZeroInt(body.chat_id)
     const replierUserId = parsePositiveInt(body.user_id)
-    const adminText = parseNonEmptyString(body.admin_text)
-    if (!commentId || !postId || !chatId || !replierUserId || !adminText) {
+    const adminText = parseOptionalString(body.admin_text)
+    const replyPhotoUrls = parsePhotoUrls(body.photo_urls)
+    if (!commentId || !postId || !chatId || !replierUserId || (adminText === '' && replyPhotoUrls.length === 0)) {
       res.status(400).json({ error: 'missing or invalid fields' })
       return
     }
@@ -863,9 +955,7 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
     }
     const channelReplyName =
       channelRegistry.getChannel(chatId)?.title?.trim() || 'Канал'
-    const rawAdminName =
-      typeof body.admin_name === 'string' ? body.admin_name.trim() : ''
-    const replierNameForStatus = rawAdminName || `админ #${replierUserId}`
+    const replierNameForStatus = 'канал'
 
     if (!(await isUserChannelAdmin(deps.bot, post.chat_id, replierUserId))) {
       res.status(403).json({ error: 'Только администраторы могут отвечать' })
@@ -878,7 +968,12 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
       return
     }
 
-    const updated = commentStore.addReply(commentId, adminText, channelReplyName)
+    const updated = commentStore.addReply(
+      commentId,
+      adminText,
+      channelReplyName,
+      replyPhotoUrls,
+    )
     if (!updated) {
       res.status(404).json({ error: 'comment not found' })
       return
@@ -889,7 +984,11 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
     if (mids.length > 0 && originalText && isMiniAppOpenUrlConfigured()) {
       const replyPreview = adminText.slice(0, 80)
       const ellipsis = adminText.length > 80 ? '...' : ''
-      const statusLine = `\n\n✅ Ответил ${replierNameForStatus}: «${replyPreview}${ellipsis}»`
+      const photosNote = replyPhotoUrls.length > 0 ? ` + ${replyPhotoUrls.length} фото` : ''
+      const statusLine =
+        adminText !== ''
+          ? `\n\n✅ Ответил ${replierNameForStatus}: «${replyPreview}${ellipsis}»${photosNote}`
+          : `\n\n✅ Ответил ${replierNameForStatus}: фото (${replyPhotoUrls.length})`
       const updatedText = `${originalText}${statusLine}`
       const miniAppUrl = buildMiniAppUrl(postId, chatId, { admin: '1' })
       const kb = Keyboard.inlineKeyboard([[Keyboard.button.link('✅ Просмотрено', miniAppUrl)]])
@@ -913,6 +1012,7 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
       postText: post.text,
       userCommentText: updated.text,
       adminReplyText: adminText,
+      adminReplyPhotoUrls: replyPhotoUrls,
       postId,
       channelChatId: chatId,
     })
@@ -1015,8 +1115,19 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
     const postId = parseNonEmptyString(body.post_id)
     const chatId = parseNonZeroInt(body.chat_id)
     const editorUserId = parsePositiveInt(body.user_id)
-    const adminText = parseNonEmptyString(body.admin_text)
-    if (!commentId || !postId || !chatId || !editorUserId || !adminText) {
+    const adminText = parseOptionalString(body.admin_text)
+    const photoUrlsInBody = 'photo_urls' in body
+    const replyPhotoUrls = photoUrlsInBody ? parsePhotoUrls(body.photo_urls) : undefined
+    if (
+      !commentId ||
+      !postId ||
+      !chatId ||
+      !editorUserId ||
+      (adminText === '' &&
+        !(replyPhotoUrls !== undefined
+          ? replyPhotoUrls.length > 0
+          : !!(commentStore.getComment(commentId)?.reply?.photo_urls?.length)))
+    ) {
       res.status(400).json({ error: 'missing or invalid fields' })
       return
     }
@@ -1033,7 +1144,12 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
 
     const channelReplyName =
       channelRegistry.getChannel(access.post.chat_id)?.title?.trim() || 'Канал'
-    const updated = commentStore.updateReply(commentId, adminText, channelReplyName)
+    const updated = commentStore.updateReply(
+      commentId,
+      adminText,
+      channelReplyName,
+      replyPhotoUrls,
+    )
     if (!updated) {
       res.status(404).json({ error: 'reply not found' })
       return

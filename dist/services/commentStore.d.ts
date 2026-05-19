@@ -3,6 +3,8 @@ export interface CommentReply {
     timestamp: string;
     /** Display name of the admin who replied (from Mini App). */
     admin_name?: string;
+    /** Attached image URLs (served by backend). */
+    photo_urls?: string[];
 }
 /** DM to an admin: message id for later edits when the channel replies. */
 export interface CommentAdminNotificationMid {
@@ -21,6 +23,8 @@ export interface Comment {
     timestamp: string;
     /** Author profile photo (MAX `avatar_url` / `full_avatar_url`). */
     avatar_url?: string;
+    /** Attached image URLs (served by backend). */
+    photo_urls?: string[];
     reply?: CommentReply;
     /** Original admin-notification body (before «✅ Отвечено» line is appended). */
     notification_text?: string;
@@ -36,7 +40,7 @@ export declare class CommentStore {
      * Attaches a channel reply to a comment. Returns updated comment or `null`.
      * @param replyAdminName optional display name of the replying admin (non-empty trimmed string is stored).
      */
-    addReply(commentId: string, replyText: string, replyAdminName?: string): Comment | null;
+    addReply(commentId: string, replyText: string, replyAdminName?: string, replyPhotoUrls?: string[]): Comment | null;
     /**
      * Updates comment body text. Returns updated comment or `null`.
      */
@@ -45,8 +49,9 @@ export declare class CommentStore {
     setCommentAvatarUrl(commentId: string, avatarUrl: string): Comment | null;
     /**
      * Updates an existing admin reply (preserves original timestamp). Returns `null` if missing.
+     * @param replyPhotoUrls `undefined` — не менять вложения; `[]` — удалить фото; иначе заменить список URL.
      */
-    updateReply(commentId: string, replyText: string, replyAdminName?: string): Comment | null;
+    updateReply(commentId: string, replyText: string, replyAdminName?: string, replyPhotoUrls?: string[]): Comment | null;
     /**
      * Removes the admin reply from a comment. Returns updated comment or `null`.
      */

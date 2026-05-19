@@ -12,6 +12,8 @@ export interface CommentReply {
   timestamp: string
   /** Display name of the admin who replied (from Mini App). */
   admin_name?: string
+  /** Attached image URLs (served by backend). */
+  photo_urls?: string[]
 }
 
 /** DM to an admin: message id for later edits when the channel replies. */
@@ -32,6 +34,8 @@ export interface Comment {
   timestamp: string
   /** Author profile photo (MAX `avatar_url` / `full_avatar_url`). */
   avatar_url?: string
+  /** Attached image URLs (served by backend). */
+  photo_urls?: string[]
   reply?: CommentReply
   /** Original admin-notification body (before «✅ Отвечено» line is appended). */
   notification_text?: string
@@ -46,6 +50,14 @@ function isCommentReply(value: unknown): value is CommentReply {
   const o = value as Record<string, unknown>
   if (o.admin_name !== undefined && typeof o.admin_name !== 'string') {
     return false
+  }
+  if (o.photo_urls !== undefined) {
+    if (
+      !Array.isArray(o.photo_urls) ||
+      o.photo_urls.some((u) => typeof u !== 'string' || !u.trim())
+    ) {
+      return false
+    }
   }
   return typeof o.text === 'string' && typeof o.timestamp === 'string'
 }
@@ -98,6 +110,16 @@ function normalizeCommentFromDisk(raw: unknown): Comment | null {
   if (o.avatar_url !== undefined && typeof o.avatar_url !== 'string') {
     return null
   }
+  if (o.photo_urls !== undefined) {
+    if (!Array.isArray(o.photo_urls)) {
+      return null
+    }
+    for (const url of o.photo_urls) {
+      if (typeof url !== 'string' || !url.trim()) {
+        return null
+      }
+    }
+  }
   if (o.notification_mids !== undefined) {
     if (!Array.isArray(o.notification_mids)) {
       return null
@@ -117,6 +139,13 @@ function normalizeCommentFromDisk(raw: unknown): Comment | null {
     timestamp: o.timestamp,
     ...(typeof o.avatar_url === 'string' && o.avatar_url.trim()
       ? { avatar_url: o.avatar_url.trim() }
+      : {}),
+    ...(Array.isArray(o.photo_urls) && o.photo_urls.length > 0
+      ? {
+          photo_urls: o.photo_urls
+            .map((u) => String(u).trim())
+            .filter(Boolean),
+        }
       : {}),
     ...(o.reply !== undefined ? { reply: o.reply as CommentReply } : {}),
     ...(o.notification_text !== undefined
@@ -170,7 +199,12 @@ export class CommentStore {
    * Attaches a channel reply to a comment. Returns updated comment or `null`.
    * @param replyAdminName optional display name of the replying admin (non-empty trimmed string is stored).
    */
-  addReply(commentId: string, replyText: string, replyAdminName?: string): Comment | null {
+  addReply(
+    commentId: string,
+    replyText: string,
+    replyAdminName?: string,
+    replyPhotoUrls?: string[],
+  ): Comment | null {
     const c = this.getComment(commentId)
     if (!c) {
       return null
@@ -179,6 +213,9 @@ export class CommentStore {
     const reply: CommentReply = { text: replyText, timestamp: new Date().toISOString() }
     if (trimmedName) {
       reply.admin_name = trimmedName
+    }
+    if (Array.isArray(replyPhotoUrls) && replyPhotoUrls.length > 0) {
+      reply.photo_urls = replyPhotoUrls.map((u) => u.trim()).filter(Boolean)
     }
     c.reply = reply
     this.saveRow(c)
@@ -223,8 +260,14 @@ export class CommentStore {
 
   /**
    * Updates an existing admin reply (preserves original timestamp). Returns `null` if missing.
+   * @param replyPhotoUrls `undefined` — не менять вложения; `[]` — удалить фото; иначе заменить список URL.
    */
-  updateReply(commentId: string, replyText: string, replyAdminName?: string): Comment | null {
+  updateReply(
+    commentId: string,
+    replyText: string,
+    replyAdminName?: string,
+    replyPhotoUrls?: string[],
+  ): Comment | null {
     const c = this.getComment(commentId)
     if (!c?.reply) {
       return null
@@ -235,6 +278,14 @@ export class CommentStore {
       c.reply.admin_name = trimmedName
     } else {
       delete c.reply.admin_name
+    }
+    /** `undefined` = не трогать вложения; `[]` = удалить все фото в ответе. */
+    if (replyPhotoUrls !== undefined) {
+      if (replyPhotoUrls.length > 0) {
+        c.reply.photo_urls = replyPhotoUrls.map((u) => u.trim()).filter(Boolean)
+      } else {
+        delete c.reply.photo_urls
+      }
     }
     this.saveRow(c)
     logger.info(`commentStore: updated reply ${commentId}`)

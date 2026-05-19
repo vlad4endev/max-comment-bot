@@ -4,8 +4,12 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.createCommentApiRouter = createCommentApiRouter;
+const node_fs_1 = __importDefault(require("node:fs"));
+const node_path_1 = __importDefault(require("node:path"));
+const node_crypto_1 = require("node:crypto");
 const max_bot_api_1 = require("@maxhub/max-bot-api");
 const express_1 = __importDefault(require("express"));
+const multer_1 = __importDefault(require("multer"));
 const config_1 = require("../config");
 const deeplink_1 = require("../utils/deeplink");
 const channelNotifyLinkStore_1 = require("../services/channelNotifyLinkStore");
@@ -57,6 +61,35 @@ function parseNonEmptyString(value) {
     }
     const t = value.trim();
     return t === '' ? null : t;
+}
+function parseOptionalString(value) {
+    return typeof value === 'string' ? value.trim() : '';
+}
+function normalizePhotoUrl(value) {
+    if (typeof value !== 'string') {
+        return null;
+    }
+    const trimmed = value.trim();
+    if (!trimmed) {
+        return null;
+    }
+    if (trimmed.length > 2048) {
+        return null;
+    }
+    return trimmed;
+}
+function parsePhotoUrls(value) {
+    if (!Array.isArray(value)) {
+        return [];
+    }
+    const out = [];
+    for (const raw of value) {
+        const normalized = normalizePhotoUrl(raw);
+        if (normalized) {
+            out.push(normalized);
+        }
+    }
+    return [...new Set(out)].slice(0, 10);
 }
 function parseBoolean(value) {
     if (typeof value === 'boolean') {
@@ -145,6 +178,9 @@ function toWireComment(c) {
         text: c.text,
         timestamp: c.timestamp,
         ...(c.avatar_url ? { avatar_url: c.avatar_url } : {}),
+        ...(Array.isArray(c.photo_urls) && c.photo_urls.length > 0
+            ? { photo_urls: c.photo_urls }
+            : {}),
         reply: c.reply,
     };
 }
@@ -213,12 +249,40 @@ async function resolveAdminCommentAccess(bot, input) {
     }
     return { ok: true, comment, post };
 }
+const MINIAPP_UPLOADS_PUBLIC_PREFIX = '/miniapp/uploads';
+const MINIAPP_UPLOADS_DIR = node_path_1.default.join(process.cwd(), 'miniapp', 'uploads');
+const MAX_UPLOAD_FILES = 10;
+const MAX_UPLOAD_SIZE_BYTES = 8 * 1024 * 1024;
+const miniappPhotoUpload = (0, multer_1.default)({
+    storage: multer_1.default.diskStorage({
+        destination(_req, _file, cb) {
+            node_fs_1.default.mkdirSync(MINIAPP_UPLOADS_DIR, { recursive: true });
+            cb(null, MINIAPP_UPLOADS_DIR);
+        },
+        filename(_req, file, cb) {
+            const ext = node_path_1.default.extname(file.originalname || '').toLowerCase();
+            const safeExt = ['.jpg', '.jpeg', '.png', '.webp', '.gif'].includes(ext) ? ext : '.jpg';
+            cb(null, `${Date.now()}-${(0, node_crypto_1.randomUUID)()}${safeExt}`);
+        },
+    }),
+    limits: {
+        files: MAX_UPLOAD_FILES,
+        fileSize: MAX_UPLOAD_SIZE_BYTES,
+    },
+    fileFilter(_req, file, cb) {
+        if (!file.mimetype || !file.mimetype.startsWith('image/')) {
+            cb(new Error('Можно загружать только изображения'));
+            return;
+        }
+        cb(null, true);
+    },
+});
 /**
  * Express router for Mini App REST API (`/api/...`).
  */
 function createCommentApiRouter(deps) {
     const router = express_1.default.Router();
-    router.use(express_1.default.json({ limit: '512kb' }));
+    router.use(express_1.default.json({ limit: '2mb' }));
     router.get('/config', (_req, res) => {
         res.json({
             bot_nickname: config_1.config.botNickname,
@@ -683,6 +747,22 @@ function createCommentApiRouter(deps) {
             res.status(500).json({ error: 'internal error' });
         }
     });
+    router.post('/upload-photos', (req, res) => {
+        miniappPhotoUpload.array('photos', MAX_UPLOAD_FILES)(req, res, (err) => {
+            if (err instanceof Error) {
+                res.status(400).json({ error: err.message || 'Ошибка загрузки фото' });
+                return;
+            }
+            const files = Array.isArray(req.files) ? req.files : [];
+            const urls = files
+                .map((f) => {
+                const name = node_path_1.default.basename(f.filename);
+                return `${MINIAPP_UPLOADS_PUBLIC_PREFIX}/${encodeURIComponent(name)}`;
+            })
+                .slice(0, MAX_UPLOAD_FILES);
+            res.json({ photo_urls: urls });
+        });
+    });
     router.post('/comment', async (req, res) => {
         const body = req.body;
         if (!isRecord(body)) {
@@ -693,9 +773,10 @@ function createCommentApiRouter(deps) {
         const chatId = parseNonZeroInt(body.chat_id);
         const userId = parsePositiveInt(body.user_id);
         const username = parseNonEmptyString(body.username);
-        const text = parseNonEmptyString(body.text);
+        const text = parseOptionalString(body.text);
+        const photoUrls = parsePhotoUrls(body.photo_urls);
         const avatarFromClient = parseNonEmptyString(body.avatar_url) ?? parseNonEmptyString(body.photo_url);
-        if (!postId || !chatId || !userId || !username || !text) {
+        if (!postId || !chatId || !userId || !username || (text === '' && photoUrls.length === 0)) {
             res.status(400).json({ error: 'missing or invalid fields' });
             return;
         }
@@ -718,6 +799,7 @@ function createCommentApiRouter(deps) {
             user_id: userId,
             username,
             text,
+            ...(photoUrls.length > 0 ? { photo_urls: photoUrls } : {}),
             ...(avatarUrl ? { avatar_url: avatarUrl } : {}),
         });
         const newCount = postStore_1.postStore.incrementCommentCount(postId);
@@ -738,6 +820,7 @@ function createCommentApiRouter(deps) {
                 channelTitle,
                 username,
                 commentText: text,
+                commentPhotoUrls: photoUrls,
                 postId,
             });
         }
@@ -756,8 +839,9 @@ function createCommentApiRouter(deps) {
         const postId = parseNonEmptyString(body.post_id);
         const chatId = parseNonZeroInt(body.chat_id);
         const replierUserId = parsePositiveInt(body.user_id);
-        const adminText = parseNonEmptyString(body.admin_text);
-        if (!commentId || !postId || !chatId || !replierUserId || !adminText) {
+        const adminText = parseOptionalString(body.admin_text);
+        const replyPhotoUrls = parsePhotoUrls(body.photo_urls);
+        if (!commentId || !postId || !chatId || !replierUserId || (adminText === '' && replyPhotoUrls.length === 0)) {
             res.status(400).json({ error: 'missing or invalid fields' });
             return;
         }
@@ -767,8 +851,7 @@ function createCommentApiRouter(deps) {
             return;
         }
         const channelReplyName = channelRegistry_1.channelRegistry.getChannel(chatId)?.title?.trim() || 'Канал';
-        const rawAdminName = typeof body.admin_name === 'string' ? body.admin_name.trim() : '';
-        const replierNameForStatus = rawAdminName || `админ #${replierUserId}`;
+        const replierNameForStatus = 'канал';
         if (!(await (0, channelPostActions_1.isUserChannelAdmin)(deps.bot, post.chat_id, replierUserId))) {
             res.status(403).json({ error: 'Только администраторы могут отвечать' });
             return;
@@ -778,7 +861,7 @@ function createCommentApiRouter(deps) {
             res.status(404).json({ error: 'comment not found' });
             return;
         }
-        const updated = commentStore_1.commentStore.addReply(commentId, adminText, channelReplyName);
+        const updated = commentStore_1.commentStore.addReply(commentId, adminText, channelReplyName, replyPhotoUrls);
         if (!updated) {
             res.status(404).json({ error: 'comment not found' });
             return;
@@ -788,7 +871,10 @@ function createCommentApiRouter(deps) {
         if (mids.length > 0 && originalText && (0, postStore_1.isMiniAppOpenUrlConfigured)()) {
             const replyPreview = adminText.slice(0, 80);
             const ellipsis = adminText.length > 80 ? '...' : '';
-            const statusLine = `\n\n✅ Ответил ${replierNameForStatus}: «${replyPreview}${ellipsis}»`;
+            const photosNote = replyPhotoUrls.length > 0 ? ` + ${replyPhotoUrls.length} фото` : '';
+            const statusLine = adminText !== ''
+                ? `\n\n✅ Ответил ${replierNameForStatus}: «${replyPreview}${ellipsis}»${photosNote}`
+                : `\n\n✅ Ответил ${replierNameForStatus}: фото (${replyPhotoUrls.length})`;
             const updatedText = `${originalText}${statusLine}`;
             const miniAppUrl = (0, postStore_1.buildMiniAppUrl)(postId, chatId, { admin: '1' });
             const kb = max_bot_api_1.Keyboard.inlineKeyboard([[max_bot_api_1.Keyboard.button.link('✅ Просмотрено', miniAppUrl)]]);
@@ -813,6 +899,7 @@ function createCommentApiRouter(deps) {
             postText: post.text,
             userCommentText: updated.text,
             adminReplyText: adminText,
+            adminReplyPhotoUrls: replyPhotoUrls,
             postId,
             channelChatId: chatId,
         });
@@ -901,8 +988,17 @@ function createCommentApiRouter(deps) {
         const postId = parseNonEmptyString(body.post_id);
         const chatId = parseNonZeroInt(body.chat_id);
         const editorUserId = parsePositiveInt(body.user_id);
-        const adminText = parseNonEmptyString(body.admin_text);
-        if (!commentId || !postId || !chatId || !editorUserId || !adminText) {
+        const adminText = parseOptionalString(body.admin_text);
+        const photoUrlsInBody = 'photo_urls' in body;
+        const replyPhotoUrls = photoUrlsInBody ? parsePhotoUrls(body.photo_urls) : undefined;
+        if (!commentId ||
+            !postId ||
+            !chatId ||
+            !editorUserId ||
+            (adminText === '' &&
+                !(replyPhotoUrls !== undefined
+                    ? replyPhotoUrls.length > 0
+                    : !!(commentStore_1.commentStore.getComment(commentId)?.reply?.photo_urls?.length)))) {
             res.status(400).json({ error: 'missing or invalid fields' });
             return;
         }
@@ -917,7 +1013,7 @@ function createCommentApiRouter(deps) {
             return;
         }
         const channelReplyName = channelRegistry_1.channelRegistry.getChannel(access.post.chat_id)?.title?.trim() || 'Канал';
-        const updated = commentStore_1.commentStore.updateReply(commentId, adminText, channelReplyName);
+        const updated = commentStore_1.commentStore.updateReply(commentId, adminText, channelReplyName, replyPhotoUrls);
         if (!updated) {
             res.status(404).json({ error: 'reply not found' });
             return;
