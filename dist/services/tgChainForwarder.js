@@ -1,5 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.setTgChainForwarderBot = setTgChainForwarderBot;
 exports.runTgChainsOnce = runTgChainsOnce;
 exports.startTgChainForwarder = startTgChainForwarder;
 const node_crypto_1 = require("node:crypto");
@@ -8,9 +9,20 @@ const database_1 = require("../db/database");
 const telegramReader_1 = require("../forwarder/telegramReader");
 const maxPublisher_1 = require("../forwarder/maxPublisher");
 const adminPanelState_1 = require("../api/adminPanelState");
+const channelImportService_1 = require("./channelImportService");
+const channelPostActions_1 = require("./channelPostActions");
+const postStore_1 = require("./postStore");
+const resolveChannelChatId_1 = require("./resolveChannelChatId");
 const tgChannelMatch_1 = require("../utils/tgChannelMatch");
 const logger_1 = require("../utils/logger");
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+/** Long-poll Telegram for new channel_post (сек). */
+const TG_CHAIN_LONG_POLL_SEC = 25;
+const TG_CHAIN_IDLE_MS = 3_000;
+let botRef = null;
+function setTgChainForwarderBot(bot) {
+    botRef = bot;
+}
 function tokenKey(token) {
     return (0, node_crypto_1.createHash)('sha256').update(token).digest('hex').slice(0, 16);
 }
@@ -85,14 +97,82 @@ async function forwardMessageToMax(msg, tgToken, maxToken, maxChatId, addSignatu
         await (0, maxPublisher_1.sendTextToMax)(maxToken, maxChannelId, text);
     }
 }
+/** После публикации в MAX — кнопка «Комментарии» на свежем посте бота. */
+async function attachCommentsButtonOnLatestBotPost(bot, maxChatId) {
+    const chatId = (0, resolveChannelChatId_1.resolveCanonicalChannelChatId)(maxChatId) ?? maxChatId;
+    const botUid = bot.botInfo?.user_id;
+    let messages = [];
+    try {
+        const res = await bot.api.getMessages(chatId, { count: 8 });
+        messages = res.messages;
+    }
+    catch (err) {
+        logger_1.logger.warn('[tgChain] getMessages for comment button failed', { chatId, err });
+        return false;
+    }
+    for (const message of messages) {
+        const mid = message.body?.mid;
+        if (!mid)
+            continue;
+        if (botUid !== undefined && message.sender?.user_id !== botUid)
+            continue;
+        if (postStore_1.postStore.findPostByChannelMessage(chatId, mid))
+            continue;
+        const post = await (0, channelPostActions_1.ensurePostFromChannelMessage)(bot, chatId, mid);
+        if (post) {
+            logger_1.logger.info('[tgChain] comments button attached', { chatId, messageMid: mid, postId: post.post_id });
+            return true;
+        }
+    }
+    logger_1.logger.warn('[tgChain] no new bot post found for comment button', { chatId });
+    return false;
+}
+async function processChainMessage(chain, msg, tgToken, maxToken) {
+    const sourceKey = chainSourceKey(chain);
+    if (!(0, tgChannelMatch_1.telegramChannelMatchesTarget)(msg.chat, sourceKey)) {
+        return;
+    }
+    if (isAlreadyForwarded(chain.id, msg.message_id)) {
+        return;
+    }
+    try {
+        await forwardMessageToMax(msg, tgToken, maxToken, chain.max_chat_id, chain.add_signature);
+        if (chain.add_comments_button !== false && botRef) {
+            await sleep(600);
+            await attachCommentsButtonOnLatestBotPost(botRef, chain.max_chat_id);
+        }
+        markForwarded(chain.id, msg.message_id);
+        const forwardedToday = chain.forwarded_today + 1;
+        chain.forwarded_today = forwardedToday;
+        await (0, adminPanelState_1.updateTgChain)(chain.id, { forwarded_today: forwardedToday });
+        logger_1.logger.info('[tgChain] forwarded', {
+            chainId: chain.id,
+            from: sourceKey,
+            to: chain.max_chat_id,
+            messageId: msg.message_id,
+        });
+        await sleep(800 + Math.random() * 400);
+    }
+    catch (err) {
+        logger_1.logger.error('[tgChain] forward failed', {
+            chainId: chain.id,
+            from: sourceKey,
+            to: chain.max_chat_id,
+            err,
+        });
+        const errorsToday = chain.errors_today + 1;
+        chain.errors_today = errorsToday;
+        await (0, adminPanelState_1.updateTgChain)(chain.id, { errors_today: errorsToday });
+    }
+}
 async function runTgChainsOnce() {
     const maxToken = (process.env.BOT_TOKEN || '').trim();
     if (!maxToken) {
-        return;
+        return false;
     }
     const chains = (await (0, adminPanelState_1.listTgChains)()).filter((c) => c.active && c.forward_posts && chainSourceKey(c) !== '');
     if (chains.length === 0) {
-        return;
+        return false;
     }
     const tokenByChain = new Map();
     for (const chain of chains) {
@@ -112,70 +192,50 @@ async function runTgChainsOnce() {
         list.push(chain);
         tokenGroups.set(token, list);
     }
+    let receivedAny = false;
     for (const [tgToken, group] of tokenGroups) {
+        const pollErr = await (0, channelImportService_1.assertTelegramPollingReady)(tgToken);
+        if (pollErr) {
+            logger_1.logger.warn('[tgChain] telegram polling not ready', { err: pollErr });
+            continue;
+        }
         const offset = getReaderOffset(tgToken);
-        const batch = await (0, telegramReader_1.getTelegramUpdatesWithIds)(tgToken, offset, 0);
+        const batch = await (0, telegramReader_1.getTelegramUpdatesWithIds)(tgToken, offset, TG_CHAIN_LONG_POLL_SEC);
         let nextOffset = offset;
         for (const u of batch) {
+            receivedAny = true;
             nextOffset = Math.max(nextOffset, u.update_id + 1);
             const msg = u.channel_post;
             if (!msg)
                 continue;
             for (const chain of group) {
-                const sourceKey = chainSourceKey(chain);
-                if (!(0, tgChannelMatch_1.telegramChannelMatchesTarget)(msg.chat, sourceKey)) {
-                    continue;
-                }
-                if (isAlreadyForwarded(chain.id, msg.message_id)) {
-                    continue;
-                }
-                try {
-                    await forwardMessageToMax(msg, tgToken, maxToken, chain.max_chat_id, chain.add_signature);
-                    markForwarded(chain.id, msg.message_id);
-                    const forwardedToday = chain.forwarded_today + 1;
-                    chain.forwarded_today = forwardedToday;
-                    await (0, adminPanelState_1.updateTgChain)(chain.id, { forwarded_today: forwardedToday });
-                    logger_1.logger.info('[tgChain] forwarded', {
-                        chainId: chain.id,
-                        from: sourceKey,
-                        to: chain.max_chat_id,
-                        messageId: msg.message_id,
-                    });
-                    await sleep(2000 + Math.random() * 3000);
-                }
-                catch (err) {
-                    logger_1.logger.error('[tgChain] forward failed', {
-                        chainId: chain.id,
-                        from: sourceKey,
-                        to: chain.max_chat_id,
-                        err,
-                    });
-                    const errorsToday = chain.errors_today + 1;
-                    chain.errors_today = errorsToday;
-                    await (0, adminPanelState_1.updateTgChain)(chain.id, { errors_today: errorsToday });
-                }
+                await processChainMessage(chain, msg, tgToken, maxToken);
             }
         }
         if (nextOffset > offset) {
             setReaderOffset(tgToken, nextOffset);
         }
     }
+    return receivedAny;
 }
 let loopStarted = false;
 function startTgChainForwarder() {
     if (loopStarted)
         return;
     loopStarted = true;
-    logger_1.logger.info('[tgChain] forwarder started');
+    logger_1.logger.info('[tgChain] forwarder started (long-poll channel_post)');
     const loop = async () => {
         while (true) {
             try {
-                await runTgChainsOnce();
+                const hadUpdates = await runTgChainsOnce();
+                if (!hadUpdates) {
+                    await sleep(TG_CHAIN_IDLE_MS);
+                }
             }
             catch (err) {
                 logger_1.logger.error('[tgChain] loop error', err);
+                await sleep(TG_CHAIN_IDLE_MS);
             }
-            await sleep(30_000);
         }
     };
     void loop();

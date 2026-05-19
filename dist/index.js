@@ -54,6 +54,7 @@ async function main() {
         }
     }
     flowProcessor_1.flowProcessor.setBot(bot);
+    (0, tgChainForwarder_1.setTgChainForwarderBot)(bot);
     (0, logger_1.startRuntimeLogRotationScheduler)();
     (0, channelPoller_1.startChannelPostPoller)(bot);
     // До HTTP: иначе при EADDRINUSE channelPoller уже в логах, а flowProcessor — нет.

@@ -34,7 +34,7 @@
       group: 'Контент',
       items: [
         { id: 'channels', label: 'Каналы', icon: 'radio' },
-        { id: 'tgchains', label: 'TG-цепочки', icon: 'link-2' },
+        { id: 'tgchains', label: 'TG → MAX', icon: 'link-2' },
         { id: 'channelimport', label: 'Импорт TG→MAX', icon: 'upload-cloud' },
         { id: 'autoposts', label: 'Автопосты', icon: 'calendar-clock' },
         { id: 'comments', label: 'Комментарии', icon: 'message-square' },
@@ -60,7 +60,7 @@
   var PAGE_TITLES = {
     dashboard: 'Дашборд',
     channels: 'Каналы',
-    tgchains: 'TG-цепочки',
+    tgchains: 'TG → MAX',
     channelimport: 'Импорт TG→MAX',
     autoposts: 'Автопосты',
     integrations: 'Интеграции',
@@ -784,11 +784,20 @@
     });
   }
 
-  function buildTelegramChannelSelect(id, chats, extraManualId) {
+  function buildTelegramChannelSelect(id, chats, extraManualId, options) {
+    options = options || {};
+    var list = chats || [];
+    if (options.adminOnly) {
+      var adminOnly = list.filter(function (ch) {
+        return ch.botIsAdmin === true;
+      });
+      if (adminOnly.length) list = adminOnly;
+    }
     var opts = '<option value="">— выберите канал/чат —</option>';
-    (chats || []).forEach(function (ch) {
+    list.forEach(function (ch) {
       var val = telegramChannelPickValue(ch);
       var label = ch.title + (ch.username ? ' (' + ch.username + ')' : '') + ' · ' + telegramChatTypeLabel(ch.type);
+      if (ch.botIsAdmin) label += ' · админ';
       opts += '<option value="' + esc(val) + '">' + esc(label) + '</option>';
     });
     var html =
@@ -1640,109 +1649,373 @@
       });
   }
 
+  function lookupTgChatByKey(key) {
+    var raw = String(key || '').trim().replace(/^@/, '');
+    if (!raw) return null;
+    return (
+      (tgLinkedChatsCache || []).find(function (ch) {
+        return String(ch.id) === raw || (ch.username && ch.username.replace(/^@/, '') === raw);
+      }) || null
+    );
+  }
+
+  function lookupMaxChatById(id) {
+    var n = String(id || '').trim();
+    if (!n) return null;
+    return (maxLinkedChatsCache || []).find(function (ch) {
+      return String(ch.id) === n;
+    });
+  }
+
+  function tgChainTgDisplayName(chainOrKey) {
+    var key = chainOrKey;
+    var title = '';
+    var sub = '';
+    if (chainOrKey && typeof chainOrKey === 'object') {
+      var c = chainOrKey;
+      key = c.tg_channel_id || (c.tg_username ? '@' + c.tg_username : '');
+      var hit = lookupTgChatByKey(key);
+      title = hit ? hit.title : c.tg_username ? '@' + c.tg_username : String(key || 'Telegram');
+      sub = c.tg_channel_id ? 'ID ' + c.tg_channel_id : hit && hit.username ? hit.username : '';
+    } else {
+      var ch = lookupTgChatByKey(key);
+      title = ch ? ch.title : key ? (String(key).startsWith('-') ? 'Канал ' + key : '@' + key) : '—';
+      sub = ch ? ch.username || 'ID ' + ch.id : '';
+    }
+    return { title: title, sub: sub };
+  }
+
+  function tgChainMaxDisplayName(chainOrId) {
+    var id = chainOrId;
+    var title = '';
+    var sub = '';
+    if (chainOrId && typeof chainOrId === 'object') {
+      id = chainOrId.max_chat_id;
+      title = chainOrId.max_title || String(id);
+      sub = 'ID ' + id;
+    } else {
+      var ch = lookupMaxChatById(id);
+      title = ch ? ch.title : id ? String(id) : '—';
+      sub = id ? 'ID ' + id : '';
+    }
+    return { title: title, sub: sub };
+  }
+
+  function updateTgChainPairPreview(root) {
+    var el = qs('#tc_pair_preview', root);
+    if (!el) return;
+    var tgRaw = readTelegramChannelPick('tc_tg_select', 'tc_tg_manual', root);
+    var maxId = qs('#tc_max', root) ? qs('#tc_max', root).value : '';
+    if (!tgRaw || !maxId) {
+      el.className = 'tg-chain-pair-live is-empty';
+      el.innerHTML =
+        'Выберите <strong>канал Telegram</strong> (откуда) и <strong>канал MAX</strong> (куда публиковать посты).';
+      return;
+    }
+    var tg = tgChainTgDisplayName(tgRaw);
+    var mx = tgChainMaxDisplayName(maxId);
+    el.className = 'tg-chain-pair-live';
+    el.innerHTML =
+      'Пара: <strong>' +
+      esc(tg.title) +
+      '</strong> → <strong>' +
+      esc(mx.title) +
+      '</strong>. Новые посты в Telegram сразу появятся в MAX.';
+  }
+
+  function submitTgChainFromForm(root, onDone) {
+    var chatId = Number(qs('#tc_max', root).value);
+    var tgRaw = readTelegramChannelPick('tc_tg_select', 'tc_tg_manual', root);
+    var tgKey = String(tgRaw || '').trim();
+    var tokenEl = qs('#tc_token', root);
+    var token = tokenEl ? String(tokenEl.value || '').trim() : '';
+    var sw = readSwitches(root);
+    if (!chatId || !tgKey) {
+      showToast('Выберите канал Telegram и канал MAX', 'error');
+      return;
+    }
+    var btn = qs('#tc_submit', root);
+    if (btn) btn.disabled = true;
+    var isNumeric = /^-?\d+$/.test(tgKey.replace(/^@/, ''));
+    var payload = {
+      max_chat_id: chatId,
+      tg_channel: tgKey,
+      forward_posts: sw.forward_posts !== false,
+      forward_comments: !!sw.forward_comments,
+      add_comments_button: sw.add_comments_button !== false,
+      add_signature: !!sw.add_signature,
+    };
+    if (!isNumeric) payload.tg_username = tgKey.replace(/^@/, '');
+    if (token) payload.bot_token = token;
+    postJson('/tg-chains', payload)
+      .then(function () {
+        showToast('Пересылка включена', 'success');
+        if (onDone) onDone();
+      })
+      .catch(function (e) {
+        showToast(e.message || 'Ошибка', 'error');
+      })
+      .finally(function () {
+        if (btn) btn.disabled = false;
+      });
+  }
+
+  function bindTgChainCard(card, chainId) {
+    var activeSw = qs('[data-chain-field="active"]', card);
+    if (activeSw) {
+      activeSw.addEventListener('click', function (e) {
+        e.stopPropagation();
+        var next = !activeSw.classList.contains('on');
+        patchJson('/tg-chains/' + encodeURIComponent(chainId), { active: next })
+          .then(function () {
+            activeSw.classList.toggle('on', next);
+            card.classList.toggle('is-paused', !next);
+            showToast(next ? 'Пересылка включена' : 'На паузе', 'success');
+          })
+          .catch(function (err) {
+            showToast(err.message || 'Ошибка', 'error');
+          });
+      });
+    }
+    qsa('[data-chain-field]:not([data-chain-field="active"])', card).forEach(function (sw) {
+      sw.addEventListener('click', function (e) {
+        e.stopPropagation();
+        var field = sw.getAttribute('data-chain-field');
+        var next = !sw.classList.contains('on');
+        var patch = {};
+        patch[field] = next;
+        patchJson('/tg-chains/' + encodeURIComponent(chainId), patch)
+          .then(function () {
+            sw.classList.toggle('on', next);
+            showToast('Сохранено', 'success');
+          })
+          .catch(function (err) {
+            showToast(err.message || 'Ошибка', 'error');
+          });
+      });
+    });
+    var del = qs('[data-del-chain]', card);
+    if (del) {
+      del.addEventListener('click', function () {
+        showConfirm('Удалить эту цепочку?', 'Пересылка между каналами прекратится.', function () {
+          deleteReq('/tg-chains/' + encodeURIComponent(chainId))
+            .then(function () {
+              showToast('Удалено', 'success');
+              renderTgChains();
+            })
+            .catch(function (err) {
+              showToast(err.message || 'Ошибка', 'error');
+            });
+        });
+      });
+    }
+  }
+
+  function renderTgChainCardHtml(c) {
+    var tg = tgChainTgDisplayName(c);
+    var mx = tgChainMaxDisplayName(c);
+    var html =
+      '<article class="tg-chain-card' +
+      (c.active ? '' : ' is-paused') +
+      '" data-chain-id="' +
+      esc(c.id) +
+      '">';
+    html += '<div class="tg-chain-card-flow">';
+    html += '<div class="tg-chain-card-end"><div class="tg-chain-card-end-label">Telegram</div>';
+    html += '<div class="tg-chain-card-end-name" title="' + esc(tg.title) + '">' + esc(tg.title) + '</div>';
+    if (tg.sub) html += '<div class="mono text-sm muted">' + esc(tg.sub) + '</div>';
+    html += '</div><span class="tg-chain-arrow">→</span>';
+    html += '<div class="tg-chain-card-end"><div class="tg-chain-card-end-label">MAX</div>';
+    html += '<div class="tg-chain-card-end-name" title="' + esc(mx.title) + '">' + esc(mx.title) + '</div>';
+    if (mx.sub) html += '<div class="mono text-sm muted">' + esc(mx.sub) + '</div>';
+    html += '</div></div>';
+    html +=
+      '<div class="tg-chain-card-meta"><span>Сегодня: <strong>' +
+      esc(fmtNum(c.forwarded_today)) +
+      '</strong> постов</span>';
+    if (c.errors_today) {
+      html += '<span style="color:var(--danger,#e11)"> · ошибок: ' + esc(fmtNum(c.errors_today)) + '</span>';
+    }
+    html += '</div><div class="tg-chain-card-actions">';
+    html +=
+      '<label class="tg-chain-mini-toggle"><span>Пересылка</span><span class="switch' +
+      (c.active ? ' on' : '') +
+      '" data-chain-field="active" role="switch" tabindex="0"></span></label>';
+    html += '<div class="tg-chain-card-toggles">';
+    html +=
+      '<label class="tg-chain-mini-toggle"><span>Кнопка 💬</span><span class="switch' +
+      (c.add_comments_button !== false ? ' on' : '') +
+      '" data-chain-field="add_comments_button" role="switch" tabindex="0"></span></label>';
+    html +=
+      '<label class="tg-chain-mini-toggle"><span>Подпись TG</span><span class="switch' +
+      (c.add_signature ? ' on' : '') +
+      '" data-chain-field="add_signature" role="switch" tabindex="0"></span></label>';
+    html += '</div>';
+    html +=
+      '<button type="button" class="btn btn-danger btn-sm" data-del-chain="' +
+      esc(c.id) +
+      '">Удалить</button></div></article>';
+    return html;
+  }
+
+  function bindTgChainSetupPage(main) {
+    var tgSel = qs('#tc_tg_select', main);
+    var maxSel = qs('#tc_max', main);
+    var manual = qs('#tc_tg_manual', main);
+    function onPickChange() {
+      updateTgChainPairPreview(main);
+    }
+    if (tgSel) tgSel.addEventListener('change', onPickChange);
+    if (maxSel) maxSel.addEventListener('change', onPickChange);
+    if (manual) manual.addEventListener('input', onPickChange);
+    var refreshMax = qs('#tc_refresh_max', main);
+    if (refreshMax) {
+      refreshMax.addEventListener('click', function () {
+        refreshMax.disabled = true;
+        fetchMaxLinkedChannels(true)
+          .then(function (data) {
+            var sel = qs('#tc_max', main);
+            if (sel) sel.innerHTML = buildMaxChannelSelectOptions(data.channels || [], { adminOnly: true });
+            updateTgChainPairPreview(main);
+            showToast((data.channels || []).length ? 'MAX обновлён' : 'Каналы не найдены', 'info');
+          })
+          .catch(function (e) {
+            showToast(e.message || 'Ошибка', 'error');
+          })
+          .finally(function () {
+            refreshMax.disabled = false;
+            refreshIcons();
+          });
+      });
+    }
+    var refreshTg = qs('#tc_refresh_tg', main);
+    if (refreshTg) {
+      refreshTg.addEventListener('click', function () {
+        refreshTg.disabled = true;
+        fetchTelegramLinkedChats(true)
+          .then(function (data) {
+            var wrap = qs('#tc_tg_wrap', main);
+            if (wrap) {
+              wrap.innerHTML =
+                '<div class="flex-between" style="align-items:center;gap:8px;margin-bottom:6px"><label style="margin:0">① Канал Telegram — откуда</label><button type="button" class="btn btn-ghost btn-sm" id="tc_refresh_tg"><i data-lucide="refresh-cw"></i> Обновить</button></div>' +
+                buildTelegramChannelSelect('tc_tg_select', data.channels || [], 'tc_tg_manual', { adminOnly: true });
+              bindTgChainSetupPage(main);
+            }
+            updateTgChainPairPreview(main);
+            showToast((data.channels || []).length ? 'Telegram обновлён' : 'Чаты не найдены', 'info');
+          })
+          .catch(function (e) {
+            showToast(e.message || 'Ошибка', 'error');
+          })
+          .finally(function () {
+            refreshTg.disabled = false;
+            refreshIcons();
+          });
+      });
+    }
+    var submit = qs('#tc_submit', main);
+    if (submit) {
+      submit.addEventListener('click', function () {
+        submitTgChainFromForm(main, function () {
+          renderTgChains();
+        });
+      });
+    }
+    bindToggleRows(main, null);
+    updateTgChainPairPreview(main);
+  }
+
   function renderTgChains() {
     var main = qs('#mainContent');
     if (!main) return;
     main.innerHTML = '<div class="dash-loading muted">Загрузка…</div>';
-    getJson('/tg-chains')
-      .then(function (data) {
+    Promise.all([
+      getJson('/tg-chains'),
+      fetchMaxLinkedChannels(false).catch(function () {
+        return { channels: maxLinkedChatsCache };
+      }),
+      fetchTelegramLinkedChats(false).catch(function () {
+        return { channels: tgLinkedChatsCache };
+      }),
+    ])
+      .then(function (bundle) {
         if (currentRoute !== 'tgchains') return;
+        var data = bundle[0];
+        var maxChannels = bundle[1].channels || maxLinkedChatsCache || [];
+        var tgChats = bundle[2].channels || tgLinkedChatsCache || [];
         var chains = data.chains || [];
         var st = data.stats || {};
-        var html = '<div class="flex-between mb-md"><h2 style="margin:0">TG-цепочки</h2>';
-        html += '<button type="button" class="btn btn-primary" id="btnNewChain">Новая цепочка</button></div>';
-        html += '<div class="stats-grid mb-md">';
-        html +=
-          '<div class="stat-card"><div class="label">Активные</div><div class="value">' +
-          esc(fmtNum(st.active)) +
-          '</div></div>';
-        html +=
-          '<div class="stat-card"><div class="label">Переслано сегодня</div><div class="value">' +
-          esc(fmtNum(st.forwarded_today)) +
-          '</div></div>';
-        html +=
-          '<div class="stat-card"><div class="label">Ошибки сегодня</div><div class="value">' +
-          esc(fmtNum(st.errors_today)) +
-          '</div></div>';
+        var tgInt = integrationsCache.find(function (i) {
+          return i.platform === 'telegram' && i.status === 'connected';
+        });
+
+        var html = '<div class="tg-chains-page">';
+        html += '<h2 style="margin:0 0 8px">Пересылка Telegram → MAX</h2>';
+
+        html += '<section class="card-like tg-chain-hero">';
+        html += '<div class="tg-chain-flow-diagram">';
+        html += '<div class="tg-chain-node tg-source"><div class="tg-chain-node-badge">TG</div>';
+        html += '<div class="tg-chain-node-title">Telegram</div><div class="tg-chain-node-sub">откуда берём посты</div></div>';
+        html += '<div class="tg-chain-arrow">→</div>';
+        html += '<div class="tg-chain-node max-dest"><div class="tg-chain-node-badge">MAX</div>';
+        html += '<div class="tg-chain-node-title">MAX</div><div class="tg-chain-node-sub">куда публикуем</div></div>';
         html += '</div>';
-        html += '<div class="table-wrap"><table><thead><tr>';
         html +=
-          '<th>MAX канал</th><th>TG</th><th>Посты</th><th>Коммент.</th><th>Активна</th><th></th>';
-        html += '</tr></thead><tbody>';
-        chains.forEach(function (c) {
-          html += '<tr data-chain-id="' + esc(c.id) + '">';
+          '<p class="muted text-sm" style="margin:12px 0 10px;line-height:1.5">Опубликовали в Telegram — бот перехватывает пост и сразу публикует в MAX (текст, фото, видео, файлы).</p>';
+        html += '<ol class="tg-chain-steps">';
+        html += '<li>Бот Telegram — администратор в <strong>исходном</strong> канале</li>';
+        html += '<li>Бот MAX — администратор в <strong>целевом</strong> канале</li>';
+        html += '<li>У TG-бота нет webhook (иначе перехват не работает)</li>';
+        html += '</ol></section>';
+
+        html += '<section class="card-like forwarding-section">';
+        html += '<h3 class="tg-chain-setup-title">Настроить пересылку</h3>';
+        html += '<p class="muted text-sm" style="margin:0 0 14px">Шаг 1 — канал-источник, шаг 2 — канал в MAX. Списки из «Интеграции».</p>';
+        html += '<div class="forwarding-add-form forwarding-add-form--picks">';
+        html +=
+          '<div class="form-group" id="tc_tg_wrap"><div class="flex-between" style="align-items:center;gap:8px;margin-bottom:6px"><label style="margin:0">① Telegram — откуда</label><button type="button" class="btn btn-ghost btn-sm" id="tc_refresh_tg"><i data-lucide="refresh-cw"></i> Обновить</button></div>';
+        html += buildTelegramChannelSelect('tc_tg_select', tgChats, 'tc_tg_manual', { adminOnly: true }) + '</div>';
+        html +=
+          '<div class="form-group"><div class="flex-between" style="align-items:center;gap:8px;margin-bottom:6px"><label style="margin:0">② MAX — куда</label><button type="button" class="btn btn-ghost btn-sm" id="tc_refresh_max"><i data-lucide="refresh-cw"></i> Обновить</button></div>';
+        html += '<select class="select" id="tc_max">' + buildMaxChannelSelectOptions(maxChannels, { adminOnly: true }) + '</select></div>';
+        html += '<div id="tc_pair_preview" class="tg-chain-pair-live is-empty"></div>';
+        html += '<div id="tcToggles">';
+        html += toggleRow('forward_posts', 'Пересылать посты', 'Новые публикации в TG → MAX', true);
+        html += toggleRow('add_comments_button', 'Кнопка «Комментарии» в MAX', '', true);
+        html += '</div>';
+        html += '<details class="tg-chain-advanced"><summary>Дополнительно</summary><div style="margin-top:10px">';
+        html += toggleRow('add_signature', 'Подпись «— TG»', '', false);
+        html += toggleRow('forward_comments', 'Пересылать комментарии TG', 'Опционально', false);
+        html += '</div></details>';
+        if (!tgInt) {
           html +=
-            '<td>' +
-            esc(c.max_title || String(c.max_chat_id)) +
-            '<div class="mono text-sm muted">' +
-            esc(String(c.max_chat_id)) +
-            '</div></td>';
-          html += '<td class="mono">@' + esc(c.tg_username) + '</td>';
-          html +=
-            '<td><span class="switch' +
-            (c.forward_posts ? ' on' : '') +
-            '" data-chain-field="forward_posts" role="switch" tabindex="0"></span></td>';
-          html +=
-            '<td><span class="switch' +
-            (c.forward_comments ? ' on' : '') +
-            '" data-chain-field="forward_comments" role="switch" tabindex="0"></span></td>';
-          html +=
-            '<td><span class="switch' +
-            (c.active ? ' on' : '') +
-            '" data-chain-field="active" role="switch" tabindex="0"></span></td>';
-          html +=
-            '<td><button type="button" class="btn btn-danger btn-sm" data-del-chain="' +
-            esc(c.id) +
-            '">Удалить</button></td>';
-          html += '</tr>';
-        });
-        if (!chains.length) {
-          html += '<tr><td colspan="6" class="muted">Цепочек нет</td></tr>';
+            '<div class="form-group mt-sm"><label>Токен бота Telegram</label><input class="input mono" id="tc_token" type="password" placeholder="Или подключите в «Интеграции»"/></div>';
         }
-        html += '</tbody></table></div>';
-        html += '<div id="chainModalHost"></div>';
+        html += '<div class="forwarding-add-form-actions" style="margin-top:14px">';
+        html += '<button type="button" class="btn btn-primary" id="tc_submit"><i data-lucide="zap"></i> Включить пересылку</button>';
+        html += '</div></div></section>';
+
+        html += '<div class="stats-grid" style="margin:16px 0">';
+        html += '<div class="stat-card"><div class="label">Активных</div><div class="value">' + esc(fmtNum(st.active)) + '</div></div>';
+        html += '<div class="stat-card"><div class="label">Сегодня переслано</div><div class="value">' + esc(fmtNum(st.forwarded_today)) + '</div></div>';
+        html += '<div class="stat-card"><div class="label">Ошибки</div><div class="value">' + esc(fmtNum(st.errors_today)) + '</div></div>';
+        html += '</div>';
+
+        html += '<h3 class="tg-chain-list-title">Настроенные пары</h3>';
+        if (chains.length) {
+          chains.forEach(function (c) {
+            html += renderTgChainCardHtml(c);
+          });
+        } else {
+          html +=
+            '<div class="tg-chain-empty"><p style="margin:0 0 6px">Пока нет цепочек</p><p class="text-sm muted" style="margin:0">Выберите каналы выше и нажмите «Включить пересылку»</p></div>';
+        }
+        html += '</div>';
         main.innerHTML = html;
-        qsa('tbody tr[data-chain-id]', main).forEach(function (row) {
-          var id = row.getAttribute('data-chain-id');
-          qsa('.switch', row).forEach(function (sw) {
-            sw.addEventListener('click', function (e) {
-              e.stopPropagation();
-              var field = sw.getAttribute('data-chain-field');
-              var next = !sw.classList.contains('on');
-              var patch = {};
-              patch[field] = next;
-              patchJson('/tg-chains/' + encodeURIComponent(id), patch)
-                .then(function () {
-                  sw.classList.toggle('on', next);
-                  showToast('Обновлено', 'success');
-                })
-                .catch(function (err) {
-                  showToast(err.message || 'Ошибка', 'error');
-                });
-            });
-          });
-          var del = qs('[data-del-chain]', row);
-          if (del) {
-            del.addEventListener('click', function () {
-              showConfirm('Удалить цепочку?', 'Действие необратимо для этой записи.', function () {
-                deleteReq('/tg-chains/' + encodeURIComponent(id))
-                  .then(function () {
-                    showToast('Удалено', 'success');
-                    renderTgChains();
-                  })
-                  .catch(function (err) {
-                    showToast(err.message || 'Ошибка', 'error');
-                  });
-              });
-            });
-          }
+        qsa('.tg-chain-card', main).forEach(function (card) {
+          bindTgChainCard(card, card.getAttribute('data-chain-id'));
         });
-        var btnNew = qs('#btnNewChain', main);
-        if (btnNew) {
-          btnNew.addEventListener('click', function () {
-            openChainModal();
-          });
-        }
+        bindTgChainSetupPage(main);
         refreshIcons();
       })
       .catch(function (err) {
@@ -1751,17 +2024,38 @@
       });
   }
 
-  function buildMaxChannelSelectOptions(channels) {
-    if (!channels || !channels.length) {
+  function buildMaxChannelSelectOptions(channels, options) {
+    options = options || {};
+    var list = channels || [];
+    if (options.adminOnly) {
+      var adminOnly = list.filter(function (ch) {
+        return ch.botIsAdmin === true;
+      });
+      if (adminOnly.length) list = adminOnly;
+    }
+    if (!list.length) {
       return '<option value="">— нет каналов MAX (загрузите в «Интеграции») —</option>';
     }
     var opts = '<option value="">— выберите канал MAX —</option>';
-    channels.forEach(function (ch) {
+    list.forEach(function (ch) {
       var label = (ch.title || 'Канал') + ' · ID ' + ch.id;
       if (ch.botIsAdmin) label += ' · админ';
       opts += '<option value="' + esc(String(ch.id)) + '">' + esc(label) + '</option>';
     });
     return opts;
+  }
+
+  function formatTgChainSource(c) {
+    if (c.tg_channel_id) {
+      var u = c.tg_username ? '@' + c.tg_username : '';
+      return (
+        '<span class="mono">' +
+        esc(c.tg_channel_id) +
+        '</span>' +
+        (u ? '<div class="muted text-sm">' + esc(u) + '</div>' : '')
+      );
+    }
+    return '<span class="mono">' + esc(c.tg_username ? '@' + c.tg_username : '—') + '</span>';
   }
 
   function renderChannelImport() {
@@ -1797,12 +2091,19 @@
           '<div class="form-group" id="ci_tg_wrap"><div class="flex-between" style="align-items:center;gap:8px;margin-bottom:6px"><label style="margin:0">Telegram-канал / чат</label><button type="button" class="btn btn-ghost btn-sm" id="ci_refresh_tg"><i data-lucide="refresh-cw"></i> Обновить</button></div>' +
           buildTelegramChannelSelect('ci_tg_select', tgChats, 'ci_tg_manual') +
           '</div>';
+        html += '<div class="form-group" style="margin:0"><label class="checkbox-label">';
+        html += '<input type="checkbox" id="ci_archive" disabled /> <strong>Архив канала</strong> (user-аккаунт, до 100 постов)</label>';
+        html += '<span class="muted text-sm" style="display:block;margin-top:4px">Нужны TG_API_ID, TG_API_HASH, TG_USER_SESSION — npm run tg:user-login</span></div>';
         html += '<div class="forwarding-add-form-actions">';
         html += '<button type="button" class="btn btn-primary" id="ci_start">Запустить анализ</button>';
         html += '<button type="button" class="btn btn-ghost" id="ci_cancel_job" disabled>Отменить задачу</button>';
         html += '</div>';
         html += '</div>';
+        html +=
+          '<div id="ci_meta_warn" class="hidden mt-sm" style="padding:10px 12px;border-radius:var(--radius-md);border:1px solid #f59e0b55;background:#fef3c722"></div>';
+        html += '<div id="ci_pair" class="muted text-sm mt-sm"></div>';
         html += '<div class="mt-md"><span class="muted">Статус: </span><strong id="ci_status">—</strong></div>';
+        html += '<div id="ci_hint" class="muted text-sm mt-sm" style="line-height:1.45"></div>';
         html += '<div class="mt-sm"><span class="muted">Подготовлено постов: </span><strong id="ci_count">0</strong></div>';
         html +=
           '<div id="ci_ready_block" class="hidden mt-md" style="padding:14px;border:1px solid var(--accent-border);border-radius:var(--radius-md);background:var(--accent-muted)">';
@@ -1884,64 +2185,162 @@
   function bindChannelImportHandlers(main) {
     var readyBlock = qs('#ci_ready_block', main);
     var publishBtn = qs('#ci_publish', main);
+    var startBtn = qs('#ci_start', main);
+
+    function applyImportMeta(meta) {
+      var warn = qs('#ci_meta_warn', main);
+      var arch = qs('#ci_archive', main);
+      if (arch && meta && meta.user_archive_ready) {
+        arch.disabled = false;
+      }
+      if (!warn || !meta) return;
+      if (!meta.reader_token_ok) {
+        warn.textContent = meta.hint || 'Не настроен токен Telegram для импорта.';
+        warn.classList.remove('hidden');
+      } else if (meta.reader_uses_main_token && meta.hint) {
+        warn.textContent = meta.hint;
+        warn.classList.remove('hidden');
+      } else {
+        warn.classList.add('hidden');
+      }
+    }
 
     function setUi(job) {
       var st = qs('#ci_status', main);
       var cnt = qs('#ci_count', main);
+      var hint = qs('#ci_hint', main);
       var cancelBtn = qs('#ci_cancel_job', main);
+      var pair = qs('#ci_pair', main);
       var labels = {
-        scanning: 'Сканирование…',
-        ready: 'Готово — подтвердите публикацию',
+        scanning: 'Сканирование Telegram…',
+        archive_fetch: 'Загрузка архива…',
+        ready: 'Анализ завершён',
         publishing: 'Публикация в MAX…',
         error: 'Ошибка',
       };
+      if (pair && job.tg_channel && job.max_channel_id) {
+        pair.textContent = 'Маршрут: ' + job.tg_channel + ' → MAX ' + job.max_channel_id;
+      }
       if (st) {
-        st.textContent =
-          job.status === 'error' && job.error_message
-            ? 'Ошибка: ' + String(job.error_message)
-            : labels[job.status] || job.status;
+        if (job.status === 'error' && job.error_message) {
+          st.textContent = 'Ошибка: ' + String(job.error_message);
+        } else if (job.status === 'scanning' && job.scan_idle_rounds != null && job.scan_idle_max) {
+          st.textContent =
+            labels.scanning +
+            ' (' +
+            Math.min(Number(job.scan_idle_rounds) + 1, job.scan_idle_max) +
+            '/' +
+            job.scan_idle_max +
+            ')';
+        } else {
+          st.textContent = labels[job.status] || job.status;
+        }
+      }
+      if (hint) {
+        hint.textContent = job.status_hint ? String(job.status_hint) : '';
       }
       if (cnt) cnt.textContent = String(job.staged_count != null ? job.staged_count : 0);
+      if (startBtn) {
+        startBtn.disabled = job.status === 'scanning' || job.status === 'archive_fetch' || job.status === 'publishing';
+      }
       if (cancelBtn) {
         cancelBtn.disabled = !(
           channelImportJobId &&
-          (job.status === 'scanning' || job.status === 'ready' || job.status === 'error')
+          (job.status === 'scanning' || job.status === 'archive_fetch' || job.status === 'ready' || job.status === 'error')
         );
       }
       if (job.status === 'ready' && readyBlock) {
         readyBlock.classList.remove('hidden');
         var n = Number(job.staged_count || 0);
         var rt = qs('#ci_ready_txt', main);
+        if (publishBtn) publishBtn.disabled = !job.can_publish;
         if (rt) {
-          rt.textContent =
-            'Готово к переносу: ' +
-            n +
-            ' сообщ. Публикация выполняется по одному с паузами (медиа сохраняются). После успеха записи импорта удаляются из базы.';
+          rt.textContent = n
+            ? 'Готово к переносу: ' +
+              n +
+              ' сообщ. Публикация выполняется по одному с паузами (медиа сохраняются).'
+            : 'Постов для переноса не найдено. См. подсказку выше.';
         }
       } else if (readyBlock) {
         readyBlock.classList.add('hidden');
       }
     }
 
+    function beginPolling(jobId) {
+      channelImportJobId = Number(jobId);
+      if (startBtn) startBtn.disabled = true;
+      qs('#ci_cancel_job', main).disabled = false;
+      clearChannelImportPoll();
+      channelImportPollTimer = window.setInterval(tickPoll, 1200);
+      tickPoll();
+    }
+
     function tickPoll() {
       if (channelImportJobId == null) return;
-      getJsonAbs(API_CHANNEL_IMPORT + '/jobs/' + encodeURIComponent(String(channelImportJobId)))
-        .then(function (job) {
+      var id = channelImportJobId;
+      postJsonAbs(API_CHANNEL_IMPORT + '/jobs/' + encodeURIComponent(String(id)) + '/scan', {})
+        .catch(function () {
+          return getJsonAbs(API_CHANNEL_IMPORT + '/jobs/' + encodeURIComponent(String(id)));
+        })
+        .then(function (payload) {
+          var job = payload && payload.job ? payload.job : payload;
           if (currentRoute !== 'channelimport') return;
+          if (!job) return;
           setUi(job);
-          if (job.status === 'ready') {
+          if (job.status === 'ready' || job.status === 'error' || job.status === 'publishing') {
             clearChannelImportPoll();
-          }
-          if (job.status === 'error' || job.status === 'publishing') {
-            clearChannelImportPoll();
+            if (startBtn) startBtn.disabled = false;
+            if (job.status === 'ready') {
+              showToast(
+                Number(job.staged_count || 0) > 0
+                  ? 'Найдено постов: ' + job.staged_count
+                  : 'Анализ завершён: постов в очереди нет',
+                Number(job.staged_count || 0) > 0 ? 'success' : 'info',
+              );
+            }
           }
         })
         .catch(function (e) {
           if (e && e.message === 'auth') return;
+          var msg = e && e.message ? String(e.message) : '';
+          if (msg.indexOf('404') >= 0) {
+            clearChannelImportPoll();
+            if (startBtn) startBtn.disabled = false;
+            setUi({
+              status: 'ready',
+              staged_count: 0,
+              status_hint:
+                'Задача завершена: в очереди Telegram не осталось постов для этого канала.',
+              can_publish: false,
+            });
+            showToast('Постов не найдено', 'info');
+            channelImportJobId = null;
+            return;
+          }
           clearChannelImportPoll();
-          showToast(e.message || 'Ошибка опроса задачи', 'error');
+          if (startBtn) startBtn.disabled = false;
+          showToast(msg || 'Ошибка опроса задачи', 'error');
         });
     }
+
+    getJsonAbs(API_CHANNEL_IMPORT + '/meta')
+      .then(function (meta) {
+        applyImportMeta(meta);
+      })
+      .catch(function () {});
+
+    getJsonAbs(API_CHANNEL_IMPORT + '/jobs/active')
+      .then(function (data) {
+        if (data && data.job && data.job.id) {
+          setUi(data.job);
+          if (data.job.status === 'scanning' || data.job.status === 'archive_fetch') {
+            beginPolling(data.job.id);
+          } else if (data.job.status === 'ready') {
+            channelImportJobId = Number(data.job.id);
+          }
+        }
+      })
+      .catch(function () {});
 
     qs('#ci_start', main).addEventListener('click', function () {
       var tg = readTelegramChannelPick('ci_tg_select', 'ci_tg_manual', main);
@@ -1950,22 +2349,37 @@
         showToast('Выберите Telegram- и MAX-канал', 'error');
         return;
       }
-      postJsonAbs(API_CHANNEL_IMPORT + '/jobs', { tg_channel: tg, max_channel_id: maxId })
+      if (startBtn) startBtn.disabled = true;
+      var useArchive = qs('#ci_archive', main) && qs('#ci_archive', main).checked;
+      var payload = { tg_channel: tg, max_channel_id: maxId };
+      if (useArchive) {
+        payload.archive = true;
+        payload.archive_limit = 100;
+      }
+      setUi({
+        status: useArchive ? 'archive_fetch' : 'scanning',
+        staged_count: 0,
+        tg_channel: tg,
+        max_channel_id: maxId,
+        scan_idle_rounds: 0,
+        scan_idle_max: 5,
+        status_hint: useArchive ? 'Загрузка архива канала…' : 'Запуск анализа…',
+        can_publish: false,
+      });
+      postJsonAbs(API_CHANNEL_IMPORT + '/jobs', payload)
         .then(function (res) {
           if (!res || res.id == null) {
             showToast('Нет id задачи', 'error');
+            if (startBtn) startBtn.disabled = false;
             return;
           }
-          channelImportJobId = Number(res.id);
           showToast('Анализ запущен', 'success');
-          qs('#ci_cancel_job', main).disabled = false;
-          setUi({ status: 'scanning', staged_count: 0 });
           if (readyBlock) readyBlock.classList.add('hidden');
-          clearChannelImportPoll();
-          channelImportPollTimer = window.setInterval(tickPoll, 1500);
-          tickPoll();
+          if (res.job) setUi(res.job);
+          beginPolling(res.id);
         })
         .catch(function (e) {
+          if (startBtn) startBtn.disabled = false;
           showToast(e.message || 'Ошибка', 'error');
         });
     });
@@ -1978,6 +2392,7 @@
           .then(function () {
             showToast('Отменено', 'success');
             clearChannelImportPoll();
+            channelImportJobId = null;
             renderChannelImport();
           })
           .catch(function () {
@@ -1993,13 +2408,17 @@
           return;
         }
         var id = channelImportJobId;
+        publishBtn.disabled = true;
+        setUi({ status: 'publishing', staged_count: 0, can_publish: false });
         postJsonAbs(API_CHANNEL_IMPORT + '/jobs/' + encodeURIComponent(String(id)) + '/publish', {})
           .then(function () {
             showToast('Готово. Данные импорта удалены из базы.', 'success');
             clearChannelImportPoll();
+            channelImportJobId = null;
             renderChannelImport();
           })
           .catch(function (e) {
+            publishBtn.disabled = false;
             showToast(e.message || 'Ошибка публикации', 'error');
           });
       });
@@ -2007,90 +2426,9 @@
 
     refreshIcons();
   }
-
   function openChainModal() {
-    var host = qs('#chainModalHost');
-    if (!host) return;
-    host.innerHTML =
-      '<div class="modal-backdrop" id="chainBackdrop"><div class="modal"><h2>Новая TG-цепочка</h2>' +
-      '<p class="muted text-sm" style="margin:0 0 12px">Посты идут только из выбранного TG-канала в выбранный MAX-канал.</p>' +
-      '<div class="form-group"><label>Канал MAX</label><select class="select" id="m_max_chat"><option value="">Загрузка…</option></select></div>' +
-      '<div id="m_tg_wrap" class="form-group"><label>Telegram-канал / чат</label><div class="muted text-sm mb-sm">Загрузка списка…</div></div>' +
-      '<div class="form-group hidden" id="m_token_wrap"><label>Токен бота TG</label><input class="input mono" id="m_token" type="password" placeholder="если бот ещё не подключён в «Интеграции»"/></div>' +
-      '<div id="mToggles">' +
-      toggleRow('forward_posts', 'Пересылать посты', '', true) +
-      toggleRow('forward_comments', 'Пересылать комментарии', '', false) +
-      toggleRow('add_signature', 'Подпись', '', false) +
-      '</div>' +
-      '<div class="modal-actions"><button type="button" class="btn btn-ghost" id="m_cancel">Отмена</button>' +
-      '<button type="button" class="btn btn-primary" id="m_ok">Создать</button></div></div></div>';
-    var backdrop = qs('#chainBackdrop', host);
-    bindToggleRows(host, null);
-    function close() {
-      host.innerHTML = '';
-    }
-    qs('#m_cancel', host).addEventListener('click', close);
-    backdrop.addEventListener('click', function (e) {
-      if (e.target === backdrop) close();
-    });
-    Promise.all([
-      fetchMaxLinkedChannels(false).catch(function () {
-        return { channels: maxLinkedChatsCache };
-      }),
-      fetchTelegramLinkedChats(false).catch(function () {
-        return { channels: tgLinkedChatsCache };
-      }),
-    ]).then(function (bundle) {
-      var maxSel = qs('#m_max_chat', host);
-      if (maxSel) {
-        maxSel.innerHTML = buildMaxChannelSelectOptions(bundle[0].channels || maxLinkedChatsCache || []);
-      }
-      var wrap = qs('#m_tg_wrap', host);
-      if (wrap) {
-        wrap.innerHTML =
-          '<label>Telegram-канал / чат</label>' +
-          buildTelegramChannelSelect('m_tg_select', bundle[1].channels || tgLinkedChatsCache, 'm_tg_manual');
-      }
-      var tokenWrap = qs('#m_token_wrap', host);
-      var tgInt = integrationsCache.find(function (i) {
-        return i.platform === 'telegram' && i.status === 'connected';
-      });
-      if (tokenWrap && tgInt) tokenWrap.classList.add('hidden');
-      refreshIcons();
-    });
-
-    qs('#m_ok', host).addEventListener('click', function () {
-      var chatId = Number(qs('#m_max_chat', host).value);
-      var tgRaw = readTelegramChannelPick('m_tg_select', 'm_tg_manual', host);
-      var tgKey = String(tgRaw || '').trim();
-      var tokenEl = qs('#m_token', host);
-      var token = tokenEl ? String(tokenEl.value || '').trim() : '';
-      var sw = readSwitches(host);
-      if (!chatId || !tgKey) {
-        showToast('Выберите MAX-канал и Telegram-канал', 'error');
-        return;
-      }
-      var isNumeric = /^-?\d+$/.test(tgKey.replace(/^@/, ''));
-      var payload = {
-        max_chat_id: chatId,
-        tg_channel: tgKey,
-        forward_posts: !!sw.forward_posts,
-        forward_comments: !!sw.forward_comments,
-        add_signature: !!sw.add_signature,
-      };
-      if (!isNumeric) payload.tg_username = tgKey.replace(/^@/, '');
-      if (token) payload.bot_token = token;
-      postJson('/tg-chains', payload)
-        .then(function () {
-          showToast('Цепочка создана', 'success');
-          close();
-          renderTgChains();
-        })
-        .catch(function (e) {
-          showToast(e.message || 'Ошибка', 'error');
-        });
-    });
-    refreshIcons();
+    renderTgChains();
+    showToast('Форма настройки — на странице выше', 'info');
   }
 
   function renderAutoposts() {

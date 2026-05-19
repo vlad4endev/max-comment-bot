@@ -35,6 +35,8 @@ export interface TgChainRecord {
   bot_token: string
   forward_posts: boolean
   forward_comments: boolean
+  /** Кнопка «Комментарии» под постом в MAX после пересылки */
+  add_comments_button: boolean
   add_signature: boolean
   active: boolean
   created_at: string

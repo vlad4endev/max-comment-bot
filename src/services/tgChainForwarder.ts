@@ -1,5 +1,8 @@
 import { createHash } from 'node:crypto'
 
+import type { Bot } from '@maxhub/max-bot-api'
+import type { Message } from '@maxhub/max-bot-api/types'
+
 import { getTelegramToken } from '../config'
 import { getDb } from '../db/database'
 import { getTgFileUrl, getTelegramUpdatesWithIds, type TgMessage } from '../forwarder/telegramReader'
@@ -10,10 +13,24 @@ import {
   sendVideoToMax,
 } from '../forwarder/maxPublisher'
 import { listTgChains, updateTgChain, type TgChainRecord } from '../api/adminPanelState'
+import { assertTelegramPollingReady } from './channelImportService'
+import { ensurePostFromChannelMessage } from './channelPostActions'
+import { postStore } from './postStore'
+import { resolveCanonicalChannelChatId } from './resolveChannelChatId'
 import { telegramChannelMatchesTarget } from '../utils/tgChannelMatch'
 import { logger } from '../utils/logger'
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+
+/** Long-poll Telegram for new channel_post (сек). */
+const TG_CHAIN_LONG_POLL_SEC = 25
+const TG_CHAIN_IDLE_MS = 3_000
+
+let botRef: Bot | null = null
+
+export function setTgChainForwarderBot(bot: Bot): void {
+  botRef = bot
+}
 
 function tokenKey(token: string): string {
   return createHash('sha256').update(token).digest('hex').slice(0, 16)
@@ -107,17 +124,92 @@ async function forwardMessageToMax(
   }
 }
 
-export async function runTgChainsOnce(): Promise<void> {
+/** После публикации в MAX — кнопка «Комментарии» на свежем посте бота. */
+async function attachCommentsButtonOnLatestBotPost(
+  bot: Bot,
+  maxChatId: number,
+): Promise<boolean> {
+  const chatId = resolveCanonicalChannelChatId(maxChatId) ?? maxChatId
+  const botUid = bot.botInfo?.user_id
+  let messages: Message[] = []
+  try {
+    const res = await bot.api.getMessages(chatId, { count: 8 })
+    messages = res.messages
+  } catch (err: unknown) {
+    logger.warn('[tgChain] getMessages for comment button failed', { chatId, err })
+    return false
+  }
+
+  for (const message of messages) {
+    const mid = message.body?.mid
+    if (!mid) continue
+    if (botUid !== undefined && message.sender?.user_id !== botUid) continue
+    if (postStore.findPostByChannelMessage(chatId, mid)) continue
+    const post = await ensurePostFromChannelMessage(bot, chatId, mid)
+    if (post) {
+      logger.info('[tgChain] comments button attached', { chatId, messageMid: mid, postId: post.post_id })
+      return true
+    }
+  }
+  logger.warn('[tgChain] no new bot post found for comment button', { chatId })
+  return false
+}
+
+async function processChainMessage(
+  chain: TgChainRecord,
+  msg: TgMessage,
+  tgToken: string,
+  maxToken: string,
+): Promise<void> {
+  const sourceKey = chainSourceKey(chain)
+  if (!telegramChannelMatchesTarget(msg.chat, sourceKey)) {
+    return
+  }
+  if (isAlreadyForwarded(chain.id, msg.message_id)) {
+    return
+  }
+
+  try {
+    await forwardMessageToMax(msg, tgToken, maxToken, chain.max_chat_id, chain.add_signature)
+    if (chain.add_comments_button !== false && botRef) {
+      await sleep(600)
+      await attachCommentsButtonOnLatestBotPost(botRef, chain.max_chat_id)
+    }
+    markForwarded(chain.id, msg.message_id)
+    const forwardedToday = chain.forwarded_today + 1
+    chain.forwarded_today = forwardedToday
+    await updateTgChain(chain.id, { forwarded_today: forwardedToday })
+    logger.info('[tgChain] forwarded', {
+      chainId: chain.id,
+      from: sourceKey,
+      to: chain.max_chat_id,
+      messageId: msg.message_id,
+    })
+    await sleep(800 + Math.random() * 400)
+  } catch (err: unknown) {
+    logger.error('[tgChain] forward failed', {
+      chainId: chain.id,
+      from: sourceKey,
+      to: chain.max_chat_id,
+      err,
+    })
+    const errorsToday = chain.errors_today + 1
+    chain.errors_today = errorsToday
+    await updateTgChain(chain.id, { errors_today: errorsToday })
+  }
+}
+
+export async function runTgChainsOnce(): Promise<boolean> {
   const maxToken = (process.env.BOT_TOKEN || '').trim()
   if (!maxToken) {
-    return
+    return false
   }
 
   const chains = (await listTgChains()).filter(
     (c) => c.active && c.forward_posts && chainSourceKey(c) !== '',
   )
   if (chains.length === 0) {
-    return
+    return false
   }
 
   const tokenByChain = new Map<string, string>()
@@ -139,54 +231,27 @@ export async function runTgChainsOnce(): Promise<void> {
     tokenGroups.set(token, list)
   }
 
+  let receivedAny = false
+
   for (const [tgToken, group] of tokenGroups) {
+    const pollErr = await assertTelegramPollingReady(tgToken)
+    if (pollErr) {
+      logger.warn('[tgChain] telegram polling not ready', { err: pollErr })
+      continue
+    }
+
     const offset = getReaderOffset(tgToken)
-    const batch = await getTelegramUpdatesWithIds(tgToken, offset, 0)
+    const batch = await getTelegramUpdatesWithIds(tgToken, offset, TG_CHAIN_LONG_POLL_SEC)
     let nextOffset = offset
 
     for (const u of batch) {
+      receivedAny = true
       nextOffset = Math.max(nextOffset, u.update_id + 1)
       const msg = u.channel_post
       if (!msg) continue
 
       for (const chain of group) {
-        const sourceKey = chainSourceKey(chain)
-        if (!telegramChannelMatchesTarget(msg.chat, sourceKey)) {
-          continue
-        }
-        if (isAlreadyForwarded(chain.id, msg.message_id)) {
-          continue
-        }
-        try {
-          await forwardMessageToMax(
-            msg,
-            tgToken,
-            maxToken,
-            chain.max_chat_id,
-            chain.add_signature,
-          )
-          markForwarded(chain.id, msg.message_id)
-          const forwardedToday = chain.forwarded_today + 1
-          chain.forwarded_today = forwardedToday
-          await updateTgChain(chain.id, { forwarded_today: forwardedToday })
-          logger.info('[tgChain] forwarded', {
-            chainId: chain.id,
-            from: sourceKey,
-            to: chain.max_chat_id,
-            messageId: msg.message_id,
-          })
-          await sleep(2000 + Math.random() * 3000)
-        } catch (err: unknown) {
-          logger.error('[tgChain] forward failed', {
-            chainId: chain.id,
-            from: sourceKey,
-            to: chain.max_chat_id,
-            err,
-          })
-          const errorsToday = chain.errors_today + 1
-          chain.errors_today = errorsToday
-          await updateTgChain(chain.id, { errors_today: errorsToday })
-        }
+        await processChainMessage(chain, msg, tgToken, maxToken)
       }
     }
 
@@ -194,6 +259,8 @@ export async function runTgChainsOnce(): Promise<void> {
       setReaderOffset(tgToken, nextOffset)
     }
   }
+
+  return receivedAny
 }
 
 let loopStarted = false
@@ -201,15 +268,18 @@ let loopStarted = false
 export function startTgChainForwarder(): void {
   if (loopStarted) return
   loopStarted = true
-  logger.info('[tgChain] forwarder started')
+  logger.info('[tgChain] forwarder started (long-poll channel_post)')
   const loop = async () => {
     while (true) {
       try {
-        await runTgChainsOnce()
+        const hadUpdates = await runTgChainsOnce()
+        if (!hadUpdates) {
+          await sleep(TG_CHAIN_IDLE_MS)
+        }
       } catch (err: unknown) {
         logger.error('[tgChain] loop error', err)
+        await sleep(TG_CHAIN_IDLE_MS)
       }
-      await sleep(30_000)
     }
   }
   void loop()

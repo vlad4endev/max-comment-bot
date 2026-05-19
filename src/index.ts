@@ -29,7 +29,7 @@ import { WEBHOOK_CONCURRENCY } from './utils/updateQueue'
 import { flowProcessor } from './services/flowProcessor'
 import { integrationsStore } from './services/integrationsStore'
 import { startChannelImportWorker } from './services/channelImportService'
-import { startTgChainForwarder } from './services/tgChainForwarder'
+import { setTgChainForwarderBot, startTgChainForwarder } from './services/tgChainForwarder'
 import { createHttpApp, createWebhookApp } from './webhook/createWebhookApp'
 
 async function main(): Promise<void> {
@@ -61,6 +61,7 @@ async function main(): Promise<void> {
     }
   }
   flowProcessor.setBot(bot)
+  setTgChainForwarderBot(bot)
   startRuntimeLogRotationScheduler()
   startChannelPostPoller(bot)
   // До HTTP: иначе при EADDRINUSE channelPoller уже в логах, а flowProcessor — нет.

@@ -16,12 +16,13 @@ function getDb() {
         return db;
     }
     node_fs_1.default.mkdirSync(DATA_DIR, { recursive: true });
-    db = new better_sqlite3_1.default(DB_PATH);
-    db.pragma('journal_mode = WAL');
-    db.pragma('synchronous = NORMAL');
-    db.pragma('foreign_keys = ON');
-    initSchema(db);
-    return db;
+    const instance = new better_sqlite3_1.default(DB_PATH);
+    instance.pragma('journal_mode = WAL');
+    instance.pragma('synchronous = NORMAL');
+    instance.pragma('foreign_keys = ON');
+    initSchema(instance);
+    db = instance;
+    return instance;
 }
 function initSchema(targetDb) {
     targetDb.exec(`
@@ -99,6 +100,7 @@ function initSchema(targetDb) {
       tg_channel TEXT NOT NULL,
       max_channel_id TEXT NOT NULL,
       status TEXT NOT NULL DEFAULT 'scanning',
+      import_source TEXT NOT NULL DEFAULT 'bot_queue',
       scan_next_offset INTEGER NOT NULL DEFAULT 0,
       scan_idle_rounds INTEGER NOT NULL DEFAULT 0,
       staged_count INTEGER NOT NULL DEFAULT 0,
@@ -137,6 +139,13 @@ function initSchema(targetDb) {
       PRIMARY KEY (chain_id, tg_message_id)
     );
   `);
+    migrateChannelImportSchema(targetDb);
+}
+function migrateChannelImportSchema(database) {
+    const cols = database.prepare('PRAGMA table_info(channel_import_jobs)').all();
+    if (!cols.some((c) => c.name === 'import_source')) {
+        database.exec("ALTER TABLE channel_import_jobs ADD COLUMN import_source TEXT NOT NULL DEFAULT 'bot_queue'");
+    }
 }
 function closeDb() {
     if (!db) {

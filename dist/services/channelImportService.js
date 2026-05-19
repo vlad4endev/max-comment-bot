@@ -1,18 +1,97 @@
 "use strict";
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.SCAN_IDLE_MAX = void 0;
+exports.resolveImportTgToken = resolveImportTgToken;
+exports.readerTokenMeta = readerTokenMeta;
+exports.assertTelegramPollingReady = assertTelegramPollingReady;
+exports.toChannelImportJobView = toChannelImportJobView;
+exports.getActiveChannelImportJob = getActiveChannelImportJob;
 exports.createChannelImportJob = createChannelImportJob;
+exports.runArchiveImportJob = runArchiveImportJob;
 exports.getChannelImportJob = getChannelImportJob;
 exports.cancelChannelImportJob = cancelChannelImportJob;
 exports.tickChannelImportJobs = tickChannelImportJobs;
 exports.publishChannelImportJob = publishChannelImportJob;
 exports.startChannelImportWorker = startChannelImportWorker;
+const axios_1 = __importDefault(require("axios"));
+const config_1 = require("../config");
 const database_1 = require("../db/database");
 const telegramReader_1 = require("../forwarder/telegramReader");
 const maxPublisher_1 = require("../forwarder/maxPublisher");
 const logger_1 = require("../utils/logger");
+const telegramUserArchive_1 = require("./telegramUserArchive");
 const tgChannelMatch_1 = require("../utils/tgChannelMatch");
-const SCAN_IDLE_MAX = 12;
+exports.SCAN_IDLE_MAX = 5;
+const TG_API = 'https://api.telegram.org/bot';
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+function resolveImportTgToken() {
+    const reader = (process.env.TG_READER_BOT_TOKEN || '').trim();
+    if (reader)
+        return reader;
+    return (0, config_1.getTelegramToken)();
+}
+function readerTokenMeta() {
+    const reader = (process.env.TG_READER_BOT_TOKEN || '').trim();
+    const fallback = (0, config_1.getTelegramToken)();
+    if (reader)
+        return { ok: true, usesMainToken: false };
+    return { ok: fallback.length > 0, usesMainToken: fallback.length > 0 };
+}
+async function assertTelegramPollingReady(tgToken) {
+    if (!tgToken) {
+        return 'Не задан TG_READER_BOT_TOKEN (или TG_TOKEN в интеграции)';
+    }
+    try {
+        const { data } = await axios_1.default.get(`${TG_API}${tgToken}/getWebhookInfo`, { timeout: 10_000 });
+        const url = data.result?.url?.trim();
+        if (data.ok && url) {
+            return `У бота включён webhook (${url}) — getUpdates пустой. Отключите webhook (deleteWebhook) для reader-бота.`;
+        }
+    }
+    catch {
+        /* ignore probe errors */
+    }
+    return null;
+}
+function toChannelImportJobView(job) {
+    const tokenMeta = readerTokenMeta();
+    const staged = job.staged_count ?? 0;
+    let statusHint = null;
+    if (job.status === 'archive_fetch') {
+        statusHint = 'Загрузка архива канала через user-аккаунт (MTProto)…';
+    }
+    else if (job.status === 'scanning') {
+        const step = Math.min(job.scan_idle_rounds + 1, exports.SCAN_IDLE_MAX);
+        statusHint = `Опрос Telegram ${step}/${exports.SCAN_IDLE_MAX}… Найдено постов: ${staged}. Если долго 0 — в канале нет новых постов в очереди бота.`;
+    }
+    else if (job.status === 'ready' && staged === 0) {
+        statusHint =
+            'В очереди обновлений бота нет постов этого канала. Опубликуйте новый пост в TG или проверьте, что reader-бот — админ в канале.';
+    }
+    else if (job.status === 'ready' && staged > 0) {
+        statusHint = 'Можно публиковать в MAX.';
+    }
+    return {
+        ...job,
+        scan_idle_max: exports.SCAN_IDLE_MAX,
+        status_hint: job.error_message ?? statusHint,
+        can_publish: job.status === 'ready' && staged > 0,
+        reader_token_ok: tokenMeta.ok,
+        reader_uses_main_token: tokenMeta.usesMainToken,
+        user_archive_ready: (0, telegramUserArchive_1.telegramUserArchiveConfigured)(),
+    };
+}
+function getActiveChannelImportJob() {
+    const job = (0, database_1.getDb)()
+        .prepare(`SELECT * FROM channel_import_jobs
+       WHERE status IN ('scanning', 'archive_fetch', 'ready')
+       ORDER BY id DESC LIMIT 1`)
+        .get();
+    return job ? toChannelImportJobView(job) : undefined;
+}
 function getImportReaderOffset() {
     const row = (0, database_1.getDb)()
         .prepare('SELECT scan_next_offset FROM channel_import_reader_state WHERE id = 1')
@@ -47,7 +126,7 @@ function buildStagingPayload(msg) {
     }
     return null;
 }
-function createChannelImportJob(tgChannel, maxChannelId) {
+function createChannelImportJob(tgChannel, maxChannelId, options) {
     const tg = (0, tgChannelMatch_1.normalizeTelegramChannelKey)(tgChannel);
     const max = maxChannelId.trim();
     if (!tg || !max) {
@@ -55,15 +134,58 @@ function createChannelImportJob(tgChannel, maxChannelId) {
     }
     const dup = (0, database_1.getDb)()
         .prepare(`SELECT id FROM channel_import_jobs
-       WHERE tg_channel = ? AND max_channel_id = ? AND status IN ('scanning', 'ready')`)
+       WHERE tg_channel = ? AND max_channel_id = ? AND status IN ('scanning', 'archive_fetch', 'ready')`)
         .get(tg, max);
     if (dup) {
         throw new Error('Уже есть активная задача импорта для этой пары TG → MAX');
     }
+    const useArchive = options?.archive === true;
+    if (useArchive && !(0, telegramUserArchive_1.telegramUserArchiveConfigured)()) {
+        throw new Error('Архив недоступен: настройте TG_API_ID, TG_API_HASH и TG_USER_SESSION (npm run tg:user-login)');
+    }
+    const initialStatus = useArchive ? 'archive_fetch' : 'scanning';
     const r = (0, database_1.getDb)()
-        .prepare('INSERT INTO channel_import_jobs (tg_channel, max_channel_id) VALUES (?, ?)')
-        .run(tg, max);
-    return Number(r.lastInsertRowid);
+        .prepare('INSERT INTO channel_import_jobs (tg_channel, max_channel_id, status, import_source) VALUES (?, ?, ?, ?)')
+        .run(tg, max, initialStatus, useArchive ? 'user_archive' : 'bot_queue');
+    const jobId = Number(r.lastInsertRowid);
+    if (useArchive) {
+        const limit = Math.min(Math.max(options?.archiveLimit ?? 100, 1), 500);
+        void runArchiveImportJob(jobId, limit).catch((err) => {
+            logger_1.logger.error('[channelImport] archive job failed job=' + String(jobId), err);
+        });
+    }
+    return jobId;
+}
+async function runArchiveImportJob(jobId, limit) {
+    const job = getChannelImportJob(jobId);
+    if (!job || job.status !== 'archive_fetch') {
+        return;
+    }
+    try {
+        const posts = await (0, telegramUserArchive_1.fetchChannelArchiveForImport)(job.tg_channel, limit, jobId);
+        for (const p of posts) {
+            (0, database_1.getDb)()
+                .prepare('INSERT OR IGNORE INTO channel_import_staged (job_id, tg_message_id, payload) VALUES (?, ?, ?)')
+                .run(jobId, p.messageId, JSON.stringify(p.payload));
+        }
+        const stagedRow = (0, database_1.getDb)()
+            .prepare('SELECT COUNT(*) AS c FROM channel_import_staged WHERE job_id = ?')
+            .get(jobId);
+        const stagedCount = stagedRow?.c ?? 0;
+        (0, database_1.getDb)()
+            .prepare(`UPDATE channel_import_jobs
+         SET status = 'ready', staged_count = ?, scan_idle_rounds = 0, error_message = NULL, updated_at = datetime('now')
+         WHERE id = ?`)
+            .run(stagedCount, jobId);
+        logger_1.logger.info('[channelImport] archive ready', { jobId, stagedCount });
+    }
+    catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        (0, database_1.getDb)()
+            .prepare(`UPDATE channel_import_jobs SET status = 'error', error_message = ?, updated_at = datetime('now') WHERE id = ?`)
+            .run(msg, jobId);
+        throw err;
+    }
 }
 function getChannelImportJob(id) {
     return (0, database_1.getDb)()
@@ -80,11 +202,7 @@ function updateJobAfterBatch(job, jobGotPosts) {
         .prepare('SELECT COUNT(*) AS c FROM channel_import_staged WHERE job_id = ?')
         .get(job.id);
     const stagedCount = stagedRow?.c ?? 0;
-    if (idle >= SCAN_IDLE_MAX && stagedCount === 0) {
-        (0, database_1.getDb)().prepare('DELETE FROM channel_import_jobs WHERE id = ?').run(job.id);
-        return;
-    }
-    const nextStatus = idle >= SCAN_IDLE_MAX ? 'ready' : 'scanning';
+    const nextStatus = idle >= exports.SCAN_IDLE_MAX ? 'ready' : 'scanning';
     (0, database_1.getDb)()
         .prepare(`UPDATE channel_import_jobs
        SET scan_idle_rounds = ?, staged_count = ?, status = ?, updated_at = datetime('now')
@@ -128,23 +246,28 @@ async function ingestScanBatchForJobs(jobs, tgToken) {
     }
 }
 async function tickChannelImportJobs() {
-    const tgToken = (process.env.TG_READER_BOT_TOKEN || '').trim();
+    const tgToken = resolveImportTgToken();
     const jobs = (0, database_1.getDb)()
         .prepare("SELECT * FROM channel_import_jobs WHERE status = 'scanning'")
         .all();
     if (jobs.length === 0) {
         return;
     }
-    if (!tgToken) {
+    const configErr = await assertTelegramPollingReady(tgToken);
+    if (configErr) {
         for (const j of jobs) {
             (0, database_1.getDb)()
                 .prepare(`UPDATE channel_import_jobs SET status = 'error', error_message = ?, updated_at = datetime('now') WHERE id = ?`)
-                .run('TG_READER_BOT_TOKEN не задан', j.id);
+                .run(configErr, j.id);
         }
         return;
     }
     try {
         await ingestScanBatchForJobs(jobs, tgToken);
+        logger_1.logger.info('[channelImport] tick', {
+            jobs: jobs.length,
+            jobIds: jobs.map((j) => j.id),
+        });
     }
     catch (err) {
         logger_1.logger.error('[channelImport] scan batch failed', err);
@@ -162,6 +285,12 @@ async function publishStagedPayload(p, tgToken, maxToken, maxChannelId) {
             await (0, maxPublisher_1.sendTextToMax)(maxToken, maxChannelId, p.text);
             return;
         case 'photo': {
+            if (p.localPath) {
+                await (0, maxPublisher_1.sendPhotoFileToMax)(maxToken, maxChannelId, p.localPath, p.caption);
+                return;
+            }
+            if (!p.fileId)
+                throw new Error('Фото: нет fileId');
             const url = await (0, telegramReader_1.getTgFileUrl)(tgToken, p.fileId);
             if (!url) {
                 throw new Error('Фото: не удалось получить файл из Telegram');
@@ -170,6 +299,12 @@ async function publishStagedPayload(p, tgToken, maxToken, maxChannelId) {
             return;
         }
         case 'video': {
+            if (p.localPath) {
+                await (0, maxPublisher_1.sendVideoFileToMax)(maxToken, maxChannelId, p.localPath, p.caption);
+                return;
+            }
+            if (!p.fileId)
+                throw new Error('Видео: нет fileId');
             const url = await (0, telegramReader_1.getTgFileUrl)(tgToken, p.fileId);
             if (!url) {
                 throw new Error('Видео: не удалось получить файл из Telegram');
@@ -178,6 +313,15 @@ async function publishStagedPayload(p, tgToken, maxToken, maxChannelId) {
             return;
         }
         case 'document': {
+            if (p.localPath) {
+                await (0, maxPublisher_1.sendDocumentFileToMax)(maxToken, maxChannelId, p.localPath, p.caption, {
+                    filename: p.fileName,
+                    contentType: p.mimeType,
+                });
+                return;
+            }
+            if (!p.fileId)
+                throw new Error('Документ: нет fileId');
             const url = await (0, telegramReader_1.getTgFileUrl)(tgToken, p.fileId);
             if (!url) {
                 throw new Error('Документ: не удалось получить файл из Telegram');
@@ -232,6 +376,6 @@ function startChannelImportWorker() {
         void tickChannelImportJobs().catch((err) => {
             logger_1.logger.error('[channelImport] tick', err);
         });
-    }, 3000);
+    }, 2000);
 }
 //# sourceMappingURL=channelImportService.js.map

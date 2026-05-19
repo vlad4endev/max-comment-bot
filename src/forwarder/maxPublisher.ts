@@ -1,3 +1,4 @@
+import fs from 'node:fs/promises'
 import path from 'node:path'
 
 import axios from 'axios'
@@ -11,6 +12,58 @@ export async function sendTextToMax(token: string, chatId: string, text: string)
     chat_id: chatId,
     text: text.substring(0, 4096),
   })
+}
+
+export async function sendPhotoFileToMax(
+  token: string,
+  chatId: string,
+  filePath: string,
+  caption: string,
+): Promise<void> {
+  const buffer = await fs.readFile(filePath)
+  const form = new FormData()
+  form.append('token', token)
+  form.append('chat_id', chatId)
+  form.append('caption', caption.substring(0, 1024))
+  form.append('photo', buffer, { filename: path.basename(filePath), contentType: 'image/jpeg' })
+  await axios.post(`${MAX_API}/messages/sendPhoto`, form, { headers: form.getHeaders() })
+}
+
+export async function sendVideoFileToMax(
+  token: string,
+  chatId: string,
+  filePath: string,
+  caption: string,
+): Promise<void> {
+  const buffer = await fs.readFile(filePath)
+  const name = path.basename(filePath)
+  const ext = path.extname(name).toLowerCase()
+  const contentType =
+    ext === '.webm' ? 'video/webm' : ext === '.mov' ? 'video/quicktime' : 'video/mp4'
+  const form = new FormData()
+  form.append('token', token)
+  form.append('chat_id', chatId)
+  form.append('caption', caption.substring(0, 1024))
+  form.append('video', buffer, { filename: name, contentType })
+  await axios.post(`${MAX_API}/messages/sendVideo`, form, { headers: form.getHeaders() })
+}
+
+export async function sendDocumentFileToMax(
+  token: string,
+  chatId: string,
+  filePath: string,
+  caption: string,
+  options?: { filename?: string; contentType?: string },
+): Promise<void> {
+  const buffer = await fs.readFile(filePath)
+  const name = options?.filename ?? path.basename(filePath)
+  const contentType = options?.contentType ?? 'application/octet-stream'
+  const form = new FormData()
+  form.append('token', token)
+  form.append('chat_id', chatId)
+  form.append('caption', caption.substring(0, 1024))
+  form.append('document', buffer, { filename: name, contentType })
+  await axios.post(`${MAX_API}/messages/sendDocument`, form, { headers: form.getHeaders() })
 }
 
 export async function sendPhotoToMax(

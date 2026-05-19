@@ -702,6 +702,7 @@ function createAdminRouter(deps) {
             bot_token: parseNonEmptyString(req.body.bot_token) ?? '',
             forward_posts: Boolean(req.body.forward_posts),
             forward_comments: Boolean(req.body.forward_comments),
+            add_comments_button: req.body.add_comments_button !== false,
             add_signature: Boolean(req.body.add_signature),
             active: true,
         });
@@ -724,6 +725,9 @@ function createAdminRouter(deps) {
             patch.forward_posts = req.body.forward_posts;
         if (typeof req.body.forward_comments === 'boolean')
             patch.forward_comments = req.body.forward_comments;
+        if (typeof req.body.add_comments_button === 'boolean') {
+            patch.add_comments_button = req.body.add_comments_button;
+        }
         const updated = await (0, adminPanelState_1.updateTgChain)(id, patch);
         if (!updated) {
             res.status(404).json({ error: 'not found' });

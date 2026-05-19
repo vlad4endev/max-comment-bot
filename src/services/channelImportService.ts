@@ -1,3 +1,6 @@
+import axios from 'axios'
+
+import { getTelegramToken } from '../config'
 import { getDb } from '../db/database'
 import {
   getTelegramUpdatesWithIds,
@@ -5,18 +8,36 @@ import {
   type TgMessage,
 } from '../forwarder/telegramReader'
 import {
+  sendDocumentFileToMax,
   sendDocumentToMax,
+  sendPhotoFileToMax,
   sendPhotoToMax,
   sendTextToMax,
+  sendVideoFileToMax,
   sendVideoToMax,
 } from '../forwarder/maxPublisher'
 import { logger } from '../utils/logger'
+import {
+  fetchChannelArchiveForImport,
+  telegramUserArchiveConfigured,
+} from './telegramUserArchive'
 import {
   normalizeTelegramChannelKey,
   telegramChannelMatchesTarget,
 } from '../utils/tgChannelMatch'
 
-const SCAN_IDLE_MAX = 12
+export const SCAN_IDLE_MAX = 5
+
+const TG_API = 'https://api.telegram.org/bot'
+
+export interface ChannelImportJobView extends ChannelImportJobRow {
+  scan_idle_max: number
+  status_hint: string | null
+  can_publish: boolean
+  reader_token_ok: boolean
+  reader_uses_main_token: boolean
+  user_archive_ready: boolean
+}
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
@@ -25,6 +46,7 @@ export interface ChannelImportJobRow {
   tg_channel: string
   max_channel_id: string
   status: string
+  import_source: string
   scan_next_offset: number
   scan_idle_rounds: number
   staged_count: number
@@ -35,9 +57,86 @@ export interface ChannelImportJobRow {
 
 export type StagedPayload =
   | { kind: 'text'; text: string }
-  | { kind: 'photo'; caption: string; fileId: string }
-  | { kind: 'video'; caption: string; fileId: string }
-  | { kind: 'document'; caption: string; fileId: string; fileName?: string; mimeType?: string }
+  | { kind: 'photo'; caption: string; fileId?: string; localPath?: string }
+  | { kind: 'video'; caption: string; fileId?: string; localPath?: string }
+  | {
+      kind: 'document'
+      caption: string
+      fileId?: string
+      localPath?: string
+      fileName?: string
+      mimeType?: string
+    }
+
+export function resolveImportTgToken(): string {
+  const reader = (process.env.TG_READER_BOT_TOKEN || '').trim()
+  if (reader) return reader
+  return getTelegramToken()
+}
+
+export function readerTokenMeta(): { ok: boolean; usesMainToken: boolean } {
+  const reader = (process.env.TG_READER_BOT_TOKEN || '').trim()
+  const fallback = getTelegramToken()
+  if (reader) return { ok: true, usesMainToken: false }
+  return { ok: fallback.length > 0, usesMainToken: fallback.length > 0 }
+}
+
+export async function assertTelegramPollingReady(tgToken: string): Promise<string | null> {
+  if (!tgToken) {
+    return 'Не задан TG_READER_BOT_TOKEN (или TG_TOKEN в интеграции)'
+  }
+  try {
+    const { data } = await axios.get<{ ok: boolean; result?: { url?: string } }>(
+      `${TG_API}${tgToken}/getWebhookInfo`,
+      { timeout: 10_000 },
+    )
+    const url = data.result?.url?.trim()
+    if (data.ok && url) {
+      return `У бота включён webhook (${url}) — getUpdates пустой. Отключите webhook (deleteWebhook) для reader-бота.`
+    }
+  } catch {
+    /* ignore probe errors */
+  }
+  return null
+}
+
+export function toChannelImportJobView(job: ChannelImportJobRow): ChannelImportJobView {
+  const tokenMeta = readerTokenMeta()
+  const staged = job.staged_count ?? 0
+  let statusHint: string | null = null
+  if (job.status === 'archive_fetch') {
+    statusHint = 'Загрузка архива канала через user-аккаунт (MTProto)…'
+  } else if (job.status === 'scanning') {
+    const step = Math.min(job.scan_idle_rounds + 1, SCAN_IDLE_MAX)
+    statusHint = `Опрос Telegram ${step}/${SCAN_IDLE_MAX}… Найдено постов: ${staged}. Если долго 0 — в канале нет новых постов в очереди бота.`
+  } else if (job.status === 'ready' && staged === 0) {
+    statusHint =
+      'В очереди обновлений бота нет постов этого канала. Опубликуйте новый пост в TG или проверьте, что reader-бот — админ в канале.'
+  } else if (job.status === 'ready' && staged > 0) {
+    statusHint = 'Можно публиковать в MAX.'
+  }
+
+  return {
+    ...job,
+    scan_idle_max: SCAN_IDLE_MAX,
+    status_hint: job.error_message ?? statusHint,
+    can_publish: job.status === 'ready' && staged > 0,
+    reader_token_ok: tokenMeta.ok,
+    reader_uses_main_token: tokenMeta.usesMainToken,
+    user_archive_ready: telegramUserArchiveConfigured(),
+  }
+}
+
+export function getActiveChannelImportJob(): ChannelImportJobView | undefined {
+  const job = getDb()
+    .prepare(
+      `SELECT * FROM channel_import_jobs
+       WHERE status IN ('scanning', 'archive_fetch', 'ready')
+       ORDER BY id DESC LIMIT 1`,
+    )
+    .get() as ChannelImportJobRow | undefined
+  return job ? toChannelImportJobView(job) : undefined
+}
 
 function getImportReaderOffset(): number {
   const row = getDb()
@@ -76,7 +175,11 @@ function buildStagingPayload(msg: TgMessage): StagedPayload | null {
   return null
 }
 
-export function createChannelImportJob(tgChannel: string, maxChannelId: string): number {
+export function createChannelImportJob(
+  tgChannel: string,
+  maxChannelId: string,
+  options?: { archive?: boolean; archiveLimit?: number },
+): number {
   const tg = normalizeTelegramChannelKey(tgChannel)
   const max = maxChannelId.trim()
   if (!tg || !max) {
@@ -85,16 +188,69 @@ export function createChannelImportJob(tgChannel: string, maxChannelId: string):
   const dup = getDb()
     .prepare(
       `SELECT id FROM channel_import_jobs
-       WHERE tg_channel = ? AND max_channel_id = ? AND status IN ('scanning', 'ready')`,
+       WHERE tg_channel = ? AND max_channel_id = ? AND status IN ('scanning', 'archive_fetch', 'ready')`,
     )
     .get(tg, max) as { id: number } | undefined
   if (dup) {
     throw new Error('Уже есть активная задача импорта для этой пары TG → MAX')
   }
+  const useArchive = options?.archive === true
+  if (useArchive && !telegramUserArchiveConfigured()) {
+    throw new Error(
+      'Архив недоступен: настройте TG_API_ID, TG_API_HASH и TG_USER_SESSION (npm run tg:user-login)',
+    )
+  }
+  const initialStatus = useArchive ? 'archive_fetch' : 'scanning'
   const r = getDb()
-    .prepare('INSERT INTO channel_import_jobs (tg_channel, max_channel_id) VALUES (?, ?)')
-    .run(tg, max)
-  return Number(r.lastInsertRowid)
+    .prepare(
+      'INSERT INTO channel_import_jobs (tg_channel, max_channel_id, status, import_source) VALUES (?, ?, ?, ?)',
+    )
+    .run(tg, max, initialStatus, useArchive ? 'user_archive' : 'bot_queue')
+  const jobId = Number(r.lastInsertRowid)
+  if (useArchive) {
+    const limit = Math.min(Math.max(options?.archiveLimit ?? 100, 1), 500)
+    void runArchiveImportJob(jobId, limit).catch((err: unknown) => {
+      logger.error('[channelImport] archive job failed job=' + String(jobId), err)
+    })
+  }
+  return jobId
+}
+
+export async function runArchiveImportJob(jobId: number, limit: number): Promise<void> {
+  const job = getChannelImportJob(jobId)
+  if (!job || job.status !== 'archive_fetch') {
+    return
+  }
+  try {
+    const posts = await fetchChannelArchiveForImport(job.tg_channel, limit, jobId)
+    for (const p of posts) {
+      getDb()
+        .prepare(
+          'INSERT OR IGNORE INTO channel_import_staged (job_id, tg_message_id, payload) VALUES (?, ?, ?)',
+        )
+        .run(jobId, p.messageId, JSON.stringify(p.payload))
+    }
+    const stagedRow = getDb()
+      .prepare('SELECT COUNT(*) AS c FROM channel_import_staged WHERE job_id = ?')
+      .get(jobId) as { c: number }
+    const stagedCount = stagedRow?.c ?? 0
+    getDb()
+      .prepare(
+        `UPDATE channel_import_jobs
+         SET status = 'ready', staged_count = ?, scan_idle_rounds = 0, error_message = NULL, updated_at = datetime('now')
+         WHERE id = ?`,
+      )
+      .run(stagedCount, jobId)
+    logger.info('[channelImport] archive ready', { jobId, stagedCount })
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err)
+    getDb()
+      .prepare(
+        `UPDATE channel_import_jobs SET status = 'error', error_message = ?, updated_at = datetime('now') WHERE id = ?`,
+      )
+      .run(msg, jobId)
+    throw err
+  }
 }
 
 export function getChannelImportJob(id: number): ChannelImportJobRow | undefined {
@@ -114,11 +270,6 @@ function updateJobAfterBatch(job: ChannelImportJobRow, jobGotPosts: boolean): vo
     .prepare('SELECT COUNT(*) AS c FROM channel_import_staged WHERE job_id = ?')
     .get(job.id) as { c: number }
   const stagedCount = stagedRow?.c ?? 0
-
-  if (idle >= SCAN_IDLE_MAX && stagedCount === 0) {
-    getDb().prepare('DELETE FROM channel_import_jobs WHERE id = ?').run(job.id)
-    return
-  }
 
   const nextStatus = idle >= SCAN_IDLE_MAX ? 'ready' : 'scanning'
   getDb()
@@ -175,7 +326,7 @@ async function ingestScanBatchForJobs(
 }
 
 export async function tickChannelImportJobs(): Promise<void> {
-  const tgToken = (process.env.TG_READER_BOT_TOKEN || '').trim()
+  const tgToken = resolveImportTgToken()
   const jobs = getDb()
     .prepare("SELECT * FROM channel_import_jobs WHERE status = 'scanning'")
     .all() as ChannelImportJobRow[]
@@ -184,19 +335,24 @@ export async function tickChannelImportJobs(): Promise<void> {
     return
   }
 
-  if (!tgToken) {
+  const configErr = await assertTelegramPollingReady(tgToken)
+  if (configErr) {
     for (const j of jobs) {
       getDb()
         .prepare(
           `UPDATE channel_import_jobs SET status = 'error', error_message = ?, updated_at = datetime('now') WHERE id = ?`,
         )
-        .run('TG_READER_BOT_TOKEN не задан', j.id)
+        .run(configErr, j.id)
     }
     return
   }
 
   try {
     await ingestScanBatchForJobs(jobs, tgToken)
+    logger.info('[channelImport] tick', {
+      jobs: jobs.length,
+      jobIds: jobs.map((j) => j.id),
+    })
   } catch (err: unknown) {
     logger.error('[channelImport] scan batch failed', err)
     const msg = err instanceof Error ? err.message : String(err)
@@ -221,6 +377,11 @@ async function publishStagedPayload(
       await sendTextToMax(maxToken, maxChannelId, p.text)
       return
     case 'photo': {
+      if (p.localPath) {
+        await sendPhotoFileToMax(maxToken, maxChannelId, p.localPath, p.caption)
+        return
+      }
+      if (!p.fileId) throw new Error('Фото: нет fileId')
       const url = await getTgFileUrl(tgToken, p.fileId)
       if (!url) {
         throw new Error('Фото: не удалось получить файл из Telegram')
@@ -229,6 +390,11 @@ async function publishStagedPayload(
       return
     }
     case 'video': {
+      if (p.localPath) {
+        await sendVideoFileToMax(maxToken, maxChannelId, p.localPath, p.caption)
+        return
+      }
+      if (!p.fileId) throw new Error('Видео: нет fileId')
       const url = await getTgFileUrl(tgToken, p.fileId)
       if (!url) {
         throw new Error('Видео: не удалось получить файл из Telegram')
@@ -237,6 +403,14 @@ async function publishStagedPayload(
       return
     }
     case 'document': {
+      if (p.localPath) {
+        await sendDocumentFileToMax(maxToken, maxChannelId, p.localPath, p.caption, {
+          filename: p.fileName,
+          contentType: p.mimeType,
+        })
+        return
+      }
+      if (!p.fileId) throw new Error('Документ: нет fileId')
       const url = await getTgFileUrl(tgToken, p.fileId)
       if (!url) {
         throw new Error('Документ: не удалось получить файл из Telegram')
@@ -306,5 +480,5 @@ export function startChannelImportWorker(): void {
     void tickChannelImportJobs().catch((err: unknown) => {
       logger.error('[channelImport] tick', err)
     })
-  }, 3000)
+  }, 2000)
 }
