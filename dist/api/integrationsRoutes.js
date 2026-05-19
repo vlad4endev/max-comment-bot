@@ -66,7 +66,7 @@ async function resolveTelegramLinkedChats(refresh) {
     if (!refresh && integ.linkedChats && integ.linkedChats.length > 0) {
         return { integrationId: integ.id, channels: integ.linkedChats };
     }
-    const channels = await (0, integrationPlatformClient_1.listTelegramBotChats)(token);
+    const channels = await (0, integrationPlatformClient_1.listTelegramBotChats)(token, integ.id);
     await integrationsStore_1.integrationsStore.setLinkedChats(integ.id, channels);
     return { integrationId: integ.id, channels };
 }
@@ -156,7 +156,7 @@ function createIntegrationsRouter(deps) {
         }
         let channels = [];
         if (platform === 'telegram') {
-            channels = await (0, integrationPlatformClient_1.listTelegramBotChats)(token);
+            channels = await (0, integrationPlatformClient_1.listTelegramBotChats)(token, record.id);
             await integrationsStore_1.integrationsStore.setLinkedChats(record.id, channels);
         }
         const updated = integrationsStore_1.integrationsStore.getIntegration(record.id) ?? record;
@@ -213,7 +213,7 @@ function createIntegrationsRouter(deps) {
                 res.json({ channels: integ.linkedChats });
                 return;
             }
-            const channels = await (0, integrationPlatformClient_1.listTelegramBotChats)(token);
+            const channels = await (0, integrationPlatformClient_1.listTelegramBotChats)(token, integ.id);
             await integrationsStore_1.integrationsStore.setLinkedChats(integ.id, channels);
             res.json({ channels });
             return;

@@ -1,6 +1,6 @@
 import type { Bot } from '@maxhub/max-bot-api'
 
-import { config, getTelegramToken } from '../config'
+import { config, getFlowPollIntervalMs, getTelegramToken } from '../config'
 import { channelRegistry } from './channelRegistry'
 import {
   fetchTelegramChannelPosts,
@@ -17,7 +17,9 @@ import {
 } from './integrationsStore'
 import { logger } from '../utils/logger'
 
-const POLL_MS = 60_000
+function flowPollMs(): number {
+  return getFlowPollIntervalMs()
+}
 
 export interface FlowTickResult {
   fetchedPosts: number
@@ -52,7 +54,10 @@ export class FlowProcessor {
       this.startFlowPoller(flow)
     }
     this.started = true
-    logger.info('flowProcessor: started', { flowCount: flows.length })
+    logger.info('flowProcessor: started', {
+      flowCount: flows.length,
+      pollIntervalMs: flowPollMs(),
+    })
     if (flows.length === 0) {
       logger.warn(
         'flowProcessor: нет активных потоков (TG→MAX). Подключите Telegram в /admin → Интеграции и создайте поток; данные: data/integrations.json',
@@ -75,7 +80,7 @@ export class FlowProcessor {
     if (this.pollers.has(flow.id)) return
     const interval = setInterval(() => {
       void this.processFlowSafe(flow.id)
-    }, POLL_MS)
+    }, flowPollMs())
     this.pollers.set(flow.id, interval)
     void this.processFlowSafe(flow.id)
   }
@@ -142,7 +147,8 @@ export class FlowProcessor {
       if (count === 5) {
         logger.warn('flowProcessor: 5 empty ticks in a row', {
           flowId: flow.id,
-          hint: 'Убедитесь что бот является администратором TG-канала с правом публикации сообщений',
+          hint:
+            'Бот должен быть в канале/группе. Для канала — пост от админа; для группы — обычное сообщение. Проверьте @username/-100 ID в потоке и что у TG-бота нет webhook (deleteWebhook).',
         })
       }
       return {
@@ -261,6 +267,7 @@ export class FlowProcessor {
       const channelKey = flow.source.channelId ?? flow.source.channelUsername ?? ''
       const { posts, lastMessageId } = await fetchTelegramChannelPosts(
         tgToken,
+        flow.source.integrationId,
         channelKey,
         cursorBefore,
       )

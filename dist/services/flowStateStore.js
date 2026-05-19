@@ -6,7 +6,7 @@ const node_path_1 = require("node:path");
 const logger_1 = require("../utils/logger");
 const STATE_PATH = (0, node_path_1.join)(process.cwd(), 'data', 'flow-state.json');
 function defaultState() {
-    return { flows: {} };
+    return { flows: {}, telegramOffsets: {} };
 }
 class FlowStateStore {
     data = defaultState();
@@ -20,7 +20,13 @@ class FlowStateStore {
             if (typeof parsed === 'object' && parsed !== null) {
                 const o = parsed;
                 if (typeof o.flows === 'object' && o.flows !== null) {
-                    this.data = { flows: o.flows };
+                    const offsets = typeof o.telegramOffsets === 'object' && o.telegramOffsets !== null
+                        ? o.telegramOffsets
+                        : {};
+                    this.data = {
+                        flows: o.flows,
+                        telegramOffsets: offsets,
+                    };
                 }
             }
         }
@@ -60,6 +66,16 @@ class FlowStateStore {
         }
         this.data.flows[flowId] = cur;
         return this.persist();
+    }
+    getTelegramUpdateOffset(integrationId) {
+        return this.data.telegramOffsets?.[integrationId];
+    }
+    async setTelegramUpdateOffset(integrationId, offset) {
+        if (!this.data.telegramOffsets) {
+            this.data.telegramOffsets = {};
+        }
+        this.data.telegramOffsets[integrationId] = offset;
+        await this.persist();
     }
     popReadyDelayedPosts(flowId, now) {
         const cur = this.data.flows[flowId];

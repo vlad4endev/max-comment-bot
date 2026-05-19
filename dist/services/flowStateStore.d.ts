@@ -10,6 +10,8 @@ declare class FlowStateStore {
     };
     setLastMessageId(flowId: string, lastMessageId: number): Promise<void>;
     scheduleDelayedPost(flowId: string, postId: string, readyAt: number): Promise<void>;
+    getTelegramUpdateOffset(integrationId: string): number | undefined;
+    setTelegramUpdateOffset(integrationId: string, offset: number): Promise<void>;
     popReadyDelayedPosts(flowId: string, now: number): string[];
 }
 export declare const flowStateStore: FlowStateStore;

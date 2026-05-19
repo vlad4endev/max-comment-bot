@@ -55,12 +55,21 @@ async function main() {
     const channelCount = channelRegistry_1.channelRegistry
         .getAllChannels()
         .filter((c) => c.type === 'channel').length;
+    const enabledFlows = integrationsStore_1.integrationsStore.getFlows().filter((f) => f.enabled);
     logger_1.logger.info('🚀 Бот запущен', {
         channelCount,
         pollerConcurrency: channelPoller_1.POLL_CONCURRENCY,
         webhookConcurrency: updateQueue_1.WEBHOOK_CONCURRENCY,
         logRotation: true,
         receiveMode: config_1.config.receiveMode,
+        telegramConnected: !!tgIntegration,
+        flowProcessorEnabledFlows: enabledFlows.length,
+        flowPollIntervalMs: (0, config_2.getFlowPollIntervalMs)(),
+        flows: enabledFlows.map((f) => ({
+            id: f.id,
+            from: `${f.source.platform}:${f.source.channelUsername ?? f.source.channelId ?? '?'}`,
+            to: `${f.destination.platform}:${f.destination.channelId}`,
+        })),
     });
     const listenPort = config_1.config.listenPort;
     if (config_1.config.receiveMode === 'webhook') {

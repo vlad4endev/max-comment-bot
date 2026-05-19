@@ -8,7 +8,9 @@ const integrationPlatformClient_1 = require("./integrationPlatformClient");
 const flowStateStore_1 = require("./flowStateStore");
 const integrationsStore_1 = require("./integrationsStore");
 const logger_1 = require("../utils/logger");
-const POLL_MS = 60_000;
+function flowPollMs() {
+    return (0, config_1.getFlowPollIntervalMs)();
+}
 class FlowProcessor {
     bot = null;
     pollers = new Map();
@@ -27,13 +29,18 @@ class FlowProcessor {
             this.startFlowPoller(flow);
         }
         this.started = true;
-        logger_1.logger.info('flowProcessor: started', { flowCount: flows.length });
+        logger_1.logger.info('flowProcessor: started', {
+            flowCount: flows.length,
+            pollIntervalMs: flowPollMs(),
+        });
         if (flows.length === 0) {
             logger_1.logger.warn('flowProcessor: нет активных потоков (TG→MAX). Подключите Telegram в /admin → Интеграции и создайте поток; данные: data/integrations.json');
         }
     }
     async reload() {
         this.stopPollers();
+        await integrationsStore_1.integrationsStore.reloadFromDisk();
+        await flowStateStore_1.flowStateStore.load();
         const flows = integrationsStore_1.integrationsStore.getFlows().filter((f) => f.enabled);
         for (const flow of flows) {
             this.startFlowPoller(flow);
@@ -45,7 +52,7 @@ class FlowProcessor {
             return;
         const interval = setInterval(() => {
             void this.processFlowSafe(flow.id);
-        }, POLL_MS);
+        }, flowPollMs());
         this.pollers.set(flow.id, interval);
         void this.processFlowSafe(flow.id);
     }
@@ -106,7 +113,7 @@ class FlowProcessor {
             if (count === 5) {
                 logger_1.logger.warn('flowProcessor: 5 empty ticks in a row', {
                     flowId: flow.id,
-                    hint: 'Убедитесь что бот является администратором TG-канала с правом публикации сообщений',
+                    hint: 'Бот должен быть в канале/группе. Для канала — пост от админа; для группы — обычное сообщение. Проверьте @username/-100 ID в потоке и что у TG-бота нет webhook (deleteWebhook).',
                 });
             }
             return {
@@ -213,7 +220,7 @@ class FlowProcessor {
             if (!tgToken)
                 return { posts: [], lastMessageId: cursorBefore, cursorBefore };
             const channelKey = flow.source.channelId ?? flow.source.channelUsername ?? '';
-            const { posts, lastMessageId } = await (0, integrationPlatformClient_1.fetchTelegramChannelPosts)(tgToken, channelKey, cursorBefore);
+            const { posts, lastMessageId } = await (0, integrationPlatformClient_1.fetchTelegramChannelPosts)(tgToken, flow.source.integrationId, channelKey, cursorBefore);
             if (lastMessageId > cursorBefore) {
                 await flowStateStore_1.flowStateStore.setLastMessageId(flow.id, lastMessageId);
             }
