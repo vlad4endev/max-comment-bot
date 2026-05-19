@@ -1342,6 +1342,31 @@
     #view-comments .msg-out .tg-bubble .tg-time {
       color: var(--tg-time-out);
     }
+    #view-comments .tg-reply-to {
+      border-left: 2px solid var(--tg-name);
+      padding: 0 0 0 8px;
+      margin-bottom: 5px;
+    }
+    #view-comments .tg-reply-to-name {
+      font-size: 12px;
+      font-weight: 600;
+      line-height: 1.25;
+      color: var(--tg-name);
+    }
+    #view-comments .tg-reply-to-text {
+      font-size: 13px;
+      line-height: 1.35;
+      margin-top: 1px;
+      color: var(--text-dim);
+      display: -webkit-box;
+      -webkit-box-orient: vertical;
+      -webkit-line-clamp: 2;
+      overflow: hidden;
+      word-break: break-word;
+    }
+    #view-comments .msg-out.msg-channel .tg-reply-to-text {
+      opacity: 0.85;
+    }
     #view-comments .media-grid {
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1364,6 +1389,9 @@
       margin-left: 42px;
       margin-top: 2px;
       max-width: min(82%, 520px);
+    }
+    #view-comments .comment-group.has-channel-reply .msg-reply-row {
+      display: none;
     }
     #view-comments .reply-below-btn {
       display: inline-block;
@@ -3689,7 +3717,40 @@
         return esc(initials(name));
       }
 
-      function buildChannelMsgHtml(reply, commentId, isLastReply, showChannelAvatar) {
+      function commentQuoteSnippet(c) {
+        var t = c && c.text ? String(c.text).trim() : '';
+        if (t) return t;
+        if (c && Array.isArray(c.photo_urls) && c.photo_urls.length) return 'Фото';
+        return '';
+      }
+
+      function buildReplyQuoteHtml(replyToUsername, replyToText) {
+        var who = replyToUsername ? String(replyToUsername).trim() : 'Пользователь';
+        var raw = replyToText ? String(replyToText).trim() : '';
+        var snip = raw;
+        if (snip.length > 140) {
+          snip = snip.slice(0, 137) + '…';
+        }
+        return (
+          '<div class="tg-reply-to">' +
+          '<div class="tg-reply-to-name">' +
+          escDisplay(who) +
+          '</div>' +
+          (snip
+            ? '<div class="tg-reply-to-text">' + escDisplay(snip) + '</div>'
+            : '<div class="tg-reply-to-text">Комментарий</div>') +
+          '</div>'
+        );
+      }
+
+      function buildChannelMsgHtml(
+        reply,
+        commentId,
+        isLastReply,
+        showChannelAvatar,
+        replyToUsername,
+        replyToText
+      ) {
         var adminTrim =
           reply && typeof reply.admin_name === 'string' ? reply.admin_name.trim() : '';
         var replyNameRaw =
@@ -3713,8 +3774,9 @@
         var nameHtml = showChannelAvatar
           ? '<div class="tg-name">' + replyLabel + '</div>'
           : '';
+        var quoteHtml = buildReplyQuoteHtml(replyToUsername, replyToText);
         return (
-          '<div class="feed-msg msg-channel msg-in' +
+          '<div class="feed-msg msg-channel msg-out' +
           lastCls +
           stackCls +
           '" data-reply-id="' +
@@ -3725,6 +3787,7 @@
           '</div>' +
           '<div class="tg-bubble bubble-ch">' +
           nameHtml +
+          quoteHtml +
           (replyText ? '<div class="tg-text">' + escDisplay(replyText) + '</div>' : '') +
           replyMedia +
           '<span class="tg-time">' +
@@ -3754,7 +3817,14 @@
         if (replies.length) {
           replyHtml = replies
             .map(function (r, idx) {
-              return buildChannelMsgHtml(r, c.comment_id, idx === replies.length - 1, idx === 0);
+              return buildChannelMsgHtml(
+                r,
+                c.comment_id,
+                idx === replies.length - 1,
+                idx === 0,
+                c.username,
+                commentQuoteSnippet(c)
+              );
             })
             .join('');
         }
@@ -3764,6 +3834,7 @@
         var dk = cts ? dateKeyLocal(cts) : '';
         var dkAttr = dk ? ' data-date-key="' + esc(dk) + '"' : '';
         var cidStr = String(c.comment_id || '');
+        var groupExtraCls = replies.length ? ' has-channel-reply' : '';
         var replyBelow =
           isAdmin && cidStr.indexOf('temp-') !== 0
             ? '<div class="msg-reply-row">' +
@@ -3779,7 +3850,9 @@
           ? ''
           : '<div class="tg-name">' + escDisplay(c.username) + '</div>';
         return (
-          '<div class="comment-group" data-comment-id="' +
+          '<div class="comment-group' +
+          groupExtraCls +
+          '" data-comment-id="' +
           esc(c.comment_id) +
           '"' +
           dkAttr +
@@ -4241,7 +4314,14 @@
           for (var i = prevCount; i < newReplies.length; i++) {
             existing.insertAdjacentHTML(
               'beforeend',
-              buildChannelMsgHtml(newReplies[i], c.comment_id, i === newReplies.length - 1, i === prevCount)
+              buildChannelMsgHtml(
+                newReplies[i],
+                c.comment_id,
+                i === newReplies.length - 1,
+                i === prevCount,
+                c.username,
+                commentQuoteSnippet(c)
+              )
             );
           }
           existing.querySelectorAll('.msg-channel').forEach(function (el, idx, all) {
