@@ -62,7 +62,8 @@ function parseNonEmptyString(value) {
     return t === '' ? null : t;
 }
 function extractChatAvatarUrl(chat) {
-    const iconRaw = chat.icon?.url;
+    const icon = chat.icon;
+    const iconRaw = icon && typeof icon === 'object' ? icon.url : undefined;
     if (typeof iconRaw !== 'string') {
         return null;
     }
