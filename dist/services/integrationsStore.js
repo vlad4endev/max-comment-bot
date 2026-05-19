@@ -378,7 +378,10 @@ function maskToken(token) {
         return '••••';
     return `••••••••${token.slice(-4)}`;
 }
+/** Ответ для авторизованной админ-панели (маршруты с checkAdminAuth). */
 function integrationPublicView(i) {
+    const connected = i.status === 'connected';
+    const hasToken = i.token.trim().length > 0;
     return {
         id: i.id,
         platform: i.platform,
@@ -387,7 +390,9 @@ function integrationPublicView(i) {
         status: i.status,
         connectedAt: i.connectedAt,
         stats: i.stats,
-        tokenPreview: maskToken(i.token),
+        hasToken,
+        token: connected && hasToken ? i.token : '',
+        tokenPreview: hasToken ? maskToken(i.token) : '',
         linkedChats: i.linkedChats ?? [],
         linkedChatsUpdatedAt: i.linkedChatsUpdatedAt ?? null,
     };

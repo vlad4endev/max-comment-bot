@@ -431,12 +431,70 @@
     var q = refresh ? '?refresh=1' : '';
     return getJsonAbs(API_INTEGRATIONS + '/telegram/linked-chats' + q).then(function (data) {
       tgLinkedChatsCache = data.channels || [];
+      if (data.integrationId) {
+        var tg = integrationsCache.find(function (i) {
+          return i.id === data.integrationId;
+        });
+        if (tg) {
+          tg.linkedChats = data.channels || [];
+          if (data.linkedChatsUpdatedAt) {
+            tg.linkedChatsUpdatedAt = data.linkedChatsUpdatedAt;
+          }
+        }
+      }
       return data;
     });
   }
 
+  function integrationHasToken(record) {
+    if (!record) return false;
+    if (record.hasToken === true) return true;
+    if (record.token && String(record.token).trim()) return true;
+    if (record.tokenPreview && String(record.tokenPreview).replace(/[•\s]/g, '').length > 0) {
+      return true;
+    }
+    return false;
+  }
+
+  function integrationTokenPreview(record) {
+    if (!record) return '';
+    if (record.token && String(record.token).trim()) {
+      var t = String(record.token);
+      return t.length <= 8 ? '••••' : '••••••••' + t.slice(-4);
+    }
+    return record.tokenPreview ? String(record.tokenPreview) : '';
+  }
+
   function telegramChannelPickValue(ch) {
     return ch.username || ch.id;
+  }
+
+  function renderTelegramChatItemHtml(ch, opts) {
+    opts = opts || {};
+    var pick = telegramChannelPickValue(ch);
+    var meta =
+      telegramChatTypeLabel(ch.type) +
+      (ch.botIsAdmin ? ' · админ' : ' · не админ') +
+      ' · ID ' +
+      ch.id;
+    var html =
+      '<li class="tg-chat-item' +
+      (ch.botIsAdmin ? ' tg-chat-item--admin' : '') +
+      '"><div class="tg-chat-main"><strong>' +
+      esc(ch.title) +
+      '</strong>';
+    if (ch.username) {
+      html += ' <span class="mono text-sm">' + esc(ch.username) + '</span>';
+    }
+    html += '</div><div class="tg-chat-meta muted">' + esc(meta) + '</div>';
+    if (opts.copyable !== false) {
+      html +=
+        '<button type="button" class="btn btn-ghost btn-sm" data-copy-tg-channel="' +
+        esc(pick) +
+        '">Копировать</button>';
+    }
+    html += '</li>';
+    return html;
   }
 
   function renderTelegramChatsListHtml(chats, opts) {
@@ -444,35 +502,40 @@
     if (!chats || !chats.length) {
       return (
         '<div class="tg-chats-empty muted">' +
-        esc(opts.emptyText || 'Чаты не найдены. Добавьте бота в канал/группу как администратора, отправьте сообщение и нажмите «Обновить».') +
+        esc(
+          opts.emptyText ||
+            'Чаты не найдены. Добавьте бота администратором в канал/группу, отправьте сообщение и нажмите «Загрузить».',
+        ) +
         '</div>'
       );
     }
-    var html = '<ul class="tg-chats-list">';
-    chats.forEach(function (ch) {
-      var pick = telegramChannelPickValue(ch);
-      var meta =
-        telegramChatTypeLabel(ch.type) +
-        (ch.botIsAdmin ? ' · админ' : '') +
-        ' · ID ' +
-        ch.id;
-      html +=
-        '<li class="tg-chat-item"><div class="tg-chat-main"><strong>' +
-        esc(ch.title) +
-        '</strong>';
-      if (ch.username) {
-        html += ' <span class="mono text-sm">' + esc(ch.username) + '</span>';
-      }
-      html += '</div><div class="tg-chat-meta muted">' + esc(meta) + '</div>';
-      if (opts.copyable !== false) {
-        html +=
-          '<button type="button" class="btn btn-ghost btn-sm" data-copy-tg-channel="' +
-          esc(pick) +
-          '">Копировать</button>';
-      }
-      html += '</li>';
+    var adminChats = chats.filter(function (ch) {
+      return ch.botIsAdmin === true;
     });
-    html += '</ul>';
+    var otherChats = chats.filter(function (ch) {
+      return ch.botIsAdmin !== true;
+    });
+    var html = '';
+    if (adminChats.length) {
+      html +=
+        '<div class="tg-chats-section-label muted text-sm">Где бот администратор (' +
+        adminChats.length +
+        ')</div><ul class="tg-chats-list">';
+      adminChats.forEach(function (ch) {
+        html += renderTelegramChatItemHtml(ch, opts);
+      });
+      html += '</ul>';
+    }
+    if (otherChats.length) {
+      html +=
+        '<div class="tg-chats-section-label muted text-sm" style="margin-top:10px">Прочие чаты (' +
+        otherChats.length +
+        ')</div><ul class="tg-chats-list">';
+      otherChats.forEach(function (ch) {
+        html += renderTelegramChatItemHtml(ch, opts);
+      });
+      html += '</ul>';
+    }
     return html;
   }
 
@@ -490,9 +553,12 @@
       '<div class="tg-chats-panel-head flex-between">' +
       '<div><div class="tg-chats-title">Привязанные каналы и чаты</div>' +
       '<div class="muted text-sm">Используются в потоках, TG-цепочках и автопостинге</div></div>' +
+      '<div class="tg-chats-actions"><button type="button" class="btn btn-primary btn-sm" data-refresh-tg-chats="' +
+      esc(integrationId) +
+      '"><i data-lucide="download"></i> Загрузить</button>' +
       '<button type="button" class="btn btn-ghost btn-sm" data-refresh-tg-chats="' +
       esc(integrationId) +
-      '"><i data-lucide="refresh-cw"></i> Обновить</button></div>' +
+      '"><i data-lucide="refresh-cw"></i> Обновить</button></div></div>' +
       (updatedAt ? '<div class="muted text-sm mb-sm">' + esc(updatedAt) + '</div>' : '') +
       renderTelegramChatsListHtml(list);
   }
@@ -511,32 +577,39 @@
         }
       });
     });
-    var ref = qs('[data-refresh-tg-chats]', panel);
-    if (ref) {
+    qsa('[data-refresh-tg-chats]', panel).forEach(function (ref) {
       ref.addEventListener('click', function () {
-        ref.disabled = true;
+        var integrationId = ref.getAttribute('data-refresh-tg-chats');
+        qsa('[data-refresh-tg-chats]', panel).forEach(function (b) {
+          b.disabled = true;
+        });
         fetchTelegramLinkedChats(true)
           .then(function (data) {
-            var tg = integrationsCache.find(function (i) {
-              return i.id === ref.getAttribute('data-refresh-tg-chats');
-            });
-            if (tg) {
-              tg.linkedChats = data.channels || [];
-              tg.linkedChatsUpdatedAt = new Date().toISOString();
-            }
-            mountTelegramChatsPanel(panel, ref.getAttribute('data-refresh-tg-chats'), data.channels);
+            mountTelegramChatsPanel(panel, integrationId, data.channels || []);
             bindTelegramChatsPanel(panel);
             refreshIcons();
-            showToast('Список обновлён (' + String((data.channels || []).length) + ')', 'success');
+            var n = (data.channels || []).length;
+            var admins =
+              data.adminCount != null
+                ? data.adminCount
+                : (data.channels || []).filter(function (c) {
+                    return c.botIsAdmin;
+                  }).length;
+            var msg = n
+              ? 'Сохранено чатов: ' + n + (admins ? ', админ: ' + admins : '')
+              : data.hint || 'Чаты не найдены';
+            showToast(msg, n ? 'success' : 'info');
           })
           .catch(function (e) {
             showToast(e.message || 'Ошибка', 'error');
           })
           .finally(function () {
-            ref.disabled = false;
+            qsa('[data-refresh-tg-chats]', panel).forEach(function (b) {
+              b.disabled = false;
+            });
           });
       });
-    }
+    });
   }
 
   function buildTelegramChannelSelect(id, chats, extraManualId) {
@@ -1921,6 +1994,15 @@
           if (panel) {
             mountTelegramChatsPanel(panel, tgRec.id, tgLinkedChatsCache);
             bindTelegramChatsPanel(panel);
+            if (!tgLinkedChatsCache.length) {
+              fetchTelegramLinkedChats(true)
+                .then(function (data) {
+                  mountTelegramChatsPanel(panel, tgRec.id, data.channels || []);
+                  bindTelegramChatsPanel(panel);
+                  refreshIcons();
+                })
+                .catch(function () {});
+            }
           }
         }
         refreshIcons();
@@ -1932,32 +2014,44 @@
   }
 
   function savedTokenBlockHtml(prefix, record) {
-    if (!record || record.status !== 'connected' || !record.token) {
+    if (!record || record.status !== 'connected' || !integrationHasToken(record)) {
       return '';
     }
-    var token = String(record.token);
+    var token = record.token ? String(record.token) : '';
+    var preview = integrationTokenPreview(record);
+    var display = token || preview;
+    var canCopy = token.length > 0;
     return (
       '<div class="saved-token-block">' +
-      '<label class="saved-token-label">Сохранённый токен</label>' +
+      '<label class="saved-token-label">Токен бота</label>' +
       '<div class="saved-token-row">' +
       '<input class="input mono saved-token-input" type="password" readonly id="' +
       esc(prefix) +
       '-token-saved" value="' +
-      esc(token) +
-      '"/>' +
+      esc(display) +
+      '" placeholder="Токен сохранён"/>' +
       '<button type="button" class="btn btn-ghost btn-sm" data-toggle-token="' +
       esc(prefix) +
       '-token-saved">Показать</button>' +
-      '<button type="button" class="btn btn-ghost btn-sm" data-copy-token="' +
-      esc(prefix) +
-      '-token-saved">Копировать</button>' +
-      '</div></div>'
+      (canCopy
+        ? '<button type="button" class="btn btn-ghost btn-sm" data-copy-token="' +
+          esc(prefix) +
+          '-token-saved">Копировать</button>'
+        : '') +
+      '</div><p class="muted text-sm saved-token-hint">' +
+      (token
+        ? 'Токен сохранён. Введите новый в «Настроить» только для замены.'
+        : 'Токен сохранён (' +
+          esc(preview) +
+          '). Полный токен не отображается — введите новый только для замены.') +
+      '</p></div>'
     );
   }
 
   function integrationCardHtml(platform, title, desc, record, prefix) {
     var connected = record && record.status === 'connected';
     var savedToken = record && record.token ? String(record.token) : '';
+    var hasToken = integrationHasToken(record);
     var logo = platform === 'vk' ? 'VK' : 'TG';
     var html =
       '<div class="integration-card' +
@@ -1975,14 +2069,29 @@
       '">' +
       (connected ? '<i data-lucide="circle-check"></i> Подключён' : 'Не подключён') +
       '</span></div>';
+    if (connected && record && !integrationHasToken(record)) {
+      html +=
+        '<div class="int-token-warning muted text-sm">Токен не задан — откройте «Настроить» и вставьте токен от @BotFather</div>';
+    }
     if (connected && record) {
       html += savedTokenBlockHtml(prefix, record);
     }
     if (platform === 'telegram' && connected && record) {
+      var adminCount = (record.linkedChats || []).filter(function (c) {
+        return c.botIsAdmin === true;
+      }).length;
       html +=
         '<div class="int-meta"><span>Бот: <strong>' +
         esc(record.name || 'Telegram') +
-        '</strong></span></div>';
+        '</strong></span>' +
+        (record.linkedChats && record.linkedChats.length
+          ? '<span> · чатов: <strong>' +
+            esc(String(record.linkedChats.length)) +
+            '</strong> (админ: <strong>' +
+            esc(String(adminCount)) +
+            '</strong>)</span>'
+          : '') +
+        '</div>';
       html +=
         '<div class="tg-chats-panel-wrap" data-tg-chats-panel="' +
         esc(record.id) +
@@ -1997,7 +2106,9 @@
       prefix +
       '-token" value="' +
       esc(savedToken) +
-      '" placeholder="Вставьте новый токен для замены" autocomplete="off"/></div>';
+      '" placeholder="' +
+      (hasToken ? 'Пусто = не менять токен · ' : '') +
+      'Токен от @BotFather" autocomplete="off"/></div>';
 
     if (platform === 'vk') {
       html +=
@@ -2210,7 +2321,8 @@
           var g = qs('#vk-group', main);
           if (g && g.value.trim()) body.groupId = g.value.trim();
         }
-        if (!token) { showToast('Укажите токен', 'error'); return; }
+        var rec = integrationsCache.find(function (i) { return i.platform === platform; });
+        if (!token && !(rec && integrationHasToken(rec))) { showToast('Укажите токен', 'error'); return; }
         postJsonAbs(API_INTEGRATIONS + '/connect', body)
           .then(function (res) {
             if (res.integration) {

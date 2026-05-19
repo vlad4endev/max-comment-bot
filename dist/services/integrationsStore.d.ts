@@ -105,5 +105,6 @@ declare class IntegrationsStore {
 }
 export declare const integrationsStore: IntegrationsStore;
 export declare function maskToken(token: string): string;
+/** Ответ для авторизованной админ-панели (маршруты с checkAdminAuth). */
 export declare function integrationPublicView(i: IntegrationRecord): Record<string, unknown>;
 export {};

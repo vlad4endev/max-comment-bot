@@ -491,7 +491,10 @@ export function maskToken(token: string): string {
   return `••••••••${token.slice(-4)}`
 }
 
+/** Ответ для авторизованной админ-панели (маршруты с checkAdminAuth). */
 export function integrationPublicView(i: IntegrationRecord): Record<string, unknown> {
+  const connected = i.status === 'connected'
+  const hasToken = i.token.trim().length > 0
   return {
     id: i.id,
     platform: i.platform,
@@ -500,7 +503,9 @@ export function integrationPublicView(i: IntegrationRecord): Record<string, unkn
     status: i.status,
     connectedAt: i.connectedAt,
     stats: i.stats,
-    tokenPreview: maskToken(i.token),
+    hasToken,
+    token: connected && hasToken ? i.token : '',
+    tokenPreview: hasToken ? maskToken(i.token) : '',
     linkedChats: i.linkedChats ?? [],
     linkedChatsUpdatedAt: i.linkedChatsUpdatedAt ?? null,
   }

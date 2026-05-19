@@ -1892,6 +1892,29 @@ tbody tr:hover td {
   min-width: 180px;
   font-size: 12px;
 }
+.saved-token-hint { margin: 6px 0 0; }
+.int-token-warning {
+  padding: 8px 16px;
+  color: var(--warning, #d97706);
+}
+.tg-chats-panel-wrap {
+  padding: 0 16px 12px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.tg-chats-panel-head { margin-bottom: 8px; }
+.tg-chats-actions { display: flex; gap: 8px; flex-shrink: 0; }
+.tg-chats-list { list-style: none; margin: 0; padding: 0; }
+.tg-chat-item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.tg-chat-item--admin { border-left: 3px solid var(--success, #10b981); padding-left: 8px; }
+.tg-chats-section-label { margin: 8px 0 4px; }
+.tg-chats-empty { padding: 12px 0; }
 .int-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
 .int-expand-btn {
   width: 100%;

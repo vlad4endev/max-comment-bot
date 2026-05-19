@@ -11,6 +11,7 @@ import { channelRegistry } from '../services/channelRegistry'
 import { flowStateStore } from '../services/flowStateStore'
 import { buildIntegrationsAnalytics, flowProcessor } from '../services/flowProcessor'
 import {
+  enrichTelegramChatsWithBotAdmin,
   listTelegramBotChats,
   listVkGroups,
   mergePlatformChannels,
@@ -79,22 +80,36 @@ function telegramIntegrationToken(integ: IntegrationRecord): string {
 
 async function resolveTelegramLinkedChats(
   refresh: boolean,
-): Promise<{ integrationId: string | null; channels: Awaited<ReturnType<typeof listTelegramBotChats>> }> {
+): Promise<{
+  integrationId: string | null
+  channels: Awaited<ReturnType<typeof listTelegramBotChats>>
+  linkedChatsUpdatedAt: string | null
+}> {
   await integrationsStore.load()
   const integ = integrationsStore.getTelegramIntegration()
   if (!integ) {
-    return { integrationId: null, channels: [] }
+    return { integrationId: null, channels: [], linkedChatsUpdatedAt: null }
   }
   const token = telegramIntegrationToken(integ)
   if (!refresh && integ.linkedChats && integ.linkedChats.length > 0) {
-    return { integrationId: integ.id, channels: integ.linkedChats }
+    return {
+      integrationId: integ.id,
+      channels: integ.linkedChats,
+      linkedChatsUpdatedAt: integ.linkedChatsUpdatedAt ?? null,
+    }
   }
   const discovered = await listTelegramBotChats(token, integ.id)
-  const channels = mergePlatformChannels(integ.linkedChats, discovered)
+  let channels = mergePlatformChannels(integ.linkedChats, discovered)
+  channels = await enrichTelegramChatsWithBotAdmin(token, channels)
   await integrationsStore.setLinkedChats(integ.id, channels, {
-    keepExistingIfEmpty: refresh,
+    keepExistingIfEmpty: refresh && channels.length === 0,
   })
-  return { integrationId: integ.id, channels }
+  const updated = integrationsStore.getIntegration(integ.id)
+  return {
+    integrationId: integ.id,
+    channels: updated?.linkedChats ?? channels,
+    linkedChatsUpdatedAt: updated?.linkedChatsUpdatedAt ?? null,
+  }
 }
 
 export function createIntegrationsRouter(deps: IntegrationsRouterDeps): express.Router {
@@ -111,15 +126,22 @@ export function createIntegrationsRouter(deps: IntegrationsRouterDeps): express.
 
   router.get('/telegram/linked-chats', async (req, res) => {
     try {
-      const { integrationId, channels } = await resolveTelegramLinkedChats(wantsRefresh(req.query))
+      const { integrationId, channels, linkedChatsUpdatedAt } = await resolveTelegramLinkedChats(
+        wantsRefresh(req.query),
+      )
+      const adminCount = channels.filter((c) => c.botIsAdmin === true).length
       res.json({
         connected: integrationId !== null,
         integrationId,
         channels,
+        linkedChatsUpdatedAt,
+        adminCount,
         hint:
           channels.length === 0
             ? 'Добавьте бота администратором в канал/группу и отправьте туда сообщение, затем нажмите «Обновить».'
-            : null,
+            : adminCount === 0
+              ? 'Чаты найдены, но бот нигде не администратор. Выдайте боту права админа и нажмите «Обновить».'
+              : null,
       })
     } catch (err: unknown) {
       logger.error('GET /telegram/linked-chats failed', err)
@@ -146,9 +168,18 @@ export function createIntegrationsRouter(deps: IntegrationsRouterDeps): express.
       return
     }
     const platform = parsePlatform(body.platform)
-    const token = typeof body.token === 'string' ? body.token.trim() : ''
-    if (!platform || token === '') {
-      res.status(400).json({ error: 'platform and token required' })
+    const tokenRaw = typeof body.token === 'string' ? body.token.trim() : ''
+    if (!platform) {
+      res.status(400).json({ error: 'platform required' })
+      return
+    }
+    await integrationsStore.load()
+    const existingForPlatform = integrationsStore
+      .getIntegrations()
+      .find((i) => i.platform === platform)
+    const token = tokenRaw !== '' ? tokenRaw : (existingForPlatform?.token ?? '').trim()
+    if (token === '') {
+      res.status(400).json({ error: 'Укажите токен бота' })
       return
     }
     const name =
@@ -168,10 +199,7 @@ export function createIntegrationsRouter(deps: IntegrationsRouterDeps): express.
       return
     }
 
-    await integrationsStore.load()
-    const existing = integrationsStore
-      .getIntegrations()
-      .find((i) => i.platform === platform)
+    const existing = existingForPlatform
     const record = await integrationsStore.upsertIntegration({
       id: existing?.id,
       platform,
@@ -195,6 +223,7 @@ export function createIntegrationsRouter(deps: IntegrationsRouterDeps): express.
     if (platform === 'telegram') {
       const discovered = await listTelegramBotChats(token, record.id)
       channels = mergePlatformChannels(record.linkedChats, discovered)
+      channels = await enrichTelegramChatsWithBotAdmin(token, channels)
       await integrationsStore.setLinkedChats(record.id, channels)
     }
 
@@ -257,11 +286,17 @@ export function createIntegrationsRouter(deps: IntegrationsRouterDeps): express.
         return
       }
       const discovered = await listTelegramBotChats(token, integ.id)
-      const channels = mergePlatformChannels(integ.linkedChats, discovered)
+      let channels = mergePlatformChannels(integ.linkedChats, discovered)
+      channels = await enrichTelegramChatsWithBotAdmin(token, channels)
       await integrationsStore.setLinkedChats(integ.id, channels, {
-        keepExistingIfEmpty: refresh,
+        keepExistingIfEmpty: refresh && channels.length === 0,
       })
-      res.json({ channels })
+      const updated = integrationsStore.getIntegration(integ.id)
+      res.json({
+        channels: updated?.linkedChats ?? channels,
+        linkedChatsUpdatedAt: updated?.linkedChatsUpdatedAt ?? null,
+        adminCount: (updated?.linkedChats ?? channels).filter((c) => c.botIsAdmin === true).length,
+      })
       return
     }
 

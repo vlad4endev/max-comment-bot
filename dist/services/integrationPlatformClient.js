@@ -5,6 +5,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.ensureTelegramPollingMode = ensureTelegramPollingMode;
 exports.mergePlatformChannels = mergePlatformChannels;
+exports.enrichTelegramChatsWithBotAdmin = enrichTelegramChatsWithBotAdmin;
 exports.validateTelegramToken = validateTelegramToken;
 exports.validateVkToken = validateVkToken;
 exports.testIntegration = testIntegration;
@@ -78,6 +79,75 @@ function mergePlatformChannels(existing, discovered) {
             return typeDiff;
         return a.title.localeCompare(b.title, 'ru');
     });
+}
+async function getTelegramBotUserId(token) {
+    try {
+        const { data } = await axios_1.default.get(`${TG_API}/bot${token}/getMe`, { timeout: 15_000 });
+        const id = data.result?.id;
+        return typeof id === 'number' ? id : null;
+    }
+    catch {
+        return null;
+    }
+}
+async function fetchTelegramChatMemberStatus(token, chatId, botUserId) {
+    try {
+        const { data } = await axios_1.default.get(`${TG_API}/bot${token}/getChatMember`, {
+            params: { chat_id: chatId, user_id: botUserId },
+            timeout: 12_000,
+        });
+        const status = data.result?.status ?? '';
+        const botIsAdmin = status === 'administrator' || status === 'creator';
+        if (!data.ok) {
+            return { botIsAdmin: false };
+        }
+        let chatMeta = { ok: false };
+        try {
+            const { data: chatData } = await axios_1.default.get(`${TG_API}/bot${token}/getChat`, {
+                params: { chat_id: chatId },
+                timeout: 12_000,
+            });
+            chatMeta = chatData;
+        }
+        catch {
+            chatMeta = { ok: false };
+        }
+        const chat = chatMeta.ok ? chatMeta.result : undefined;
+        return {
+            botIsAdmin,
+            title: chat ? chatTitleFromTelegramChat(chat, chatId) : undefined,
+            username: typeof chat?.username === 'string' && chat.username.trim() !== ''
+                ? `@${chat.username.replace(/^@/, '')}`
+                : undefined,
+            type: chat ? normalizeTelegramChatType(chat.type) : undefined,
+        };
+    }
+    catch {
+        return { botIsAdmin: false };
+    }
+}
+/** Проверяет через getChatMember/getChat, где бот администратор (в т.ч. уже сохранённые чаты). */
+async function enrichTelegramChatsWithBotAdmin(token, chats) {
+    const trimmed = token.trim();
+    if (trimmed === '' || chats.length === 0) {
+        return chats;
+    }
+    const botUserId = await getTelegramBotUserId(trimmed);
+    if (botUserId === null) {
+        return chats;
+    }
+    const enriched = [];
+    for (const ch of chats) {
+        const member = await fetchTelegramChatMemberStatus(trimmed, ch.id, botUserId);
+        enriched.push({
+            id: ch.id,
+            title: member.title && member.title.length > ch.title.length ? member.title : ch.title,
+            username: member.username ?? ch.username,
+            type: member.type && member.type !== 'unknown' ? member.type : ch.type,
+            botIsAdmin: ch.botIsAdmin === true || member.botIsAdmin,
+        });
+    }
+    return mergePlatformChannels(undefined, enriched);
 }
 async function validateTelegramToken(token) {
     try {
@@ -240,22 +310,11 @@ async function listTelegramBotChats(token, integrationId) {
     catch (err) {
         logger_1.logger.warn('listTelegramBotChats: getUpdates failed', err);
     }
-    const typeOrder = {
-        channel: 0,
-        supergroup: 1,
-        group: 2,
-        private: 3,
-        unknown: 4,
-    };
-    return [...seen.values()].sort((a, b) => {
-        const adminDiff = Number(b.botIsAdmin === true) - Number(a.botIsAdmin === true);
-        if (adminDiff !== 0)
-            return adminDiff;
-        const typeDiff = (typeOrder[a.type ?? 'unknown'] ?? 9) - (typeOrder[b.type ?? 'unknown'] ?? 9);
-        if (typeDiff !== 0)
-            return typeDiff;
-        return a.title.localeCompare(b.title, 'ru');
-    });
+    const discovered = [...seen.values()];
+    if (discovered.length === 0) {
+        return [];
+    }
+    return enrichTelegramChatsWithBotAdmin(trimmed, discovered);
 }
 async function listTelegramAdminChannels(token) {
     return listTelegramBotChats(token);
