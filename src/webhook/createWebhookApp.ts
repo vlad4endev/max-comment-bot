@@ -60,6 +60,10 @@ export function createHttpApp(options: HttpAppOptions): express.Express {
     res.status(200).type('text/plain').send('ok')
   })
 
+  app.get('/favicon.ico', (_req, res) => {
+    res.redirect(302, '/admin/assets/favicon.svg')
+  })
+
   app.get('/admin/login', (_req, res) => {
     res.sendFile(join(adminPanelRoot, 'login.html'), (err) => {
       if (err) {

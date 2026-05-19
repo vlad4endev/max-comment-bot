@@ -36,6 +36,9 @@ function createHttpApp(options) {
     app.get('/health', (_req, res) => {
         res.status(200).type('text/plain').send('ok');
     });
+    app.get('/favicon.ico', (_req, res) => {
+        res.redirect(302, '/admin/assets/favicon.svg');
+    });
     app.get('/admin/login', (_req, res) => {
         res.sendFile((0, node_path_1.join)(adminPanelRoot, 'login.html'), (err) => {
             if (err) {

@@ -1886,15 +1886,15 @@
     if (!connected) {
       return html + '<div class="analytics-empty"><i data-lucide="plug"></i><span>Подключите платформу</span></div></div>';
     }
-    return (
-      html +
+    html +=
       '<div class="analytics-stats"><div class="a-stat"><div class="a-stat-val">' +
       esc(String(stats.totalPosts)) +
       '</div><div class="a-stat-label">постов</div></div><div class="a-stat"><div class="a-stat-val">' +
       esc(String(stats.forwarded)) +
       '</div><div class="a-stat-label">переслано</div></div><div class="a-stat"><div class="a-stat-val">' +
       esc(String(stats.channels)) +
-      '</div><div class="a-stat-label">каналов</div></div></div></div>');
+      '</div><div class="a-stat-label">каналов</div></div></div></div>';
+    return html;
   }
 
   function forwardedItemHtml(item) {
