@@ -81,6 +81,9 @@
       --bubble-admin-border: rgba(127,119,221,0.20);
 
       --tg-chat-bg: #0e1621;
+      --comments-divider: rgba(255, 255, 255, 0.08);
+      --comments-card-bg: #182533;
+      --comments-input-bg: #17212b;
       --tg-bubble-in: #182533;
       --tg-bubble-out: #2b5278;
       --tg-bubble-shadow: none;
@@ -151,7 +154,10 @@
       --bubble-admin: rgba(108,100,204,0.08);
       --bubble-admin-border: rgba(108,100,204,0.20);
 
-      --tg-chat-bg: #d9e0e8;
+      --tg-chat-bg: #e8edf2;
+      --comments-divider: rgba(0, 0, 0, 0.06);
+      --comments-card-bg: #ffffff;
+      --comments-input-bg: #ffffff;
       --tg-bubble-in: #ffffff;
       --tg-bubble-out: #eeffde;
       --tg-bubble-shadow: 0 1px 0.5px rgba(0, 0, 0, 0.08);
@@ -1021,12 +1027,12 @@
       width: 100%;
       box-sizing: border-box;
     }
-    /* Comments view */
+    /* Comments view — единый фон как в Telegram (шапка + чат + ввод) */
     #view-comments {
       display: flex;
       flex-direction: column;
       overflow: hidden;
-      background: var(--bg-primary);
+      background: var(--tg-chat-bg);
     }
     #view-comments #app {
       display: flex;
@@ -1038,10 +1044,10 @@
     #view-comments .header-wrap {
       flex: 0 0 auto;
       z-index: 10;
-      background: var(--bg-primary);
-      border-bottom: 1px solid var(--border);
-      padding: 14px 16px 12px;
-      padding-top: calc(14px + env(safe-area-inset-top));
+      background: var(--tg-chat-bg);
+      border-bottom: 1px solid var(--comments-divider);
+      padding: 12px 14px 10px;
+      padding-top: calc(12px + env(safe-area-inset-top));
     }
     #view-comments .channel-row {
       display: flex;
@@ -1136,9 +1142,10 @@
       align-items: center;
       gap: 10px;
       padding: 10px 12px;
-      background: var(--surface);
-      border: 1px solid var(--surface-border);
+      background: var(--comments-card-bg);
+      border: none;
       border-radius: 12px;
+      box-shadow: var(--tg-bubble-shadow);
     }
     #view-comments .post-preview-text {
       flex: 1;
@@ -1169,8 +1176,9 @@
       flex: 0 0 auto;
       color: var(--danger);
       font-size: 12px;
-      padding: 6px 16px 4px;
+      padding: 6px 14px 4px;
       min-height: 1em;
+      background: var(--tg-chat-bg);
     }
     #view-comments #feed {
       flex: 1 1 auto;
@@ -1179,11 +1187,11 @@
       overflow-x: hidden;
       -webkit-overflow-scrolling: touch;
       scroll-behavior: smooth;
-      padding: 8px 10px 0;
+      padding: 6px 10px 8px;
       display: flex;
       flex-direction: column;
       gap: 10px;
-      background: var(--tg-chat-bg);
+      background: transparent;
     }
     #view-comments .feed-empty {
       text-align: center;
@@ -1438,12 +1446,14 @@
       margin-top: 6px;
     }
     #view-comments .reply-banner {
-      background: var(--accent-bg);
-      border-top: 1px solid var(--accent-border);
+      background: var(--comments-card-bg);
+      border-top: 1px solid var(--comments-divider);
       border-left: 3px solid var(--accent);
       padding: 7px 12px;
       display: flex;
       align-items: center;
+      margin-bottom: 6px;
+      border-radius: 10px 10px 0 0;
     }
     #view-comments .reply-banner-inner {
       display: flex;
@@ -1508,11 +1518,16 @@
       right: 4px;
       top: 4px;
     }
-    #view-comments .comment-group.admin-menu-open.admin-menu--comment > .admin-actions.admin-context-menu {
+    #view-comments .comment-group.admin-menu-open.admin-menu--comment .admin-actions[data-admin-menu-kind="comment"] {
       display: flex;
+      z-index: 50;
     }
     #view-comments .comment-group.admin-menu-open.admin-menu--reply .msg-channel.msg-channel-last .admin-actions.admin-context-menu {
       display: flex;
+      z-index: 50;
+    }
+    #view-comments .admin-actions.admin-context-menu {
+      pointer-events: auto;
     }
     #view-comments .admin-actions.admin-context-menu .admin-act-btn {
       width: 100%;
@@ -1568,10 +1583,10 @@
       flex: 0 0 auto;
       position: relative;
       z-index: 10;
-      background: var(--bg-primary);
-      border-top: 1px solid var(--border);
-      padding: 10px 14px;
-      padding-bottom: calc(10px + var(--composer-safe-bottom, env(safe-area-inset-bottom)));
+      background: var(--tg-chat-bg);
+      border-top: 1px solid var(--comments-divider);
+      padding: 8px 12px;
+      padding-bottom: calc(8px + var(--composer-safe-bottom, env(safe-area-inset-bottom)));
     }
     #view-comments .composer {
       display: flex;
@@ -1583,8 +1598,9 @@
       width: 36px;
       height: 36px;
       border-radius: 50%;
-      border: 1px solid var(--input-border);
-      background: var(--input-bg);
+      border: none;
+      background: var(--comments-input-bg);
+      box-shadow: var(--tg-bubble-shadow);
       color: var(--text-secondary);
       cursor: pointer;
       flex-shrink: 0;
@@ -1658,10 +1674,11 @@
       min-width: 0;
       height: 40px;
       border-radius: 20px;
-      border: 1px solid var(--input-border);
+      border: none;
       padding: 0 14px;
       font-size: 16px;
-      background: var(--input-bg);
+      background: var(--comments-input-bg);
+      box-shadow: var(--tg-bubble-shadow);
       color: var(--text-primary);
     }
     #view-comments .composer input::placeholder {
@@ -2124,11 +2141,21 @@
         return { join_channel_id: '-' + j.slice(4) }
       }
       var s = trimmed.toLowerCase()
-      var m = s.match(/^pid_([a-f0-9]+)_cid_(\d+)(_admin)?$/)
+      var m = s.match(/^pid_([a-f0-9]+)_cid_(\d+)(?:_mid_([A-Za-z0-9_-]+))?(_admin)?$/)
       if (!m) return null
       var id = m[1]
       var uuid = [id.slice(0,8), id.slice(8,12), id.slice(12,16), id.slice(16,20), id.slice(20)].join('-')
-      return { post_id: uuid, chat_id: '-' + m[2], admin: !!m[3] }
+      var out = { post_id: uuid, chat_id: '-' + m[2], admin: !!m[4] }
+      if (m[3]) {
+        try {
+          var padded = m[3] + '='.repeat((4 - (m[3].length % 4)) % 4)
+          var bin = atob(padded.replace(/-/g, '+').replace(/_/g, '/'))
+          var mid = ''
+          for (var i = 0; i < bin.length; i++) mid += String.fromCharCode(bin.charCodeAt(i))
+          if (mid) out.message_mid = mid
+        } catch (e) {}
+      }
+      return out
     }
 
     /** Same numeric id as MAX API / bot (`user_id`); Bridge may also expose `id`. */
@@ -2180,6 +2207,7 @@
       if (fromStart) {
         if (fromStart.post_id && !sp.get('post_id')) sp.set('post_id', fromStart.post_id);
         if (fromStart.chat_id && !sp.get('chat_id')) sp.set('chat_id', fromStart.chat_id);
+        if (fromStart.message_mid && !sp.get('message_mid')) sp.set('message_mid', fromStart.message_mid);
         if (fromStart.admin && !sp.get('admin')) sp.set('admin', '1');
         if (fromStart.join_channel_id && !sp.get('join_channel_id')) {
           sp.set('join_channel_id', fromStart.join_channel_id);
@@ -2189,7 +2217,7 @@
         var inner = raw.charAt(0) === '?' ? raw.slice(1) : raw;
         try {
           var q2 = new URLSearchParams(inner);
-          ['post_id', 'chat_id', 'user_id', 'username', 'admin', 'subscribers', 'join_channel_id'].forEach(function (k) {
+          ['post_id', 'chat_id', 'message_mid', 'user_id', 'username', 'admin', 'subscribers', 'join_channel_id'].forEach(function (k) {
             var v = q2.get(k);
             if (v && !sp.get(k)) sp.set(k, v);
           });
@@ -3769,8 +3797,9 @@
           '<span class="tg-time">' +
           esc(timeShown) +
           '</span>' +
-          '</div></div>' +
+          '</div>' +
           commentAdminActs +
+          '</div>' +
           replyBelow +
           replyHtml +
           '</div>'
@@ -3940,16 +3969,57 @@
       function adminApiBase(cid) {
         return {
           comment_id: cid,
-          post_id: postId,
+          post_id: currentPostId || postId,
           chat_id: Number(chatId),
           user_id: Number(userId),
         };
+      }
+
+      function runAdminDeleteRequest(url, cid, block, btn, onSuccess) {
+        btn.disabled = true;
+        setErr('');
+        fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(adminApiBase(cid)),
+        })
+          .then(function (r) {
+            if (!r.ok) {
+              return r.json().then(function (j) {
+                throw new Error(j.error || String(r.status));
+              });
+            }
+            return r.json();
+          })
+          .then(onSuccess)
+          .catch(function (e) {
+            setErr(e.message || String(e));
+          })
+          .finally(function () {
+            btn.disabled = false;
+          });
       }
 
       function wireAdminModeration(block) {
         if (!isAdmin) return;
         var cid = block.getAttribute('data-comment-id');
         if (!cid || cid.indexOf('temp-') === 0) return;
+
+        block.querySelectorAll('.admin-actions.admin-context-menu').forEach(function (menu) {
+          if (menu.dataset.menuShield === '1') return;
+          menu.dataset.menuShield = '1';
+          menu.addEventListener(
+            'touchstart',
+            function (e) {
+              e.stopPropagation();
+            },
+            { passive: true }
+          );
+          menu.addEventListener('mousedown', function (e) {
+            e.stopPropagation();
+          });
+        });
+
 
         block.querySelectorAll('[data-edit-comment]').forEach(function (btn) {
           if (btn.dataset.actWired === '1') return;
@@ -4048,86 +4118,83 @@
         block.querySelectorAll('[data-delete-comment]').forEach(function (btn) {
           if (btn.dataset.delWired === '1') return;
           btn.dataset.delWired = '1';
-          btn.addEventListener('click', function (e) {
+          function doDeleteComment() {
+            block.classList.remove('admin-menu-open', 'admin-menu--comment', 'admin-menu--reply');
+            runAdminDeleteRequest('/api/comment/delete', cid, block, btn, function (res) {
+              knownIds.delete(cid);
+              block.remove();
+              if (typeof res.comment_count === 'number') {
+                postCommentCount = res.comment_count;
+                updateBadgeFromCount(postCommentCount);
+              } else {
+                bumpCommentCount(-1);
+              }
+              if (!feedEl.querySelector('.comment-group')) {
+                feedEl.innerHTML = '<div class="feed-empty">Пока нет комментариев</div>';
+              }
+            });
+          }
+          var deleteTapLock = false;
+          function onDeleteCommentTap(e) {
+            if (deleteTapLock) return;
             e.preventDefault();
             e.stopPropagation();
-            block.classList.remove('admin-menu-open', 'admin-menu--comment', 'admin-menu--reply');
             window.setTimeout(function () {
-              if (!window.confirm('Удалить этот комментарий?')) return;
-              btn.disabled = true;
-              setErr('');
-              fetch('/api/comment/delete', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(adminApiBase(cid)),
-            })
-              .then(function (r) {
-                if (!r.ok) {
-                  return r.json().then(function (j) {
-                    throw new Error(j.error || String(r.status));
-                  });
-                }
-                return r.json();
-              })
-              .then(function (res) {
-                knownIds.delete(cid);
-                block.remove();
-                if (typeof res.comment_count === 'number') {
-                  postCommentCount = res.comment_count;
-                  updateBadgeFromCount(postCommentCount);
-                } else {
-                  bumpCommentCount(-1);
-                }
-                if (!feedEl.querySelector('.comment-group')) {
-                  feedEl.innerHTML = '<div class="feed-empty">Пока нет комментариев</div>';
-                }
-              })
-              .catch(function (e) {
-                setErr(e.message || String(e));
-              })
-              .finally(function () {
-                btn.disabled = false;
-              });
+              var ok = true;
+              try {
+                ok = window.confirm('Удалить этот комментарий?');
+              } catch (err) {
+                ok = true;
+              }
+              if (!ok) return;
+              deleteTapLock = true;
+              doDeleteComment();
             }, 0);
-          });
+          }
+          btn.addEventListener('click', onDeleteCommentTap);
+          btn.addEventListener(
+            'touchend',
+            function (e) {
+              onDeleteCommentTap(e);
+            },
+            { passive: false }
+          );
         });
 
         block.querySelectorAll('[data-delete-reply]').forEach(function (btn) {
           if (btn.dataset.delWired === '1') return;
           btn.dataset.delWired = '1';
-          btn.addEventListener('click', function (e) {
+          function doDeleteReply() {
+            block.classList.remove('admin-menu-open', 'admin-menu--comment', 'admin-menu--reply');
+            runAdminDeleteRequest('/api/reply/delete', cid, block, btn, function (updated) {
+              mergeOrUpdateComment(updated);
+            });
+          }
+          var deleteReplyTapLock = false;
+          function onDeleteReplyTap(e) {
+            if (deleteReplyTapLock) return;
             e.preventDefault();
             e.stopPropagation();
-            block.classList.remove('admin-menu-open', 'admin-menu--comment', 'admin-menu--reply');
             window.setTimeout(function () {
-              if (!window.confirm('Удалить ответ канала?')) return;
-              btn.disabled = true;
-              setErr('');
-              fetch('/api/reply/delete', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(adminApiBase(cid)),
-            })
-              .then(function (r) {
-                if (!r.ok) {
-                  return r.json().then(function (j) {
-                    throw new Error(j.error || String(r.status));
-                  });
-                }
-                return r.json();
-              })
-              .then(function (updated) {
-                block.classList.remove('admin-menu-open', 'admin-menu--comment', 'admin-menu--reply');
-                mergeOrUpdateComment(updated);
-              })
-              .catch(function (e) {
-                setErr(e.message || String(e));
-              })
-              .finally(function () {
-                btn.disabled = false;
-              });
+              var ok = true;
+              try {
+                ok = window.confirm('Удалить ответ канала?');
+              } catch (err) {
+                ok = true;
+              }
+              if (!ok) return;
+              deleteReplyTapLock = true;
+              doDeleteReply();
             }, 0);
-          });
+          }
+          btn.addEventListener('click', onDeleteReplyTap);
+          btn.addEventListener(
+            'touchend',
+            function (e) {
+              onDeleteReplyTap(e);
+            },
+            { passive: false }
+          );
         });
       }
 
@@ -4218,6 +4285,26 @@
         feedEl.appendChild(frag);
       }
 
+      function reconcileCommentsWithServer(list) {
+        if (!Array.isArray(list)) return;
+        var serverIds = new Set();
+        list.forEach(function (c) {
+          if (c && c.comment_id) serverIds.add(String(c.comment_id));
+        });
+        feedEl.querySelectorAll('.comment-group[data-comment-id]').forEach(function (node) {
+          var id = node.getAttribute('data-comment-id');
+          if (!id || String(id).indexOf('temp-') === 0) return;
+          if (!serverIds.has(id)) {
+            knownIds.delete(id);
+            node.remove();
+          }
+        });
+        if (!feedEl.querySelector('.comment-group') && list.length === 0) {
+          feedEl.innerHTML = '<div class="feed-empty">Пока нет комментариев</div>';
+        }
+        appendNewOnly(list);
+      }
+
       function appendNewOnly(list) {
         if (!Array.isArray(list)) return;
         var hadEmpty = !!feedEl.querySelector('.feed-empty');
@@ -4303,7 +4390,7 @@
             if (initial) {
               renderInitial(arr);
             } else {
-              appendNewOnly(arr);
+              reconcileCommentsWithServer(arr);
             }
             if (postCommentCount == null) {
               updateBadgeFromCount(arr.length);
