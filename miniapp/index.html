@@ -1382,6 +1382,91 @@
       background: rgba(0, 0, 0, 0.06);
       display: block;
     }
+    #view-comments .media-grid img.media-zoomable,
+    #view-comments .composer-attachment img.media-zoomable {
+      cursor: zoom-in;
+    }
+    #view-comments .photo-viewer-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 350;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      background: rgba(0, 0, 0, 0.94);
+      padding: env(safe-area-inset-top) 0 env(safe-area-inset-bottom);
+      touch-action: none;
+    }
+    #view-comments .photo-viewer-overlay.hidden {
+      display: none !important;
+    }
+    #view-comments .photo-viewer-close {
+      position: absolute;
+      top: calc(10px + env(safe-area-inset-top));
+      right: 12px;
+      z-index: 2;
+      width: 40px;
+      height: 40px;
+      border: none;
+      border-radius: 50%;
+      background: rgba(255, 255, 255, 0.14);
+      color: #fff;
+      font-size: 22px;
+      line-height: 1;
+      cursor: pointer;
+    }
+    #view-comments .photo-viewer-stage {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 100%;
+      min-height: 0;
+      padding: 52px 12px 28px;
+      box-sizing: border-box;
+    }
+    #view-comments .photo-viewer-stage img {
+      max-width: 100%;
+      max-height: 100%;
+      object-fit: contain;
+      user-select: none;
+      -webkit-user-drag: none;
+    }
+    #view-comments .photo-viewer-nav {
+      position: absolute;
+      top: 50%;
+      transform: translateY(-50%);
+      width: 44px;
+      height: 44px;
+      border: none;
+      border-radius: 50%;
+      background: rgba(255, 255, 255, 0.14);
+      color: #fff;
+      font-size: 28px;
+      line-height: 1;
+      cursor: pointer;
+      z-index: 2;
+    }
+    #view-comments .photo-viewer-nav.hidden {
+      display: none;
+    }
+    #view-comments .photo-viewer-prev {
+      left: 8px;
+    }
+    #view-comments .photo-viewer-next {
+      right: 8px;
+    }
+    #view-comments .photo-viewer-counter {
+      flex: 0 0 auto;
+      margin-bottom: calc(12px + env(safe-area-inset-bottom));
+      font-size: 13px;
+      color: rgba(255, 255, 255, 0.72);
+      font-weight: 500;
+    }
+    #view-comments .photo-viewer-counter.hidden {
+      display: none;
+    }
     #view-comments .msg-reply-row {
       align-self: flex-start;
       margin-left: 42px;
@@ -2047,6 +2132,15 @@
               <button type="button" id="adminConfirmOk" class="danger">Удалить</button>
             </div>
           </div>
+        </div>
+        <div id="photoViewerOverlay" class="photo-viewer-overlay hidden" aria-hidden="true">
+          <button type="button" class="photo-viewer-close" id="photoViewerClose" aria-label="Закрыть">✕</button>
+          <div class="photo-viewer-stage">
+            <button type="button" class="photo-viewer-nav photo-viewer-prev hidden" id="photoViewerPrev" aria-label="Предыдущее фото">‹</button>
+            <img id="photoViewerImg" alt="Фото" />
+            <button type="button" class="photo-viewer-nav photo-viewer-next hidden" id="photoViewerNext" aria-label="Следующее фото">›</button>
+          </div>
+          <div id="photoViewerCounter" class="photo-viewer-counter hidden"></div>
         </div>
         <div class="composer-wrap">
           <div id="replyBanner" class="reply-banner" style="display:none">
@@ -3595,10 +3689,142 @@
         if (!urls.length) return '';
         var imgs = urls
           .map(function (u) {
-            return '<img src="' + esc(u) + '" alt="Фото" loading="lazy" />';
+            return '<img class="media-zoomable" src="' + esc(u) + '" alt="Фото" loading="lazy" />';
           })
           .join('');
         return '<div class="media-grid">' + imgs + '</div>';
+      }
+
+      var photoViewerOverlayEl = document.getElementById('photoViewerOverlay');
+      var photoViewerImgEl = document.getElementById('photoViewerImg');
+      var photoViewerCloseEl = document.getElementById('photoViewerClose');
+      var photoViewerPrevEl = document.getElementById('photoViewerPrev');
+      var photoViewerNextEl = document.getElementById('photoViewerNext');
+      var photoViewerCounterEl = document.getElementById('photoViewerCounter');
+      var photoViewerUrls = [];
+      var photoViewerIndex = 0;
+
+      function photoViewerSrc(img) {
+        return (img && (img.getAttribute('src') || img.src || '')).trim();
+      }
+
+      function collectZoomableUrls(container) {
+        if (!container) return [];
+        var out = [];
+        container.querySelectorAll('img.media-zoomable').forEach(function (img) {
+          var s = photoViewerSrc(img);
+          if (s) out.push(s);
+        });
+        return out;
+      }
+
+      function updatePhotoViewerUi() {
+        if (!photoViewerImgEl) return;
+        photoViewerImgEl.src = photoViewerUrls[photoViewerIndex] || '';
+        var multi = photoViewerUrls.length > 1;
+        if (photoViewerPrevEl) photoViewerPrevEl.classList.toggle('hidden', !multi);
+        if (photoViewerNextEl) photoViewerNextEl.classList.toggle('hidden', !multi);
+        if (photoViewerCounterEl) {
+          if (multi) {
+            photoViewerCounterEl.textContent =
+              photoViewerIndex + 1 + ' / ' + photoViewerUrls.length;
+            photoViewerCounterEl.classList.remove('hidden');
+          } else {
+            photoViewerCounterEl.textContent = '';
+            photoViewerCounterEl.classList.add('hidden');
+          }
+        }
+      }
+
+      function openPhotoViewer(urls, startIndex) {
+        if (!photoViewerOverlayEl || !photoViewerImgEl) return;
+        var list = (urls || []).filter(function (u) {
+          return typeof u === 'string' && u.trim();
+        });
+        if (!list.length) return;
+        photoViewerUrls = list;
+        photoViewerIndex = Math.max(0, Math.min(startIndex || 0, list.length - 1));
+        updatePhotoViewerUi();
+        photoViewerOverlayEl.classList.remove('hidden');
+        photoViewerOverlayEl.setAttribute('aria-hidden', 'false');
+        document.body.style.overflow = 'hidden';
+      }
+
+      function closePhotoViewer() {
+        if (!photoViewerOverlayEl) return;
+        photoViewerOverlayEl.classList.add('hidden');
+        photoViewerOverlayEl.setAttribute('aria-hidden', 'true');
+        photoViewerUrls = [];
+        photoViewerIndex = 0;
+        if (photoViewerImgEl) photoViewerImgEl.removeAttribute('src');
+        document.body.style.overflow = '';
+      }
+
+      function shiftPhotoViewer(delta) {
+        if (photoViewerUrls.length < 2) return;
+        photoViewerIndex =
+          (photoViewerIndex + delta + photoViewerUrls.length) % photoViewerUrls.length;
+        updatePhotoViewerUi();
+      }
+
+      function openPhotoViewerFromImg(img) {
+        if (!img) return;
+        var grid = img.closest('.media-grid');
+        var urls = collectZoomableUrls(grid || img.parentElement);
+        var idx = urls.indexOf(photoViewerSrc(img));
+        openPhotoViewer(urls, idx >= 0 ? idx : 0);
+      }
+
+      if (photoViewerOverlayEl && photoViewerOverlayEl.dataset.bound !== '1') {
+        photoViewerOverlayEl.dataset.bound = '1';
+        if (photoViewerCloseEl) {
+          photoViewerCloseEl.addEventListener('click', function (e) {
+            e.stopPropagation();
+            closePhotoViewer();
+          });
+        }
+        if (photoViewerPrevEl) {
+          photoViewerPrevEl.addEventListener('click', function (e) {
+            e.stopPropagation();
+            shiftPhotoViewer(-1);
+          });
+        }
+        if (photoViewerNextEl) {
+          photoViewerNextEl.addEventListener('click', function (e) {
+            e.stopPropagation();
+            shiftPhotoViewer(1);
+          });
+        }
+        photoViewerOverlayEl.addEventListener('click', function (e) {
+          if (
+            e.target === photoViewerOverlayEl ||
+            (e.target.classList && e.target.classList.contains('photo-viewer-stage'))
+          ) {
+            closePhotoViewer();
+          }
+        });
+        if (photoViewerImgEl) {
+          photoViewerImgEl.addEventListener('click', function (e) {
+            e.stopPropagation();
+          });
+        }
+        document.addEventListener('keydown', function (e) {
+          if (!photoViewerOverlayEl || photoViewerOverlayEl.classList.contains('hidden')) return;
+          if (e.key === 'Escape') closePhotoViewer();
+          if (e.key === 'ArrowLeft') shiftPhotoViewer(-1);
+          if (e.key === 'ArrowRight') shiftPhotoViewer(1);
+        });
+      }
+
+      if (feedEl && feedEl.dataset.photoViewerBound !== '1') {
+        feedEl.dataset.photoViewerBound = '1';
+        feedEl.addEventListener('click', function (e) {
+          var img = e.target.closest('.media-grid img.media-zoomable');
+          if (!img) return;
+          e.preventDefault();
+          e.stopPropagation();
+          openPhotoViewerFromImg(img);
+        });
       }
 
       function renderComposerAttachments() {
@@ -3613,7 +3839,7 @@
           .map(function (item, idx) {
             return (
               '<div class="composer-attachment">' +
-              '<img src="' +
+              '<img class="media-zoomable" src="' +
               esc(item.previewUrl) +
               '" alt="Фото ' +
               (idx + 1) +
@@ -3783,10 +4009,14 @@
         return [];
       }
 
-      function channelAvatarBlockHtml() {
+      function channelDisplayName() {
         var name =
-          chNameEl && chNameEl.textContent ? String(chNameEl.textContent).trim() : 'Канал';
-        if (!name) name = 'Канал';
+          chNameEl && chNameEl.textContent ? String(chNameEl.textContent).trim() : '';
+        return name || 'Канал';
+      }
+
+      function channelAvatarBlockHtml() {
+        var name = channelDisplayName();
         if (chAvatarEl) {
           var img = chAvatarEl.querySelector('img');
           if (img) {
@@ -3831,16 +4061,15 @@
         isLastReply,
         showChannelAvatar,
         replyToUsername,
-        replyToText
+        replyToText,
+        adminMenuKind
       ) {
         var adminTrim =
           reply && typeof reply.admin_name === 'string' ? reply.admin_name.trim() : '';
-        var replyNameRaw =
-          adminTrim ||
-          (chNameEl && chNameEl.textContent && String(chNameEl.textContent).trim()) ||
-          'Канал';
+        var replyNameRaw = adminTrim || channelDisplayName();
         var replyLabel = escDisplay(replyNameRaw);
-        var adminReplyActs = isLastReply ? buildAdminActionsHtml(commentId, 'reply') : '';
+        var menuKind = adminMenuKind || 'reply';
+        var adminReplyActs = isLastReply ? buildAdminActionsHtml(commentId, menuKind) : '';
         var replyT = reply && reply.timestamp ? parseCommentTimestamp(reply.timestamp) : null;
         var replyClock = formatCommentClock(replyT);
         var replyText = reply && typeof reply.text === 'string' ? reply.text : '';
@@ -3856,7 +4085,10 @@
         var nameHtml = showChannelAvatar
           ? '<div class="tg-name">' + replyLabel + '</div>'
           : '';
-        var quoteHtml = buildReplyQuoteHtml(replyToUsername, replyToText);
+        var quoteHtml = '';
+        if (replyToUsername || replyToText) {
+          quoteHtml = buildReplyQuoteHtml(replyToUsername, replyToText);
+        }
         return (
           '<div class="feed-msg msg-channel msg-out' +
           lastCls +
@@ -3891,7 +4123,41 @@
         return null;
       }
 
+      function buildChannelOnlyCommentGroup(c) {
+        var synthetic = {
+          text: c.text || '',
+          timestamp: c.timestamp,
+          admin_name: c.username,
+          photo_urls: c.photo_urls,
+          reply_id: c.comment_id,
+        };
+        var cts = parseCommentTimestamp(c.timestamp);
+        var dk = cts ? dateKeyLocal(cts) : '';
+        var dkAttr = dk ? ' data-date-key="' + esc(dk) + '"' : '';
+        var channelHtml = buildChannelMsgHtml(
+          synthetic,
+          c.comment_id,
+          true,
+          true,
+          null,
+          null,
+          'comment'
+        );
+        return (
+          '<div class="comment-group has-channel-reply" data-comment-id="' +
+          esc(c.comment_id) +
+          '"' +
+          dkAttr +
+          '>' +
+          channelHtml +
+          '</div>'
+        );
+      }
+
       function buildUserBlock(c) {
+        if (c.posted_as_channel) {
+          return buildChannelOnlyCommentGroup(c);
+        }
         var av = avatarBlockHtml(resolveCommentAvatarUrl(c), c.username);
         var commentMedia = buildMediaGridHtml(c.photo_urls);
         var replies = listCommentReplies(c);
@@ -4680,12 +4946,16 @@
             var optimistic = {
               comment_id: tempId,
               user_id: Number(userId),
-              username: username,
+              username: isAdmin ? channelDisplayName() : username,
               text: text,
               timestamp: new Date().toISOString(),
-              avatar_url: currentUserPhotoUrl || undefined,
               photo_urls: urls.length ? urls : undefined,
             };
+            if (isAdmin) {
+              optimistic.posted_as_channel = true;
+            } else if (currentUserPhotoUrl) {
+              optimistic.avatar_url = currentUserPhotoUrl;
+            }
             if (feedEl.querySelector('.feed-empty')) {
               feedEl.innerHTML = '';
             }
@@ -4704,10 +4974,9 @@
                 post_id: postId,
                 chat_id: Number(chatId),
                 user_id: Number(userId),
-                username: username,
+                username: isAdmin ? channelDisplayName() : username,
                 text: text,
                 photo_urls: urls.length ? urls : undefined,
-                avatar_url: currentUserPhotoUrl || undefined,
               }),
             })
               .then(function (r) {
@@ -4720,8 +4989,27 @@
               })
               .then(function (res) {
                 knownIds.delete(tempId);
-                node.setAttribute('data-comment-id', res.comment_id);
                 knownIds.add(res.comment_id);
+                if (optimistic.posted_as_channel) {
+                  node.remove();
+                  var saved = {
+                    comment_id: res.comment_id,
+                    user_id: Number(userId),
+                    username: res.username || optimistic.username,
+                    text: res.text != null ? res.text : text,
+                    timestamp: res.timestamp || optimistic.timestamp,
+                    photo_urls: res.photo_urls || optimistic.photo_urls,
+                  };
+                  if (res.posted_as_channel) {
+                    saved.posted_as_channel = true;
+                    if (res.avatar_url) saved.avatar_url = res.avatar_url;
+                  } else if (res.avatar_url || currentUserPhotoUrl) {
+                    saved.avatar_url = res.avatar_url || currentUserPhotoUrl;
+                  }
+                  mergeOrUpdateComment(saved);
+                  return;
+                }
+                node.setAttribute('data-comment-id', res.comment_id);
                 var tEl = node.querySelector('.bubble-u .utime');
                 if (tEl && res.timestamp) {
                   var tx = parseCommentTimestamp(res.timestamp);
@@ -4779,17 +5067,28 @@
         composerAttachmentsEl.dataset.bound = '1';
         composerAttachmentsEl.addEventListener('click', function (e) {
           var rm = e.target.closest('[data-remove-photo]');
-          if (!rm) return;
-          var idx = parseInt(rm.getAttribute('data-remove-photo') || '', 10);
-          if (!Number.isFinite(idx) || idx < 0 || idx >= pendingPhotoFiles.length) return;
-          var removed = pendingPhotoFiles.splice(idx, 1)[0];
-          if (removed) {
-            try {
-              URL.revokeObjectURL(removed.previewUrl);
-            } catch (_) {}
+          if (rm) {
+            var idx = parseInt(rm.getAttribute('data-remove-photo') || '', 10);
+            if (!Number.isFinite(idx) || idx < 0 || idx >= pendingPhotoFiles.length) return;
+            var removed = pendingPhotoFiles.splice(idx, 1)[0];
+            if (removed) {
+              try {
+                URL.revokeObjectURL(removed.previewUrl);
+              } catch (_) {}
+            }
+            renderComposerAttachments();
+            updateSendEnabled();
+            return;
           }
-          renderComposerAttachments();
-          updateSendEnabled();
+          var img = e.target.closest('.composer-attachment img.media-zoomable');
+          if (!img) return;
+          e.preventDefault();
+          e.stopPropagation();
+          var urls = pendingPhotoFiles.map(function (item) {
+            return item.previewUrl;
+          });
+          var startIdx = urls.indexOf(photoViewerSrc(img));
+          openPhotoViewer(urls, startIdx >= 0 ? startIdx : 0);
         });
       }
       if (replyBannerCloseEl && !replyBannerCloseEl.dataset.bound) {
