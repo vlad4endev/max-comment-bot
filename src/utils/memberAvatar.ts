@@ -79,3 +79,47 @@ export async function resolveMemberAvatarUrls(
   }
   return out
 }
+
+/**
+ * Display name for a user (e.g. who replied as channel): `name` from channel membership,
+ * then from remembered private dialog with the bot.
+ */
+export async function resolveMemberDisplayName(
+  bot: Bot,
+  channelChatId: number,
+  userId: number,
+): Promise<string | null> {
+  if (!Number.isFinite(userId) || userId <= 0) {
+    return null
+  }
+  try {
+    const { members } = await bot.api.getChatMembers(channelChatId, { user_ids: [userId] })
+    const n = members[0]?.name?.trim()
+    if (n) {
+      return n
+    }
+  } catch (err: unknown) {
+    logger.debug('resolveMemberDisplayName: channel getChatMembers failed', {
+      channelChatId,
+      userId,
+      err,
+    })
+  }
+  const priv = stateManager.getUserPrivateChatId(userId)
+  if (priv !== undefined) {
+    try {
+      const { members } = await bot.api.getChatMembers(priv, { user_ids: [userId] })
+      const n = members[0]?.name?.trim()
+      if (n) {
+        return n
+      }
+    } catch (err: unknown) {
+      logger.debug('resolveMemberDisplayName: private getChatMembers failed', {
+        priv,
+        userId,
+        err,
+      })
+    }
+  }
+  return null
+}

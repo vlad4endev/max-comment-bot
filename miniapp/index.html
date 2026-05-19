@@ -3533,7 +3533,13 @@
       }
 
       function buildReplyBlockHtml(c) {
-        var replyLabel = 'от канала';
+        var adminTrim =
+          c.reply && typeof c.reply.admin_name === 'string' ? c.reply.admin_name.trim() : '';
+        var replyNameRaw =
+          adminTrim ||
+          (chNameEl && chNameEl.textContent && String(chNameEl.textContent).trim()) ||
+          'Канал';
+        var replyLabel = escDisplay(replyNameRaw);
         var adminReplyActs = buildAdminActionsHtml(c.comment_id, 'reply');
         var replyT = c.reply && c.reply.timestamp ? parseCommentTimestamp(c.reply.timestamp) : null;
         var replyClock = formatCommentClock(replyT);
@@ -4019,18 +4025,31 @@
         });
       }
 
+      function postApiQuery() {
+        var parts = [];
+        if (chatId) parts.push('chat_id=' + encodeURIComponent(chatId));
+        var mid = params.get('message_mid');
+        if (mid) parts.push('message_mid=' + encodeURIComponent(mid));
+        return parts.length ? '?' + parts.join('&') : '';
+      }
+
       function loadPost() {
         if (!postId) {
           setErr('Нет post_id');
           postPreviewTextEl.textContent = '';
-          return Promise.resolve();
+          return Promise.resolve(false);
         }
-        return fetch('/api/post/' + encodeURIComponent(postId))
+        return fetch('/api/post/' + encodeURIComponent(postId) + postApiQuery())
           .then(function (r) {
-            if (!r.ok) throw new Error('Пост не найден');
+            if (r.status === 404) throw new Error('Пост не найден. Откройте комментарии с кнопки под постом или обновите кнопки в админке.');
+            if (!r.ok) throw new Error('Не удалось загрузить пост');
             return r.json();
           })
           .then(function (p) {
+            if (p.post_id && p.post_id !== postId) {
+              postId = p.post_id;
+              currentPostId = p.post_id;
+            }
             setChannelHeader(p.channel_title, p.channel_avatar_url);
             postPreviewTextEl.textContent =
               p.text && p.text.trim() ? normalizeDisplayText(p.text) : '\u00a0';
@@ -4045,17 +4064,20 @@
               postCommentCount = p.comment_count;
               updateBadgeFromCount(postCommentCount);
             }
+            return true;
           })
           .catch(function (e) {
             setErr(e.message || String(e));
             postPreviewTextEl.textContent = '';
+            return false;
           });
       }
 
       function loadComments(initial) {
         if (!postId) return Promise.resolve();
-        return fetch('/api/comments/' + encodeURIComponent(postId))
+        return fetch('/api/comments/' + encodeURIComponent(postId) + postApiQuery())
           .then(function (r) {
+            if (r.status === 404) throw new Error('Пост не найден. Откройте комментарии с кнопки под постом.');
             if (!r.ok) throw new Error('Не удалось загрузить комментарии');
             return r.json();
           })
@@ -4304,7 +4326,8 @@
 
       updateSendEnabled();
 
-      loadPost().then(function () {
+      loadPost().then(function (ok) {
+        if (!ok) return;
         fetch(
           '/api/channel-settings?chat_id=' +
             encodeURIComponent(chatId) +

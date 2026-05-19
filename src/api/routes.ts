@@ -37,7 +37,7 @@ import {
   userMiniappSettingsStore,
 } from '../services/userMiniappSettingsStore'
 import { fullyRemoveUserFromBot } from '../services/userAccessCleanup'
-import { resolveMemberAvatarUrls } from '../utils/memberAvatar'
+import { resolveMemberAvatarUrls, resolveMemberDisplayName } from '../utils/memberAvatar'
 import { logger } from '../utils/logger'
 
 export interface CommentApiRouterDeps {
@@ -800,8 +800,30 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
     }
   })
 
+  function resolvePostForMiniApp(postId: string, chatIdRaw: number | null, messageMid: string | null) {
+    const direct = postStore.getPost(postId)
+    if (direct) {
+      return direct
+    }
+    if (chatIdRaw !== null && messageMid) {
+      const byMid = postStore.findPostByChannelMessage(chatIdRaw, messageMid)
+      if (byMid) {
+        logger.info('GET /post: resolved by message_mid', {
+          requestedPostId: postId,
+          postId: byMid.post_id,
+          chatId: chatIdRaw,
+          messageMid,
+        })
+        return byMid
+      }
+    }
+    return null
+  }
+
   router.get('/post/:postId', async (req, res) => {
-    const post = postStore.getPost(req.params.postId)
+    const chatIdRaw = parseNonZeroInt(req.query.chat_id)
+    const messageMid = parseNonEmptyString(req.query.message_mid)
+    const post = resolvePostForMiniApp(req.params.postId, chatIdRaw, messageMid)
     if (!post) {
       res.status(404).json({ error: 'post not found' })
       return
@@ -836,17 +858,20 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
 
   router.get('/comments/:postId', async (req, res) => {
     const postId = req.params.postId
-    const post = postStore.getPost(postId)
+    const chatIdRaw = parseNonZeroInt(req.query.chat_id)
+    const messageMid = parseNonEmptyString(req.query.message_mid)
+    const post = resolvePostForMiniApp(postId, chatIdRaw, messageMid)
     if (!post) {
       res.status(404).json({ error: 'post not found' })
       return
     }
+    const resolvedPostId = post.post_id
     try {
-      const comments = commentStore.getComments(postId)
+      const comments = commentStore.getComments(resolvedPostId)
       const enriched = await enrichCommentsWithAvatars(deps.bot, post.chat_id, comments)
       res.json(enriched.map(toWireComment))
     } catch (err: unknown) {
-      logger.error('GET /api/comments/:postId failed', { postId, err })
+      logger.error('GET /api/comments/:postId failed', { postId: resolvedPostId, err })
       res.status(500).json({ error: 'internal error' })
     }
   })
@@ -964,12 +989,14 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
     }
     const channelReplyName =
       channelRegistry.getChannel(chatId)?.title?.trim() || 'Канал'
-    const replierNameForStatus = 'канал'
 
     if (!(await isUserChannelAdmin(deps.bot, post.chat_id, replierUserId))) {
       res.status(403).json({ error: 'Только администраторы могут отвечать' })
       return
     }
+
+    const replierNameForStatus =
+      (await resolveMemberDisplayName(deps.bot, post.chat_id, replierUserId)) ?? 'администратор'
 
     const existing = commentStore.getComment(commentId)
     if (!existing || existing.post_id !== postId) {
