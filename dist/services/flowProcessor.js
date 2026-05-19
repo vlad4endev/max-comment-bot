@@ -28,6 +28,9 @@ class FlowProcessor {
         }
         this.started = true;
         logger_1.logger.info('flowProcessor: started', { flowCount: flows.length });
+        if (flows.length === 0) {
+            logger_1.logger.warn('flowProcessor: нет активных потоков (TG→MAX). Подключите Telegram в /admin → Интеграции и создайте поток; данные: data/integrations.json');
+        }
     }
     async reload() {
         this.stopPollers();

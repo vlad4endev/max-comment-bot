@@ -175,9 +175,8 @@ export function createIntegrationsRouter(deps: IntegrationsRouterDeps): express.
       try {
         await upsertRootEnvVar('TG_TOKEN', token)
       } catch (err: unknown) {
-        logger.error('integrations: failed to sync TG_TOKEN to .env', err)
-        res.status(500).json({ error: 'Не удалось сохранить TG_TOKEN в .env' })
-        return
+        // Токен уже в integrations.json; в Docker .env часто не на volume.
+        logger.warn('integrations: TG_TOKEN не записан в .env (токен сохранён в integrations.json)', err)
       }
     }
 

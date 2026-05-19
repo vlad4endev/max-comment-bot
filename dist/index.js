@@ -50,6 +50,8 @@ async function main() {
     flowProcessor_1.flowProcessor.setBot(bot);
     (0, logger_1.startRuntimeLogRotationScheduler)();
     (0, channelPoller_1.startChannelPostPoller)(bot);
+    // До HTTP: иначе при EADDRINUSE channelPoller уже в логах, а flowProcessor — нет.
+    await flowProcessor_1.flowProcessor.start();
     const channelCount = channelRegistry_1.channelRegistry
         .getAllChannels()
         .filter((c) => c.type === 'channel').length;
@@ -75,7 +77,6 @@ async function main() {
             server.once('error', reject);
         });
         logger_1.logger.info(`HTTP слушает 0.0.0.0:${listenPort}, webhook: POST ${webhookPath}, /api, /miniapp`);
-        await flowProcessor_1.flowProcessor.start();
         try {
             await (0, subscriptions_1.setWebhookSubscription)({
                 token: config_1.config.BOT_TOKEN,
@@ -104,7 +105,6 @@ async function main() {
             server.once('error', reject);
         });
         logger_1.logger.info(`HTTP слушает 0.0.0.0:${listenPort} (/api, /miniapp); long polling для updates`);
-        await flowProcessor_1.flowProcessor.start();
         (0, bot_1.setupGracefulShutdown)(bot, {
             receiveMode: 'polling',
             httpServer: server,

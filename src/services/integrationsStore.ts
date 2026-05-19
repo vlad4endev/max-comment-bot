@@ -262,11 +262,20 @@ class IntegrationsStore {
       }
     } catch (err: unknown) {
       const code = (err as NodeJS.ErrnoException)?.code
-      if (code !== 'ENOENT') {
+      if (code === 'ENOENT') {
+        await this.persist()
+        logger.info('integrationsStore: created empty data/integrations.json')
+      } else {
         logger.warn('integrationsStore: load failed, using empty', err)
       }
     }
     this.loaded = true
+  }
+
+  /** Перечитать файл с диска (после ручного редактирования data/integrations.json). */
+  async reloadFromDisk(): Promise<void> {
+    this.loaded = false
+    await this.load()
   }
 
   private async persist(): Promise<void> {
