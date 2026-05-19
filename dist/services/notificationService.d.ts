@@ -35,8 +35,8 @@ export declare function notifyAdminsNewMiniappComment(bot: Bot, input: {
     postId: string;
 }): Promise<void>;
 /**
- * Текст одного DM админу: исходное «новый комментарий» без изменений + короткая пометка.
- * Полная переписка — только в миниаппе.
+ * Текст одного DM админу: исходное «новый комментарий» без изменений.
+ * Статус «отвечено» — на инлайн-кнопке после ответа канала.
  */
 export declare function buildAdminCommentNotificationBody(comment: Comment): string | null;
 /**

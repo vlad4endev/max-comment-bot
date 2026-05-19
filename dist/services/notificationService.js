@@ -216,37 +216,30 @@ async function notifyAdminsNewMiniappComment(bot, input) {
         commentStore_1.commentStore.saveNotificationMid(input.commentId, admin_id, message_mid);
     }
 }
-function channelReplyCountLabel(n) {
-    const m10 = n % 10;
-    const m100 = n % 100;
-    if (m10 === 1 && m100 !== 11) {
-        return `${n} ответ`;
-    }
-    if (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) {
-        return `${n} ответа`;
-    }
-    return `${n} ответов`;
-}
 function countChannelReplies(comment) {
     if (Array.isArray(comment.replies) && comment.replies.length > 0) {
         return comment.replies.length;
     }
     return comment.reply ? 1 : 0;
 }
+function isCommentAnsweredByChannel(comment) {
+    return countChannelReplies(comment) > 0;
+}
+function buildAdminCommentNotificationKeyboard(postId, channelChatId, answered) {
+    const openUrl = (0, postStore_1.buildMiniAppUrl)(postId, channelChatId, { admin: '1' });
+    const label = answered ? '✅ Отвечено' : '💬 Открыть комментарии';
+    return max_bot_api_1.Keyboard.inlineKeyboard([[max_bot_api_1.Keyboard.button.link(label, openUrl)]]);
+}
 /**
- * Текст одного DM админу: исходное «новый комментарий» без изменений + короткая пометка.
- * Полная переписка — только в миниаппе.
+ * Текст одного DM админу: исходное «новый комментарий» без изменений.
+ * Статус «отвечено» — на инлайн-кнопке после ответа канала.
  */
 function buildAdminCommentNotificationBody(comment) {
     const base = comment.notification_text?.trim();
     if (!base) {
         return null;
     }
-    const replyCount = countChannelReplies(comment);
-    if (replyCount === 0) {
-        return base;
-    }
-    return `${base}\n\n💬 Канал ответил (${channelReplyCountLabel(replyCount)}). Переписка — в комментариях.`;
+    return base;
 }
 /**
  * Обновляет одно и то же уведомление админам о комментарии (дописывает хронологию ответов).
@@ -267,8 +260,8 @@ async function syncAdminCommentNotification(bot, comment, postId, channelChatId)
         logger_1.logger.warn('syncAdminCommentNotification: BOT_NICKNAME / MINI_APP_URL not set for Mini App links');
         return;
     }
-    const openUrl = (0, postStore_1.buildMiniAppUrl)(postId, channelChatId, { admin: '1' });
-    const keyboard = max_bot_api_1.Keyboard.inlineKeyboard([[max_bot_api_1.Keyboard.button.link('💬 Открыть комментарии', openUrl)]]);
+    const answered = isCommentAnsweredByChannel(comment);
+    const keyboard = buildAdminCommentNotificationKeyboard(postId, channelChatId, answered);
     for (const { admin_id, message_mid } of mids) {
         try {
             await bot.api.editMessage(message_mid, {
