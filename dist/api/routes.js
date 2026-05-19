@@ -21,6 +21,7 @@ const postStore_1 = require("../services/postStore");
 const stateManager_1 = require("../services/stateManager");
 const userMiniappSettingsStore_1 = require("../services/userMiniappSettingsStore");
 const userAccessCleanup_1 = require("../services/userAccessCleanup");
+const memberAvatar_1 = require("../utils/memberAvatar");
 const logger_1 = require("../utils/logger");
 function isRecord(value) {
     return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -143,8 +144,35 @@ function toWireComment(c) {
         username: c.username,
         text: c.text,
         timestamp: c.timestamp,
+        ...(c.avatar_url ? { avatar_url: c.avatar_url } : {}),
         reply: c.reply,
     };
+}
+async function enrichCommentsWithAvatars(bot, channelChatId, comments) {
+    const missingUserIds = new Set();
+    for (const c of comments) {
+        if (!c.avatar_url?.trim()) {
+            missingUserIds.add(c.user_id);
+        }
+    }
+    if (missingUserIds.size === 0) {
+        return comments;
+    }
+    const urls = await (0, memberAvatar_1.resolveMemberAvatarUrls)(bot, channelChatId, [...missingUserIds]);
+    if (urls.size === 0) {
+        return comments;
+    }
+    for (const c of comments) {
+        if (c.avatar_url?.trim()) {
+            continue;
+        }
+        const url = urls.get(c.user_id);
+        if (url) {
+            commentStore_1.commentStore.setCommentAvatarUrl(c.comment_id, url);
+            c.avatar_url = url;
+        }
+    }
+    return comments;
 }
 function parseAdminModerationBody(body) {
     if (!isRecord(body)) {
@@ -638,9 +666,22 @@ function createCommentApiRouter(deps) {
             channel_avatar_url,
         });
     });
-    router.get('/comments/:postId', (req, res) => {
-        const list = commentStore_1.commentStore.getComments(req.params.postId).map(toWireComment);
-        res.json(list);
+    router.get('/comments/:postId', async (req, res) => {
+        const postId = req.params.postId;
+        const post = postStore_1.postStore.getPost(postId);
+        if (!post) {
+            res.status(404).json({ error: 'post not found' });
+            return;
+        }
+        try {
+            const comments = commentStore_1.commentStore.getComments(postId);
+            const enriched = await enrichCommentsWithAvatars(deps.bot, post.chat_id, comments);
+            res.json(enriched.map(toWireComment));
+        }
+        catch (err) {
+            logger_1.logger.error('GET /api/comments/:postId failed', { postId, err });
+            res.status(500).json({ error: 'internal error' });
+        }
     });
     router.post('/comment', async (req, res) => {
         const body = req.body;
@@ -653,6 +694,7 @@ function createCommentApiRouter(deps) {
         const userId = parsePositiveInt(body.user_id);
         const username = parseNonEmptyString(body.username);
         const text = parseNonEmptyString(body.text);
+        const avatarFromClient = parseNonEmptyString(body.avatar_url) ?? parseNonEmptyString(body.photo_url);
         if (!postId || !chatId || !userId || !username || !text) {
             res.status(400).json({ error: 'missing or invalid fields' });
             return;
@@ -666,11 +708,17 @@ function createCommentApiRouter(deps) {
             res.status(403).json({ error: 'Доступ запрещён' });
             return;
         }
+        let avatarUrl = avatarFromClient;
+        if (!avatarUrl) {
+            const resolved = await (0, memberAvatar_1.resolveMemberAvatarUrls)(deps.bot, chatId, [userId]);
+            avatarUrl = resolved.get(userId) ?? null;
+        }
         const saved = commentStore_1.commentStore.saveComment({
             post_id: postId,
             user_id: userId,
             username,
             text,
+            ...(avatarUrl ? { avatar_url: avatarUrl } : {}),
         });
         const newCount = postStore_1.postStore.incrementCommentCount(postId);
         if (newCount === null) {

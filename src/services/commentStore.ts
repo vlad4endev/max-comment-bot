@@ -30,6 +30,8 @@ export interface Comment {
   username: string
   text: string
   timestamp: string
+  /** Author profile photo (MAX `avatar_url` / `full_avatar_url`). */
+  avatar_url?: string
   reply?: CommentReply
   /** Original admin-notification body (before «✅ Отвечено» line is appended). */
   notification_text?: string
@@ -93,6 +95,9 @@ function normalizeCommentFromDisk(raw: unknown): Comment | null {
   if (o.notification_text !== undefined && typeof o.notification_text !== 'string') {
     return null
   }
+  if (o.avatar_url !== undefined && typeof o.avatar_url !== 'string') {
+    return null
+  }
   if (o.notification_mids !== undefined) {
     if (!Array.isArray(o.notification_mids)) {
       return null
@@ -110,6 +115,9 @@ function normalizeCommentFromDisk(raw: unknown): Comment | null {
     username: o.username,
     text: o.text,
     timestamp: o.timestamp,
+    ...(typeof o.avatar_url === 'string' && o.avatar_url.trim()
+      ? { avatar_url: o.avatar_url.trim() }
+      : {}),
     ...(o.reply !== undefined ? { reply: o.reply as CommentReply } : {}),
     ...(o.notification_text !== undefined
       ? { notification_text: o.notification_text }
@@ -195,6 +203,21 @@ export class CommentStore {
     c.text = text
     this.saveRow(c)
     logger.info(`commentStore: updated text ${commentId}`)
+    return c
+  }
+
+  /** Persists author avatar URL when resolved from MAX API or Mini App. */
+  setCommentAvatarUrl(commentId: string, avatarUrl: string): Comment | null {
+    const c = this.getComment(commentId)
+    if (!c) {
+      return null
+    }
+    const trimmed = avatarUrl.trim()
+    if (!trimmed || c.avatar_url === trimmed) {
+      return c
+    }
+    c.avatar_url = trimmed
+    this.saveRow(c)
     return c
   }
 
