@@ -11,6 +11,8 @@
   var flowsCache = [];
   var intMaxMeta = null;
   var tgLinkedChatsCache = [];
+  var maxLinkedChatsCache = [];
+  var maxChannelsRefreshedAt = null;
   var currentRoute = '';
   var dashRefreshTimer = null;
   var logsRefreshTimer = null;
@@ -561,6 +563,174 @@
       '"><i data-lucide="refresh-cw"></i> Обновить</button></div></div>' +
       (updatedAt ? '<div class="muted text-sm mb-sm">' + esc(updatedAt) + '</div>' : '') +
       renderTelegramChatsListHtml(list);
+  }
+
+  function fetchMaxLinkedChannels(refresh) {
+    var q = refresh ? '?refresh=1' : '';
+    return getJsonAbs(API_INTEGRATIONS + '/max/linked-channels' + q).then(function (data) {
+      maxLinkedChatsCache = data.channels || [];
+      maxChannelsRefreshedAt = data.refreshedAt || null;
+      intMaxMeta = {
+        channelCount: data.channelCount != null ? data.channelCount : maxLinkedChatsCache.length,
+        tokenPreview: data.tokenPreview || (intMaxMeta && intMaxMeta.tokenPreview) || '',
+        channels: maxLinkedChatsCache,
+        adminCount: data.adminCount,
+      };
+      return data;
+    });
+  }
+
+  function maxChannelAccessLabel(access) {
+    if (access === 'ok') return 'админ';
+    if (access === 'bot_not_admin') return 'не админ';
+    if (access === 'bot_not_in_chat') return 'бот не в канале';
+    return 'недоступен';
+  }
+
+  function renderMaxChatsListHtml(chats) {
+    if (!chats || !chats.length) {
+      return (
+        '<div class="tg-chats-empty muted">' +
+        'Каналы не найдены. Добавьте бота администратором в MAX-канал — после подключения нажмите «Загрузить».' +
+        '</div>'
+      );
+    }
+    var adminChats = chats.filter(function (ch) {
+      return ch.botIsAdmin === true;
+    });
+    var otherChats = chats.filter(function (ch) {
+      return ch.botIsAdmin !== true;
+    });
+    var html = '';
+    function itemHtml(ch) {
+      var meta =
+        (ch.type === 'channel' ? 'канал' : ch.type || 'чат') +
+        ' · ' +
+        maxChannelAccessLabel(ch.access) +
+        ' · ID ' +
+        ch.id;
+      return (
+        '<li class="tg-chat-item' +
+        (ch.botIsAdmin ? ' tg-chat-item--admin' : '') +
+        '"><div class="tg-chat-main"><strong>' +
+        esc(ch.title) +
+        '</strong></div><div class="tg-chat-meta muted">' +
+        esc(meta) +
+        '</div><button type="button" class="btn btn-ghost btn-sm" data-copy-max-channel="' +
+        esc(ch.id) +
+        '">Копировать ID</button></li>'
+      );
+    }
+    if (adminChats.length) {
+      html +=
+        '<div class="tg-chats-section-label muted text-sm">Где бот администратор (' +
+        adminChats.length +
+        ')</div><ul class="tg-chats-list">';
+      adminChats.forEach(function (ch) {
+        html += itemHtml(ch);
+      });
+      html += '</ul>';
+    }
+    if (otherChats.length) {
+      html +=
+        '<div class="tg-chats-section-label muted text-sm" style="margin-top:10px">Прочие (' +
+        otherChats.length +
+        ')</div><ul class="tg-chats-list">';
+      otherChats.forEach(function (ch) {
+        html += itemHtml(ch);
+      });
+      html += '</ul>';
+    }
+    return html;
+  }
+
+  function mountMaxChatsPanel(panel, chats) {
+    if (!panel) return;
+    var list = chats || [];
+    var updatedAt = maxChannelsRefreshedAt
+      ? 'Обновлено: ' + fmtRelativeTime(maxChannelsRefreshedAt)
+      : '';
+    panel.innerHTML =
+      '<div class="tg-chats-panel-head flex-between">' +
+      '<div><div class="tg-chats-title">Привязанные MAX-каналы</div>' +
+      '<div class="muted text-sm">Каналы из реестра бота (потоки, комментарии, автопостинг)</div></div>' +
+      '<div class="tg-chats-actions"><button type="button" class="btn btn-primary btn-sm" data-refresh-max-chats="1"><i data-lucide="download"></i> Загрузить</button>' +
+      '<button type="button" class="btn btn-ghost btn-sm" data-refresh-max-chats="1"><i data-lucide="refresh-cw"></i> Обновить</button></div></div>' +
+      (updatedAt ? '<div class="muted text-sm mb-sm">' + esc(updatedAt) + '</div>' : '') +
+      renderMaxChatsListHtml(list);
+  }
+
+  function bindMaxChatsPanel(panel) {
+    if (!panel) return;
+    qsa('[data-copy-max-channel]', panel).forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var v = btn.getAttribute('data-copy-max-channel') || '';
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(v).then(function () {
+            showToast('Скопировано: ' + v, 'success');
+          });
+        } else {
+          showToast(v, 'info');
+        }
+      });
+    });
+    qsa('[data-refresh-max-chats]', panel).forEach(function (ref) {
+      ref.addEventListener('click', function () {
+        qsa('[data-refresh-max-chats]', panel).forEach(function (b) {
+          b.disabled = true;
+        });
+        fetchMaxLinkedChannels(true)
+          .then(function (data) {
+            mountMaxChatsPanel(panel, data.channels || []);
+            bindMaxChatsPanel(panel);
+            refreshIcons();
+            var n = (data.channels || []).length;
+            var admins = data.adminCount != null ? data.adminCount : 0;
+            var msg = n
+              ? 'Каналов MAX: ' + n + (admins ? ', админ: ' + admins : '')
+              : data.hint || 'Каналы не найдены';
+            showToast(msg, n ? 'success' : 'info');
+            var metaEl = qs('[data-max-channels-meta]');
+            if (metaEl) {
+              metaEl.innerHTML =
+                '<span>Каналов: <strong>' +
+                esc(String(n)) +
+                '</strong> (админ: <strong>' +
+                esc(String(admins)) +
+                '</strong>)</span><span>Bot Token: <code>••••••••' +
+                esc((intMaxMeta && intMaxMeta.tokenPreview) || '') +
+                '</code></span>';
+            }
+          })
+          .catch(function (e) {
+            showToast(e.message || 'Ошибка', 'error');
+          })
+          .finally(function () {
+            qsa('[data-refresh-max-chats]', panel).forEach(function (b) {
+              b.disabled = false;
+            });
+          });
+      });
+    });
+  }
+
+  function maxIntegrationCardHtml(meta) {
+    var channels = maxLinkedChatsCache.length ? maxLinkedChatsCache : (meta && meta.channels) || [];
+    var adminCount = channels.filter(function (c) {
+      return c.botIsAdmin === true;
+    }).length;
+    var tokenPreview = (meta && meta.tokenPreview) || '';
+    return (
+      '<div class="integration-card connected"><div class="int-card-header"><div class="int-logo max">М</div><div class="int-info"><div class="int-name">MAX</div><div class="int-desc">Основная платформа — подключён</div></div><span class="int-status connected"><i data-lucide="circle-check"></i> Подключён</span></div>' +
+      '<div class="int-meta" data-max-channels-meta><span>Каналов: <strong>' +
+      esc(String(channels.length)) +
+      '</strong>' +
+      (channels.length ? ' (админ: <strong>' + esc(String(adminCount)) + '</strong>)' : '') +
+      '</span><span>Bot Token: <code>••••••••' +
+      esc(tokenPreview) +
+      '</code></span></div>' +
+      '<div class="tg-chats-panel-wrap" data-max-chats-panel="1"></div></div>'
+    );
   }
 
   function bindTelegramChatsPanel(panel) {
@@ -1579,32 +1749,137 @@
       });
   }
 
+  function buildMaxChannelSelectOptions(channels) {
+    if (!channels || !channels.length) {
+      return '<option value="">— нет каналов MAX (загрузите в «Интеграции») —</option>';
+    }
+    var opts = '<option value="">— выберите канал MAX —</option>';
+    channels.forEach(function (ch) {
+      var label = (ch.title || 'Канал') + ' · ID ' + ch.id;
+      if (ch.botIsAdmin) label += ' · админ';
+      opts += '<option value="' + esc(String(ch.id)) + '">' + esc(label) + '</option>';
+    });
+    return opts;
+  }
+
   function renderChannelImport() {
     var main = qs('#mainContent');
     if (!main) return;
     clearChannelImportPoll();
     channelImportJobId = null;
+    main.innerHTML = '<div class="dash-loading muted">Загрузка каналов…</div>';
 
-    var html = '<div class="card-like mb-md forwarding-section" id="forwarding-section">';
-    html += '<h2 class="forwarding-section-title">Импорт канала Telegram → MAX</h2>';
-    html +=
-      '<p class="muted text-sm" style="margin:0 0 16px;line-height:1.45">Укажите Telegram-канал и ID канала MAX (бот MAX — админ в MAX-канале). Reader-бот <code>TG_READER_BOT_TOKEN</code> — админ в TG-канале. Нажмите <strong>Запустить анализ</strong>: соберём посты (текст, фото, видео, документы) из <em>очереди обновлений</em> Telegram. Полный архив канала через Bot API получить нельзя — только то, что ещё не «подтверждено» сервером Telegram для бота.</p>';
-    html += '<div class="forwarding-add-form">';
-    html += '<input type="text" class="input" id="ci_tg" placeholder="@telegram_channel" />';
-    html += '<input type="text" class="input" id="ci_max" placeholder="MAX Channel ID" />';
-    html += '<button type="button" class="btn btn-primary" id="ci_start">Запустить анализ</button>';
-    html += '<button type="button" class="btn btn-ghost" id="ci_cancel_job" disabled>Отменить задачу</button>';
-    html += '</div>';
-    html += '<div class="mt-md"><span class="muted">Статус: </span><strong id="ci_status">—</strong></div>';
-    html += '<div class="mt-sm"><span class="muted">Подготовлено постов: </span><strong id="ci_count">0</strong></div>';
-    html +=
-      '<div id="ci_ready_block" class="hidden mt-md" style="padding:14px;border:1px solid var(--accent-border);border-radius:var(--radius-md);background:var(--accent-muted)">';
-    html += '<p id="ci_ready_txt" class="text-sm" style="margin:0 0 10px"></p>';
-    html += '<button type="button" class="btn btn-primary" id="ci_publish">Опубликовать в MAX</button>';
-    html += '</div>';
-    html += '</div>';
-    main.innerHTML = html;
+    Promise.all([
+      fetchMaxLinkedChannels(false).catch(function () {
+        return { channels: maxLinkedChatsCache };
+      }),
+      fetchTelegramLinkedChats(false).catch(function () {
+        return { channels: tgLinkedChatsCache };
+      }),
+    ])
+      .then(function (bundle) {
+        if (currentRoute !== 'channelimport') return;
+        var maxChannels = bundle[0].channels || maxLinkedChatsCache || [];
+        var tgChats = bundle[1].channels || tgLinkedChatsCache || [];
 
+        var html = '<div class="card-like mb-md forwarding-section" id="forwarding-section">';
+        html += '<h2 class="forwarding-section-title">Импорт канала Telegram → MAX</h2>';
+        html +=
+          '<p class="muted text-sm" style="margin:0 0 16px;line-height:1.45">Выберите Telegram-канал из интеграции и MAX-канал, где бот администратор. Reader-бот <code>TG_READER_BOT_TOKEN</code> должен быть админом в том же TG-канале. <strong>Запустить анализ</strong> соберёт посты из <em>очереди обновлений</em> Telegram (полный архив через Bot API недоступен).</p>';
+        html += '<div class="forwarding-add-form forwarding-add-form--picks">';
+        html +=
+          '<div class="form-group"><div class="flex-between" style="align-items:center;gap:8px;margin-bottom:6px"><label style="margin:0">Канал MAX</label><button type="button" class="btn btn-ghost btn-sm" id="ci_refresh_max"><i data-lucide="refresh-cw"></i> Обновить</button></div><select class="select" id="ci_max">' +
+          buildMaxChannelSelectOptions(maxChannels) +
+          '</select></div>';
+        html +=
+          '<div class="form-group" id="ci_tg_wrap"><div class="flex-between" style="align-items:center;gap:8px;margin-bottom:6px"><label style="margin:0">Telegram-канал / чат</label><button type="button" class="btn btn-ghost btn-sm" id="ci_refresh_tg"><i data-lucide="refresh-cw"></i> Обновить</button></div>' +
+          buildTelegramChannelSelect('ci_tg_select', tgChats, 'ci_tg_manual') +
+          '</div>';
+        html += '<div class="forwarding-add-form-actions">';
+        html += '<button type="button" class="btn btn-primary" id="ci_start">Запустить анализ</button>';
+        html += '<button type="button" class="btn btn-ghost" id="ci_cancel_job" disabled>Отменить задачу</button>';
+        html += '</div>';
+        html += '</div>';
+        html += '<div class="mt-md"><span class="muted">Статус: </span><strong id="ci_status">—</strong></div>';
+        html += '<div class="mt-sm"><span class="muted">Подготовлено постов: </span><strong id="ci_count">0</strong></div>';
+        html +=
+          '<div id="ci_ready_block" class="hidden mt-md" style="padding:14px;border:1px solid var(--accent-border);border-radius:var(--radius-md);background:var(--accent-muted)">';
+        html += '<p id="ci_ready_txt" class="text-sm" style="margin:0 0 10px"></p>';
+        html += '<button type="button" class="btn btn-primary" id="ci_publish">Опубликовать в MAX</button>';
+        html += '</div>';
+        html += '</div>';
+        main.innerHTML = html;
+
+        var refreshMaxBtn = qs('#ci_refresh_max', main);
+        if (refreshMaxBtn) {
+          refreshMaxBtn.addEventListener('click', function () {
+            refreshMaxBtn.disabled = true;
+            fetchMaxLinkedChannels(true)
+              .then(function (data) {
+                var sel = qs('#ci_max', main);
+                if (sel) sel.innerHTML = buildMaxChannelSelectOptions(data.channels || []);
+                var n = (data.channels || []).length;
+                showToast(
+                  n ? 'Список MAX обновлён: ' + n : data.hint || 'Каналы не найдены',
+                  n ? 'success' : 'info',
+                );
+              })
+              .catch(function (e) {
+                showToast(e.message || 'Ошибка', 'error');
+              })
+              .finally(function () {
+                refreshMaxBtn.disabled = false;
+              });
+          });
+        }
+
+        var refreshTgBtn = qs('#ci_refresh_tg', main);
+        if (refreshTgBtn) {
+          refreshTgBtn.addEventListener('click', function () {
+            refreshTgBtn.disabled = true;
+            fetchTelegramLinkedChats(true)
+              .then(function (data) {
+                var wrap = qs('#ci_tg_wrap', main);
+                if (wrap) {
+                  var labelRow = wrap.querySelector('.flex-between');
+                  wrap.innerHTML = '';
+                  if (labelRow) wrap.appendChild(labelRow);
+                  var frag = document.createElement('div');
+                  frag.innerHTML = buildTelegramChannelSelect(
+                    'ci_tg_select',
+                    data.channels || [],
+                    'ci_tg_manual',
+                  );
+                  while (frag.firstChild) wrap.appendChild(frag.firstChild);
+                }
+                var n = (data.channels || []).length;
+                showToast(
+                  n ? 'Список Telegram обновлён: ' + n : data.hint || 'Чаты не найдены',
+                  n ? 'success' : 'info',
+                );
+              })
+              .catch(function (e) {
+                showToast(e.message || 'Ошибка', 'error');
+              })
+              .finally(function () {
+                refreshTgBtn.disabled = false;
+                refreshIcons();
+              });
+          });
+        }
+
+        bindChannelImportHandlers(main);
+        refreshIcons();
+      })
+      .catch(function (err) {
+        if (err && err.message === 'auth') return;
+        if (currentRoute !== 'channelimport') return;
+        main.innerHTML =
+          '<p class="muted">Не удалось загрузить списки каналов: ' + esc(err.message || '') + '</p>';
+      });
+  }
+
+  function bindChannelImportHandlers(main) {
     var readyBlock = qs('#ci_ready_block', main);
     var publishBtn = qs('#ci_publish', main);
 
@@ -1667,10 +1942,10 @@
     }
 
     qs('#ci_start', main).addEventListener('click', function () {
-      var tg = (qs('#ci_tg', main).value || '').trim();
+      var tg = readTelegramChannelPick('ci_tg_select', 'ci_tg_manual', main);
       var maxId = (qs('#ci_max', main).value || '').trim();
       if (!tg || !maxId) {
-        alert('Заполните оба поля');
+        showToast('Выберите Telegram- и MAX-канал', 'error');
         return;
       }
       postJsonAbs(API_CHANNEL_IMPORT + '/jobs', { tg_channel: tg, max_channel_id: maxId })
@@ -1958,11 +2233,11 @@
           html += integrationCardHtml('telegram', 'Telegram Bot', 'Получение постов из каналов, отправка в MAX', tg, 'tg');
           html += integrationCardHtml('vk', 'ВКонтакте', 'Сообщества: посты, комментарии, аналитика', vk, 'vk');
           html +=
-            '<div class="integration-card connected"><div class="int-card-header"><div class="int-logo max">М</div><div class="int-info"><div class="int-name">MAX</div><div class="int-desc">Основная платформа — подключён</div></div><span class="int-status connected"><i data-lucide="circle-check"></i> Подключён</span></div><div class="int-meta"><span>Каналов: <strong>' +
-            esc(String((intMaxMeta && intMaxMeta.channelCount) || 0)) +
-            '</strong></span><span>Bot Token: <code>••••••••' +
-            esc((intMaxMeta && intMaxMeta.tokenPreview) || '') +
-            '</code></span></div></div></div>';
+          maxLinkedChatsCache =
+            intMaxMeta && intMaxMeta.channels && intMaxMeta.channels.length
+              ? intMaxMeta.channels
+              : maxLinkedChatsCache;
+          html += maxIntegrationCardHtml(intMaxMeta);
         } else if (integrationsTab === 'flows') {
           html += '<div class="flows-list">';
           flowsCache.forEach(function (f) { html += flowCardHtml(f); });
@@ -2003,6 +2278,20 @@
                 })
                 .catch(function () {});
             }
+          }
+        }
+        var maxPanel = qs('[data-max-chats-panel]', main);
+        if (maxPanel) {
+          mountMaxChatsPanel(maxPanel, maxLinkedChatsCache);
+          bindMaxChatsPanel(maxPanel);
+          if (!maxLinkedChatsCache.length) {
+            fetchMaxLinkedChannels(true)
+              .then(function (data) {
+                mountMaxChatsPanel(maxPanel, data.channels || []);
+                bindMaxChatsPanel(maxPanel);
+                refreshIcons();
+              })
+              .catch(function () {});
           }
         }
         refreshIcons();

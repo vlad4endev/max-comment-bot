@@ -13,6 +13,7 @@ const config_1 = require("../config");
 const logger_1 = require("../utils/logger");
 const envFile_1 = require("../utils/envFile");
 const channelRegistry_1 = require("../services/channelRegistry");
+const maxPlatformClient_1 = require("../services/maxPlatformClient");
 const flowStateStore_1 = require("../services/flowStateStore");
 const flowProcessor_1 = require("../services/flowProcessor");
 const integrationPlatformClient_1 = require("../services/integrationPlatformClient");
@@ -129,6 +130,29 @@ function createIntegrationsRouter(deps) {
             tokenPreview: config_1.config.BOT_TOKEN.slice(-4),
             channels,
         });
+    });
+    router.get('/max/linked-channels', async (req, res) => {
+        try {
+            const refresh = wantsRefresh(req.query);
+            const channels = await (0, maxPlatformClient_1.listMaxBotLinkedChannels)(deps.bot, {
+                syncRegistry: refresh,
+                liveCheck: true,
+            });
+            const adminCount = channels.filter((c) => c.botIsAdmin).length;
+            res.json({
+                connected: true,
+                channels,
+                channelCount: channels.length,
+                adminCount,
+                tokenPreview: config_1.config.BOT_TOKEN.slice(-4),
+                refreshedAt: new Date().toISOString(),
+                hint: (0, maxPlatformClient_1.maxChannelAccessHint)(channels),
+            });
+        }
+        catch (err) {
+            logger_1.logger.error('GET /max/linked-channels failed', err);
+            res.status(500).json({ error: 'Не удалось получить список каналов MAX' });
+        }
     });
     router.post('/connect', async (req, res) => {
         const body = req.body;

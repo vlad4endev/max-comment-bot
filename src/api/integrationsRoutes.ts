@@ -8,6 +8,10 @@ import { config, getTelegramToken } from '../config'
 import { logger } from '../utils/logger'
 import { removeRootEnvVar, upsertRootEnvVar } from '../utils/envFile'
 import { channelRegistry } from '../services/channelRegistry'
+import {
+  listMaxBotLinkedChannels,
+  maxChannelAccessHint,
+} from '../services/maxPlatformClient'
 import { flowStateStore } from '../services/flowStateStore'
 import { buildIntegrationsAnalytics, flowProcessor } from '../services/flowProcessor'
 import {
@@ -159,6 +163,29 @@ export function createIntegrationsRouter(deps: IntegrationsRouterDeps): express.
       tokenPreview: config.BOT_TOKEN.slice(-4),
       channels,
     })
+  })
+
+  router.get('/max/linked-channels', async (req, res) => {
+    try {
+      const refresh = wantsRefresh(req.query)
+      const channels = await listMaxBotLinkedChannels(deps.bot, {
+        syncRegistry: refresh,
+        liveCheck: true,
+      })
+      const adminCount = channels.filter((c) => c.botIsAdmin).length
+      res.json({
+        connected: true,
+        channels,
+        channelCount: channels.length,
+        adminCount,
+        tokenPreview: config.BOT_TOKEN.slice(-4),
+        refreshedAt: new Date().toISOString(),
+        hint: maxChannelAccessHint(channels),
+      })
+    } catch (err: unknown) {
+      logger.error('GET /max/linked-channels failed', err)
+      res.status(500).json({ error: 'Не удалось получить список каналов MAX' })
+    }
   })
 
   router.post('/connect', async (req, res) => {
