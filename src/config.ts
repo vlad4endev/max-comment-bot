@@ -32,6 +32,11 @@ export function getFlowPollIntervalMs(): number {
 
 export interface Config {
   BOT_TOKEN: string
+  /**
+   * Отдельный токен Telegram-бота только для чтения channel_post (пересылка TG→MAX).
+   * Не путать с {@link Config.TG_TOKEN}.
+   */
+  tgReaderToken: string
   /** Опционально: TG_TOKEN из .env (дублирует getTelegramToken на старте). */
   TG_TOKEN: string
   /**
@@ -151,6 +156,7 @@ function getConfig(): Config {
 
   const base: Config = {
     BOT_TOKEN,
+    tgReaderToken: process.env.TG_READER_BOT_TOKEN || '',
     TG_TOKEN,
     ownerUserId: ownerParsed,
     adminToken: computeAdminToken(ownerParsed, BOT_TOKEN),

@@ -8,6 +8,7 @@ exports.createWebhookApp = createWebhookApp;
 const node_path_1 = require("node:path");
 const express_1 = __importDefault(require("express"));
 const adminRoutes_1 = require("../api/adminRoutes");
+const channelImportRoutes_1 = require("../api/channelImportRoutes");
 const integrationsRoutes_1 = require("../api/integrationsRoutes");
 const routes_1 = require("../api/routes");
 const adminAuth_1 = require("../middleware/adminAuth");
@@ -68,6 +69,7 @@ function createHttpApp(options) {
         });
     });
     app.use('/api/admin', (0, adminRoutes_1.createAdminRouter)({ bot: options.bot }));
+    app.use('/api/channel-import', (0, channelImportRoutes_1.createChannelImportRouter)());
     const integrationsDeps = { bot: options.bot };
     app.use('/api/integrations', (0, integrationsRoutes_1.createIntegrationsRouter)(integrationsDeps));
     app.use('/api/flows', (0, integrationsRoutes_1.createFlowsRouter)(integrationsDeps));

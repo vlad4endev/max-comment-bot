@@ -74,6 +74,48 @@ function initSchema(targetDb: Database.Database): void {
       data        TEXT NOT NULL,
       created_at  TEXT NOT NULL DEFAULT (datetime('now'))
     );
+
+    CREATE TABLE IF NOT EXISTS forwarding_configs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      tg_channel TEXT NOT NULL,
+      max_channel_id TEXT NOT NULL,
+      is_active INTEGER DEFAULT 1,
+      last_message_id INTEGER DEFAULT 0,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS forwarded_posts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      tg_message_id INTEGER NOT NULL,
+      tg_channel TEXT NOT NULL,
+      forwarded_at TEXT DEFAULT (datetime('now')),
+      UNIQUE(tg_message_id, tg_channel)
+    );
+
+    CREATE TABLE IF NOT EXISTS channel_import_jobs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      tg_channel TEXT NOT NULL,
+      max_channel_id TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'scanning',
+      scan_next_offset INTEGER NOT NULL DEFAULT 0,
+      scan_idle_rounds INTEGER NOT NULL DEFAULT 0,
+      staged_count INTEGER NOT NULL DEFAULT 0,
+      error_message TEXT,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_channel_import_jobs_status ON channel_import_jobs(status);
+
+    CREATE TABLE IF NOT EXISTS channel_import_staged (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      job_id INTEGER NOT NULL,
+      tg_message_id INTEGER NOT NULL,
+      payload TEXT NOT NULL,
+      created_at TEXT DEFAULT (datetime('now')),
+      UNIQUE(job_id, tg_message_id),
+      FOREIGN KEY (job_id) REFERENCES channel_import_jobs(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_channel_import_staged_job ON channel_import_staged(job_id);
   `)
 }
 

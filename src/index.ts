@@ -28,6 +28,7 @@ import { getFlowPollIntervalMs, getTelegramToken } from './config'
 import { WEBHOOK_CONCURRENCY } from './utils/updateQueue'
 import { flowProcessor } from './services/flowProcessor'
 import { integrationsStore } from './services/integrationsStore'
+import { startChannelImportWorker } from './services/channelImportService'
 import { createHttpApp, createWebhookApp } from './webhook/createWebhookApp'
 
 async function main(): Promise<void> {
@@ -122,6 +123,7 @@ async function main(): Promise<void> {
       httpServer: server,
       webhookUrl,
     })
+    startChannelImportWorker()
   } else {
     const app = createHttpApp({ bot })
     const server = createServer(app)
@@ -140,6 +142,7 @@ async function main(): Promise<void> {
       httpServer: server,
     })
 
+    startChannelImportWorker()
     await startBotLongPolling(bot)
   }
 }

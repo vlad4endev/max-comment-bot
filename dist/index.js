@@ -21,6 +21,7 @@ const config_2 = require("./config");
 const updateQueue_1 = require("./utils/updateQueue");
 const flowProcessor_1 = require("./services/flowProcessor");
 const integrationsStore_1 = require("./services/integrationsStore");
+const channelImportService_1 = require("./services/channelImportService");
 const createWebhookApp_1 = require("./webhook/createWebhookApp");
 async function main() {
     (0, migrate_1.migrateFromJson)();
@@ -105,6 +106,7 @@ async function main() {
             httpServer: server,
             webhookUrl,
         });
+        (0, channelImportService_1.startChannelImportWorker)();
     }
     else {
         const app = (0, createWebhookApp_1.createHttpApp)({ bot });
@@ -118,6 +120,7 @@ async function main() {
             receiveMode: 'polling',
             httpServer: server,
         });
+        (0, channelImportService_1.startChannelImportWorker)();
         await (0, bot_1.startBotLongPolling)(bot);
     }
 }

@@ -1969,6 +1969,51 @@ tbody tr:hover td {
   border-radius: var(--radius-md);
   padding: 16px;
 }
+
+/* Шаг 7: блок Telegram → MAX */
+.forwarding-section {
+  margin-top: 0;
+}
+.forwarding-section-title {
+  margin: 0 0 16px;
+  font-size: 18px;
+  font-weight: 600;
+}
+.forwarding-empty {
+  color: var(--text-muted);
+}
+
+.forwarding-add-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+.forwarding-add-form .input {
+  flex: 1;
+  min-width: 160px;
+}
+.forwarding-list-wrap {
+  margin-top: 16px;
+}
+.forwarding-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  margin-bottom: 8px;
+  background: var(--bg-surface);
+}
+.forwarding-row-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 .card-header { margin-bottom: 12px; }
 .checkbox-label { display: flex; align-items: center; gap: 8px; font-size: 13px; margin: 8px 0; }
 

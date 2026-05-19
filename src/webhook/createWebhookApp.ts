@@ -5,6 +5,7 @@ import type { Update } from '@maxhub/max-bot-api/types'
 import express from 'express'
 
 import { createAdminRouter } from '../api/adminRoutes'
+import { createChannelImportRouter } from '../api/channelImportRoutes'
 import {
   createFlowsRouter,
   createIntegrationsAnalyticsRouter,
@@ -99,6 +100,8 @@ export function createHttpApp(options: HttpAppOptions): express.Express {
   })
 
   app.use('/api/admin', createAdminRouter({ bot: options.bot }))
+
+  app.use('/api/channel-import', createChannelImportRouter())
 
   const integrationsDeps = { bot: options.bot }
   app.use('/api/integrations', createIntegrationsRouter(integrationsDeps))

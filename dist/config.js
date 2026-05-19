@@ -91,6 +91,7 @@ function getConfig() {
     const TG_TOKEN = getTelegramToken();
     const base = {
         BOT_TOKEN,
+        tgReaderToken: process.env.TG_READER_BOT_TOKEN || '',
         TG_TOKEN,
         ownerUserId: ownerParsed,
         adminToken: computeAdminToken(ownerParsed, BOT_TOKEN),

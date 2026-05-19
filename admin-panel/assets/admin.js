@@ -2,6 +2,7 @@
   'use strict';
 
   var API_BASE = '/api/admin';
+  var API_CHANNEL_IMPORT = '/api/channel-import';
   var API_INTEGRATIONS = '/api/integrations';
   var API_FLOWS = '/api/flows';
   var API_INT_ANALYTICS = '/api/integrations-analytics';
@@ -22,6 +23,8 @@
   var commentsChatId = null;
   var commentsQuery = '';
   var usersCache = [];
+  var channelImportPollTimer = null;
+  var channelImportJobId = null;
 
   var NAV = [
     { group: 'Обзор', items: [{ id: 'dashboard', label: 'Дашборд', icon: 'layout-dashboard' }] },
@@ -30,6 +33,7 @@
       items: [
         { id: 'channels', label: 'Каналы', icon: 'radio' },
         { id: 'tgchains', label: 'TG-цепочки', icon: 'link-2' },
+        { id: 'channelimport', label: 'Импорт TG→MAX', icon: 'upload-cloud' },
         { id: 'autoposts', label: 'Автопосты', icon: 'calendar-clock' },
         { id: 'comments', label: 'Комментарии', icon: 'message-square' },
       ],
@@ -55,6 +59,7 @@
     dashboard: 'Дашборд',
     channels: 'Каналы',
     tgchains: 'TG-цепочки',
+    channelimport: 'Импорт TG→MAX',
     autoposts: 'Автопосты',
     integrations: 'Интеграции',
     antispam: 'Антиспам',
@@ -728,6 +733,14 @@
     }, 30000);
   }
 
+  function clearChannelImportPoll() {
+    if (channelImportPollTimer) {
+      window.clearInterval(channelImportPollTimer);
+      channelImportPollTimer = null;
+    }
+    channelImportJobId = null;
+  }
+
   function parseHashRoute() {
     var raw = (location.hash || '').replace(/^#/, '').trim();
     if (raw === '') return 'dashboard';
@@ -736,6 +749,7 @@
       dashboard: 1,
       channels: 1,
       tgchains: 1,
+      channelimport: 1,
       autoposts: 1,
       integrations: 1,
       antispam: 1,
@@ -1456,6 +1470,158 @@
         if (err && err.message === 'auth') return;
         main.innerHTML = '<p class="muted">Ошибка: ' + esc(err.message || '') + '</p>';
       });
+  }
+
+  function renderChannelImport() {
+    var main = qs('#mainContent');
+    if (!main) return;
+    clearChannelImportPoll();
+    channelImportJobId = null;
+
+    var html = '<div class="card-like mb-md forwarding-section" id="forwarding-section">';
+    html += '<h2 class="forwarding-section-title">Импорт канала Telegram → MAX</h2>';
+    html +=
+      '<p class="muted text-sm" style="margin:0 0 16px;line-height:1.45">Укажите Telegram-канал и ID канала MAX (бот MAX — админ в MAX-канале). Reader-бот <code>TG_READER_BOT_TOKEN</code> — админ в TG-канале. Нажмите <strong>Запустить анализ</strong>: соберём посты (текст, фото, видео, документы) из <em>очереди обновлений</em> Telegram. Полный архив канала через Bot API получить нельзя — только то, что ещё не «подтверждено» сервером Telegram для бота.</p>';
+    html += '<div class="forwarding-add-form">';
+    html += '<input type="text" class="input" id="ci_tg" placeholder="@telegram_channel" />';
+    html += '<input type="text" class="input" id="ci_max" placeholder="MAX Channel ID" />';
+    html += '<button type="button" class="btn btn-primary" id="ci_start">Запустить анализ</button>';
+    html += '<button type="button" class="btn btn-ghost" id="ci_cancel_job" disabled>Отменить задачу</button>';
+    html += '</div>';
+    html += '<div class="mt-md"><span class="muted">Статус: </span><strong id="ci_status">—</strong></div>';
+    html += '<div class="mt-sm"><span class="muted">Подготовлено постов: </span><strong id="ci_count">0</strong></div>';
+    html +=
+      '<div id="ci_ready_block" class="hidden mt-md" style="padding:14px;border:1px solid var(--accent-border);border-radius:var(--radius-md);background:var(--accent-muted)">';
+    html += '<p id="ci_ready_txt" class="text-sm" style="margin:0 0 10px"></p>';
+    html += '<button type="button" class="btn btn-primary" id="ci_publish">Опубликовать в MAX</button>';
+    html += '</div>';
+    html += '</div>';
+    main.innerHTML = html;
+
+    var readyBlock = qs('#ci_ready_block', main);
+    var publishBtn = qs('#ci_publish', main);
+
+    function setUi(job) {
+      var st = qs('#ci_status', main);
+      var cnt = qs('#ci_count', main);
+      var cancelBtn = qs('#ci_cancel_job', main);
+      var labels = {
+        scanning: 'Сканирование…',
+        ready: 'Готово — подтвердите публикацию',
+        publishing: 'Публикация в MAX…',
+        error: 'Ошибка',
+      };
+      if (st) {
+        st.textContent =
+          job.status === 'error' && job.error_message
+            ? 'Ошибка: ' + String(job.error_message)
+            : labels[job.status] || job.status;
+      }
+      if (cnt) cnt.textContent = String(job.staged_count != null ? job.staged_count : 0);
+      if (cancelBtn) {
+        cancelBtn.disabled = !(
+          channelImportJobId &&
+          (job.status === 'scanning' || job.status === 'ready' || job.status === 'error')
+        );
+      }
+      if (job.status === 'ready' && readyBlock) {
+        readyBlock.classList.remove('hidden');
+        var n = Number(job.staged_count || 0);
+        var rt = qs('#ci_ready_txt', main);
+        if (rt) {
+          rt.textContent =
+            'Готово к переносу: ' +
+            n +
+            ' сообщ. Публикация выполняется по одному с паузами (медиа сохраняются). После успеха записи импорта удаляются из базы.';
+        }
+      } else if (readyBlock) {
+        readyBlock.classList.add('hidden');
+      }
+    }
+
+    function tickPoll() {
+      if (channelImportJobId == null) return;
+      getJsonAbs(API_CHANNEL_IMPORT + '/jobs/' + encodeURIComponent(String(channelImportJobId)))
+        .then(function (job) {
+          if (currentRoute !== 'channelimport') return;
+          setUi(job);
+          if (job.status === 'ready') {
+            clearChannelImportPoll();
+          }
+          if (job.status === 'error' || job.status === 'publishing') {
+            clearChannelImportPoll();
+          }
+        })
+        .catch(function (e) {
+          if (e && e.message === 'auth') return;
+          clearChannelImportPoll();
+          showToast(e.message || 'Ошибка опроса задачи', 'error');
+        });
+    }
+
+    qs('#ci_start', main).addEventListener('click', function () {
+      var tg = (qs('#ci_tg', main).value || '').trim();
+      var maxId = (qs('#ci_max', main).value || '').trim();
+      if (!tg || !maxId) {
+        alert('Заполните оба поля');
+        return;
+      }
+      postJsonAbs(API_CHANNEL_IMPORT + '/jobs', { tg_channel: tg, max_channel_id: maxId })
+        .then(function (res) {
+          if (!res || res.id == null) {
+            showToast('Нет id задачи', 'error');
+            return;
+          }
+          channelImportJobId = Number(res.id);
+          showToast('Анализ запущен', 'success');
+          qs('#ci_cancel_job', main).disabled = false;
+          setUi({ status: 'scanning', staged_count: 0 });
+          if (readyBlock) readyBlock.classList.add('hidden');
+          clearChannelImportPoll();
+          channelImportPollTimer = window.setInterval(tickPoll, 1500);
+          tickPoll();
+        })
+        .catch(function (e) {
+          showToast(e.message || 'Ошибка', 'error');
+        });
+    });
+
+    qs('#ci_cancel_job', main).addEventListener('click', function () {
+      if (!channelImportJobId) return;
+      var id = channelImportJobId;
+      showConfirm('Отменить задачу?', 'Черновик импорта будет удалён из базы.', function () {
+        deleteAbs(API_CHANNEL_IMPORT + '/jobs/' + encodeURIComponent(String(id)))
+          .then(function () {
+            showToast('Отменено', 'success');
+            clearChannelImportPoll();
+            renderChannelImport();
+          })
+          .catch(function () {
+            showToast('Не удалось отменить', 'error');
+          });
+      });
+    });
+
+    if (publishBtn) {
+      publishBtn.addEventListener('click', function () {
+        if (!channelImportJobId) {
+          showToast('Нет активной задачи', 'error');
+          return;
+        }
+        var id = channelImportJobId;
+        postJsonAbs(API_CHANNEL_IMPORT + '/jobs/' + encodeURIComponent(String(id)) + '/publish', {})
+          .then(function () {
+            showToast('Готово. Данные импорта удалены из базы.', 'success');
+            clearChannelImportPoll();
+            renderChannelImport();
+          })
+          .catch(function (e) {
+            showToast(e.message || 'Ошибка публикации', 'error');
+          });
+      });
+    }
+
+    refreshIcons();
   }
 
   function openChainModal() {
@@ -2613,7 +2779,11 @@
   }
 
   function handleRoute() {
+    var prev = currentRoute;
     var next = parseHashRoute();
+    if (prev === 'channelimport' && next !== 'channelimport') {
+      clearChannelImportPoll();
+    }
     if (next !== currentRoute) {
       clearDashTimer();
       clearLogsTimer();
@@ -2632,6 +2802,8 @@
       renderChannels();
     } else if (currentRoute === 'tgchains') {
       renderTgChains();
+    } else if (currentRoute === 'channelimport') {
+      renderChannelImport();
     } else if (currentRoute === 'autoposts') {
       renderAutoposts();
     } else if (currentRoute === 'integrations') {
