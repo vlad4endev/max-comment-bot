@@ -1055,35 +1055,31 @@
       gap: 8px;
       margin-bottom: 10px;
     }
-    #managerBtn {
-      display: inline-flex;
+    #view-comments #managerBtn {
+      display: none;
       align-items: center;
       justify-content: center;
       gap: 5px;
-      min-height: 28px;
-      padding: 5px 10px;
-      border-radius: 20px;
+      margin-left: auto;
+      flex-shrink: 0;
+      min-height: 26px;
+      padding: 4px 10px;
+      border-radius: 999px;
       background: var(--teal-bg);
       border: 1px solid var(--teal-border-strong);
       text-decoration: none;
-      flex-shrink: 1;
-      min-width: 0;
-      max-width: 42%;
       font-size: 11px;
       font-weight: 600;
       line-height: 1.2;
       color: var(--teal);
       cursor: pointer;
-    }
-    #managerBtn .manager-btn-icon {
-      flex-shrink: 0;
-      font-size: 13px;
-      line-height: 1;
-    }
-    #managerBtn .manager-btn-label {
-      overflow: hidden;
-      text-overflow: ellipsis;
       white-space: nowrap;
+    }
+    #view-comments #managerBtn .manager-btn-icon {
+      width: 15px;
+      height: 15px;
+      flex-shrink: 0;
+      display: block;
     }
     #view-comments .channel-avatar {
       width: 36px;
@@ -1116,25 +1112,10 @@
       overflow: hidden;
       text-overflow: ellipsis;
     }
-    #view-comments .channel-subs {
+    #view-comments .channel-comment-count {
       font-size: 11px;
       color: var(--text-dim);
       margin-top: 2px;
-    }
-    #view-comments .count-badge {
-      flex-shrink: 0;
-      min-width: 26px;
-      height: 26px;
-      padding: 0 9px;
-      border-radius: 999px;
-      background: var(--shadow-accent);
-      color: var(--text-on-accent);
-      font-size: 11px;
-      font-weight: 700;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      border: 1px solid var(--shadow-accent-strong);
     }
     #view-comments .post-preview {
       display: flex;
@@ -1243,6 +1224,7 @@
       max-width: 100%;
       position: relative;
       gap: 2px;
+      overflow: visible;
     }
     #view-comments .feed-msg {
       display: flex;
@@ -1251,6 +1233,7 @@
       gap: 6px;
       max-width: min(82%, 520px);
       position: relative;
+      overflow: visible;
       transition: transform 0.12s ease-out;
     }
     #view-comments .feed-msg.msg-in {
@@ -1563,11 +1546,59 @@
     }
     #view-comments .comment-group.admin-menu-open.admin-menu--comment .admin-actions[data-admin-menu-kind="comment"] {
       display: flex;
-      z-index: 50;
+      z-index: 120;
     }
     #view-comments .comment-group.admin-menu-open.admin-menu--reply .msg-channel.msg-channel-last .admin-actions.admin-context-menu {
       display: flex;
-      z-index: 50;
+      z-index: 120;
+    }
+    #view-comments .admin-confirm-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 300;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+      background: var(--overlay-bg);
+    }
+    #view-comments .admin-confirm-overlay.hidden {
+      display: none;
+    }
+    #view-comments .admin-confirm-card {
+      width: min(100%, 320px);
+      padding: 18px 16px 14px;
+      border-radius: 14px;
+      background: var(--comments-card-bg);
+      border: 1px solid var(--comments-divider);
+      box-shadow: 0 12px 40px var(--elevation-shadow);
+    }
+    #view-comments .admin-confirm-card p {
+      margin: 0 0 14px;
+      font-size: 15px;
+      line-height: 1.4;
+      color: var(--text-strong);
+      text-align: center;
+    }
+    #view-comments .admin-confirm-row {
+      display: flex;
+      gap: 8px;
+    }
+    #view-comments .admin-confirm-row button {
+      flex: 1;
+      min-height: 40px;
+      border-radius: 10px;
+      border: 1px solid var(--comments-divider);
+      background: var(--comments-input-bg);
+      color: var(--text-primary);
+      font-size: 15px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    #view-comments .admin-confirm-row button.danger {
+      background: var(--danger);
+      border-color: var(--danger);
+      color: #fff;
     }
     #view-comments .admin-actions.admin-context-menu {
       pointer-events: auto;
@@ -1989,13 +2020,16 @@
             <div class="channel-avatar" id="chAvatar" aria-hidden="true">?</div>
             <div class="channel-meta">
               <div class="channel-name" id="chName">Канал</div>
-              <div class="channel-subs" id="chSubs">подписчики: —</div>
+              <div class="channel-comment-count" id="countBadge" title="Комментариев">Комментарии: 0</div>
             </div>
-            <a id="managerBtn" href="#" target="_blank" style="display:none" title="Написать менеджеру">
-              <span class="manager-btn-icon" aria-hidden="true">📩</span>
-              <span class="manager-btn-label">Написать менеджеру</span>
+            <a id="managerBtn" href="#" target="_blank" title="Написать менеджеру">
+              <svg class="manager-btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M7.9 20A9 9 0 1 0 4 16.5L2 22z" />
+                <path d="M8 10h8" />
+                <path d="M8 14h5" />
+              </svg>
+              <span>Менеджер</span>
             </a>
-            <div class="count-badge" id="countBadge" title="Комментариев">0</div>
           </div>
           <button type="button" class="post-preview" id="postPreviewBtn" title="Открыть пост в канале" aria-label="Открыть пост в канале">
             <div class="post-preview-text" id="postPreviewText">Загрузка…</div>
@@ -2004,6 +2038,16 @@
         </div>
         <div id="err"></div>
         <div id="feed"></div>
+
+        <div id="adminConfirmOverlay" class="admin-confirm-overlay hidden" aria-hidden="true">
+          <div class="admin-confirm-card" role="dialog" aria-modal="true">
+            <p id="adminConfirmMessage">Удалить?</p>
+            <div class="admin-confirm-row">
+              <button type="button" id="adminConfirmCancel">Отмена</button>
+              <button type="button" id="adminConfirmOk" class="danger">Удалить</button>
+            </div>
+          </div>
+        </div>
         <div class="composer-wrap">
           <div id="replyBanner" class="reply-banner" style="display:none">
             <div class="reply-banner-inner">
@@ -3388,11 +3432,9 @@
         (username && String(username).trim()) ||
         'Админ';
       var isAdmin = params.get('admin') === '1';
-      var subscribersOverride = params.get('subscribers');
 
       var chAvatarEl = document.getElementById('chAvatar');
       var chNameEl = document.getElementById('chName');
-      var chSubsEl = document.getElementById('chSubs');
       var countBadgeEl = document.getElementById('countBadge');
       var postPreviewTextEl = document.getElementById('postPreviewText');
       var postThumbEl = document.getElementById('postThumb');
@@ -3600,17 +3642,12 @@
 
       function updateBadgeFromCount(n) {
         var v = typeof n === 'number' && n >= 0 ? n : knownIds.size;
-        countBadgeEl.textContent = String(v);
+        countBadgeEl.textContent = 'Комментарии: ' + String(v);
       }
 
       function setChannelHeader(title, avatarUrl) {
         var name = title && String(title).trim() ? title.trim() : 'Канал';
         chNameEl.textContent = name;
-        if (subscribersOverride != null && String(subscribersOverride).trim() !== '') {
-          chSubsEl.textContent = 'подписчики: ' + String(subscribersOverride).trim();
-        } else {
-          chSubsEl.textContent = 'подписчики: —';
-        }
         if (avatarUrl) {
           chAvatarEl.innerHTML = '<img src="' + esc(avatarUrl) + '" alt="" />';
         } else {
@@ -4071,8 +4108,18 @@
           if (!commentActionsTouchBound) {
             commentActionsTouchBound = true;
             function closeAdminMenuIfOutside(e) {
+              var t = e.target;
+              if (
+                t &&
+                t.closest &&
+                (t.closest('.admin-actions') ||
+                  t.closest('.admin-confirm-overlay') ||
+                  t.closest('.admin-confirm-card'))
+              ) {
+                return;
+              }
               feedEl.querySelectorAll('.comment-group.admin-menu-open').forEach(function (g) {
-                if (!g.contains(e.target)) {
+                if (!g.contains(t)) {
                   g.classList.remove('admin-menu-open', 'admin-menu--comment', 'admin-menu--reply');
                 }
               });
@@ -4082,6 +4129,46 @@
           }
         }
         wireAdminModeration(node);
+      }
+
+      var adminConfirmOverlayEl = document.getElementById('adminConfirmOverlay');
+      var adminConfirmMessageEl = document.getElementById('adminConfirmMessage');
+      var adminConfirmOkEl = document.getElementById('adminConfirmOk');
+      var adminConfirmCancelEl = document.getElementById('adminConfirmCancel');
+      var adminConfirmCallback = null;
+
+      function hideAdminConfirm() {
+        if (!adminConfirmOverlayEl) return;
+        adminConfirmOverlayEl.classList.add('hidden');
+        adminConfirmOverlayEl.setAttribute('aria-hidden', 'true');
+        adminConfirmCallback = null;
+      }
+
+      function showAdminConfirm(message, onOk) {
+        if (!adminConfirmOverlayEl) {
+          if (onOk) onOk();
+          return;
+        }
+        adminConfirmCallback = onOk;
+        if (adminConfirmMessageEl) adminConfirmMessageEl.textContent = message;
+        adminConfirmOverlayEl.classList.remove('hidden');
+        adminConfirmOverlayEl.setAttribute('aria-hidden', 'false');
+      }
+
+      if (adminConfirmOkEl) {
+        adminConfirmOkEl.addEventListener('click', function () {
+          var cb = adminConfirmCallback;
+          hideAdminConfirm();
+          if (cb) cb();
+        });
+      }
+      if (adminConfirmCancelEl) {
+        adminConfirmCancelEl.addEventListener('click', hideAdminConfirm);
+      }
+      if (adminConfirmOverlayEl) {
+        adminConfirmOverlayEl.addEventListener('click', function (e) {
+          if (e.target === adminConfirmOverlayEl) hideAdminConfirm();
+        });
       }
 
       function adminApiBase(cid) {
@@ -4126,16 +4213,13 @@
         block.querySelectorAll('.admin-actions.admin-context-menu').forEach(function (menu) {
           if (menu.dataset.menuShield === '1') return;
           menu.dataset.menuShield = '1';
-          menu.addEventListener(
-            'touchstart',
-            function (e) {
-              e.stopPropagation();
-            },
-            { passive: true }
-          );
-          menu.addEventListener('mousedown', function (e) {
+          function stopMenuEvent(e) {
             e.stopPropagation();
-          });
+          }
+          menu.addEventListener('touchstart', stopMenuEvent, { passive: true, capture: true });
+          menu.addEventListener('touchend', stopMenuEvent, { passive: true, capture: true });
+          menu.addEventListener('mousedown', stopMenuEvent, true);
+          menu.addEventListener('click', stopMenuEvent, true);
         });
 
 
@@ -4237,7 +4321,7 @@
           if (btn.dataset.delWired === '1') return;
           btn.dataset.delWired = '1';
           function doDeleteComment() {
-            block.classList.remove('admin-menu-open', 'admin-menu--comment', 'admin-menu--reply');
+            closeAllAdminContextMenus();
             runAdminDeleteRequest('/api/comment/delete', cid, block, btn, function (res) {
               knownIds.delete(cid);
               block.remove();
@@ -4252,67 +4336,29 @@
               }
             });
           }
-          var deleteTapLock = false;
           function onDeleteCommentTap(e) {
-            if (deleteTapLock) return;
             e.preventDefault();
             e.stopPropagation();
-            window.setTimeout(function () {
-              var ok = true;
-              try {
-                ok = window.confirm('Удалить этот комментарий?');
-              } catch (err) {
-                ok = true;
-              }
-              if (!ok) return;
-              deleteTapLock = true;
-              doDeleteComment();
-            }, 0);
+            showAdminConfirm('Удалить этот комментарий?', doDeleteComment);
           }
           btn.addEventListener('click', onDeleteCommentTap);
-          btn.addEventListener(
-            'touchend',
-            function (e) {
-              onDeleteCommentTap(e);
-            },
-            { passive: false }
-          );
         });
 
         block.querySelectorAll('[data-delete-reply]').forEach(function (btn) {
           if (btn.dataset.delWired === '1') return;
           btn.dataset.delWired = '1';
           function doDeleteReply() {
-            block.classList.remove('admin-menu-open', 'admin-menu--comment', 'admin-menu--reply');
+            closeAllAdminContextMenus();
             runAdminDeleteRequest('/api/reply/delete', cid, block, btn, function (updated) {
               mergeOrUpdateComment(updated);
             });
           }
-          var deleteReplyTapLock = false;
           function onDeleteReplyTap(e) {
-            if (deleteReplyTapLock) return;
             e.preventDefault();
             e.stopPropagation();
-            window.setTimeout(function () {
-              var ok = true;
-              try {
-                ok = window.confirm('Удалить ответ канала?');
-              } catch (err) {
-                ok = true;
-              }
-              if (!ok) return;
-              deleteReplyTapLock = true;
-              doDeleteReply();
-            }, 0);
+            showAdminConfirm('Удалить ответ канала?', doDeleteReply);
           }
           btn.addEventListener('click', onDeleteReplyTap);
-          btn.addEventListener(
-            'touchend',
-            function (e) {
-              onDeleteReplyTap(e);
-            },
-            { passive: false }
-          );
         });
       }
 
