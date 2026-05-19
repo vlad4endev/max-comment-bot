@@ -56,18 +56,25 @@ function wantsRefresh(query) {
         return true;
     return false;
 }
+/** Токен из integrations.json важнее устаревшего TG_TOKEN в .env. */
+function telegramIntegrationToken(integ) {
+    return (integ.token || (0, config_1.getTelegramToken)()).trim();
+}
 async function resolveTelegramLinkedChats(refresh) {
     await integrationsStore_1.integrationsStore.load();
     const integ = integrationsStore_1.integrationsStore.getTelegramIntegration();
     if (!integ) {
         return { integrationId: null, channels: [] };
     }
-    const token = (0, config_1.getTelegramToken)() || integ.token;
+    const token = telegramIntegrationToken(integ);
     if (!refresh && integ.linkedChats && integ.linkedChats.length > 0) {
         return { integrationId: integ.id, channels: integ.linkedChats };
     }
-    const channels = await (0, integrationPlatformClient_1.listTelegramBotChats)(token, integ.id);
-    await integrationsStore_1.integrationsStore.setLinkedChats(integ.id, channels);
+    const discovered = await (0, integrationPlatformClient_1.listTelegramBotChats)(token, integ.id);
+    const channels = (0, integrationPlatformClient_1.mergePlatformChannels)(integ.linkedChats, discovered);
+    await integrationsStore_1.integrationsStore.setLinkedChats(integ.id, channels, {
+        keepExistingIfEmpty: refresh,
+    });
     return { integrationId: integ.id, channels };
 }
 function createIntegrationsRouter(deps) {
@@ -146,6 +153,7 @@ function createIntegrationsRouter(deps) {
             status: 'connected',
         });
         if (platform === 'telegram') {
+            process.env.TG_TOKEN = token;
             try {
                 await (0, envFile_1.upsertRootEnvVar)('TG_TOKEN', token);
             }
@@ -156,7 +164,8 @@ function createIntegrationsRouter(deps) {
         }
         let channels = [];
         if (platform === 'telegram') {
-            channels = await (0, integrationPlatformClient_1.listTelegramBotChats)(token, record.id);
+            const discovered = await (0, integrationPlatformClient_1.listTelegramBotChats)(token, record.id);
+            channels = (0, integrationPlatformClient_1.mergePlatformChannels)(record.linkedChats, discovered);
             await integrationsStore_1.integrationsStore.setLinkedChats(record.id, channels);
         }
         const updated = integrationsStore_1.integrationsStore.getIntegration(record.id) ?? record;
@@ -195,7 +204,7 @@ function createIntegrationsRouter(deps) {
             res.status(404).json({ error: 'not found' });
             return;
         }
-        const token = integ.platform === 'telegram' ? (0, config_1.getTelegramToken)() || integ.token : integ.token;
+        const token = integ.platform === 'telegram' ? telegramIntegrationToken(integ) : integ.token;
         const result = await (0, integrationPlatformClient_1.testIntegration)(integ.platform, token, integ.groupId);
         res.json(result);
     });
@@ -207,14 +216,17 @@ function createIntegrationsRouter(deps) {
             return;
         }
         const refresh = wantsRefresh(req.query);
-        const token = integ.platform === 'telegram' ? (0, config_1.getTelegramToken)() || integ.token : integ.token;
+        const token = integ.platform === 'telegram' ? telegramIntegrationToken(integ) : integ.token;
         if (integ.platform === 'telegram') {
             if (!refresh && integ.linkedChats && integ.linkedChats.length > 0) {
                 res.json({ channels: integ.linkedChats });
                 return;
             }
-            const channels = await (0, integrationPlatformClient_1.listTelegramBotChats)(token, integ.id);
-            await integrationsStore_1.integrationsStore.setLinkedChats(integ.id, channels);
+            const discovered = await (0, integrationPlatformClient_1.listTelegramBotChats)(token, integ.id);
+            const channels = (0, integrationPlatformClient_1.mergePlatformChannels)(integ.linkedChats, discovered);
+            await integrationsStore_1.integrationsStore.setLinkedChats(integ.id, channels, {
+                keepExistingIfEmpty: refresh,
+            });
             res.json({ channels });
             return;
         }

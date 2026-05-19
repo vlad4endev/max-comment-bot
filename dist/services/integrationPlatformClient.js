@@ -3,6 +3,8 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.ensureTelegramPollingMode = ensureTelegramPollingMode;
+exports.mergePlatformChannels = mergePlatformChannels;
 exports.validateTelegramToken = validateTelegramToken;
 exports.validateVkToken = validateVkToken;
 exports.testIntegration = testIntegration;
@@ -16,6 +18,67 @@ const axios_1 = __importDefault(require("axios"));
 const logger_1 = require("../utils/logger");
 const flowStateStore_1 = require("./flowStateStore");
 const TG_API = 'https://api.telegram.org';
+const TELEGRAM_DISCOVERY_UPDATES = [
+    'message',
+    'edited_message',
+    'channel_post',
+    'edited_channel_post',
+    'my_chat_member',
+];
+/** Webhook блокирует getUpdates — для опроса и обнаружения чатов нужен polling. */
+async function ensureTelegramPollingMode(token) {
+    try {
+        const { data } = await axios_1.default.get(`${TG_API}/bot${token}/getWebhookInfo`, { timeout: 10_000 });
+        const url = data.result?.url?.trim();
+        if (!data.ok || !url) {
+            return;
+        }
+        await axios_1.default.get(`${TG_API}/bot${token}/deleteWebhook`, {
+            params: { drop_pending_updates: false },
+            timeout: 15_000,
+        });
+        logger_1.logger.info('ensureTelegramPollingMode: webhook снят для getUpdates', { hadUrl: url });
+    }
+    catch (err) {
+        logger_1.logger.warn('ensureTelegramPollingMode failed', err);
+    }
+}
+function mergePlatformChannels(existing, discovered) {
+    const seen = new Map();
+    for (const ch of existing ?? []) {
+        seen.set(ch.id, { ...ch });
+    }
+    for (const ch of discovered) {
+        const prev = seen.get(ch.id);
+        if (!prev) {
+            seen.set(ch.id, ch);
+            continue;
+        }
+        seen.set(ch.id, {
+            id: ch.id,
+            title: ch.title.length > prev.title.length ? ch.title : prev.title,
+            username: ch.username ?? prev.username,
+            type: ch.type && ch.type !== 'unknown' ? ch.type : prev.type,
+            botIsAdmin: prev.botIsAdmin === true || ch.botIsAdmin === true,
+        });
+    }
+    const typeOrder = {
+        channel: 0,
+        supergroup: 1,
+        group: 2,
+        private: 3,
+        unknown: 4,
+    };
+    return [...seen.values()].sort((a, b) => {
+        const adminDiff = Number(b.botIsAdmin === true) - Number(a.botIsAdmin === true);
+        if (adminDiff !== 0)
+            return adminDiff;
+        const typeDiff = (typeOrder[a.type ?? 'unknown'] ?? 9) - (typeOrder[b.type ?? 'unknown'] ?? 9);
+        if (typeDiff !== 0)
+            return typeDiff;
+        return a.title.localeCompare(b.title, 'ru');
+    });
+}
 async function validateTelegramToken(token) {
     try {
         const { data } = await axios_1.default.get(`${TG_API}/bot${token}/getMe`, { timeout: 15_000 });
@@ -135,6 +198,11 @@ function ingestTelegramUpdate(seen, upd) {
 }
 /** Чаты/каналы, с которыми бот взаимодействовал (из getUpdates + my_chat_member). */
 async function listTelegramBotChats(token, integrationId) {
+    const trimmed = token.trim();
+    if (trimmed === '') {
+        return [];
+    }
+    await ensureTelegramPollingMode(trimmed);
     const seen = new Map();
     await flowStateStore_1.flowStateStore.load();
     let offset = integrationId !== undefined
@@ -142,11 +210,15 @@ async function listTelegramBotChats(token, integrationId) {
         : undefined;
     try {
         for (let page = 0; page < 8; page++) {
-            const params = { limit: 100, timeout: 0 };
+            const params = {
+                limit: 100,
+                timeout: 0,
+                allowed_updates: JSON.stringify(TELEGRAM_DISCOVERY_UPDATES),
+            };
             if (offset !== undefined) {
                 params.offset = offset;
             }
-            const { data } = await axios_1.default.get(`${TG_API}/bot${token}/getUpdates`, { params, timeout: 20_000 });
+            const { data } = await axios_1.default.get(`${TG_API}/bot${trimmed}/getUpdates`, { params, timeout: 20_000 });
             if (!data.ok || !data.result?.length) {
                 break;
             }
@@ -313,6 +385,7 @@ async function probeTelegramChannelAccess(token, channelId) {
 async function fetchTelegramChannelPosts(token, integrationId, channelId, afterMessageId) {
     return withTelegramIntegrationLock(integrationId, async () => {
         await flowStateStore_1.flowStateStore.load();
+        await ensureTelegramPollingMode(token.trim());
         try {
             const storedOffset = flowStateStore_1.flowStateStore.getTelegramUpdateOffset(integrationId);
             const params = {

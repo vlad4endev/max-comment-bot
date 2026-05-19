@@ -216,7 +216,7 @@ class FlowProcessor {
             return { posts: [], lastMessageId: cursorBefore, cursorBefore };
         }
         if (flow.source.platform === 'telegram') {
-            const tgToken = (0, config_1.getTelegramToken)() || integ.token;
+            const tgToken = (integ.token || (0, config_1.getTelegramToken)()).trim();
             if (!tgToken)
                 return { posts: [], lastMessageId: cursorBefore, cursorBefore };
             const channelKey = flow.source.channelId ?? flow.source.channelUsername ?? '';

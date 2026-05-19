@@ -48,11 +48,15 @@ async function main(): Promise<void> {
   const tgIntegration = integrationsStore
     .getIntegrations()
     .find((i) => i.platform === 'telegram' && i.status === 'connected')
-  if (tgIntegration?.token && !getTelegramToken()) {
-    try {
-      await upsertRootEnvVar('TG_TOKEN', tgIntegration.token)
-    } catch (err: unknown) {
-      logger.warn('Не удалось синхронизировать TG_TOKEN из integrations.json в .env', err)
+  if (tgIntegration?.token) {
+    const envToken = getTelegramToken()
+    if (envToken !== tgIntegration.token.trim()) {
+      process.env.TG_TOKEN = tgIntegration.token.trim()
+      try {
+        await upsertRootEnvVar('TG_TOKEN', tgIntegration.token.trim())
+      } catch (err: unknown) {
+        logger.warn('Не удалось синхронизировать TG_TOKEN из integrations.json в .env', err)
+      }
     }
   }
   flowProcessor.setBot(bot)

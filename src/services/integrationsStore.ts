@@ -411,9 +411,13 @@ class IntegrationsStore {
   async setLinkedChats(
     integrationId: string,
     chats: PlatformChannelInfo[],
+    options?: { keepExistingIfEmpty?: boolean },
   ): Promise<IntegrationRecord | undefined> {
     const integ = this.getIntegration(integrationId)
     if (!integ) return undefined
+    if (options?.keepExistingIfEmpty && chats.length === 0 && (integ.linkedChats?.length ?? 0) > 0) {
+      return integ
+    }
     const linkedChats: IntegrationLinkedChat[] = chats.map((c) => ({
       id: c.id,
       title: c.title,

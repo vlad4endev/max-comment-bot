@@ -95,7 +95,9 @@ declare class IntegrationsStore {
     }): Promise<void>;
     appendForwardedLog(entry: Omit<ForwardedLogEntry, 'id' | 'forwardedAt'>): Promise<void>;
     getForwardedLog(limit: number, flowId?: string): ForwardedLogEntry[];
-    setLinkedChats(integrationId: string, chats: PlatformChannelInfo[]): Promise<IntegrationRecord | undefined>;
+    setLinkedChats(integrationId: string, chats: PlatformChannelInfo[], options?: {
+        keepExistingIfEmpty?: boolean;
+    }): Promise<IntegrationRecord | undefined>;
     getTelegramIntegration(): IntegrationRecord | undefined;
     bumpIntegrationActivity(integrationId: string, posts?: number): Promise<void>;
     /** Удаляет потоки, у которых источник или назначение — этот MAX-канал. */

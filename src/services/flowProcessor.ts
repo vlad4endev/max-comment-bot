@@ -262,7 +262,7 @@ export class FlowProcessor {
     }
 
     if (flow.source.platform === 'telegram') {
-      const tgToken = getTelegramToken() || integ.token
+      const tgToken = (integ.token || getTelegramToken()).trim()
       if (!tgToken) return { posts: [], lastMessageId: cursorBefore, cursorBefore }
       const channelKey = flow.source.channelId ?? flow.source.channelUsername ?? ''
       const { posts, lastMessageId } = await fetchTelegramChannelPosts(

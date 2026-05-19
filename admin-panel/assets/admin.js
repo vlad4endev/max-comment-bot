@@ -1918,6 +1918,12 @@
       '</span></div>';
     if (platform === 'telegram' && connected && record) {
       html +=
+        '<div class="int-meta"><span>Бот: <strong>' +
+        esc(record.name || 'Telegram') +
+        '</strong></span><span>Bot Token: <code>••••••••' +
+        esc(record.tokenPreview || '') +
+        '</code></span></div>';
+      html +=
         '<div class="tg-chats-panel-wrap" data-tg-chats-panel="' +
         esc(record.id) +
         '"></div>';
@@ -2120,6 +2126,16 @@
         if (!token) { showToast('Укажите токен', 'error'); return; }
         postJsonAbs(API_INTEGRATIONS + '/connect', body)
           .then(function (res) {
+            if (res.integration) {
+              var idx = integrationsCache.findIndex(function (i) {
+                return i.id === res.integration.id || i.platform === res.integration.platform;
+              });
+              if (idx >= 0) integrationsCache[idx] = res.integration;
+              else integrationsCache.push(res.integration);
+            }
+            if (res.channels && res.channels.length) {
+              tgLinkedChatsCache = res.channels;
+            }
             var n = (res.channels && res.channels.length) || 0;
             var msg = n ? 'Подключено. Найдено чатов: ' + n : (res.hint || 'Подключено');
             showToast(msg, n ? 'success' : 'info');

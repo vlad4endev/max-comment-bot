@@ -29,6 +29,73 @@ export type TelegramLinkedChat = PlatformChannelInfo & {
 
 const TG_API = 'https://api.telegram.org'
 
+const TELEGRAM_DISCOVERY_UPDATES = [
+  'message',
+  'edited_message',
+  'channel_post',
+  'edited_channel_post',
+  'my_chat_member',
+] as const
+
+/** Webhook блокирует getUpdates — для опроса и обнаружения чатов нужен polling. */
+export async function ensureTelegramPollingMode(token: string): Promise<void> {
+  try {
+    const { data } = await axios.get<{
+      ok: boolean
+      result?: { url?: string }
+    }>(`${TG_API}/bot${token}/getWebhookInfo`, { timeout: 10_000 })
+    const url = data.result?.url?.trim()
+    if (!data.ok || !url) {
+      return
+    }
+    await axios.get(`${TG_API}/bot${token}/deleteWebhook`, {
+      params: { drop_pending_updates: false },
+      timeout: 15_000,
+    })
+    logger.info('ensureTelegramPollingMode: webhook снят для getUpdates', { hadUrl: url })
+  } catch (err: unknown) {
+    logger.warn('ensureTelegramPollingMode failed', err)
+  }
+}
+
+export function mergePlatformChannels(
+  existing: PlatformChannelInfo[] | undefined,
+  discovered: PlatformChannelInfo[],
+): PlatformChannelInfo[] {
+  const seen = new Map<string, PlatformChannelInfo>()
+  for (const ch of existing ?? []) {
+    seen.set(ch.id, { ...ch })
+  }
+  for (const ch of discovered) {
+    const prev = seen.get(ch.id)
+    if (!prev) {
+      seen.set(ch.id, ch)
+      continue
+    }
+    seen.set(ch.id, {
+      id: ch.id,
+      title: ch.title.length > prev.title.length ? ch.title : prev.title,
+      username: ch.username ?? prev.username,
+      type: ch.type && ch.type !== 'unknown' ? ch.type : prev.type,
+      botIsAdmin: prev.botIsAdmin === true || ch.botIsAdmin === true,
+    })
+  }
+  const typeOrder: Record<TelegramChatType, number> = {
+    channel: 0,
+    supergroup: 1,
+    group: 2,
+    private: 3,
+    unknown: 4,
+  }
+  return [...seen.values()].sort((a, b) => {
+    const adminDiff = Number(b.botIsAdmin === true) - Number(a.botIsAdmin === true)
+    if (adminDiff !== 0) return adminDiff
+    const typeDiff = (typeOrder[a.type ?? 'unknown'] ?? 9) - (typeOrder[b.type ?? 'unknown'] ?? 9)
+    if (typeDiff !== 0) return typeDiff
+    return a.title.localeCompare(b.title, 'ru')
+  })
+}
+
 export async function validateTelegramToken(token: string): Promise<PlatformTestResult> {
   try {
     const { data } = await axios.get<{ ok: boolean; result?: { username?: string; first_name?: string } }>(
@@ -178,6 +245,13 @@ export async function listTelegramBotChats(
   token: string,
   integrationId?: string,
 ): Promise<PlatformChannelInfo[]> {
+  const trimmed = token.trim()
+  if (trimmed === '') {
+    return []
+  }
+
+  await ensureTelegramPollingMode(trimmed)
+
   const seen = new Map<string, PlatformChannelInfo>()
   await flowStateStore.load()
   let offset =
@@ -187,14 +261,18 @@ export async function listTelegramBotChats(
 
   try {
     for (let page = 0; page < 8; page++) {
-      const params: Record<string, number> = { limit: 100, timeout: 0 }
+      const params: Record<string, number | string> = {
+        limit: 100,
+        timeout: 0,
+        allowed_updates: JSON.stringify(TELEGRAM_DISCOVERY_UPDATES),
+      }
       if (offset !== undefined) {
         params.offset = offset
       }
       const { data } = await axios.get<{
         ok: boolean
         result?: Array<Record<string, unknown>>
-      }>(`${TG_API}/bot${token}/getUpdates`, { params, timeout: 20_000 })
+      }>(`${TG_API}/bot${trimmed}/getUpdates`, { params, timeout: 20_000 })
 
       if (!data.ok || !data.result?.length) {
         break
@@ -407,6 +485,7 @@ export async function fetchTelegramChannelPosts(
 ): Promise<{ posts: ExternalPost[]; lastMessageId: number }> {
   return withTelegramIntegrationLock(integrationId, async () => {
     await flowStateStore.load()
+    await ensureTelegramPollingMode(token.trim())
     try {
       const storedOffset = flowStateStore.getTelegramUpdateOffset(integrationId)
       const params: Record<string, string | number> = {

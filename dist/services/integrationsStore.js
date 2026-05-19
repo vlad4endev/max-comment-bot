@@ -306,10 +306,13 @@ class IntegrationsStore {
         }
         return list.slice(0, limit);
     }
-    async setLinkedChats(integrationId, chats) {
+    async setLinkedChats(integrationId, chats, options) {
         const integ = this.getIntegration(integrationId);
         if (!integ)
             return undefined;
+        if (options?.keepExistingIfEmpty && chats.length === 0 && (integ.linkedChats?.length ?? 0) > 0) {
+            return integ;
+        }
         const linkedChats = chats.map((c) => ({
             id: c.id,
             title: c.title,

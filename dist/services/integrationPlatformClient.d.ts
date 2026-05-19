@@ -18,6 +18,9 @@ export type TelegramLinkedChat = PlatformChannelInfo & {
     type: TelegramChatType;
     botIsAdmin: boolean;
 };
+/** Webhook блокирует getUpdates — для опроса и обнаружения чатов нужен polling. */
+export declare function ensureTelegramPollingMode(token: string): Promise<void>;
+export declare function mergePlatformChannels(existing: PlatformChannelInfo[] | undefined, discovered: PlatformChannelInfo[]): PlatformChannelInfo[];
 export declare function validateTelegramToken(token: string): Promise<PlatformTestResult>;
 export declare function validateVkToken(token: string, groupId?: string): Promise<PlatformTestResult>;
 export declare function testIntegration(platform: IntegrationPlatform, token: string, groupId?: string): Promise<PlatformTestResult>;
