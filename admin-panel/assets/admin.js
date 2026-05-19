@@ -646,6 +646,7 @@
 
   function mountMaxChatsPanel(panel, chats) {
     if (!panel) return;
+    panel.removeAttribute('data-max-bound');
     var list = chats || [];
     var updatedAt = maxChannelsRefreshedAt
       ? 'Обновлено: ' + fmtRelativeTime(maxChannelsRefreshedAt)
@@ -661,7 +662,8 @@
   }
 
   function bindMaxChatsPanel(panel) {
-    if (!panel) return;
+    if (!panel || panel.getAttribute('data-max-bound') === '1') return;
+    panel.setAttribute('data-max-bound', '1');
     qsa('[data-copy-max-channel]', panel).forEach(function (btn) {
       btn.addEventListener('click', function () {
         var v = btn.getAttribute('data-copy-max-channel') || '';
@@ -2235,7 +2237,7 @@
               ? intMaxMeta.channels
               : maxLinkedChatsCache;
           html += maxIntegrationCardHtml(intMaxMeta);
-          html += '</motion>';
+          html += '</div>';
         } else if (integrationsTab === 'flows') {
           html += '<div class="flows-list">';
           flowsCache.forEach(function (f) { html += flowCardHtml(f); });
@@ -2282,15 +2284,25 @@
         if (maxPanel) {
           mountMaxChatsPanel(maxPanel, maxLinkedChatsCache);
           bindMaxChatsPanel(maxPanel);
-          if (!maxLinkedChatsCache.length) {
-            fetchMaxLinkedChannels(true)
-              .then(function (data) {
-                mountMaxChatsPanel(maxPanel, data.channels || []);
-                bindMaxChatsPanel(maxPanel);
-                refreshIcons();
-              })
-              .catch(function () {});
-          }
+          fetchMaxLinkedChannels(true)
+            .then(function (data) {
+              mountMaxChatsPanel(maxPanel, data.channels || []);
+              bindMaxChatsPanel(maxPanel);
+              var metaEl = qs('[data-max-channels-meta]', main);
+              if (metaEl && data.channels) {
+                var admins = data.adminCount != null ? data.adminCount : 0;
+                metaEl.innerHTML =
+                  '<span>Каналов: <strong>' +
+                  esc(String(data.channels.length)) +
+                  '</strong> (админ: <strong>' +
+                  esc(String(admins)) +
+                  '</strong>)</span><span>Bot Token: <code>••••••••' +
+                  esc((intMaxMeta && intMaxMeta.tokenPreview) || '') +
+                  '</code></span>';
+              }
+              refreshIcons();
+            })
+            .catch(function () {});
         }
         refreshIcons();
       })
