@@ -1,4 +1,5 @@
 import type { Bot } from '@maxhub/max-bot-api';
+import type { Comment } from './commentStore';
 export interface AdminNotificationSendResult {
     admin_id: number;
     message_mid: string;
@@ -33,6 +34,15 @@ export declare function notifyAdminsNewMiniappComment(bot: Bot, input: {
     commentPhotoUrls?: string[];
     postId: string;
 }): Promise<void>;
+/**
+ * Текст одного DM админу: исходное «новый комментарий» без изменений + короткая пометка.
+ * Полная переписка — только в миниаппе.
+ */
+export declare function buildAdminCommentNotificationBody(comment: Comment): string | null;
+/**
+ * Обновляет одно и то же уведомление админам о комментарии (дописывает хронологию ответов).
+ */
+export declare function syncAdminCommentNotification(bot: Bot, comment: Comment, postId: string, channelChatId: number): Promise<void>;
 /**
  * Шлёт пользователю DM об ответе канала на комментарий (кнопка «Открыть»). Ошибки доставки логируются.
  */

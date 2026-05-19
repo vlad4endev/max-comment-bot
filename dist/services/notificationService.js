@@ -5,6 +5,8 @@ exports.deliverAdminNotifications = deliverAdminNotifications;
 exports.collectAdminNotifyRecipientIds = collectAdminNotifyRecipientIds;
 exports.notifyAllAdmins = notifyAllAdmins;
 exports.notifyAdminsNewMiniappComment = notifyAdminsNewMiniappComment;
+exports.buildAdminCommentNotificationBody = buildAdminCommentNotificationBody;
+exports.syncAdminCommentNotification = syncAdminCommentNotification;
 exports.notifyUserAboutMiniappReply = notifyUserAboutMiniappReply;
 const max_bot_api_1 = require("@maxhub/max-bot-api");
 const config_1 = require("../config");
@@ -12,6 +14,7 @@ const channelNotifyLinkStore_1 = require("./channelNotifyLinkStore");
 const commentStore_1 = require("./commentStore");
 const subscriberStore_1 = require("./subscriberStore");
 const postStore_1 = require("./postStore");
+const stateManager_1 = require("./stateManager");
 const logger_1 = require("../utils/logger");
 function preview80(text) {
     const t = text.trim().replace(/\s+/g, ' ');
@@ -83,23 +86,70 @@ async function getChannelAdmins(bot, chatId) {
 function isFallbackAdminChatRecipient(recipientId) {
     return recipientId === config_1.config.ADMIN_CHAT_ID;
 }
+/** MAX: нет личного диалога с пользователем (часто не нажали /start боту). */
+function isDialogNotFoundError(err) {
+    if (typeof err !== 'object' || err === null) {
+        return false;
+    }
+    const o = err;
+    if (o.status !== 404) {
+        return false;
+    }
+    const code = o.response && typeof o.response === 'object' ? o.response.code : undefined;
+    return code === 'dialog.not.found';
+}
+/**
+ * Личка админу: сначала {@link Bot.api.sendMessageToUser}; при `dialog.not.found` — повтор в сохранённый
+ * приватный чат (`stateManager`), если пользователь уже открывал бота.
+ */
+async function sendAdminDirectMessage(bot, recipientId, message, extra) {
+    if (isFallbackAdminChatRecipient(recipientId)) {
+        return bot.api.sendMessageToChat(config_1.config.ADMIN_CHAT_ID, message, extra);
+    }
+    try {
+        return await bot.api.sendMessageToUser(recipientId, message, extra);
+    }
+    catch (firstErr) {
+        if (!isDialogNotFoundError(firstErr)) {
+            throw firstErr;
+        }
+        const privateChatId = stateManager_1.stateManager.getUserPrivateChatId(recipientId);
+        if (privateChatId === undefined) {
+            throw firstErr;
+        }
+        try {
+            const sent = await bot.api.sendMessageToChat(privateChatId, message, extra);
+            return sent;
+        }
+        catch {
+            throw firstErr;
+        }
+    }
+}
 async function deliverAdminNotifications(bot, sourceChatId, recipientIds, message, extra) {
     const unique = [...new Set(recipientIds)];
     const out = [];
     for (const recipientId of unique) {
         try {
-            const sent = isFallbackAdminChatRecipient(recipientId)
-                ? await bot.api.sendMessageToChat(config_1.config.ADMIN_CHAT_ID, message, extra)
-                : await bot.api.sendMessageToUser(recipientId, message, extra);
+            const sent = await sendAdminDirectMessage(bot, recipientId, message, extra);
             out.push({ admin_id: recipientId, message_mid: sent.body.mid });
             logger_1.logger.info('Уведомление админу доставлено', { recipientId, sourceChat: sourceChatId });
         }
         catch (err) {
-            logger_1.logger.warn('Не удалось отправить уведомление админу (пропускаем и идём дальше)', {
-                recipientId,
-                sourceChat: sourceChatId,
-                err,
-            });
+            if (isDialogNotFoundError(err)) {
+                logger_1.logger.debug('Не удалось отправить уведомление админу: нет диалога с ботом (нужен /start в личке с ботом)', {
+                    recipientId,
+                    sourceChat: sourceChatId,
+                    ...loggableApiError(err),
+                });
+            }
+            else {
+                logger_1.logger.warn('Не удалось отправить уведомление админу (пропускаем и идём дальше)', {
+                    recipientId,
+                    sourceChat: sourceChatId,
+                    err,
+                });
+            }
         }
     }
     return out;
@@ -164,6 +214,76 @@ async function notifyAdminsNewMiniappComment(bot, input) {
     });
     for (const { admin_id, message_mid } of sent) {
         commentStore_1.commentStore.saveNotificationMid(input.commentId, admin_id, message_mid);
+    }
+}
+function channelReplyCountLabel(n) {
+    const m10 = n % 10;
+    const m100 = n % 100;
+    if (m10 === 1 && m100 !== 11) {
+        return `${n} ответ`;
+    }
+    if (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) {
+        return `${n} ответа`;
+    }
+    return `${n} ответов`;
+}
+function countChannelReplies(comment) {
+    if (Array.isArray(comment.replies) && comment.replies.length > 0) {
+        return comment.replies.length;
+    }
+    return comment.reply ? 1 : 0;
+}
+/**
+ * Текст одного DM админу: исходное «новый комментарий» без изменений + короткая пометка.
+ * Полная переписка — только в миниаппе.
+ */
+function buildAdminCommentNotificationBody(comment) {
+    const base = comment.notification_text?.trim();
+    if (!base) {
+        return null;
+    }
+    const replyCount = countChannelReplies(comment);
+    if (replyCount === 0) {
+        return base;
+    }
+    return `${base}\n\n💬 Канал ответил (${channelReplyCountLabel(replyCount)}). Переписка — в комментариях.`;
+}
+/**
+ * Обновляет одно и то же уведомление админам о комментарии (дописывает хронологию ответов).
+ */
+async function syncAdminCommentNotification(bot, comment, postId, channelChatId) {
+    const body = buildAdminCommentNotificationBody(comment);
+    if (!body) {
+        logger_1.logger.warn('syncAdminCommentNotification: missing notification_text', {
+            commentId: comment.comment_id,
+        });
+        return;
+    }
+    const mids = commentStore_1.commentStore.getNotificationMids(comment.comment_id);
+    if (mids.length === 0) {
+        return;
+    }
+    if (!(0, postStore_1.isMiniAppOpenUrlConfigured)()) {
+        logger_1.logger.warn('syncAdminCommentNotification: BOT_NICKNAME / MINI_APP_URL not set for Mini App links');
+        return;
+    }
+    const openUrl = (0, postStore_1.buildMiniAppUrl)(postId, channelChatId, { admin: '1' });
+    const keyboard = max_bot_api_1.Keyboard.inlineKeyboard([[max_bot_api_1.Keyboard.button.link('💬 Открыть комментарии', openUrl)]]);
+    for (const { admin_id, message_mid } of mids) {
+        try {
+            await bot.api.editMessage(message_mid, {
+                text: body,
+                attachments: [keyboard],
+            });
+        }
+        catch (e) {
+            logger_1.logger.warn('syncAdminCommentNotification: editMessage failed', {
+                admin_id,
+                message_mid,
+                commentId: comment.comment_id,
+                e,
+            });
+        }
     }
 }
 /**

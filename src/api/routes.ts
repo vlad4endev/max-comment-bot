@@ -3,7 +3,6 @@ import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 
 import type { Bot } from '@maxhub/max-bot-api'
-import { Keyboard } from '@maxhub/max-bot-api'
 import type { ChatMember } from '@maxhub/max-bot-api/types'
 import express from 'express'
 import multer from 'multer'
@@ -28,9 +27,10 @@ import { subscriberStore } from '../services/subscriberStore'
 import {
   notifyAdminsNewMiniappComment,
   notifyUserAboutMiniappReply,
+  syncAdminCommentNotification,
 } from '../services/notificationService'
 import type { Post } from '../services/postStore'
-import { buildMiniAppUrl, isMiniAppOpenUrlConfigured, postStore } from '../services/postStore'
+import { postStore } from '../services/postStore'
 import { stateManager } from '../services/stateManager'
 import {
   parseMiniappFeatureKey,
@@ -222,8 +222,27 @@ function toWireComment(c: Comment): {
   timestamp: string
   avatar_url?: string
   photo_urls?: string[]
-  reply?: { text: string; timestamp: string; admin_name?: string; photo_urls?: string[] }
+  reply?: {
+    reply_id?: string
+    text: string
+    timestamp: string
+    admin_name?: string
+    photo_urls?: string[]
+  }
+  replies?: {
+    reply_id?: string
+    text: string
+    timestamp: string
+    admin_name?: string
+    photo_urls?: string[]
+  }[]
 } {
+  const replies =
+    Array.isArray(c.replies) && c.replies.length > 0
+      ? c.replies
+      : c.reply
+        ? [c.reply]
+        : undefined
   return {
     comment_id: c.comment_id,
     post_id: c.post_id,
@@ -235,7 +254,8 @@ function toWireComment(c: Comment): {
     ...(Array.isArray(c.photo_urls) && c.photo_urls.length > 0
       ? { photo_urls: c.photo_urls }
       : {}),
-    reply: c.reply,
+    ...(c.reply ? { reply: c.reply } : {}),
+    ...(replies ? { replies } : {}),
   }
 }
 
@@ -1009,37 +1029,17 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
       adminText,
       channelReplyName,
       replyPhotoUrls,
+      replierNameForStatus,
     )
     if (!updated) {
       res.status(404).json({ error: 'comment not found' })
       return
     }
 
-    const mids = commentStore.getNotificationMids(commentId)
-    const originalText = updated.notification_text
-    if (mids.length > 0 && originalText && isMiniAppOpenUrlConfigured()) {
-      const replyPreview = adminText.slice(0, 80)
-      const ellipsis = adminText.length > 80 ? '...' : ''
-      const photosNote = replyPhotoUrls.length > 0 ? ` + ${replyPhotoUrls.length} фото` : ''
-      const statusLine =
-        adminText !== ''
-          ? `\n\n✅ Ответил ${replierNameForStatus}: «${replyPreview}${ellipsis}»${photosNote}`
-          : `\n\n✅ Ответил ${replierNameForStatus}: фото (${replyPhotoUrls.length})`
-      const updatedText = `${originalText}${statusLine}`
-      const miniAppUrl = buildMiniAppUrl(postId, chatId, { admin: '1' })
-      const kb = Keyboard.inlineKeyboard([[Keyboard.button.link('✅ Просмотрено', miniAppUrl)]])
-      for (const { admin_id, message_mid } of mids) {
-        try {
-          await deps.bot.api.editMessage(message_mid, {
-            text: updatedText,
-            attachments: [kb],
-          })
-        } catch (e: unknown) {
-          logger.warn('Could not update notification message', { admin_id, message_mid, e })
-        }
-      }
-    } else if (mids.length > 0 && !originalText) {
-      logger.warn('POST /api/reply: skip notification edit (missing notification_text)', { commentId })
+    try {
+      await syncAdminCommentNotification(deps.bot, updated, postId, chatId)
+    } catch (err: unknown) {
+      logger.warn('POST /api/reply: sync admin notification failed', { commentId, err })
     }
 
     await notifyUserAboutMiniappReply(deps.bot, {
@@ -1053,7 +1053,8 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
       channelChatId: chatId,
     })
 
-    res.json({ ok: true })
+    const [enriched] = await enrichCommentsWithAvatars(deps.bot, chatId, [updated])
+    res.json(toWireComment(enriched ?? updated))
   })
 
   router.patch('/comment', async (req, res) => {
@@ -1195,6 +1196,11 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
       res.status(404).json({ error: 'reply not found' })
       return
     }
+    try {
+      await syncAdminCommentNotification(deps.bot, updated, postId, chatId)
+    } catch (err: unknown) {
+      logger.warn('PATCH /api/reply: sync admin notification failed', { commentId, err })
+    }
     res.json(toWireComment(updated))
   })
 
@@ -1217,6 +1223,14 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
     if (!updated) {
       res.status(404).json({ error: 'reply not found' })
       return
+    }
+    try {
+      await syncAdminCommentNotification(deps.bot, updated, input.postId, input.chatId)
+    } catch (err: unknown) {
+      logger.warn('DELETE /api/reply: sync admin notification failed', {
+        commentId: input.commentId,
+        err,
+      })
     }
     res.json(toWireComment(updated))
   }

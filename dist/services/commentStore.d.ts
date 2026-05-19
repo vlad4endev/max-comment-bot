@@ -1,4 +1,5 @@
 export interface CommentReply {
+    reply_id?: string;
     text: string;
     timestamp: string;
     /** Display name of the admin who replied (from Mini App). */
@@ -10,6 +11,13 @@ export interface CommentReply {
 export interface CommentAdminNotificationMid {
     admin_id: number;
     message_mid: string;
+}
+/** One channel reply line shown in the admin DM thread (appended on each answer). */
+export interface CommentNotificationReplyLogEntry {
+    text: string;
+    timestamp: string;
+    replier_name: string;
+    photo_count?: number;
 }
 /**
  * Persisted comment for a post (Mini App + API).
@@ -26,11 +34,16 @@ export interface Comment {
     /** Attached image URLs (served by backend). */
     photo_urls?: string[];
     reply?: CommentReply;
+    /** All channel replies in order (miniapp thread); {@link reply} mirrors the latest. */
+    replies?: CommentReply[];
     /** Original admin-notification body (before «✅ Отвечено» line is appended). */
     notification_text?: string;
     /** One entry per admin who received the new-comment DM. */
     notification_mids?: CommentAdminNotificationMid[];
+    /** Chronology of channel replies appended to the single admin notification. */
+    notification_reply_log?: CommentNotificationReplyLogEntry[];
 }
+export declare function replyToNotificationLogEntry(reply: CommentReply, notificationReplierName?: string): CommentNotificationReplyLogEntry;
 export declare class CommentStore {
     private statements;
     loadFromDisk(): Promise<void>;
@@ -40,7 +53,7 @@ export declare class CommentStore {
      * Attaches a channel reply to a comment. Returns updated comment or `null`.
      * @param replyAdminName optional display name of the replying admin (non-empty trimmed string is stored).
      */
-    addReply(commentId: string, replyText: string, replyAdminName?: string, replyPhotoUrls?: string[]): Comment | null;
+    addReply(commentId: string, replyText: string, replyAdminName?: string, replyPhotoUrls?: string[], notificationReplierName?: string): Comment | null;
     /**
      * Updates comment body text. Returns updated comment or `null`.
      */

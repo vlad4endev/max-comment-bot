@@ -1210,6 +1210,64 @@
     #view-comments .comment-group.swipe-reply .msg-user {
       transform: translateX(-24px);
     }
+    #view-comments .feed-msg.msg-channel {
+      display: flex;
+      flex-direction: row;
+      align-items: flex-start;
+      gap: 8px;
+      max-width: 100%;
+      margin-top: 8px;
+      margin-left: 38px;
+      position: relative;
+    }
+    #view-comments .feed-msg.msg-channel .av-ch {
+      width: 30px;
+      height: 30px;
+      border-radius: 50%;
+      flex-shrink: 0;
+      font-size: 11px;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      line-height: 1;
+      overflow: hidden;
+      background: var(--accent-bg);
+      color: var(--accent-strong);
+    }
+    #view-comments .feed-msg.msg-channel .bubble-ch {
+      position: relative;
+      flex: 1;
+      min-width: 0;
+      max-width: calc(100% - 60px);
+      padding: 10px 13px;
+      border-radius: 4px 16px 16px 16px;
+      background: var(--accent-bg);
+      border: 1px solid var(--accent-border);
+    }
+    #view-comments .feed-msg.msg-channel .cname {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--accent-strong);
+      margin-bottom: 2px;
+    }
+    #view-comments .feed-msg.msg-channel .ctext {
+      font-size: 14px;
+      line-height: 1.45;
+      color: var(--text-strong);
+      word-break: break-word;
+      white-space: pre-wrap;
+    }
+    #view-comments .feed-msg.msg-channel .ctime {
+      font-size: 10px;
+      color: var(--text-tiny);
+      margin-top: 6px;
+    }
+    #view-comments .feed-msg.msg-channel .av-ch img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
     #view-comments .msg-user .av {
       width: 30px;
       height: 30px;
@@ -1428,7 +1486,7 @@
     #view-comments .comment-group.admin-menu-open.admin-menu--comment > .admin-actions.admin-context-menu {
       display: flex;
     }
-    #view-comments .comment-group.admin-menu-open.admin-menu--reply .reply-block .admin-actions.admin-context-menu {
+    #view-comments .comment-group.admin-menu-open.admin-menu--reply .msg-channel.msg-channel-last .admin-actions.admin-context-menu {
       display: flex;
     }
     #view-comments .admin-actions.admin-context-menu .admin-act-btn {
@@ -3552,31 +3610,68 @@
         );
       }
 
-      function buildReplyBlockHtml(c) {
+      function listCommentReplies(c) {
+        if (Array.isArray(c.replies) && c.replies.length) {
+          return c.replies;
+        }
+        if (c.reply) {
+          return [c.reply];
+        }
+        return [];
+      }
+
+      function channelAvatarBlockHtml() {
+        var name =
+          chNameEl && chNameEl.textContent ? String(chNameEl.textContent).trim() : 'Канал';
+        if (!name) name = 'Канал';
+        if (chAvatarEl) {
+          var img = chAvatarEl.querySelector('img');
+          if (img) {
+            var src = img.getAttribute('src') || img.src || '';
+            if (src) {
+              return '<img src="' + esc(src) + '" alt="" />';
+            }
+          }
+        }
+        return esc(initials(name));
+      }
+
+      function buildChannelMsgHtml(reply, commentId, isLastReply) {
         var adminTrim =
-          c.reply && typeof c.reply.admin_name === 'string' ? c.reply.admin_name.trim() : '';
+          reply && typeof reply.admin_name === 'string' ? reply.admin_name.trim() : '';
         var replyNameRaw =
           adminTrim ||
           (chNameEl && chNameEl.textContent && String(chNameEl.textContent).trim()) ||
           'Канал';
         var replyLabel = escDisplay(replyNameRaw);
-        var adminReplyActs = buildAdminActionsHtml(c.comment_id, 'reply');
-        var replyT = c.reply && c.reply.timestamp ? parseCommentTimestamp(c.reply.timestamp) : null;
+        var adminReplyActs = isLastReply ? buildAdminActionsHtml(commentId, 'reply') : '';
+        var replyT = reply && reply.timestamp ? parseCommentTimestamp(reply.timestamp) : null;
         var replyClock = formatCommentClock(replyT);
-        var replyText = c.reply && typeof c.reply.text === 'string' ? c.reply.text : '';
-        var replyMedia = buildMediaGridHtml(c.reply && c.reply.photo_urls);
+        var replyText = reply && typeof reply.text === 'string' ? reply.text : '';
+        var replyMedia = buildMediaGridHtml(reply && reply.photo_urls);
+        var rid =
+          reply && reply.reply_id
+            ? String(reply.reply_id)
+            : reply && reply.timestamp
+              ? String(reply.timestamp)
+              : '';
+        var lastCls = isLastReply ? ' msg-channel-last' : '';
         return (
-          '<div class="reply-block">' +
-          '<div class="reply-inner">' +
-          '<div class="reply-tag"><div class="reply-dot"></div><span>' +
-          replyLabel +
-          '</span></div>' +
-          '<div class="reply-quote">' +
-          escDisplay(c.text) +
+          '<div class="feed-msg msg-channel' +
+          lastCls +
+          '" data-reply-id="' +
+          esc(rid) +
+          '">' +
+          '<div class="av av-ch">' +
+          channelAvatarBlockHtml() +
           '</div>' +
-          (replyText ? '<div class="reply-text">' + escDisplay(replyText) + '</div>' : '') +
+          '<div class="bubble-ch">' +
+          '<div class="cname">' +
+          replyLabel +
+          '</div>' +
+          (replyText ? '<div class="ctext">' + escDisplay(replyText) + '</div>' : '') +
           replyMedia +
-          '<div class="reply-time">' +
+          '<div class="ctime">' +
           esc(replyClock) +
           '</div>' +
           '</div>' +
@@ -3584,7 +3679,6 @@
           '</div>'
         );
       }
-
       function resolveCommentAvatarUrl(c) {
         if (c.avatar_url && String(c.avatar_url).trim()) {
           return String(c.avatar_url).trim();
@@ -3598,9 +3692,14 @@
       function buildUserBlock(c) {
         var av = avatarBlockHtml(resolveCommentAvatarUrl(c), c.username);
         var commentMedia = buildMediaGridHtml(c.photo_urls);
+        var replies = listCommentReplies(c);
         var replyHtml = '';
-        if (c.reply) {
-          replyHtml = buildReplyBlockHtml(c);
+        if (replies.length) {
+          replyHtml = replies
+            .map(function (r, idx) {
+              return buildChannelMsgHtml(r, c.comment_id, idx === replies.length - 1);
+            })
+            .join('');
         }
         var commentAdminActs = buildAdminActionsHtml(c.comment_id, 'comment');
         var cts = parseCommentTimestamp(c.timestamp);
@@ -3636,8 +3735,8 @@
           esc(timeShown) +
           '</div>' +
           '</div></div>' +
-          replyBelow +
           commentAdminActs +
+          replyBelow +
           replyHtml +
           '</div>'
         );
@@ -3663,7 +3762,7 @@
         if (isAdmin) {
           var pressTimer = null;
           var msgEl = node.querySelector('.msg-user');
-          if (msgEl) {
+          if (msgEl && node.dataset.commentWired !== '1') {
             var swipe = { active: false, sx: 0, sy: 0 };
             msgEl.addEventListener(
               'touchstart',
@@ -3725,9 +3824,11 @@
               e.preventDefault();
               openAdminContextMenu(node, 'comment');
             });
+            node.dataset.commentWired = '1';
           }
-          var replyEl = node.querySelector('.reply-block');
-          if (replyEl) {
+          var replyEl = node.querySelector('.msg-channel.msg-channel-last');
+          if (replyEl && replyEl.dataset.channelWired !== '1') {
+            replyEl.dataset.channelWired = '1';
             var replyTouch = { sx: 0, sy: 0, active: false };
             replyEl.addEventListener(
               'touchstart',
@@ -3772,7 +3873,8 @@
             });
           }
           var replyQuick = node.querySelector('[data-reply-comment]');
-          if (replyQuick) {
+          if (replyQuick && replyQuick.dataset.replyWired !== '1') {
+            replyQuick.dataset.replyWired = '1';
             replyQuick.addEventListener('click', function (e) {
               e.preventDefault();
               e.stopPropagation();
@@ -3815,6 +3917,8 @@
         if (!cid || cid.indexOf('temp-') === 0) return;
 
         block.querySelectorAll('[data-edit-comment]').forEach(function (btn) {
+          if (btn.dataset.actWired === '1') return;
+          btn.dataset.actWired = '1';
           btn.addEventListener('click', function () {
             block.classList.remove('admin-menu-open', 'admin-menu--comment', 'admin-menu--reply');
             var box = block.querySelector(
@@ -3830,14 +3934,16 @@
         });
 
         block.querySelectorAll('[data-edit-reply]').forEach(function (btn) {
+          if (btn.dataset.actWired === '1') return;
+          btn.dataset.actWired = '1';
           btn.addEventListener('click', function () {
             block.classList.remove('admin-menu-open', 'admin-menu--comment', 'admin-menu--reply');
             var box = block.querySelector(
               '[data-admin-edit-box="' + cssEsc(cid) + '"][data-edit-kind="reply"]'
             );
-            var rtext = block.querySelector('.reply-text');
+            var rtext = block.querySelector('.msg-channel.msg-channel-last .ctext');
             var ta = box && box.querySelector('textarea');
-            var hasReplyMedia = !!block.querySelector('.reply-block .media-grid');
+            var hasReplyMedia = !!block.querySelector('.msg-channel.msg-channel-last .media-grid');
             if (!box || !ta) return;
             if (rtext) {
               ta.value = rtext.textContent || '';
@@ -3852,6 +3958,8 @@
         });
 
         block.querySelectorAll('[data-admin-edit-save]').forEach(function (btn) {
+          if (btn.dataset.actWired === '1') return;
+          btn.dataset.actWired = '1';
           btn.addEventListener('click', function () {
             var box = btn.closest('[data-admin-edit-box]');
             if (!box) return;
@@ -3860,7 +3968,7 @@
             var text = ta && ta.value.trim();
             if (!text && kind !== 'reply') return;
             if (!text && kind === 'reply') {
-              var hasReplyImg = !!block.querySelector('.reply-block .media-grid');
+              var hasReplyImg = !!block.querySelector('.msg-channel.msg-channel-last .media-grid');
               if (!hasReplyImg) return;
             }
             btn.disabled = true;
@@ -4022,6 +4130,27 @@
           feedEl.appendChild(node);
           wireCommentNode(node);
           knownIds.add(c.comment_id);
+          return;
+        }
+        var newReplies = listCommentReplies(c);
+        var channelEls = existing.querySelectorAll('.msg-channel');
+        var prevCount = channelEls.length;
+        if (newReplies.length > prevCount) {
+          for (var i = prevCount; i < newReplies.length; i++) {
+            existing.insertAdjacentHTML(
+              'beforeend',
+              buildChannelMsgHtml(newReplies[i], c.comment_id, i === newReplies.length - 1)
+            );
+          }
+          existing.querySelectorAll('.msg-channel').forEach(function (el, idx, all) {
+            if (idx < all.length - 1) {
+              el.classList.remove('msg-channel-last');
+              el.querySelectorAll('.admin-actions').forEach(function (a) {
+                a.remove();
+              });
+            }
+          });
+          wireCommentNode(existing);
           return;
         }
         var fresh = elFromHTML(buildUserBlock(c));
@@ -4237,10 +4366,15 @@
                   }
                   return r.json();
                 })
-                .then(function () {
+                .then(function (data) {
                   clearComposerPhotos();
                   inputEl.value = '';
                   hideReplyBanner();
+                  if (data && data.comment_id) {
+                    mergeOrUpdateComment(data);
+                    scrollToBottom();
+                    return;
+                  }
                   return loadComments(false);
                 });
             }

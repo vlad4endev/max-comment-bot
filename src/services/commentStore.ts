@@ -8,6 +8,7 @@ import { postStore } from './postStore'
 import { pushAdminActivity } from './adminActivityStore'
 
 export interface CommentReply {
+  reply_id?: string
   text: string
   timestamp: string
   /** Display name of the admin who replied (from Mini App). */
@@ -20,6 +21,14 @@ export interface CommentReply {
 export interface CommentAdminNotificationMid {
   admin_id: number
   message_mid: string
+}
+
+/** One channel reply line shown in the admin DM thread (appended on each answer). */
+export interface CommentNotificationReplyLogEntry {
+  text: string
+  timestamp: string
+  replier_name: string
+  photo_count?: number
 }
 
 /**
@@ -37,10 +46,14 @@ export interface Comment {
   /** Attached image URLs (served by backend). */
   photo_urls?: string[]
   reply?: CommentReply
+  /** All channel replies in order (miniapp thread); {@link reply} mirrors the latest. */
+  replies?: CommentReply[]
   /** Original admin-notification body (before «✅ Отвечено» line is appended). */
   notification_text?: string
   /** One entry per admin who received the new-comment DM. */
   notification_mids?: CommentAdminNotificationMid[]
+  /** Chronology of channel replies appended to the single admin notification. */
+  notification_reply_log?: CommentNotificationReplyLogEntry[]
 }
 
 function isCommentReply(value: unknown): value is CommentReply {
@@ -59,7 +72,22 @@ function isCommentReply(value: unknown): value is CommentReply {
       return false
     }
   }
+  if (o.reply_id !== undefined && typeof o.reply_id !== 'string') {
+    return false
+  }
   return typeof o.text === 'string' && typeof o.timestamp === 'string'
+}
+
+function ensureCommentReplyIds(comment: Comment): void {
+  const thread = existingRepliesList(comment)
+  for (const r of thread) {
+    if (!r.reply_id) {
+      r.reply_id = uuidv4()
+    }
+  }
+  if (thread.length > 0) {
+    setReplies(comment, thread)
+  }
 }
 
 function parseStoredUserId(value: unknown): number | null {
@@ -100,7 +128,9 @@ function normalizeCommentFromDisk(raw: unknown): Comment | null {
     typeof o.username !== 'string' ||
     typeof o.text !== 'string' ||
     typeof o.timestamp !== 'string' ||
-    (o.reply !== undefined && !isCommentReply(o.reply))
+    (o.reply !== undefined && !isCommentReply(o.reply)) ||
+    (o.replies !== undefined &&
+      (!Array.isArray(o.replies) || o.replies.some((r) => !isCommentReply(r))))
   ) {
     return null
   }
@@ -130,7 +160,17 @@ function normalizeCommentFromDisk(raw: unknown): Comment | null {
       }
     }
   }
-  return {
+  if (o.notification_reply_log !== undefined) {
+    if (!Array.isArray(o.notification_reply_log)) {
+      return null
+    }
+    for (const row of o.notification_reply_log) {
+      if (!isNotificationReplyLogEntry(row)) {
+        return null
+      }
+    }
+  }
+  const comment: Comment = {
     comment_id: o.comment_id,
     post_id: o.post_id,
     user_id: userId,
@@ -148,12 +188,68 @@ function normalizeCommentFromDisk(raw: unknown): Comment | null {
         }
       : {}),
     ...(o.reply !== undefined ? { reply: o.reply as CommentReply } : {}),
+    ...(Array.isArray(o.replies) && o.replies.length > 0
+      ? { replies: o.replies as CommentReply[] }
+      : {}),
     ...(o.notification_text !== undefined
       ? { notification_text: o.notification_text }
       : {}),
     ...(o.notification_mids !== undefined
       ? { notification_mids: o.notification_mids as CommentAdminNotificationMid[] }
       : {}),
+    ...(o.notification_reply_log !== undefined
+      ? {
+          notification_reply_log: o.notification_reply_log as CommentNotificationReplyLogEntry[],
+        }
+      : {}),
+  }
+  ensureCommentReplyIds(comment)
+  return comment
+}
+
+function isNotificationReplyLogEntry(value: unknown): value is CommentNotificationReplyLogEntry {
+  if (typeof value !== 'object' || value === null) {
+    return false
+  }
+  const o = value as Record<string, unknown>
+  if (typeof o.text !== 'string' || typeof o.timestamp !== 'string' || typeof o.replier_name !== 'string') {
+    return false
+  }
+  if (o.photo_count !== undefined && typeof o.photo_count !== 'number') {
+    return false
+  }
+  return true
+}
+
+function existingRepliesList(c: Comment): CommentReply[] {
+  if (Array.isArray(c.replies) && c.replies.length > 0) {
+    return [...c.replies]
+  }
+  return c.reply ? [c.reply] : []
+}
+
+function setReplies(c: Comment, list: CommentReply[]): void {
+  if (list.length === 0) {
+    delete c.replies
+    delete c.reply
+    return
+  }
+  c.replies = list
+  c.reply = list[list.length - 1]
+}
+
+export function replyToNotificationLogEntry(
+  reply: CommentReply,
+  notificationReplierName?: string,
+): CommentNotificationReplyLogEntry {
+  const photoCount = Array.isArray(reply.photo_urls) ? reply.photo_urls.length : 0
+  const replier =
+    notificationReplierName?.trim() || reply.admin_name?.trim() || 'Канал'
+  return {
+    text: reply.text,
+    timestamp: reply.timestamp,
+    replier_name: replier,
+    ...(photoCount > 0 ? { photo_count: photoCount } : {}),
   }
 }
 
@@ -192,7 +288,21 @@ export class CommentStore {
 
   getComments(postId: string): Comment[] {
     const rows = this.getStatements().listByPost.all(postId) as { data: string }[]
-    return rows.map((row) => this.parseRow(row.data))
+    const out: Comment[] = []
+    for (const row of rows) {
+      try {
+        const c = this.parseRow(row.data)
+        const normalized = normalizeCommentFromDisk(c)
+        if (normalized) {
+          out.push(normalized)
+        } else {
+          logger.warn('commentStore: skip corrupt comment row', { postId })
+        }
+      } catch (err: unknown) {
+        logger.warn('commentStore: skip unreadable comment row', { postId, err })
+      }
+    }
+    return out
   }
 
   /**
@@ -204,20 +314,36 @@ export class CommentStore {
     replyText: string,
     replyAdminName?: string,
     replyPhotoUrls?: string[],
+    notificationReplierName?: string,
   ): Comment | null {
     const c = this.getComment(commentId)
     if (!c) {
       return null
     }
     const trimmedName = replyAdminName?.trim()
-    const reply: CommentReply = { text: replyText, timestamp: new Date().toISOString() }
+    const reply: CommentReply = {
+      reply_id: uuidv4(),
+      text: replyText,
+      timestamp: new Date().toISOString(),
+    }
     if (trimmedName) {
       reply.admin_name = trimmedName
     }
     if (Array.isArray(replyPhotoUrls) && replyPhotoUrls.length > 0) {
       reply.photo_urls = replyPhotoUrls.map((u) => u.trim()).filter(Boolean)
     }
-    c.reply = reply
+    const thread = existingRepliesList(c)
+    thread.push(reply)
+    setReplies(c, thread)
+    const log = c.notification_reply_log ?? []
+    const newEntry = replyToNotificationLogEntry(reply, notificationReplierName)
+    const last = log[log.length - 1]
+    if (last && last.timestamp === newEntry.timestamp) {
+      log[log.length - 1] = newEntry
+      c.notification_reply_log = log
+    } else {
+      c.notification_reply_log = [...log, newEntry]
+    }
     this.saveRow(c)
     logger.info(`commentStore: reply on ${commentId}`)
     const post = postStore.getPost(c.post_id)
@@ -287,6 +413,18 @@ export class CommentStore {
         delete c.reply.photo_urls
       }
     }
+    const thread = existingRepliesList(c)
+    if (thread.length > 0) {
+      thread[thread.length - 1] = c.reply
+      c.replies = thread
+    }
+    const log = c.notification_reply_log ?? []
+    if (log.length > 0) {
+      log[log.length - 1] = replyToNotificationLogEntry(c.reply)
+      c.notification_reply_log = log
+    } else {
+      c.notification_reply_log = [replyToNotificationLogEntry(c.reply)]
+    }
     this.saveRow(c)
     logger.info(`commentStore: updated reply ${commentId}`)
     return c
@@ -297,10 +435,21 @@ export class CommentStore {
    */
   deleteReply(commentId: string): Comment | null {
     const c = this.getComment(commentId)
-    if (!c?.reply) {
+    const thread = c ? existingRepliesList(c) : []
+    if (!c || thread.length === 0) {
       return null
     }
-    delete c.reply
+    thread.pop()
+    setReplies(c, thread)
+    const log = c.notification_reply_log ?? []
+    if (log.length > 0) {
+      log.pop()
+      if (log.length > 0) {
+        c.notification_reply_log = log
+      } else {
+        delete c.notification_reply_log
+      }
+    }
     this.saveRow(c)
     logger.info(`commentStore: deleted reply ${commentId}`)
     return c
@@ -324,7 +473,15 @@ export class CommentStore {
    */
   getComment(commentId: string): Comment | null {
     const row = this.getStatements().getById.get(commentId) as { data: string } | undefined
-    return row ? this.parseRow(row.data) : null
+    if (!row) {
+      return null
+    }
+    try {
+      return normalizeCommentFromDisk(this.parseRow(row.data))
+    } catch (err: unknown) {
+      logger.warn('commentStore: getComment parse failed', { commentId, err })
+      return null
+    }
   }
 
   /**
@@ -383,7 +540,18 @@ export class CommentStore {
    */
   listAllCommentsNewestFirst(): Comment[] {
     const rows = this.getStatements().listAllNewest.all() as { data: string }[]
-    return rows.map((row) => this.parseRow(row.data))
+    const out: Comment[] = []
+    for (const row of rows) {
+      try {
+        const c = normalizeCommentFromDisk(this.parseRow(row.data))
+        if (c) {
+          out.push(c)
+        }
+      } catch {
+        // skip corrupt rows
+      }
+    }
+    return out
   }
 
   /**
@@ -421,8 +589,8 @@ export class CommentStore {
     return Number(row.n) || 0
   }
 
-  private parseRow(raw: string): Comment {
-    return JSON.parse(raw) as Comment
+  private parseRow(raw: string): unknown {
+    return JSON.parse(raw) as unknown
   }
 
   private saveRow(comment: Comment): void {

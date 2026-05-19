@@ -4,6 +4,7 @@ import type { ChatMember } from '@maxhub/max-bot-api/types'
 
 import { config } from '../config'
 import { channelNotifyLinkStore } from './channelNotifyLinkStore'
+import type { Comment } from './commentStore'
 import { commentStore } from './commentStore'
 import { subscriberStore } from './subscriberStore'
 import { buildMiniAppUrl, isMiniAppOpenUrlConfigured } from './postStore'
@@ -262,6 +263,84 @@ export async function notifyAdminsNewMiniappComment(
   })
   for (const { admin_id, message_mid } of sent) {
     commentStore.saveNotificationMid(input.commentId, admin_id, message_mid)
+  }
+}
+
+function channelReplyCountLabel(n: number): string {
+  const m10 = n % 10
+  const m100 = n % 100
+  if (m10 === 1 && m100 !== 11) {
+    return `${n} ответ`
+  }
+  if (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) {
+    return `${n} ответа`
+  }
+  return `${n} ответов`
+}
+
+function countChannelReplies(comment: Comment): number {
+  if (Array.isArray(comment.replies) && comment.replies.length > 0) {
+    return comment.replies.length
+  }
+  return comment.reply ? 1 : 0
+}
+
+/**
+ * Текст одного DM админу: исходное «новый комментарий» без изменений + короткая пометка.
+ * Полная переписка — только в миниаппе.
+ */
+export function buildAdminCommentNotificationBody(comment: Comment): string | null {
+  const base = comment.notification_text?.trim()
+  if (!base) {
+    return null
+  }
+  const replyCount = countChannelReplies(comment)
+  if (replyCount === 0) {
+    return base
+  }
+  return `${base}\n\n💬 Канал ответил (${channelReplyCountLabel(replyCount)}). Переписка — в комментариях.`
+}
+
+/**
+ * Обновляет одно и то же уведомление админам о комментарии (дописывает хронологию ответов).
+ */
+export async function syncAdminCommentNotification(
+  bot: Bot,
+  comment: Comment,
+  postId: string,
+  channelChatId: number,
+): Promise<void> {
+  const body = buildAdminCommentNotificationBody(comment)
+  if (!body) {
+    logger.warn('syncAdminCommentNotification: missing notification_text', {
+      commentId: comment.comment_id,
+    })
+    return
+  }
+  const mids = commentStore.getNotificationMids(comment.comment_id)
+  if (mids.length === 0) {
+    return
+  }
+  if (!isMiniAppOpenUrlConfigured()) {
+    logger.warn('syncAdminCommentNotification: BOT_NICKNAME / MINI_APP_URL not set for Mini App links')
+    return
+  }
+  const openUrl = buildMiniAppUrl(postId, channelChatId, { admin: '1' })
+  const keyboard = Keyboard.inlineKeyboard([[Keyboard.button.link('💬 Открыть комментарии', openUrl)]])
+  for (const { admin_id, message_mid } of mids) {
+    try {
+      await bot.api.editMessage(message_mid, {
+        text: body,
+        attachments: [keyboard],
+      })
+    } catch (e: unknown) {
+      logger.warn('syncAdminCommentNotification: editMessage failed', {
+        admin_id,
+        message_mid,
+        commentId: comment.comment_id,
+        e,
+      })
+    }
   }
 }
 

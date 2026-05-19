@@ -1,6 +1,7 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.commentStore = exports.CommentStore = void 0;
+exports.replyToNotificationLogEntry = replyToNotificationLogEntry;
 const uuid_1 = require("uuid");
 const database_1 = require("../db/database");
 const logger_1 = require("../utils/logger");
@@ -20,7 +21,21 @@ function isCommentReply(value) {
             return false;
         }
     }
+    if (o.reply_id !== undefined && typeof o.reply_id !== 'string') {
+        return false;
+    }
     return typeof o.text === 'string' && typeof o.timestamp === 'string';
+}
+function ensureCommentReplyIds(comment) {
+    const thread = existingRepliesList(comment);
+    for (const r of thread) {
+        if (!r.reply_id) {
+            r.reply_id = (0, uuid_1.v4)();
+        }
+    }
+    if (thread.length > 0) {
+        setReplies(comment, thread);
+    }
 }
 function parseStoredUserId(value) {
     if (typeof value === 'number' && Number.isInteger(value) && value > 0) {
@@ -55,7 +70,9 @@ function normalizeCommentFromDisk(raw) {
         typeof o.username !== 'string' ||
         typeof o.text !== 'string' ||
         typeof o.timestamp !== 'string' ||
-        (o.reply !== undefined && !isCommentReply(o.reply))) {
+        (o.reply !== undefined && !isCommentReply(o.reply)) ||
+        (o.replies !== undefined &&
+            (!Array.isArray(o.replies) || o.replies.some((r) => !isCommentReply(r))))) {
         return null;
     }
     if (o.notification_text !== undefined && typeof o.notification_text !== 'string') {
@@ -84,7 +101,17 @@ function normalizeCommentFromDisk(raw) {
             }
         }
     }
-    return {
+    if (o.notification_reply_log !== undefined) {
+        if (!Array.isArray(o.notification_reply_log)) {
+            return null;
+        }
+        for (const row of o.notification_reply_log) {
+            if (!isNotificationReplyLogEntry(row)) {
+                return null;
+            }
+        }
+    }
+    const comment = {
         comment_id: o.comment_id,
         post_id: o.post_id,
         user_id: userId,
@@ -102,12 +129,60 @@ function normalizeCommentFromDisk(raw) {
             }
             : {}),
         ...(o.reply !== undefined ? { reply: o.reply } : {}),
+        ...(Array.isArray(o.replies) && o.replies.length > 0
+            ? { replies: o.replies }
+            : {}),
         ...(o.notification_text !== undefined
             ? { notification_text: o.notification_text }
             : {}),
         ...(o.notification_mids !== undefined
             ? { notification_mids: o.notification_mids }
             : {}),
+        ...(o.notification_reply_log !== undefined
+            ? {
+                notification_reply_log: o.notification_reply_log,
+            }
+            : {}),
+    };
+    ensureCommentReplyIds(comment);
+    return comment;
+}
+function isNotificationReplyLogEntry(value) {
+    if (typeof value !== 'object' || value === null) {
+        return false;
+    }
+    const o = value;
+    if (typeof o.text !== 'string' || typeof o.timestamp !== 'string' || typeof o.replier_name !== 'string') {
+        return false;
+    }
+    if (o.photo_count !== undefined && typeof o.photo_count !== 'number') {
+        return false;
+    }
+    return true;
+}
+function existingRepliesList(c) {
+    if (Array.isArray(c.replies) && c.replies.length > 0) {
+        return [...c.replies];
+    }
+    return c.reply ? [c.reply] : [];
+}
+function setReplies(c, list) {
+    if (list.length === 0) {
+        delete c.replies;
+        delete c.reply;
+        return;
+    }
+    c.replies = list;
+    c.reply = list[list.length - 1];
+}
+function replyToNotificationLogEntry(reply, notificationReplierName) {
+    const photoCount = Array.isArray(reply.photo_urls) ? reply.photo_urls.length : 0;
+    const replier = notificationReplierName?.trim() || reply.admin_name?.trim() || 'Канал';
+    return {
+        text: reply.text,
+        timestamp: reply.timestamp,
+        replier_name: replier,
+        ...(photoCount > 0 ? { photo_count: photoCount } : {}),
     };
 }
 class CommentStore {
@@ -134,26 +209,58 @@ class CommentStore {
     }
     getComments(postId) {
         const rows = this.getStatements().listByPost.all(postId);
-        return rows.map((row) => this.parseRow(row.data));
+        const out = [];
+        for (const row of rows) {
+            try {
+                const c = this.parseRow(row.data);
+                const normalized = normalizeCommentFromDisk(c);
+                if (normalized) {
+                    out.push(normalized);
+                }
+                else {
+                    logger_1.logger.warn('commentStore: skip corrupt comment row', { postId });
+                }
+            }
+            catch (err) {
+                logger_1.logger.warn('commentStore: skip unreadable comment row', { postId, err });
+            }
+        }
+        return out;
     }
     /**
      * Attaches a channel reply to a comment. Returns updated comment or `null`.
      * @param replyAdminName optional display name of the replying admin (non-empty trimmed string is stored).
      */
-    addReply(commentId, replyText, replyAdminName, replyPhotoUrls) {
+    addReply(commentId, replyText, replyAdminName, replyPhotoUrls, notificationReplierName) {
         const c = this.getComment(commentId);
         if (!c) {
             return null;
         }
         const trimmedName = replyAdminName?.trim();
-        const reply = { text: replyText, timestamp: new Date().toISOString() };
+        const reply = {
+            reply_id: (0, uuid_1.v4)(),
+            text: replyText,
+            timestamp: new Date().toISOString(),
+        };
         if (trimmedName) {
             reply.admin_name = trimmedName;
         }
         if (Array.isArray(replyPhotoUrls) && replyPhotoUrls.length > 0) {
             reply.photo_urls = replyPhotoUrls.map((u) => u.trim()).filter(Boolean);
         }
-        c.reply = reply;
+        const thread = existingRepliesList(c);
+        thread.push(reply);
+        setReplies(c, thread);
+        const log = c.notification_reply_log ?? [];
+        const newEntry = replyToNotificationLogEntry(reply, notificationReplierName);
+        const last = log[log.length - 1];
+        if (last && last.timestamp === newEntry.timestamp) {
+            log[log.length - 1] = newEntry;
+            c.notification_reply_log = log;
+        }
+        else {
+            c.notification_reply_log = [...log, newEntry];
+        }
         this.saveRow(c);
         logger_1.logger.info(`commentStore: reply on ${commentId}`);
         const post = postStore_1.postStore.getPost(c.post_id);
@@ -217,6 +324,19 @@ class CommentStore {
                 delete c.reply.photo_urls;
             }
         }
+        const thread = existingRepliesList(c);
+        if (thread.length > 0) {
+            thread[thread.length - 1] = c.reply;
+            c.replies = thread;
+        }
+        const log = c.notification_reply_log ?? [];
+        if (log.length > 0) {
+            log[log.length - 1] = replyToNotificationLogEntry(c.reply);
+            c.notification_reply_log = log;
+        }
+        else {
+            c.notification_reply_log = [replyToNotificationLogEntry(c.reply)];
+        }
         this.saveRow(c);
         logger_1.logger.info(`commentStore: updated reply ${commentId}`);
         return c;
@@ -226,10 +346,22 @@ class CommentStore {
      */
     deleteReply(commentId) {
         const c = this.getComment(commentId);
-        if (!c?.reply) {
+        const thread = c ? existingRepliesList(c) : [];
+        if (!c || thread.length === 0) {
             return null;
         }
-        delete c.reply;
+        thread.pop();
+        setReplies(c, thread);
+        const log = c.notification_reply_log ?? [];
+        if (log.length > 0) {
+            log.pop();
+            if (log.length > 0) {
+                c.notification_reply_log = log;
+            }
+            else {
+                delete c.notification_reply_log;
+            }
+        }
         this.saveRow(c);
         logger_1.logger.info(`commentStore: deleted reply ${commentId}`);
         return c;
@@ -251,7 +383,16 @@ class CommentStore {
      */
     getComment(commentId) {
         const row = this.getStatements().getById.get(commentId);
-        return row ? this.parseRow(row.data) : null;
+        if (!row) {
+            return null;
+        }
+        try {
+            return normalizeCommentFromDisk(this.parseRow(row.data));
+        }
+        catch (err) {
+            logger_1.logger.warn('commentStore: getComment parse failed', { commentId, err });
+            return null;
+        }
     }
     /**
      * Persists the admin DM template text for this comment (used when editing notifications after reply).
@@ -306,7 +447,19 @@ class CommentStore {
      */
     listAllCommentsNewestFirst() {
         const rows = this.getStatements().listAllNewest.all();
-        return rows.map((row) => this.parseRow(row.data));
+        const out = [];
+        for (const row of rows) {
+            try {
+                const c = normalizeCommentFromDisk(this.parseRow(row.data));
+                if (c) {
+                    out.push(c);
+                }
+            }
+            catch {
+                // skip corrupt rows
+            }
+        }
+        return out;
     }
     /**
      * Comments for posts in a channel (`postStore` lookup).

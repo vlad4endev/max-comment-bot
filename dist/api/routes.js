@@ -7,7 +7,6 @@ exports.createCommentApiRouter = createCommentApiRouter;
 const node_fs_1 = __importDefault(require("node:fs"));
 const node_path_1 = __importDefault(require("node:path"));
 const node_crypto_1 = require("node:crypto");
-const max_bot_api_1 = require("@maxhub/max-bot-api");
 const express_1 = __importDefault(require("express"));
 const multer_1 = __importDefault(require("multer"));
 const config_1 = require("../config");
@@ -64,6 +63,15 @@ function parseNonEmptyString(value) {
 }
 function parseOptionalString(value) {
     return typeof value === 'string' ? value.trim() : '';
+}
+/** NFKC: compatibility superscripts etc. → plain ASCII digits/letters for consistent rendering. */
+function normalizeUserFacingText(value) {
+    try {
+        return value.normalize('NFKC');
+    }
+    catch {
+        return value;
+    }
 }
 function normalizePhotoUrl(value) {
     if (typeof value !== 'string') {
@@ -170,6 +178,11 @@ async function listChannelChatIdsWhereUserIsAdmin(bot, userId) {
     return flags.filter((x) => x !== null).sort((a, b) => a - b);
 }
 function toWireComment(c) {
+    const replies = Array.isArray(c.replies) && c.replies.length > 0
+        ? c.replies
+        : c.reply
+            ? [c.reply]
+            : undefined;
     return {
         comment_id: c.comment_id,
         post_id: c.post_id,
@@ -181,7 +194,8 @@ function toWireComment(c) {
         ...(Array.isArray(c.photo_urls) && c.photo_urls.length > 0
             ? { photo_urls: c.photo_urls }
             : {}),
-        reply: c.reply,
+        ...(c.reply ? { reply: c.reply } : {}),
+        ...(replies ? { replies } : {}),
     };
 }
 async function enrichCommentsWithAvatars(bot, channelChatId, comments) {
@@ -696,8 +710,29 @@ function createCommentApiRouter(deps) {
             res.status(500).json({ error: 'internal error' });
         }
     });
+    function resolvePostForMiniApp(postId, chatIdRaw, messageMid) {
+        const direct = postStore_1.postStore.getPost(postId);
+        if (direct) {
+            return direct;
+        }
+        if (chatIdRaw !== null && messageMid) {
+            const byMid = postStore_1.postStore.findPostByChannelMessage(chatIdRaw, messageMid);
+            if (byMid) {
+                logger_1.logger.info('GET /post: resolved by message_mid', {
+                    requestedPostId: postId,
+                    postId: byMid.post_id,
+                    chatId: chatIdRaw,
+                    messageMid,
+                });
+                return byMid;
+            }
+        }
+        return null;
+    }
     router.get('/post/:postId', async (req, res) => {
-        const post = postStore_1.postStore.getPost(req.params.postId);
+        const chatIdRaw = parseNonZeroInt(req.query.chat_id);
+        const messageMid = parseNonEmptyString(req.query.message_mid);
+        const post = resolvePostForMiniApp(req.params.postId, chatIdRaw, messageMid);
         if (!post) {
             res.status(404).json({ error: 'post not found' });
             return;
@@ -732,18 +767,21 @@ function createCommentApiRouter(deps) {
     });
     router.get('/comments/:postId', async (req, res) => {
         const postId = req.params.postId;
-        const post = postStore_1.postStore.getPost(postId);
+        const chatIdRaw = parseNonZeroInt(req.query.chat_id);
+        const messageMid = parseNonEmptyString(req.query.message_mid);
+        const post = resolvePostForMiniApp(postId, chatIdRaw, messageMid);
         if (!post) {
             res.status(404).json({ error: 'post not found' });
             return;
         }
+        const resolvedPostId = post.post_id;
         try {
-            const comments = commentStore_1.commentStore.getComments(postId);
+            const comments = commentStore_1.commentStore.getComments(resolvedPostId);
             const enriched = await enrichCommentsWithAvatars(deps.bot, post.chat_id, comments);
             res.json(enriched.map(toWireComment));
         }
         catch (err) {
-            logger_1.logger.error('GET /api/comments/:postId failed', { postId, err });
+            logger_1.logger.error('GET /api/comments/:postId failed', { postId: resolvedPostId, err });
             res.status(500).json({ error: 'internal error' });
         }
     });
@@ -773,7 +811,7 @@ function createCommentApiRouter(deps) {
         const chatId = parseNonZeroInt(body.chat_id);
         const userId = parsePositiveInt(body.user_id);
         const username = parseNonEmptyString(body.username);
-        const text = parseOptionalString(body.text);
+        const text = normalizeUserFacingText(parseOptionalString(body.text));
         const photoUrls = parsePhotoUrls(body.photo_urls);
         const avatarFromClient = parseNonEmptyString(body.avatar_url) ?? parseNonEmptyString(body.photo_url);
         if (!postId || !chatId || !userId || !username || (text === '' && photoUrls.length === 0)) {
@@ -839,7 +877,7 @@ function createCommentApiRouter(deps) {
         const postId = parseNonEmptyString(body.post_id);
         const chatId = parseNonZeroInt(body.chat_id);
         const replierUserId = parsePositiveInt(body.user_id);
-        const adminText = parseOptionalString(body.admin_text);
+        const adminText = normalizeUserFacingText(parseOptionalString(body.admin_text));
         const replyPhotoUrls = parsePhotoUrls(body.photo_urls);
         if (!commentId || !postId || !chatId || !replierUserId || (adminText === '' && replyPhotoUrls.length === 0)) {
             res.status(400).json({ error: 'missing or invalid fields' });
@@ -851,47 +889,26 @@ function createCommentApiRouter(deps) {
             return;
         }
         const channelReplyName = channelRegistry_1.channelRegistry.getChannel(chatId)?.title?.trim() || 'Канал';
-        const replierNameForStatus = 'канал';
         if (!(await (0, channelPostActions_1.isUserChannelAdmin)(deps.bot, post.chat_id, replierUserId))) {
             res.status(403).json({ error: 'Только администраторы могут отвечать' });
             return;
         }
+        const replierNameForStatus = (await (0, memberAvatar_1.resolveMemberDisplayName)(deps.bot, post.chat_id, replierUserId)) ?? 'администратор';
         const existing = commentStore_1.commentStore.getComment(commentId);
         if (!existing || existing.post_id !== postId) {
             res.status(404).json({ error: 'comment not found' });
             return;
         }
-        const updated = commentStore_1.commentStore.addReply(commentId, adminText, channelReplyName, replyPhotoUrls);
+        const updated = commentStore_1.commentStore.addReply(commentId, adminText, channelReplyName, replyPhotoUrls, replierNameForStatus);
         if (!updated) {
             res.status(404).json({ error: 'comment not found' });
             return;
         }
-        const mids = commentStore_1.commentStore.getNotificationMids(commentId);
-        const originalText = updated.notification_text;
-        if (mids.length > 0 && originalText && (0, postStore_1.isMiniAppOpenUrlConfigured)()) {
-            const replyPreview = adminText.slice(0, 80);
-            const ellipsis = adminText.length > 80 ? '...' : '';
-            const photosNote = replyPhotoUrls.length > 0 ? ` + ${replyPhotoUrls.length} фото` : '';
-            const statusLine = adminText !== ''
-                ? `\n\n✅ Ответил ${replierNameForStatus}: «${replyPreview}${ellipsis}»${photosNote}`
-                : `\n\n✅ Ответил ${replierNameForStatus}: фото (${replyPhotoUrls.length})`;
-            const updatedText = `${originalText}${statusLine}`;
-            const miniAppUrl = (0, postStore_1.buildMiniAppUrl)(postId, chatId, { admin: '1' });
-            const kb = max_bot_api_1.Keyboard.inlineKeyboard([[max_bot_api_1.Keyboard.button.link('✅ Просмотрено', miniAppUrl)]]);
-            for (const { admin_id, message_mid } of mids) {
-                try {
-                    await deps.bot.api.editMessage(message_mid, {
-                        text: updatedText,
-                        attachments: [kb],
-                    });
-                }
-                catch (e) {
-                    logger_1.logger.warn('Could not update notification message', { admin_id, message_mid, e });
-                }
-            }
+        try {
+            await (0, notificationService_1.syncAdminCommentNotification)(deps.bot, updated, postId, chatId);
         }
-        else if (mids.length > 0 && !originalText) {
-            logger_1.logger.warn('POST /api/reply: skip notification edit (missing notification_text)', { commentId });
+        catch (err) {
+            logger_1.logger.warn('POST /api/reply: sync admin notification failed', { commentId, err });
         }
         await (0, notificationService_1.notifyUserAboutMiniappReply)(deps.bot, {
             userId: Number(updated.user_id),
@@ -903,7 +920,8 @@ function createCommentApiRouter(deps) {
             postId,
             channelChatId: chatId,
         });
-        res.json({ ok: true });
+        const [enriched] = await enrichCommentsWithAvatars(deps.bot, chatId, [updated]);
+        res.json(toWireComment(enriched ?? updated));
     });
     router.patch('/comment', async (req, res) => {
         const body = req.body;
@@ -915,7 +933,8 @@ function createCommentApiRouter(deps) {
         const postId = parseNonEmptyString(body.post_id);
         const chatId = parseNonZeroInt(body.chat_id);
         const editorUserId = parsePositiveInt(body.user_id);
-        const text = parseNonEmptyString(body.text);
+        const rawText = parseNonEmptyString(body.text);
+        const text = rawText != null ? normalizeUserFacingText(rawText) : null;
         if (!commentId || !postId || !chatId || !editorUserId || !text) {
             res.status(400).json({ error: 'missing or invalid fields' });
             return;
@@ -954,13 +973,18 @@ function createCommentApiRouter(deps) {
             return;
         }
         const newCount = postStore_1.postStore.decrementCommentCount(input.postId);
+        res.json({ ok: true, comment_count: newCount });
         if (newCount !== null) {
             const updatedPost = postStore_1.postStore.getPost(input.postId);
             if (updatedPost) {
-                await postStore_1.postStore.updateButtonCaption(deps.bot, updatedPost);
+                void postStore_1.postStore.updateButtonCaption(deps.bot, updatedPost).catch((err) => {
+                    logger_1.logger.warn('adminDeleteComment: updateButtonCaption failed after response', {
+                        postId: input.postId,
+                        err,
+                    });
+                });
             }
         }
-        res.json({ ok: true, comment_count: newCount });
     };
     router.delete('/comment', async (req, res) => {
         const input = parseAdminModerationBody(req.body);
@@ -988,7 +1012,7 @@ function createCommentApiRouter(deps) {
         const postId = parseNonEmptyString(body.post_id);
         const chatId = parseNonZeroInt(body.chat_id);
         const editorUserId = parsePositiveInt(body.user_id);
-        const adminText = parseOptionalString(body.admin_text);
+        const adminText = normalizeUserFacingText(parseOptionalString(body.admin_text));
         const photoUrlsInBody = 'photo_urls' in body;
         const replyPhotoUrls = photoUrlsInBody ? parsePhotoUrls(body.photo_urls) : undefined;
         if (!commentId ||
@@ -1018,6 +1042,12 @@ function createCommentApiRouter(deps) {
             res.status(404).json({ error: 'reply not found' });
             return;
         }
+        try {
+            await (0, notificationService_1.syncAdminCommentNotification)(deps.bot, updated, postId, chatId);
+        }
+        catch (err) {
+            logger_1.logger.warn('PATCH /api/reply: sync admin notification failed', { commentId, err });
+        }
         res.json(toWireComment(updated));
     });
     const adminDeleteReply = async (res, input) => {
@@ -1035,6 +1065,15 @@ function createCommentApiRouter(deps) {
         if (!updated) {
             res.status(404).json({ error: 'reply not found' });
             return;
+        }
+        try {
+            await (0, notificationService_1.syncAdminCommentNotification)(deps.bot, updated, input.postId, input.chatId);
+        }
+        catch (err) {
+            logger_1.logger.warn('DELETE /api/reply: sync admin notification failed', {
+                commentId: input.commentId,
+                err,
+            });
         }
         res.json(toWireComment(updated));
     };
