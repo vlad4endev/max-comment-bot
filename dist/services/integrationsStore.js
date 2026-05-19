@@ -178,11 +178,20 @@ class IntegrationsStore {
         }
         catch (err) {
             const code = err?.code;
-            if (code !== 'ENOENT') {
+            if (code === 'ENOENT') {
+                await this.persist();
+                logger_1.logger.info('integrationsStore: created empty data/integrations.json');
+            }
+            else {
                 logger_1.logger.warn('integrationsStore: load failed, using empty', err);
             }
         }
         this.loaded = true;
+    }
+    /** Перечитать файл с диска (после ручного редактирования data/integrations.json). */
+    async reloadFromDisk() {
+        this.loaded = false;
+        await this.load();
     }
     async persist() {
         await (0, promises_1.mkdir)((0, node_path_1.dirname)(DATA_PATH), { recursive: true });

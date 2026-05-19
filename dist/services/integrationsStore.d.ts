@@ -74,6 +74,8 @@ declare class IntegrationsStore {
     private data;
     private loaded;
     load(): Promise<void>;
+    /** Перечитать файл с диска (после ручного редактирования data/integrations.json). */
+    reloadFromDisk(): Promise<void>;
     private persist;
     getIntegrations(): IntegrationRecord[];
     getIntegration(id: string): IntegrationRecord | undefined;

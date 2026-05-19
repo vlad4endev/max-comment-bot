@@ -150,9 +150,8 @@ function createIntegrationsRouter(deps) {
                 await (0, envFile_1.upsertRootEnvVar)('TG_TOKEN', token);
             }
             catch (err) {
-                logger_1.logger.error('integrations: failed to sync TG_TOKEN to .env', err);
-                res.status(500).json({ error: 'Не удалось сохранить TG_TOKEN в .env' });
-                return;
+                // Токен уже в integrations.json; в Docker .env часто не на volume.
+                logger_1.logger.warn('integrations: TG_TOKEN не записан в .env (токен сохранён в integrations.json)', err);
             }
         }
         let channels = [];
