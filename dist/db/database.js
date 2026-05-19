@@ -118,6 +118,24 @@ function initSchema(targetDb) {
       FOREIGN KEY (job_id) REFERENCES channel_import_jobs(id) ON DELETE CASCADE
     );
     CREATE INDEX IF NOT EXISTS idx_channel_import_staged_job ON channel_import_staged(job_id);
+
+    CREATE TABLE IF NOT EXISTS channel_import_reader_state (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      scan_next_offset INTEGER NOT NULL DEFAULT 0
+    );
+    INSERT OR IGNORE INTO channel_import_reader_state (id, scan_next_offset) VALUES (1, 0);
+
+    CREATE TABLE IF NOT EXISTS tg_chain_reader_offsets (
+      token_key TEXT PRIMARY KEY,
+      scan_next_offset INTEGER NOT NULL DEFAULT 0
+    );
+
+    CREATE TABLE IF NOT EXISTS tg_chain_forwarded (
+      chain_id TEXT NOT NULL,
+      tg_message_id INTEGER NOT NULL,
+      forwarded_at TEXT DEFAULT (datetime('now')),
+      PRIMARY KEY (chain_id, tg_message_id)
+    );
   `);
 }
 function closeDb() {

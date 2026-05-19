@@ -669,16 +669,36 @@ function createAdminRouter(deps) {
             return;
         }
         const maxChatId = parseNonZeroInt(req.body.max_chat_id);
-        const tgUsername = parseNonEmptyString(req.body.tg_username);
-        if (maxChatId === null || !tgUsername) {
-            res.status(400).json({ error: 'max_chat_id and tg_username required' });
+        const tgRaw = parseNonEmptyString(req.body.tg_channel) ?? parseNonEmptyString(req.body.tg_username);
+        if (maxChatId === null || !tgRaw) {
+            res.status(400).json({ error: 'max_chat_id and tg_channel required' });
+            return;
+        }
+        const tgKey = tgRaw.trim();
+        const isNumericTg = /^-?\d+$/.test(tgKey.replace(/^@/, ''));
+        const tgChannelId = isNumericTg ? tgKey.replace(/^@/, '') : undefined;
+        const tgUsername = isNumericTg
+            ? (parseNonEmptyString(req.body.tg_username)?.replace(/^@/, '') ?? '')
+            : tgKey.replace(/^@/, '');
+        if (!tgChannelId && !tgUsername) {
+            res.status(400).json({ error: 'invalid tg channel' });
+            return;
+        }
+        const existing = (await (0, adminPanelState_1.listTgChains)()).find((c) => c.active &&
+            c.max_chat_id === maxChatId &&
+            (tgChannelId
+                ? c.tg_channel_id === tgChannelId
+                : c.tg_username.toLowerCase() === tgUsername.toLowerCase()));
+        if (existing) {
+            res.status(400).json({ error: 'Активная цепочка для этой пары TG → MAX уже есть' });
             return;
         }
         const ch = channelRegistry_1.channelRegistry.getChannel(maxChatId);
         const row = await (0, adminPanelState_1.createTgChain)({
             max_chat_id: maxChatId,
             max_title: ch?.title ?? null,
-            tg_username: tgUsername.replace(/^@/, ''),
+            tg_username: tgUsername,
+            tg_channel_id: tgChannelId,
             bot_token: parseNonEmptyString(req.body.bot_token) ?? '',
             forward_posts: Boolean(req.body.forward_posts),
             forward_comments: Boolean(req.body.forward_comments),

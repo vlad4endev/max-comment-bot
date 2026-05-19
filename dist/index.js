@@ -22,6 +22,7 @@ const updateQueue_1 = require("./utils/updateQueue");
 const flowProcessor_1 = require("./services/flowProcessor");
 const integrationsStore_1 = require("./services/integrationsStore");
 const channelImportService_1 = require("./services/channelImportService");
+const tgChainForwarder_1 = require("./services/tgChainForwarder");
 const createWebhookApp_1 = require("./webhook/createWebhookApp");
 async function main() {
     (0, migrate_1.migrateFromJson)();
@@ -111,6 +112,7 @@ async function main() {
             webhookUrl,
         });
         (0, channelImportService_1.startChannelImportWorker)();
+        (0, tgChainForwarder_1.startTgChainForwarder)();
     }
     else {
         const app = (0, createWebhookApp_1.createHttpApp)({ bot });
@@ -125,6 +127,7 @@ async function main() {
             httpServer: server,
         });
         (0, channelImportService_1.startChannelImportWorker)();
+        (0, tgChainForwarder_1.startTgChainForwarder)();
         await (0, bot_1.startBotLongPolling)(bot);
     }
 }

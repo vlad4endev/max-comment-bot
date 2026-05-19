@@ -10,19 +10,19 @@ const database_1 = require("../db/database");
 const telegramReader_1 = require("../forwarder/telegramReader");
 const maxPublisher_1 = require("../forwarder/maxPublisher");
 const logger_1 = require("../utils/logger");
+const tgChannelMatch_1 = require("../utils/tgChannelMatch");
 const SCAN_IDLE_MAX = 12;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-function normalizeTgChannel(raw) {
-    const t = raw.trim();
-    if (t === '')
-        return t;
-    return t.startsWith('@') ? t : `@${t}`;
+function getImportReaderOffset() {
+    const row = (0, database_1.getDb)()
+        .prepare('SELECT scan_next_offset FROM channel_import_reader_state WHERE id = 1')
+        .get();
+    return row?.scan_next_offset ?? 0;
 }
-function matchesChannel(msg, configTgChannel) {
-    const u = msg.chat.username?.trim();
-    const chatUsername = u ? `@${u}` : String(msg.chat.id);
-    const normalized = configTgChannel.startsWith('@') ? configTgChannel : `@${configTgChannel}`;
-    return chatUsername === normalized || String(msg.chat.id) === configTgChannel.trim();
+function setImportReaderOffset(offset) {
+    (0, database_1.getDb)()
+        .prepare('UPDATE channel_import_reader_state SET scan_next_offset = ? WHERE id = 1')
+        .run(offset);
 }
 function buildStagingPayload(msg) {
     const caption = (msg.caption || msg.text || '').trim();
@@ -48,10 +48,17 @@ function buildStagingPayload(msg) {
     return null;
 }
 function createChannelImportJob(tgChannel, maxChannelId) {
-    const tg = normalizeTgChannel(tgChannel);
+    const tg = (0, tgChannelMatch_1.normalizeTelegramChannelKey)(tgChannel);
     const max = maxChannelId.trim();
     if (!tg || !max) {
         throw new Error('tg_channel and max_channel_id required');
+    }
+    const dup = (0, database_1.getDb)()
+        .prepare(`SELECT id FROM channel_import_jobs
+       WHERE tg_channel = ? AND max_channel_id = ? AND status IN ('scanning', 'ready')`)
+        .get(tg, max);
+    if (dup) {
+        throw new Error('Уже есть активная задача импорта для этой пары TG → MAX');
     }
     const r = (0, database_1.getDb)()
         .prepare('INSERT INTO channel_import_jobs (tg_channel, max_channel_id) VALUES (?, ?)')
@@ -67,24 +74,8 @@ function cancelChannelImportJob(id) {
     const r = (0, database_1.getDb)().prepare('DELETE FROM channel_import_jobs WHERE id = ?').run(id);
     return r.changes > 0;
 }
-async function ingestScanBatch(job, tgToken) {
-    const batch = await (0, telegramReader_1.getTelegramUpdatesWithIds)(tgToken, job.scan_next_offset, 0);
-    let nextOffset = job.scan_next_offset;
-    for (const u of batch) {
-        nextOffset = Math.max(nextOffset, u.update_id + 1);
-        const msg = u.channel_post;
-        if (!matchesChannel(msg, job.tg_channel)) {
-            continue;
-        }
-        const payload = buildStagingPayload(msg);
-        if (!payload) {
-            continue;
-        }
-        (0, database_1.getDb)()
-            .prepare('INSERT OR IGNORE INTO channel_import_staged (job_id, tg_message_id, payload) VALUES (?, ?, ?)')
-            .run(job.id, msg.message_id, JSON.stringify(payload));
-    }
-    const idle = batch.length === 0 ? job.scan_idle_rounds + 1 : 0;
+function updateJobAfterBatch(job, jobGotPosts) {
+    const idle = jobGotPosts ? 0 : job.scan_idle_rounds + 1;
     const stagedRow = (0, database_1.getDb)()
         .prepare('SELECT COUNT(*) AS c FROM channel_import_staged WHERE job_id = ?')
         .get(job.id);
@@ -96,9 +87,45 @@ async function ingestScanBatch(job, tgToken) {
     const nextStatus = idle >= SCAN_IDLE_MAX ? 'ready' : 'scanning';
     (0, database_1.getDb)()
         .prepare(`UPDATE channel_import_jobs
-       SET scan_next_offset = ?, scan_idle_rounds = ?, staged_count = ?, status = ?, updated_at = datetime('now')
+       SET scan_idle_rounds = ?, staged_count = ?, status = ?, updated_at = datetime('now')
        WHERE id = ?`)
-        .run(nextOffset, idle, stagedCount, nextStatus, job.id);
+        .run(idle, stagedCount, nextStatus, job.id);
+}
+async function ingestScanBatchForJobs(jobs, tgToken) {
+    const offset = getImportReaderOffset();
+    const batch = await (0, telegramReader_1.getTelegramUpdatesWithIds)(tgToken, offset, 0);
+    let nextOffset = offset;
+    const jobTouched = new Set();
+    for (const u of batch) {
+        nextOffset = Math.max(nextOffset, u.update_id + 1);
+        const msg = u.channel_post;
+        if (!msg)
+            continue;
+        for (const job of jobs) {
+            if (!(0, tgChannelMatch_1.telegramChannelMatchesTarget)(msg.chat, job.tg_channel)) {
+                continue;
+            }
+            const payload = buildStagingPayload(msg);
+            if (!payload) {
+                continue;
+            }
+            const ins = (0, database_1.getDb)()
+                .prepare('INSERT OR IGNORE INTO channel_import_staged (job_id, tg_message_id, payload) VALUES (?, ?, ?)')
+                .run(job.id, msg.message_id, JSON.stringify(payload));
+            if (ins.changes > 0) {
+                jobTouched.add(job.id);
+            }
+        }
+    }
+    if (nextOffset > offset) {
+        setImportReaderOffset(nextOffset);
+    }
+    for (const job of jobs) {
+        const fresh = getChannelImportJob(job.id);
+        if (!fresh)
+            continue;
+        updateJobAfterBatch(fresh, jobTouched.has(job.id));
+    }
 }
 async function tickChannelImportJobs() {
     const tgToken = (process.env.TG_READER_BOT_TOKEN || '').trim();
@@ -116,15 +143,16 @@ async function tickChannelImportJobs() {
         }
         return;
     }
-    for (const job of jobs) {
-        try {
-            await ingestScanBatch(job, tgToken);
-        }
-        catch (err) {
-            logger_1.logger.error('[channelImport] scan batch failed job=' + String(job.id), err);
+    try {
+        await ingestScanBatchForJobs(jobs, tgToken);
+    }
+    catch (err) {
+        logger_1.logger.error('[channelImport] scan batch failed', err);
+        const msg = err instanceof Error ? err.message : String(err);
+        for (const job of jobs) {
             (0, database_1.getDb)()
                 .prepare(`UPDATE channel_import_jobs SET status = 'error', error_message = ?, updated_at = datetime('now') WHERE id = ?`)
-                .run(err instanceof Error ? err.message : String(err), job.id);
+                .run(msg, job.id);
         }
     }
 }
@@ -173,10 +201,14 @@ async function publishChannelImportJob(jobId, tgToken, maxToken) {
     const rows = (0, database_1.getDb)()
         .prepare('SELECT * FROM channel_import_staged WHERE job_id = ? ORDER BY id ASC')
         .all(jobId);
+    const maxDest = job.max_channel_id.trim();
+    if (!maxDest) {
+        throw new Error('MAX-канал не задан');
+    }
     try {
         for (const row of rows) {
             const p = JSON.parse(row.payload);
-            await publishStagedPayload(p, tgToken, maxToken, job.max_channel_id);
+            await publishStagedPayload(p, tgToken, maxToken, maxDest);
             await sleep(1500 + Math.random() * 2000);
         }
     }

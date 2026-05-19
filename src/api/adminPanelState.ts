@@ -30,6 +30,8 @@ export interface TgChainRecord {
   max_chat_id: number
   max_title: string | null
   tg_username: string
+  /** Числовой ID TG-канала (-100…), если выбран из списка интеграции */
+  tg_channel_id?: string
   bot_token: string
   forward_posts: boolean
   forward_comments: boolean

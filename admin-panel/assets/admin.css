@@ -2044,9 +2044,24 @@ tbody tr:hover td {
   gap: 8px;
   align-items: center;
 }
-.forwarding-add-form .input {
+.forwarding-add-form .input,
+.forwarding-add-form .select {
   flex: 1;
   min-width: 160px;
+}
+.forwarding-add-form--picks {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 12px;
+}
+.forwarding-add-form--picks .form-group {
+  margin: 0;
+}
+.forwarding-add-form-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
 }
 .forwarding-list-wrap {
   margin-top: 16px;

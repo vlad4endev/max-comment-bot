@@ -2009,24 +2009,10 @@
   function openChainModal() {
     var host = qs('#chainModalHost');
     if (!host) return;
-    var opts = channelsCache.length
-      ? channelsCache
-          .map(function (c) {
-            return (
-              '<option value="' +
-              esc(String(c.chat_id)) +
-              '">' +
-              esc(c.title || String(c.chat_id)) +
-              '</option>'
-            );
-          })
-          .join('')
-      : '<option value="">— сначала откройте «Каналы» —</option>';
     host.innerHTML =
       '<div class="modal-backdrop" id="chainBackdrop"><div class="modal"><h2>Новая TG-цепочка</h2>' +
-      '<div class="form-group"><label>Канал MAX</label><select class="select" id="m_max_chat">' +
-      opts +
-      '</select></div>' +
+      '<p class="muted text-sm" style="margin:0 0 12px">Посты идут только из выбранного TG-канала в выбранный MAX-канал.</p>' +
+      '<div class="form-group"><label>Канал MAX</label><select class="select" id="m_max_chat"><option value="">Загрузка…</option></select></div>' +
       '<div id="m_tg_wrap" class="form-group"><label>Telegram-канал / чат</label><div class="muted text-sm mb-sm">Загрузка списка…</div></div>' +
       '<div class="form-group hidden" id="m_token_wrap"><label>Токен бота TG</label><input class="input mono" id="m_token" type="password" placeholder="если бот ещё не подключён в «Интеграции»"/></div>' +
       '<div id="mToggles">' +
@@ -2045,40 +2031,52 @@
     backdrop.addEventListener('click', function (e) {
       if (e.target === backdrop) close();
     });
-    fetchTelegramLinkedChats(false)
-      .catch(function () { return { channels: tgLinkedChatsCache }; })
-      .then(function () {
-        var wrap = qs('#m_tg_wrap', host);
-        if (wrap) {
-          wrap.innerHTML =
-            '<label>Telegram-канал / чат</label>' +
-            buildTelegramChannelSelect('m_tg_select', tgLinkedChatsCache, 'm_tg_manual');
-        }
-        var tokenWrap = qs('#m_token_wrap', host);
-        var tgInt = integrationsCache.find(function (i) {
-          return i.platform === 'telegram' && i.status === 'connected';
-        });
-        if (tokenWrap && tgInt) tokenWrap.classList.add('hidden');
+    Promise.all([
+      fetchMaxLinkedChannels(false).catch(function () {
+        return { channels: maxLinkedChatsCache };
+      }),
+      fetchTelegramLinkedChats(false).catch(function () {
+        return { channels: tgLinkedChatsCache };
+      }),
+    ]).then(function (bundle) {
+      var maxSel = qs('#m_max_chat', host);
+      if (maxSel) {
+        maxSel.innerHTML = buildMaxChannelSelectOptions(bundle[0].channels || maxLinkedChatsCache || []);
+      }
+      var wrap = qs('#m_tg_wrap', host);
+      if (wrap) {
+        wrap.innerHTML =
+          '<label>Telegram-канал / чат</label>' +
+          buildTelegramChannelSelect('m_tg_select', bundle[1].channels || tgLinkedChatsCache, 'm_tg_manual');
+      }
+      var tokenWrap = qs('#m_token_wrap', host);
+      var tgInt = integrationsCache.find(function (i) {
+        return i.platform === 'telegram' && i.status === 'connected';
       });
+      if (tokenWrap && tgInt) tokenWrap.classList.add('hidden');
+      refreshIcons();
+    });
 
     qs('#m_ok', host).addEventListener('click', function () {
       var chatId = Number(qs('#m_max_chat', host).value);
       var tgRaw = readTelegramChannelPick('m_tg_select', 'm_tg_manual', host);
-      var tg = String(tgRaw || '').trim().replace(/^@/, '');
+      var tgKey = String(tgRaw || '').trim();
       var tokenEl = qs('#m_token', host);
       var token = tokenEl ? String(tokenEl.value || '').trim() : '';
       var sw = readSwitches(host);
-      if (!chatId || !tg) {
-        showToast('Укажите MAX-канал и Telegram-канал', 'error');
+      if (!chatId || !tgKey) {
+        showToast('Выберите MAX-канал и Telegram-канал', 'error');
         return;
       }
+      var isNumeric = /^-?\d+$/.test(tgKey.replace(/^@/, ''));
       var payload = {
         max_chat_id: chatId,
-        tg_username: tg,
+        tg_channel: tgKey,
         forward_posts: !!sw.forward_posts,
         forward_comments: !!sw.forward_comments,
         add_signature: !!sw.add_signature,
       };
+      if (!isNumeric) payload.tg_username = tgKey.replace(/^@/, '');
       if (token) payload.bot_token = token;
       postJson('/tg-chains', payload)
         .then(function () {
@@ -2232,12 +2230,12 @@
           html += '<div class="integrations-grid">';
           html += integrationCardHtml('telegram', 'Telegram Bot', 'Получение постов из каналов, отправка в MAX', tg, 'tg');
           html += integrationCardHtml('vk', 'ВКонтакте', 'Сообщества: посты, комментарии, аналитика', vk, 'vk');
-          html +=
           maxLinkedChatsCache =
             intMaxMeta && intMaxMeta.channels && intMaxMeta.channels.length
               ? intMaxMeta.channels
               : maxLinkedChatsCache;
           html += maxIntegrationCardHtml(intMaxMeta);
+          html += '</motion>';
         } else if (integrationsTab === 'flows') {
           html += '<div class="flows-list">';
           flowsCache.forEach(function (f) { html += flowCardHtml(f); });
