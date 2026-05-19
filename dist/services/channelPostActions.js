@@ -137,6 +137,7 @@ async function tryAttachCommentsToChannelPost(bot, message, options = {}) {
     const text = message.body.text?.trim() ?? '';
     const photoUrl = firstImageUrlFromMessage(message);
     const media_attachments = (0, postStore_1.mediaAttachmentRequestsFromMessageBody)(message.body.attachments);
+    const channelPostUrl = typeof message.url === 'string' && message.url.trim() !== '' ? message.url.trim() : undefined;
     const post = {
         post_id: postId,
         chat_id: chatId,
@@ -144,6 +145,7 @@ async function tryAttachCommentsToChannelPost(bot, message, options = {}) {
         sender_name: user?.name ?? 'Канал',
         text,
         photo_url: photoUrl,
+        channel_post_url: channelPostUrl,
         media_attachments,
         comment_count: 0,
         timestamp: new Date().toISOString(),

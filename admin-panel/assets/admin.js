@@ -154,7 +154,15 @@
         '</span>';
       html += '</div>';
       html += '<div class="comment-card-text">' + esc(c.text || '') + '</div>';
-      html += '<div class="comment-post-context">';
+      var postUrl =
+        post.channel_post_url && String(post.channel_post_url).trim()
+          ? String(post.channel_post_url).trim()
+          : '';
+      html += postUrl
+        ? '<a class="comment-post-context" href="' +
+          esc(postUrl) +
+          '" target="_blank" rel="noopener noreferrer" title="Открыть пост в MAX">'
+        : '<div class="comment-post-context">';
       html += '<span class="comment-post-label">К посту</span>';
       if (post.photo_url) {
         html +=
@@ -173,7 +181,7 @@
           esc(formatRelativeTime(post.timestamp)) +
           '</span>';
       }
-      html += '</div></div>';
+      html += '</div>' + (postUrl ? '</a>' : '</div>');
       if (answered && c.reply) {
         var adminName = c.reply.admin_name ? String(c.reply.admin_name).trim() : '';
         html += '<div class="comment-reply-block">';
@@ -1923,8 +1931,33 @@
       });
   }
 
+  function savedTokenBlockHtml(prefix, record) {
+    if (!record || record.status !== 'connected' || !record.token) {
+      return '';
+    }
+    var token = String(record.token);
+    return (
+      '<div class="saved-token-block">' +
+      '<label class="saved-token-label">Сохранённый токен</label>' +
+      '<div class="saved-token-row">' +
+      '<input class="input mono saved-token-input" type="password" readonly id="' +
+      esc(prefix) +
+      '-token-saved" value="' +
+      esc(token) +
+      '"/>' +
+      '<button type="button" class="btn btn-ghost btn-sm" data-toggle-token="' +
+      esc(prefix) +
+      '-token-saved">Показать</button>' +
+      '<button type="button" class="btn btn-ghost btn-sm" data-copy-token="' +
+      esc(prefix) +
+      '-token-saved">Копировать</button>' +
+      '</div></div>'
+    );
+  }
+
   function integrationCardHtml(platform, title, desc, record, prefix) {
     var connected = record && record.status === 'connected';
+    var savedToken = record && record.token ? String(record.token) : '';
     var logo = platform === 'vk' ? 'VK' : 'TG';
     var html =
       '<div class="integration-card' +
@@ -1942,13 +1975,14 @@
       '">' +
       (connected ? '<i data-lucide="circle-check"></i> Подключён' : 'Не подключён') +
       '</span></div>';
+    if (connected && record) {
+      html += savedTokenBlockHtml(prefix, record);
+    }
     if (platform === 'telegram' && connected && record) {
       html +=
         '<div class="int-meta"><span>Бот: <strong>' +
         esc(record.name || 'Telegram') +
-        '</strong></span><span>Bot Token: <code>••••••••' +
-        esc(record.tokenPreview || '') +
-        '</code></span></div>';
+        '</strong></span></div>';
       html +=
         '<div class="tg-chats-panel-wrap" data-tg-chats-panel="' +
         esc(record.id) +
@@ -1961,7 +1995,9 @@
       (platform === 'vk' ? 'Access Token' : 'Bot Token') +
       '</label><input class="input mono" type="password" id="' +
       prefix +
-      '-token"/></div>';
+      '-token" value="' +
+      esc(savedToken) +
+      '" placeholder="Вставьте новый токен для замены" autocomplete="off"/></div>';
 
     if (platform === 'vk') {
       html +=
@@ -2134,6 +2170,31 @@
       btn.addEventListener('click', function () {
         var body = qs('#' + btn.getAttribute('data-expand'), main);
         if (body) body.classList.toggle('hidden');
+      });
+    });
+    qsa('[data-toggle-token]', main).forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var id = btn.getAttribute('data-toggle-token');
+        var el = id ? qs('#' + id, main) : null;
+        if (!el) return;
+        var show = el.type === 'password';
+        el.type = show ? 'text' : 'password';
+        btn.textContent = show ? 'Скрыть' : 'Показать';
+      });
+    });
+    qsa('[data-copy-token]', main).forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var id = btn.getAttribute('data-copy-token');
+        var el = id ? qs('#' + id, main) : null;
+        var v = el ? String(el.value || '') : '';
+        if (!v) return;
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(v).then(function () {
+            showToast('Токен скопирован', 'success');
+          });
+        } else {
+          showToast(v, 'info');
+        }
       });
     });
     qsa('[data-connect]', main).forEach(function (btn) {

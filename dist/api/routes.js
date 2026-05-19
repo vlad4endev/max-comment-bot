@@ -768,10 +768,21 @@ function createCommentApiRouter(deps) {
                 err,
             });
         }
+        let channel_post_url = null;
+        try {
+            channel_post_url = await (0, postStore_1.resolveChannelPostUrl)(deps.bot, post);
+        }
+        catch (err) {
+            logger_1.logger.warn('GET /post/:postId: resolveChannelPostUrl failed', {
+                postId: post.post_id,
+                err,
+            });
+        }
         res.json({
             post_id: post.post_id,
             text: post.text,
             photo_url: post.photo_url ?? null,
+            channel_post_url,
             chat_id: post.chat_id,
             comment_count: post.comment_count,
             channel_title: channel?.title ?? null,

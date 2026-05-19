@@ -718,6 +718,17 @@ h3 {
   border: 1px solid var(--border-subtle);
 }
 
+a.comment-post-context {
+  text-decoration: none;
+  color: inherit;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+a.comment-post-context:hover {
+  background: var(--bg-hover, rgba(255, 255, 255, 0.04));
+  border-color: var(--border-strong, var(--border-subtle));
+}
+
 .comment-post-label {
   flex-shrink: 0;
   font-size: 0.68rem;
@@ -1859,6 +1870,27 @@ tbody tr:hover td {
   gap: 16px;
   font-size: 12px;
   color: var(--text-secondary);
+}
+.saved-token-block {
+  padding: 0 16px 12px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.saved-token-label {
+  display: block;
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+}
+.saved-token-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.saved-token-input {
+  flex: 1;
+  min-width: 180px;
+  font-size: 12px;
 }
 .int-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
 .int-expand-btn {

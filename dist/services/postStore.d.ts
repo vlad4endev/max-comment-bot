@@ -13,6 +13,8 @@ export interface Post {
     sender_name?: string;
     text: string;
     photo_url?: string;
+    /** Public MAX link to the channel post (`Message.url` from API). */
+    channel_post_url?: string;
     /**
      * Non-keyboard attachments from the channel post (from {@link Message.body.attachments}).
      * Used so {@link Bot.api.editMessage} can merge media with the inline keyboard instead of replacing all attachments.
@@ -56,5 +58,7 @@ export declare function isMiniAppOpenUrlConfigured(): boolean;
  * MAX Mini App: `https://max.ru/<bot>?startapp=<payload>` (payload: A–Z, a–z, 0–9, _, -).
  * Fallback: legacy {@link config.miniAppUrl} with `post_id` / `chat_id` query params.
  */
+/** Returns shareable channel post URL; fetches from MAX API and persists when missing in DB. */
+export declare function resolveChannelPostUrl(bot: Bot, post: Post): Promise<string | null>;
 export declare function buildMiniAppUrl(postId: string, chatId: number, extra?: Record<string, string>, messageMid?: string): string;
 export declare const postStore: PostStore;

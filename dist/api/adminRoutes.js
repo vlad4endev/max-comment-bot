@@ -544,6 +544,7 @@ function createAdminRouter(deps) {
                         text: post.text,
                         sender_name: post.sender_name ?? null,
                         photo_url: post.photo_url ?? null,
+                        channel_post_url: post.channel_post_url ?? null,
                         timestamp: post.timestamp,
                     }
                     : null,

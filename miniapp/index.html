@@ -1146,6 +1146,21 @@
       border: none;
       border-radius: 12px;
       box-shadow: var(--tg-bubble-shadow);
+      width: 100%;
+      text-align: left;
+      font: inherit;
+      color: inherit;
+    }
+    #view-comments .post-preview.clickable {
+      cursor: pointer;
+      transition: background 0.15s ease;
+    }
+    #view-comments .post-preview.clickable:active {
+      background: var(--input-bg);
+    }
+    #view-comments .post-preview:disabled {
+      cursor: default;
+      opacity: 1;
     }
     #view-comments .post-preview-text {
       flex: 1;
@@ -1619,8 +1634,8 @@
     #view-comments .composer {
       display: flex;
       flex-direction: row;
-      align-items: center;
-      gap: 10px;
+      align-items: flex-end;
+      gap: 8px;
     }
     #view-comments .composer-photo-btn {
       width: 36px;
@@ -1644,7 +1659,7 @@
     #view-comments .composer-attachments {
       display: none;
       margin-top: 8px;
-      margin-left: 40px;
+      margin-left: 0;
       grid-template-columns: repeat(4, minmax(0, 1fr));
       gap: 6px;
     }
@@ -1676,40 +1691,32 @@
       line-height: 1;
       padding: 0;
     }
-    #view-comments .composer .av-composer {
-      width: 30px;
-      height: 30px;
-      border-radius: 50%;
-      flex-shrink: 0;
-      font-size: 11px;
-      font-weight: 700;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      background: var(--teal-strong-bg);
-      color: var(--teal);
-      overflow: hidden;
-    }
-    #view-comments .composer .av-composer img,
     #view-comments .msg-user .av img {
       width: 100%;
       height: 100%;
       object-fit: cover;
       border-radius: 50%;
     }
-    #view-comments .composer input[type="text"] {
+    #view-comments .composer-input {
       flex: 1;
       min-width: 0;
+      width: 100%;
+      min-height: 40px;
+      max-height: 120px;
       height: 40px;
       border-radius: 20px;
       border: none;
-      padding: 0 14px;
+      padding: 9px 14px;
       font-size: 16px;
+      line-height: 1.35;
+      font-family: inherit;
+      resize: none;
+      overflow-y: hidden;
       background: var(--comments-input-bg);
       box-shadow: var(--tg-bubble-shadow);
       color: var(--text-primary);
     }
-    #view-comments .composer input::placeholder {
+    #view-comments .composer-input::placeholder {
       color: var(--text-soft);
     }
     #view-comments .send-btn {
@@ -1990,10 +1997,10 @@
             </a>
             <div class="count-badge" id="countBadge" title="Комментариев">0</div>
           </div>
-          <div class="post-preview">
+          <button type="button" class="post-preview" id="postPreviewBtn" title="Открыть пост в канале" aria-label="Открыть пост в канале">
             <div class="post-preview-text" id="postPreviewText">Загрузка…</div>
             <img class="post-thumb" id="postThumb" alt="" />
-          </div>
+          </button>
         </div>
         <div id="err"></div>
         <div id="feed"></div>
@@ -2009,10 +2016,9 @@
             </div>
           </div>
           <div class="composer">
-            <div class="av av-composer" id="composerAv" aria-hidden="true">?</div>
             <button type="button" class="composer-photo-btn" id="photoBtn" aria-label="Прикрепить фото">📎</button>
             <input type="file" id="photoInput" class="composer-photo-input" accept="image/*" multiple />
-            <input type="text" id="input" placeholder="Написать комментарий…" autocomplete="off" />
+            <textarea id="input" class="composer-input" rows="1" placeholder="Написать комментарий…" autocomplete="off"></textarea>
             <button type="button" class="send-btn" id="sendBtn" aria-label="Отправить" disabled>
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <path d="M22 2L11 13" />
@@ -3390,6 +3396,7 @@
       var countBadgeEl = document.getElementById('countBadge');
       var postPreviewTextEl = document.getElementById('postPreviewText');
       var postThumbEl = document.getElementById('postThumb');
+      var postPreviewBtnEl = document.getElementById('postPreviewBtn');
       var replyBannerEl = document.getElementById('replyBanner');
       var replyBannerNameEl = document.getElementById('replyBannerName');
       var replyBannerCloseEl = document.getElementById('replyBannerClose');
@@ -3400,16 +3407,54 @@
       var photoBtnEl = document.getElementById('photoBtn');
       var photoInputEl = document.getElementById('photoInput');
       var composerAttachmentsEl = document.getElementById('composerAttachments');
-      var composerAvEl = document.getElementById('composerAv');
       var currentPostId = postId;
+      var COMPOSER_INPUT_MAX_HEIGHT = 120;
 
       var knownIds = new Set();
       var postCommentCount = null;
+      var channelPostUrl = null;
       var replyContext = null; // { comment_id, username, post_id }
       var pendingPhotoFiles = [];
 
+      function setPostPreviewLink(url) {
+        channelPostUrl = url && String(url).trim() ? String(url).trim() : null;
+        if (!postPreviewBtnEl) return;
+        if (channelPostUrl) {
+          postPreviewBtnEl.classList.add('clickable');
+          postPreviewBtnEl.disabled = false;
+        } else {
+          postPreviewBtnEl.classList.remove('clickable');
+          postPreviewBtnEl.disabled = true;
+        }
+      }
+
+      function openChannelPost() {
+        if (!channelPostUrl) return;
+        try {
+          if (window.WebApp && typeof window.WebApp.openMaxLink === 'function') {
+            window.WebApp.openMaxLink(channelPostUrl);
+            return;
+          }
+        } catch (err) {}
+        window.location.href = channelPostUrl;
+      }
+
       function setErr(msg) {
         errEl.textContent = msg || '';
+      }
+
+      function resizeComposerInput() {
+        if (!inputEl) return;
+        inputEl.style.height = 'auto';
+        var next = Math.min(inputEl.scrollHeight, COMPOSER_INPUT_MAX_HEIGHT);
+        inputEl.style.height = Math.max(40, next) + 'px';
+        inputEl.style.overflowY = inputEl.scrollHeight > COMPOSER_INPUT_MAX_HEIGHT ? 'auto' : 'hidden';
+      }
+
+      function clearComposerInput() {
+        if (!inputEl) return;
+        inputEl.value = '';
+        resizeComposerInput();
       }
 
       function updateSendEnabled() {
@@ -3551,7 +3596,7 @@
         renderComposerAttachments();
       }
 
-      setAvatarEl(composerAvEl, currentUserPhotoUrl, username);
+      resizeComposerInput();
 
       function updateBadgeFromCount(n) {
         var v = typeof n === 'number' && n >= 0 ? n : knownIds.size;
@@ -4448,11 +4493,13 @@
               postCommentCount = p.comment_count;
               updateBadgeFromCount(postCommentCount);
             }
+            setPostPreviewLink(p.channel_post_url || null);
             return true;
           })
           .catch(function (e) {
             setErr(e.message || String(e));
             postPreviewTextEl.textContent = '';
+            setPostPreviewLink(null);
             return false;
           });
       }
@@ -4570,7 +4617,7 @@
                 })
                 .then(function (data) {
                   clearComposerPhotos();
-                  inputEl.value = '';
+                  clearComposerInput();
                   hideReplyBanner();
                   if (data && data.comment_id) {
                     mergeOrUpdateComment(data);
@@ -4582,7 +4629,7 @@
             }
 
             clearComposerPhotos();
-            inputEl.value = '';
+            clearComposerInput();
             var tempId = 'temp-' + Date.now();
             var optimistic = {
               comment_id: tempId,
@@ -4645,6 +4692,7 @@
                 node.remove();
                 bumpCommentCount(-1);
                 inputEl.value = text;
+                resizeComposerInput();
               });
           })
           .catch(function (e) {
@@ -4654,6 +4702,7 @@
           })
           .finally(function () {
             updateSendEnabled();
+            resizeComposerInput();
             scrollToBottom();
           });
       }
@@ -4703,7 +4752,15 @@
           hideReplyBanner();
         });
       }
+      if (postPreviewBtnEl && postPreviewBtnEl.dataset.bound !== '1') {
+        postPreviewBtnEl.dataset.bound = '1';
+        postPreviewBtnEl.disabled = true;
+        postPreviewBtnEl.addEventListener('click', function () {
+          openChannelPost();
+        });
+      }
       inputEl.addEventListener('input', function () {
+        resizeComposerInput();
         updateSendEnabled();
       });
       inputEl.addEventListener('keydown', function (e) {

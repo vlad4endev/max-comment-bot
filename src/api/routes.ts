@@ -30,7 +30,7 @@ import {
   syncAdminCommentNotification,
 } from '../services/notificationService'
 import type { Post } from '../services/postStore'
-import { postStore } from '../services/postStore'
+import { postStore, resolveChannelPostUrl } from '../services/postStore'
 import { stateManager } from '../services/stateManager'
 import {
   parseMiniappFeatureKey,
@@ -878,10 +878,20 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
         err,
       })
     }
+    let channel_post_url: string | null = null
+    try {
+      channel_post_url = await resolveChannelPostUrl(deps.bot, post)
+    } catch (err: unknown) {
+      logger.warn('GET /post/:postId: resolveChannelPostUrl failed', {
+        postId: post.post_id,
+        err,
+      })
+    }
     res.json({
       post_id: post.post_id,
       text: post.text,
       photo_url: post.photo_url ?? null,
+      channel_post_url,
       chat_id: post.chat_id,
       comment_count: post.comment_count,
       channel_title: channel?.title ?? null,

@@ -4,6 +4,7 @@ exports.postStore = exports.PostStore = void 0;
 exports.mediaAttachmentRequestsFromMessageBody = mediaAttachmentRequestsFromMessageBody;
 exports.attachCommentButtonToChannelPost = attachCommentButtonToChannelPost;
 exports.isMiniAppOpenUrlConfigured = isMiniAppOpenUrlConfigured;
+exports.resolveChannelPostUrl = resolveChannelPostUrl;
 exports.buildMiniAppUrl = buildMiniAppUrl;
 const max_bot_api_1 = require("@maxhub/max-bot-api");
 const config_1 = require("../config");
@@ -247,6 +248,39 @@ function isMiniAppOpenUrlConfigured() {
  * MAX Mini App: `https://max.ru/<bot>?startapp=<payload>` (payload: A–Z, a–z, 0–9, _, -).
  * Fallback: legacy {@link config.miniAppUrl} with `post_id` / `chat_id` query params.
  */
+/** Returns shareable channel post URL; fetches from MAX API and persists when missing in DB. */
+async function resolveChannelPostUrl(bot, post) {
+    const stored = post.channel_post_url?.trim();
+    if (stored) {
+        return stored;
+    }
+    let message;
+    try {
+        message = await bot.api.getMessage(post.message_mid);
+    }
+    catch {
+        try {
+            const { messages } = await bot.api.getMessages(post.chat_id, {
+                message_ids: [post.message_mid],
+            });
+            message = messages[0];
+        }
+        catch (err) {
+            logger_1.logger.warn('resolveChannelPostUrl: could not load message', {
+                postId: post.post_id,
+                messageMid: post.message_mid,
+                err,
+            });
+            return null;
+        }
+    }
+    const url = message?.url?.trim();
+    if (!url) {
+        return null;
+    }
+    exports.postStore.savePost({ ...post, channel_post_url: url });
+    return url;
+}
 function buildMiniAppUrl(postId, chatId, extra, messageMid) {
     const payload = maxStartappPayload(postId, chatId, messageMid, extra);
     const nick = config_1.config.botNickname.trim();

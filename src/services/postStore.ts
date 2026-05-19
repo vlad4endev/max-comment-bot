@@ -27,6 +27,8 @@ export interface Post {
   sender_name?: string
   text: string
   photo_url?: string
+  /** Public MAX link to the channel post (`Message.url` from API). */
+  channel_post_url?: string
   /**
    * Non-keyboard attachments from the channel post (from {@link Message.body.attachments}).
    * Used so {@link Bot.api.editMessage} can merge media with the inline keyboard instead of replacing all attachments.
@@ -339,6 +341,38 @@ export function isMiniAppOpenUrlConfigured(): boolean {
  * MAX Mini App: `https://max.ru/<bot>?startapp=<payload>` (payload: A–Z, a–z, 0–9, _, -).
  * Fallback: legacy {@link config.miniAppUrl} with `post_id` / `chat_id` query params.
  */
+/** Returns shareable channel post URL; fetches from MAX API and persists when missing in DB. */
+export async function resolveChannelPostUrl(bot: Bot, post: Post): Promise<string | null> {
+  const stored = post.channel_post_url?.trim()
+  if (stored) {
+    return stored
+  }
+  let message: Message | undefined
+  try {
+    message = await bot.api.getMessage(post.message_mid)
+  } catch {
+    try {
+      const { messages } = await bot.api.getMessages(post.chat_id, {
+        message_ids: [post.message_mid],
+      })
+      message = messages[0]
+    } catch (err: unknown) {
+      logger.warn('resolveChannelPostUrl: could not load message', {
+        postId: post.post_id,
+        messageMid: post.message_mid,
+        err,
+      })
+      return null
+    }
+  }
+  const url = message?.url?.trim()
+  if (!url) {
+    return null
+  }
+  postStore.savePost({ ...post, channel_post_url: url })
+  return url
+}
+
 export function buildMiniAppUrl(
   postId: string,
   chatId: number,

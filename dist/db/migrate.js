@@ -108,6 +108,9 @@ function normalizePost(raw) {
     if (typeof o.photo_url === 'string') {
         post.photo_url = o.photo_url;
     }
+    if (typeof o.channel_post_url === 'string' && o.channel_post_url.trim() !== '') {
+        post.channel_post_url = o.channel_post_url.trim();
+    }
     if (Array.isArray(o.media_attachments)) {
         post.media_attachments = o.media_attachments;
     }
