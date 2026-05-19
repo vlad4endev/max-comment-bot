@@ -4,6 +4,7 @@ import { v4 as uuidv4 } from 'uuid'
 
 import { logger } from '../utils/logger'
 import { pushAdminActivity } from './adminActivityStore'
+import { resolveCanonicalChannelChatId } from './resolveChannelChatId'
 import { disabledAdminStore } from './disabledAdminStore'
 import {
   attachCommentButtonToChannelPost,
@@ -114,10 +115,11 @@ export async function tryAttachCommentsToChannelPost(
     typeof override === 'number' && Number.isFinite(override) ? override : undefined
   const rid = message.recipient?.chat_id
   const recipientChatId = typeof rid === 'number' && Number.isFinite(rid) ? rid : undefined
-  const chatId = overrideOk ?? recipientChatId ?? null
-  if (chatId === null) {
+  const rawChatId = overrideOk ?? recipientChatId ?? null
+  if (rawChatId === null) {
     return { ok: false, reason: 'no_chat_id' }
   }
+  const chatId = resolveCanonicalChannelChatId(rawChatId) ?? rawChatId
 
   const botUid = options.botUserId ?? bot.botInfo?.user_id
   if (user && botUid !== undefined && user.user_id === botUid) {
@@ -134,7 +136,18 @@ export async function tryAttachCommentsToChannelPost(
     return { ok: false, reason: 'no_mid' }
   }
 
-  if (postStore.findPostByChannelMessage(chatId, mid)) {
+  const existingPost = postStore.findPostByChannelMessage(chatId, mid)
+  if (existingPost) {
+    try {
+      await postStore.updateButtonCaption(bot, existingPost)
+    } catch (err: unknown) {
+      logger.warn('tryAttachCommentsToChannelPost: refresh button failed', {
+        postId: existingPost.post_id,
+        chatId,
+        mid,
+        err,
+      })
+    }
     return { ok: false, reason: 'already_exists' }
   }
 
@@ -174,7 +187,7 @@ export async function tryAttachCommentsToChannelPost(
   }
   postStore.savePost(post)
 
-  const openUrl = buildMiniAppUrl(postId, chatId)
+  const openUrl = buildMiniAppUrl(postId, chatId, undefined, mid)
   const kb = Keyboard.inlineKeyboard([[Keyboard.button.link('💬 Комментарии (0)', openUrl)]])
   const editText = text === '' ? '\u00a0' : text
 
@@ -185,4 +198,49 @@ export async function tryAttachCommentsToChannelPost(
     message_mid: mid,
   })
   return { ok: true }
+}
+
+/**
+ * Loads a channel message from MAX and registers it in {@link postStore} if missing.
+ * Used when Mini App opens with `message_mid` but the post row was lost (DB reset, migration).
+ */
+export async function ensurePostFromChannelMessage(
+  bot: Bot,
+  chatId: number,
+  messageMid: string,
+): Promise<Post | null> {
+  const canonicalChatId = resolveCanonicalChannelChatId(chatId) ?? chatId
+  const existing = postStore.findPostByChannelMessage(canonicalChatId, messageMid)
+  if (existing) {
+    return existing
+  }
+  let message: Message | undefined
+  try {
+    message = await bot.api.getMessage(messageMid)
+  } catch {
+    try {
+      const { messages } = await bot.api.getMessages(canonicalChatId, {
+        message_ids: [messageMid],
+      })
+      message = messages[0]
+    } catch (err: unknown) {
+      logger.warn('ensurePostFromChannelMessage: could not load message', {
+        chatId: canonicalChatId,
+        messageMid,
+        err,
+      })
+      return null
+    }
+  }
+  if (!message?.body?.mid) {
+    return null
+  }
+  const r = await tryAttachCommentsToChannelPost(bot, message, {
+    channelChatIdOverride: canonicalChatId,
+    skipAuthorAdminCheck: true,
+  })
+  if (r.ok || r.reason === 'already_exists') {
+    return postStore.findPostByChannelMessage(canonicalChatId, messageMid)
+  }
+  return null
 }

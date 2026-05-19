@@ -20,7 +20,7 @@ import {
   resolveCanonicalChannelChatId,
   resolveChannelChatIdFromInviteParam,
 } from '../services/resolveChannelChatId'
-import { isUserChannelAdmin } from '../services/channelPostActions'
+import { ensurePostFromChannelMessage, isUserChannelAdmin } from '../services/channelPostActions'
 import type { Comment } from '../services/commentStore'
 import { commentStore } from '../services/commentStore'
 import { subscriberStore } from '../services/subscriberStore'
@@ -826,12 +826,13 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
       return direct
     }
     if (chatIdRaw !== null && messageMid) {
-      const byMid = postStore.findPostByChannelMessage(chatIdRaw, messageMid)
+      const canonicalChatId = resolveCanonicalChannelChatId(chatIdRaw) ?? chatIdRaw
+      const byMid = postStore.findPostByChannelMessage(canonicalChatId, messageMid)
       if (byMid) {
         logger.info('GET /post: resolved by message_mid', {
           requestedPostId: postId,
           postId: byMid.post_id,
-          chatId: chatIdRaw,
+          chatId: canonicalChatId,
           messageMid,
         })
         return byMid
@@ -843,7 +844,19 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
   router.get('/post/:postId', async (req, res) => {
     const chatIdRaw = parseNonZeroInt(req.query.chat_id)
     const messageMid = parseNonEmptyString(req.query.message_mid)
-    const post = resolvePostForMiniApp(req.params.postId, chatIdRaw, messageMid)
+    let post = resolvePostForMiniApp(req.params.postId, chatIdRaw, messageMid)
+    if (!post && chatIdRaw !== null && messageMid) {
+      const canonicalChatId = resolveCanonicalChannelChatId(chatIdRaw) ?? chatIdRaw
+      post = await ensurePostFromChannelMessage(deps.bot, canonicalChatId, messageMid)
+      if (post && post.post_id !== req.params.postId) {
+        logger.info('GET /post: backfilled from message_mid', {
+          requestedPostId: req.params.postId,
+          postId: post.post_id,
+          chatId: canonicalChatId,
+          messageMid,
+        })
+      }
+    }
     if (!post) {
       res.status(404).json({ error: 'post not found' })
       return
@@ -880,7 +893,11 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
     const postId = req.params.postId
     const chatIdRaw = parseNonZeroInt(req.query.chat_id)
     const messageMid = parseNonEmptyString(req.query.message_mid)
-    const post = resolvePostForMiniApp(postId, chatIdRaw, messageMid)
+    let post = resolvePostForMiniApp(postId, chatIdRaw, messageMid)
+    if (!post && chatIdRaw !== null && messageMid) {
+      const canonicalChatId = resolveCanonicalChannelChatId(chatIdRaw) ?? chatIdRaw
+      post = await ensurePostFromChannelMessage(deps.bot, canonicalChatId, messageMid)
+    }
     if (!post) {
       res.status(404).json({ error: 'post not found' })
       return

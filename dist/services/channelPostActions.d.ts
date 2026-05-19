@@ -1,5 +1,6 @@
 import { Bot } from '@maxhub/max-bot-api';
 import type { Message } from '@maxhub/max-bot-api/types';
+import { type Post } from './postStore';
 /**
  * Resolves chat id for a message (channel/group/dialog). Falls back to sender id for 1:1.
  */
@@ -27,3 +28,8 @@ export declare function tryAttachCommentsToChannelPost(bot: Bot, message: Messag
     channelChatIdOverride?: number;
     skipAuthorAdminCheck?: boolean;
 }): Promise<AttachChannelCommentsResult>;
+/**
+ * Loads a channel message from MAX and registers it in {@link postStore} if missing.
+ * Used when Mini App opens with `message_mid` but the post row was lost (DB reset, migration).
+ */
+export declare function ensurePostFromChannelMessage(bot: Bot, chatId: number, messageMid: string): Promise<Post | null>;

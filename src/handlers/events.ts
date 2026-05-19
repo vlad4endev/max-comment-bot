@@ -1023,7 +1023,10 @@ ${inviteUrl}
         recipientChatType: message.recipient.chat_type,
         messageMid: message.body.mid,
       })
-      const r = await tryAttachCommentsToChannelPost(bot, message, { botUserId: ctx.myId })
+      const r = await tryAttachCommentsToChannelPost(bot, message, {
+        botUserId: ctx.myId,
+        skipAuthorAdminCheck: true,
+      })
       if (r.ok) {
         logger.info('message_created: comment button attached (push path)', {
           messageMid: message.body.mid,

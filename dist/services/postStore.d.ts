@@ -56,5 +56,5 @@ export declare function isMiniAppOpenUrlConfigured(): boolean;
  * MAX Mini App: `https://max.ru/<bot>?startapp=<payload>` (payload: A–Z, a–z, 0–9, _, -).
  * Fallback: legacy {@link config.miniAppUrl} with `post_id` / `chat_id` query params.
  */
-export declare function buildMiniAppUrl(postId: string, chatId: number, extra?: Record<string, string>): string;
+export declare function buildMiniAppUrl(postId: string, chatId: number, extra?: Record<string, string>, messageMid?: string): string;
 export declare const postStore: PostStore;

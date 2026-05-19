@@ -10,6 +10,8 @@ import type Database from 'better-sqlite3'
 
 import { config } from '../config'
 import { getDb } from '../db/database'
+import { resolveCanonicalChannelChatId } from './resolveChannelChatId'
+import { encodeMessageMidForStartapp } from '../utils/startappPayload'
 import { logger } from '../utils/logger'
 
 /**
@@ -39,6 +41,7 @@ export class PostStore {
     getPost: Database.Statement
     listByChatId: Database.Statement
     findByChatAndMid: Database.Statement
+    findByAbsChatAndMid: Database.Statement
     upsert: Database.Statement
     deleteByChatId: Database.Statement
     selectIdsByChatId: Database.Statement
@@ -77,10 +80,20 @@ export class PostStore {
   }
 
   findPostByChannelMessage(chatId: number, messageMid: string): Post | null {
-    const row = this.getStatements().findByChatAndMid.get(chatId, messageMid) as
+    const canonical = resolveCanonicalChannelChatId(chatId) ?? chatId
+    for (const cid of [canonical, chatId]) {
+      const row = this.getStatements().findByChatAndMid.get(cid, messageMid) as
+        | { data: string }
+        | undefined
+      if (row) {
+        return this.parsePost(row.data)
+      }
+    }
+    const abs = Math.abs(canonical)
+    const absRow = this.getStatements().findByAbsChatAndMid.get(abs, messageMid) as
       | { data: string }
       | undefined
-    return row ? this.parsePost(row.data) : null
+    return absRow ? this.parsePost(absRow.data) : null
   }
 
   incrementCommentCount(postId: string): number | null {
@@ -130,7 +143,7 @@ export class PostStore {
       logger.warn('postStore.updateButtonCaption: BOT_NICKNAME / MINI_APP_URL not usable for links')
       return
     }
-    const url = buildMiniAppUrl(post.post_id, post.chat_id)
+    const url = buildMiniAppUrl(post.post_id, post.chat_id, undefined, post.message_mid)
     const kb = Keyboard.inlineKeyboard([
       [Keyboard.button.link(`💬 Комментарии (${post.comment_count})`, url)],
     ])
@@ -174,6 +187,9 @@ export class PostStore {
         'SELECT data FROM posts WHERE chat_id = ? ORDER BY timestamp ASC, post_id ASC',
       ),
       findByChatAndMid: db.prepare('SELECT data FROM posts WHERE chat_id = ? AND message_mid = ?'),
+      findByAbsChatAndMid: db.prepare(
+        'SELECT data FROM posts WHERE ABS(chat_id) = ? AND message_mid = ? LIMIT 1',
+      ),
       upsert: db.prepare(
         `INSERT OR REPLACE INTO posts (
           post_id, chat_id, message_mid, comments_ui_message_mid, sender_name, text,
@@ -299,10 +315,19 @@ export async function attachCommentButtonToChannelPost(
   }
 }
 
-function maxStartappPayload(postId: string, chatId: number, extra?: Record<string, string>): string {
+function maxStartappPayload(
+  postId: string,
+  chatId: number,
+  messageMid?: string,
+  extra?: Record<string, string>,
+): string {
   const compactId = postId.replace(/-/g, '')
   const suffix = extra?.admin === '1' ? '_admin' : ''
-  return `pid_${compactId}_cid_${Math.abs(chatId)}${suffix}`
+  const midPart =
+    messageMid && messageMid.trim() !== ''
+      ? `_mid_${encodeMessageMidForStartapp(messageMid.trim())}`
+      : ''
+  return `pid_${compactId}_cid_${Math.abs(chatId)}${midPart}${suffix}`
 }
 
 /** True if we can build a link that opens the Mini App (MAX deep link or legacy MINI_APP_URL). */
@@ -314,8 +339,13 @@ export function isMiniAppOpenUrlConfigured(): boolean {
  * MAX Mini App: `https://max.ru/<bot>?startapp=<payload>` (payload: A–Z, a–z, 0–9, _, -).
  * Fallback: legacy {@link config.miniAppUrl} with `post_id` / `chat_id` query params.
  */
-export function buildMiniAppUrl(postId: string, chatId: number, extra?: Record<string, string>): string {
-  const payload = maxStartappPayload(postId, chatId, extra)
+export function buildMiniAppUrl(
+  postId: string,
+  chatId: number,
+  extra?: Record<string, string>,
+  messageMid?: string,
+): string {
+  const payload = maxStartappPayload(postId, chatId, messageMid, extra)
   const nick = config.botNickname.trim()
   if (nick) {
     return `https://max.ru/${nick}?startapp=${payload}`
@@ -327,6 +357,9 @@ export function buildMiniAppUrl(postId: string, chatId: number, extra?: Record<s
   const u = new URL(base.replace(/\/+$/, ''))
   u.searchParams.set('post_id', postId)
   u.searchParams.set('chat_id', String(chatId))
+  if (messageMid && messageMid.trim() !== '') {
+    u.searchParams.set('message_mid', messageMid.trim())
+  }
   if (extra) {
     for (const [k, v] of Object.entries(extra)) {
       u.searchParams.set(k, v)

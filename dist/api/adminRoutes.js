@@ -771,10 +771,19 @@ function createAdminRouter(deps) {
             return;
         }
         try {
-            await (0, channelPoller_1.runChannelPollerForChat)(deps.bot, chatId);
-            res.json({ ok: true });
+            const stats = await (0, channelPoller_1.runChannelPollerForChat)(deps.bot, chatId);
+            res.json({ ok: true, ...stats });
         }
         catch (err) {
+            if (err instanceof channelPoller_1.RefreshButtonsError) {
+                const status = err.code === 'miniapp_not_configured'
+                    ? 503
+                    : err.code === 'channel_not_found'
+                        ? 404
+                        : 502;
+                res.status(status).json({ error: err.message, code: err.code });
+                return;
+            }
             logger_1.logger.error('admin refresh-buttons', err);
             res.status(500).json({ error: 'failed' });
         }

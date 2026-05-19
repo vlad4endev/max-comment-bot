@@ -1,10 +1,22 @@
 import type { Bot } from '@maxhub/max-bot-api';
 /** Exported for startup diagnostics. */
 export declare const POLL_CONCURRENCY = 5;
+export interface RefreshButtonsStats {
+    chat_id: number;
+    messages_fetched: number;
+    created: number;
+    refreshed: number;
+    skipped: number;
+    failed: number;
+}
+export declare class RefreshButtonsError extends Error {
+    readonly code: 'miniapp_not_configured' | 'channel_not_found' | 'api_error';
+    constructor(code: 'miniapp_not_configured' | 'channel_not_found' | 'api_error', message: string);
+}
 /**
  * One sweep for a single channel (admin «обновить кнопки»).
  */
-export declare function runChannelPollerForChat(bot: Bot, chatId: number): Promise<void>;
+export declare function runChannelPollerForChat(bot: Bot, chatId: number): Promise<RefreshButtonsStats>;
 /**
  * One sweep: for each registered channel, fetch recent messages and attach the comment button to new admin posts.
  */

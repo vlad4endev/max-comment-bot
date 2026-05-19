@@ -8,6 +8,8 @@ exports.buildMiniAppUrl = buildMiniAppUrl;
 const max_bot_api_1 = require("@maxhub/max-bot-api");
 const config_1 = require("../config");
 const database_1 = require("../db/database");
+const resolveChannelChatId_1 = require("./resolveChannelChatId");
+const startappPayload_1 = require("../utils/startappPayload");
 const logger_1 = require("../utils/logger");
 class PostStore {
     statements = null;
@@ -26,8 +28,16 @@ class PostStore {
         return rows.map((row) => this.parsePost(row.data));
     }
     findPostByChannelMessage(chatId, messageMid) {
-        const row = this.getStatements().findByChatAndMid.get(chatId, messageMid);
-        return row ? this.parsePost(row.data) : null;
+        const canonical = (0, resolveChannelChatId_1.resolveCanonicalChannelChatId)(chatId) ?? chatId;
+        for (const cid of [canonical, chatId]) {
+            const row = this.getStatements().findByChatAndMid.get(cid, messageMid);
+            if (row) {
+                return this.parsePost(row.data);
+            }
+        }
+        const abs = Math.abs(canonical);
+        const absRow = this.getStatements().findByAbsChatAndMid.get(abs, messageMid);
+        return absRow ? this.parsePost(absRow.data) : null;
     }
     incrementCommentCount(postId) {
         const post = this.getPost(postId);
@@ -71,7 +81,7 @@ class PostStore {
             logger_1.logger.warn('postStore.updateButtonCaption: BOT_NICKNAME / MINI_APP_URL not usable for links');
             return;
         }
-        const url = buildMiniAppUrl(post.post_id, post.chat_id);
+        const url = buildMiniAppUrl(post.post_id, post.chat_id, undefined, post.message_mid);
         const kb = max_bot_api_1.Keyboard.inlineKeyboard([
             [max_bot_api_1.Keyboard.button.link(`💬 Комментарии (${post.comment_count})`, url)],
         ]);
@@ -110,6 +120,7 @@ class PostStore {
             getPost: db.prepare('SELECT data FROM posts WHERE post_id = ?'),
             listByChatId: db.prepare('SELECT data FROM posts WHERE chat_id = ? ORDER BY timestamp ASC, post_id ASC'),
             findByChatAndMid: db.prepare('SELECT data FROM posts WHERE chat_id = ? AND message_mid = ?'),
+            findByAbsChatAndMid: db.prepare('SELECT data FROM posts WHERE ABS(chat_id) = ? AND message_mid = ? LIMIT 1'),
             upsert: db.prepare(`INSERT OR REPLACE INTO posts (
           post_id, chat_id, message_mid, comments_ui_message_mid, sender_name, text,
           photo_url, media_attachments, comment_count, timestamp, data
@@ -220,10 +231,13 @@ async function attachCommentButtonToChannelPost(bot, post, editText, keyboard) {
         });
     }
 }
-function maxStartappPayload(postId, chatId, extra) {
+function maxStartappPayload(postId, chatId, messageMid, extra) {
     const compactId = postId.replace(/-/g, '');
     const suffix = extra?.admin === '1' ? '_admin' : '';
-    return `pid_${compactId}_cid_${Math.abs(chatId)}${suffix}`;
+    const midPart = messageMid && messageMid.trim() !== ''
+        ? `_mid_${(0, startappPayload_1.encodeMessageMidForStartapp)(messageMid.trim())}`
+        : '';
+    return `pid_${compactId}_cid_${Math.abs(chatId)}${midPart}${suffix}`;
 }
 /** True if we can build a link that opens the Mini App (MAX deep link or legacy MINI_APP_URL). */
 function isMiniAppOpenUrlConfigured() {
@@ -233,8 +247,8 @@ function isMiniAppOpenUrlConfigured() {
  * MAX Mini App: `https://max.ru/<bot>?startapp=<payload>` (payload: A–Z, a–z, 0–9, _, -).
  * Fallback: legacy {@link config.miniAppUrl} with `post_id` / `chat_id` query params.
  */
-function buildMiniAppUrl(postId, chatId, extra) {
-    const payload = maxStartappPayload(postId, chatId, extra);
+function buildMiniAppUrl(postId, chatId, extra, messageMid) {
+    const payload = maxStartappPayload(postId, chatId, messageMid, extra);
     const nick = config_1.config.botNickname.trim();
     if (nick) {
         return `https://max.ru/${nick}?startapp=${payload}`;
@@ -246,6 +260,9 @@ function buildMiniAppUrl(postId, chatId, extra) {
     const u = new URL(base.replace(/\/+$/, ''));
     u.searchParams.set('post_id', postId);
     u.searchParams.set('chat_id', String(chatId));
+    if (messageMid && messageMid.trim() !== '') {
+        u.searchParams.set('message_mid', messageMid.trim());
+    }
     if (extra) {
         for (const [k, v] of Object.entries(extra)) {
             u.searchParams.set(k, v);

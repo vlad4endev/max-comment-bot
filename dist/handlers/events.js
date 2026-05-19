@@ -851,7 +851,10 @@ ${inviteUrl}
                 recipientChatType: message.recipient.chat_type,
                 messageMid: message.body.mid,
             });
-            const r = await (0, channelPostActions_1.tryAttachCommentsToChannelPost)(bot, message, { botUserId: ctx.myId });
+            const r = await (0, channelPostActions_1.tryAttachCommentsToChannelPost)(bot, message, {
+                botUserId: ctx.myId,
+                skipAuthorAdminCheck: true,
+            });
             if (r.ok) {
                 logger_1.logger.info('message_created: comment button attached (push path)', {
                     messageMid: message.body.mid,

@@ -17,7 +17,11 @@ import { adminRuntimeSettingsStore } from '../services/adminRuntimeSettingsStore
 import { channelNotifyLinkStore } from '../services/channelNotifyLinkStore'
 import { channelRegistry } from '../services/channelRegistry'
 import { disabledAdminStore } from '../services/disabledAdminStore'
-import { restartChannelPostPoller, runChannelPollerForChat } from '../services/channelPoller'
+import {
+  RefreshButtonsError,
+  restartChannelPostPoller,
+  runChannelPollerForChat,
+} from '../services/channelPoller'
 import { commentStore } from '../services/commentStore'
 import { postStore } from '../services/postStore'
 import { stateManager } from '../services/stateManager'
@@ -876,9 +880,19 @@ export function createAdminRouter(deps: AdminRouterDeps): express.Router {
       return
     }
     try {
-      await runChannelPollerForChat(deps.bot, chatId)
-      res.json({ ok: true })
+      const stats = await runChannelPollerForChat(deps.bot, chatId)
+      res.json({ ok: true, ...stats })
     } catch (err: unknown) {
+      if (err instanceof RefreshButtonsError) {
+        const status =
+          err.code === 'miniapp_not_configured'
+            ? 503
+            : err.code === 'channel_not_found'
+              ? 404
+              : 502
+        res.status(status).json({ error: err.message, code: err.code })
+        return
+      }
       logger.error('admin refresh-buttons', err)
       res.status(500).json({ error: 'failed' })
     }

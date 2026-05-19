@@ -5,6 +5,7 @@ import { adminRuntimeSettingsStore } from './adminRuntimeSettingsStore'
 import { clearAdminJoinNotifiedForChannel } from './channelAdminJoinNotified'
 import type { ChannelRecord } from './channelRegistry'
 import { channelRegistry } from './channelRegistry'
+import { resolveCanonicalChannelChatId } from './resolveChannelChatId'
 import { logger } from '../utils/logger'
 import { apiCallWithRetry } from '../utils/maxApiRetry'
 import { tryAttachCommentsToChannelPost } from './channelPostActions'
@@ -12,6 +13,8 @@ import { isMiniAppOpenUrlConfigured } from './postStore'
 
 const MIN_POLL_INTERVAL_MS = 3_000
 const FETCH_COUNT = 10
+/** Admin «обновить кнопки» scans more history than the periodic poller. */
+const REFRESH_BUTTONS_FETCH_COUNT = 50
 /** Exported for startup diagnostics. */
 export const POLL_CONCURRENCY = 5
 const DISABLE_AFTER_ERRORS = 5
@@ -48,6 +51,8 @@ async function pollChannel(
     const r = await tryAttachCommentsToChannelPost(bot, message, {
       botUserId: botUid,
       channelChatIdOverride: channel.chat_id,
+      /** Channel posts often have no admin-shaped sender; poller only runs on registered channels. */
+      skipAuthorAdminCheck: true,
     })
     const logPayload = {
       chatId: channel.chat_id,
@@ -91,33 +96,92 @@ async function pollChannelSafe(bot: Bot, channel: ChannelRecord, botUid: number 
   }
 }
 
+export interface RefreshButtonsStats {
+  chat_id: number
+  messages_fetched: number
+  created: number
+  refreshed: number
+  skipped: number
+  failed: number
+}
+
+export class RefreshButtonsError extends Error {
+  constructor(
+    readonly code: 'miniapp_not_configured' | 'channel_not_found' | 'api_error',
+    message: string,
+  ) {
+    super(message)
+    this.name = 'RefreshButtonsError'
+  }
+}
+
 /**
  * One sweep for a single channel (admin «обновить кнопки»).
  */
-export async function runChannelPollerForChat(bot: Bot, chatId: number): Promise<void> {
+export async function runChannelPollerForChat(
+  bot: Bot,
+  chatId: number,
+): Promise<RefreshButtonsStats> {
   if (!isMiniAppOpenUrlConfigured()) {
-    return
+    throw new RefreshButtonsError(
+      'miniapp_not_configured',
+      'Не заданы BOT_NICKNAME или MINI_APP_URL — ссылки на Mini App недоступны',
+    )
   }
 
-  const reg = channelRegistry.getChannel(chatId)
+  const canonicalChatId = resolveCanonicalChannelChatId(chatId) ?? chatId
+  const reg = channelRegistry.getChannel(canonicalChatId) ?? channelRegistry.getChannel(chatId)
   if (!reg || reg.type !== 'channel') {
-    return
+    throw new RefreshButtonsError('channel_not_found', 'Канал не найден в реестре бота')
+  }
+
+  const stats: RefreshButtonsStats = {
+    chat_id: reg.chat_id,
+    messages_fetched: 0,
+    created: 0,
+    refreshed: 0,
+    skipped: 0,
+    failed: 0,
   }
 
   const botUid = bot.botInfo?.user_id
+  let messages: Awaited<ReturnType<typeof bot.api.getMessages>>['messages']
   try {
-    const { messages } = await apiCallWithRetry(() =>
-      bot.api.getMessages(chatId, { count: FETCH_COUNT }),
+    const result = await apiCallWithRetry(() =>
+      bot.api.getMessages(reg.chat_id, { count: REFRESH_BUTTONS_FETCH_COUNT }),
     )
-    for (const message of messages) {
-      await tryAttachCommentsToChannelPost(bot, message, {
-        botUserId: botUid,
-        channelChatIdOverride: chatId,
-      })
-    }
+    messages = result.messages
   } catch (err: unknown) {
-    logger.warn('channelPoller: runChannelPollerForChat failed', { chatId, err })
+    logger.warn('channelPoller: runChannelPollerForChat getMessages failed', {
+      chatId: reg.chat_id,
+      err,
+    })
+    throw new RefreshButtonsError(
+      'api_error',
+      'Не удалось получить сообщения канала (проверьте права бота)',
+    )
   }
+
+  stats.messages_fetched = messages.length
+  for (const message of messages) {
+    const r = await tryAttachCommentsToChannelPost(bot, message, {
+      botUserId: botUid,
+      channelChatIdOverride: reg.chat_id,
+      skipAuthorAdminCheck: true,
+    })
+    if (r.ok) {
+      stats.created += 1
+    } else if (r.reason === 'already_exists') {
+      stats.refreshed += 1
+    } else if (r.reason === 'skip_bot' || r.reason === 'no_mid' || r.reason === 'no_chat_id') {
+      stats.skipped += 1
+    } else {
+      stats.failed += 1
+    }
+  }
+
+  logger.info('channelPoller: runChannelPollerForChat done', stats)
+  return stats
 }
 
 /**

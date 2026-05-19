@@ -4,10 +4,12 @@ exports.resolveMessageChatId = resolveMessageChatId;
 exports.isLikelyChannelPost = isLikelyChannelPost;
 exports.isUserChannelAdmin = isUserChannelAdmin;
 exports.tryAttachCommentsToChannelPost = tryAttachCommentsToChannelPost;
+exports.ensurePostFromChannelMessage = ensurePostFromChannelMessage;
 const max_bot_api_1 = require("@maxhub/max-bot-api");
 const uuid_1 = require("uuid");
 const logger_1 = require("../utils/logger");
 const adminActivityStore_1 = require("./adminActivityStore");
+const resolveChannelChatId_1 = require("./resolveChannelChatId");
 const disabledAdminStore_1 = require("./disabledAdminStore");
 const postStore_1 = require("./postStore");
 /**
@@ -82,10 +84,11 @@ async function tryAttachCommentsToChannelPost(bot, message, options = {}) {
     const overrideOk = typeof override === 'number' && Number.isFinite(override) ? override : undefined;
     const rid = message.recipient?.chat_id;
     const recipientChatId = typeof rid === 'number' && Number.isFinite(rid) ? rid : undefined;
-    const chatId = overrideOk ?? recipientChatId ?? null;
-    if (chatId === null) {
+    const rawChatId = overrideOk ?? recipientChatId ?? null;
+    if (rawChatId === null) {
         return { ok: false, reason: 'no_chat_id' };
     }
+    const chatId = (0, resolveChannelChatId_1.resolveCanonicalChannelChatId)(rawChatId) ?? rawChatId;
     const botUid = options.botUserId ?? bot.botInfo?.user_id;
     if (user && botUid !== undefined && user.user_id === botUid) {
         return { ok: false, reason: 'skip_bot' };
@@ -98,7 +101,19 @@ async function tryAttachCommentsToChannelPost(bot, message, options = {}) {
     if (typeof mid !== 'string' || mid.trim() === '') {
         return { ok: false, reason: 'no_mid' };
     }
-    if (postStore_1.postStore.findPostByChannelMessage(chatId, mid)) {
+    const existingPost = postStore_1.postStore.findPostByChannelMessage(chatId, mid);
+    if (existingPost) {
+        try {
+            await postStore_1.postStore.updateButtonCaption(bot, existingPost);
+        }
+        catch (err) {
+            logger_1.logger.warn('tryAttachCommentsToChannelPost: refresh button failed', {
+                postId: existingPost.post_id,
+                chatId,
+                mid,
+                err,
+            });
+        }
         return { ok: false, reason: 'already_exists' };
     }
     const needsAdminCheck = Boolean(user) && !options.skipAuthorAdminCheck;
@@ -134,7 +149,7 @@ async function tryAttachCommentsToChannelPost(bot, message, options = {}) {
         timestamp: new Date().toISOString(),
     };
     postStore_1.postStore.savePost(post);
-    const openUrl = (0, postStore_1.buildMiniAppUrl)(postId, chatId);
+    const openUrl = (0, postStore_1.buildMiniAppUrl)(postId, chatId, undefined, mid);
     const kb = max_bot_api_1.Keyboard.inlineKeyboard([[max_bot_api_1.Keyboard.button.link('💬 Комментарии (0)', openUrl)]]);
     const editText = text === '' ? '\u00a0' : text;
     await (0, postStore_1.attachCommentButtonToChannelPost)(bot, post, editText, kb);
@@ -144,5 +159,47 @@ async function tryAttachCommentsToChannelPost(bot, message, options = {}) {
         message_mid: mid,
     });
     return { ok: true };
+}
+/**
+ * Loads a channel message from MAX and registers it in {@link postStore} if missing.
+ * Used when Mini App opens with `message_mid` but the post row was lost (DB reset, migration).
+ */
+async function ensurePostFromChannelMessage(bot, chatId, messageMid) {
+    const canonicalChatId = (0, resolveChannelChatId_1.resolveCanonicalChannelChatId)(chatId) ?? chatId;
+    const existing = postStore_1.postStore.findPostByChannelMessage(canonicalChatId, messageMid);
+    if (existing) {
+        return existing;
+    }
+    let message;
+    try {
+        message = await bot.api.getMessage(messageMid);
+    }
+    catch {
+        try {
+            const { messages } = await bot.api.getMessages(canonicalChatId, {
+                message_ids: [messageMid],
+            });
+            message = messages[0];
+        }
+        catch (err) {
+            logger_1.logger.warn('ensurePostFromChannelMessage: could not load message', {
+                chatId: canonicalChatId,
+                messageMid,
+                err,
+            });
+            return null;
+        }
+    }
+    if (!message?.body?.mid) {
+        return null;
+    }
+    const r = await tryAttachCommentsToChannelPost(bot, message, {
+        channelChatIdOverride: canonicalChatId,
+        skipAuthorAdminCheck: true,
+    });
+    if (r.ok || r.reason === 'already_exists') {
+        return postStore_1.postStore.findPostByChannelMessage(canonicalChatId, messageMid);
+    }
+    return null;
 }
 //# sourceMappingURL=channelPostActions.js.map

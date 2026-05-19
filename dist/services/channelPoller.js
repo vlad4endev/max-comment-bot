@@ -3,7 +3,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.POLL_CONCURRENCY = void 0;
+exports.RefreshButtonsError = exports.POLL_CONCURRENCY = void 0;
 exports.runChannelPollerForChat = runChannelPollerForChat;
 exports.runChannelPollerTick = runChannelPollerTick;
 exports.startChannelPostPoller = startChannelPostPoller;
@@ -14,12 +14,15 @@ const p_limit_1 = __importDefault(require("p-limit"));
 const adminRuntimeSettingsStore_1 = require("./adminRuntimeSettingsStore");
 const channelAdminJoinNotified_1 = require("./channelAdminJoinNotified");
 const channelRegistry_1 = require("./channelRegistry");
+const resolveChannelChatId_1 = require("./resolveChannelChatId");
 const logger_1 = require("../utils/logger");
 const maxApiRetry_1 = require("../utils/maxApiRetry");
 const channelPostActions_1 = require("./channelPostActions");
 const postStore_1 = require("./postStore");
 const MIN_POLL_INTERVAL_MS = 3_000;
 const FETCH_COUNT = 10;
+/** Admin «обновить кнопки» scans more history than the periodic poller. */
+const REFRESH_BUTTONS_FETCH_COUNT = 50;
 /** Exported for startup diagnostics. */
 exports.POLL_CONCURRENCY = 5;
 const DISABLE_AFTER_ERRORS = 5;
@@ -47,6 +50,8 @@ async function pollChannel(bot, channel, botUid) {
         const r = await (0, channelPostActions_1.tryAttachCommentsToChannelPost)(bot, message, {
             botUserId: botUid,
             channelChatIdOverride: channel.chat_id,
+            /** Channel posts often have no admin-shaped sender; poller only runs on registered channels. */
+            skipAuthorAdminCheck: true,
         });
         const logPayload = {
             chatId: channel.chat_id,
@@ -84,30 +89,70 @@ async function pollChannelSafe(bot, channel, botUid) {
         }
     }
 }
+class RefreshButtonsError extends Error {
+    code;
+    constructor(code, message) {
+        super(message);
+        this.code = code;
+        this.name = 'RefreshButtonsError';
+    }
+}
+exports.RefreshButtonsError = RefreshButtonsError;
 /**
  * One sweep for a single channel (admin «обновить кнопки»).
  */
 async function runChannelPollerForChat(bot, chatId) {
     if (!(0, postStore_1.isMiniAppOpenUrlConfigured)()) {
-        return;
+        throw new RefreshButtonsError('miniapp_not_configured', 'Не заданы BOT_NICKNAME или MINI_APP_URL — ссылки на Mini App недоступны');
     }
-    const reg = channelRegistry_1.channelRegistry.getChannel(chatId);
+    const canonicalChatId = (0, resolveChannelChatId_1.resolveCanonicalChannelChatId)(chatId) ?? chatId;
+    const reg = channelRegistry_1.channelRegistry.getChannel(canonicalChatId) ?? channelRegistry_1.channelRegistry.getChannel(chatId);
     if (!reg || reg.type !== 'channel') {
-        return;
+        throw new RefreshButtonsError('channel_not_found', 'Канал не найден в реестре бота');
     }
+    const stats = {
+        chat_id: reg.chat_id,
+        messages_fetched: 0,
+        created: 0,
+        refreshed: 0,
+        skipped: 0,
+        failed: 0,
+    };
     const botUid = bot.botInfo?.user_id;
+    let messages;
     try {
-        const { messages } = await (0, maxApiRetry_1.apiCallWithRetry)(() => bot.api.getMessages(chatId, { count: FETCH_COUNT }));
-        for (const message of messages) {
-            await (0, channelPostActions_1.tryAttachCommentsToChannelPost)(bot, message, {
-                botUserId: botUid,
-                channelChatIdOverride: chatId,
-            });
-        }
+        const result = await (0, maxApiRetry_1.apiCallWithRetry)(() => bot.api.getMessages(reg.chat_id, { count: REFRESH_BUTTONS_FETCH_COUNT }));
+        messages = result.messages;
     }
     catch (err) {
-        logger_1.logger.warn('channelPoller: runChannelPollerForChat failed', { chatId, err });
+        logger_1.logger.warn('channelPoller: runChannelPollerForChat getMessages failed', {
+            chatId: reg.chat_id,
+            err,
+        });
+        throw new RefreshButtonsError('api_error', 'Не удалось получить сообщения канала (проверьте права бота)');
     }
+    stats.messages_fetched = messages.length;
+    for (const message of messages) {
+        const r = await (0, channelPostActions_1.tryAttachCommentsToChannelPost)(bot, message, {
+            botUserId: botUid,
+            channelChatIdOverride: reg.chat_id,
+            skipAuthorAdminCheck: true,
+        });
+        if (r.ok) {
+            stats.created += 1;
+        }
+        else if (r.reason === 'already_exists') {
+            stats.refreshed += 1;
+        }
+        else if (r.reason === 'skip_bot' || r.reason === 'no_mid' || r.reason === 'no_chat_id') {
+            stats.skipped += 1;
+        }
+        else {
+            stats.failed += 1;
+        }
+    }
+    logger_1.logger.info('channelPoller: runChannelPollerForChat done', stats);
+    return stats;
 }
 /**
  * One sweep: for each registered channel, fetch recent messages and attach the comment button to new admin posts.

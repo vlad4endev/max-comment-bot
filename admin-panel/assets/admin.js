@@ -1224,8 +1224,34 @@
         if (btnRef) {
           btnRef.addEventListener('click', function () {
             postJson('/refresh-buttons', { chat_id: chatId })
-              .then(function () {
-                showToast('Кнопки обновлены', 'success');
+              .then(function (r) {
+                var created = r && typeof r.created === 'number' ? r.created : 0;
+                var refreshed = r && typeof r.refreshed === 'number' ? r.refreshed : 0;
+                var fetched = r && typeof r.messages_fetched === 'number' ? r.messages_fetched : 0;
+                if (fetched === 0) {
+                  showToast('Сообщения канала не получены — проверьте права бота', 'error');
+                  return;
+                }
+                if (created === 0 && refreshed === 0) {
+                  showToast(
+                    'За ' +
+                      fetched +
+                      ' сообщ. кнопки не обновлены (нет прав или только служебные сообщения)',
+                    'error',
+                  );
+                  return;
+                }
+                showToast(
+                  'Готово: ' +
+                    created +
+                    ' новых, ' +
+                    refreshed +
+                    ' обновлено (из ' +
+                    fetched +
+                    ' сообщ.)',
+                  'success',
+                );
+                loadChannelDetail(chatId);
               })
               .catch(function (e) {
                 showToast(e.message || 'Ошибка', 'error');
