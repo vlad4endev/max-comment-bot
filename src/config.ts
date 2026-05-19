@@ -21,6 +21,15 @@ export function getTelegramToken(): string {
     .trim()
 }
 
+/** Интервал опроса TG→MAX потоков (мс). По умолчанию 60_000, минимум 5_000. */
+export function getFlowPollIntervalMs(): number {
+  const raw = (process.env.FLOW_POLL_INTERVAL_MS ?? '').trim()
+  if (raw === '') return 60_000
+  const parsed = Number.parseInt(raw, 10)
+  if (!Number.isFinite(parsed) || parsed < 5_000) return 60_000
+  return Math.min(parsed, 300_000)
+}
+
 export interface Config {
   BOT_TOKEN: string
   /** Опционально: TG_TOKEN из .env (дублирует getTelegramToken на старте). */

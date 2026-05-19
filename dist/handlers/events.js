@@ -411,6 +411,12 @@ async function handleBotDisconnected(bot, chatId, reason) {
     logger_1.logger.info('handleBotDisconnected: bot lost admin only, pending rights', { chatId });
     (0, channelAdminJoinNotified_1.clearAdminJoinNotifiedForChannel)(chatId);
     stateManager_1.stateManager.markChannelPendingAdminRights(chatId);
+    try {
+        await notifyAdminsBotLostAdminRights(bot, chatId);
+    }
+    catch (err) {
+        logger_1.logger.warn('handleBotDisconnected: notifyAdminsBotLostAdminRights failed', { chatId, err });
+    }
 }
 var channelAdminJoinNotified_2 = require("../services/channelAdminJoinNotified");
 Object.defineProperty(exports, "clearAdminJoinNotifiedForChannel", { enumerable: true, get: function () { return channelAdminJoinNotified_2.clearAdminJoinNotifiedForChannel; } });

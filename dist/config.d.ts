@@ -1,6 +1,8 @@
 export type ReceiveMode = 'webhook' | 'polling';
 /** Токен Telegram-бота (из `.env`, синхронизируется из админ-панели). */
 export declare function getTelegramToken(): string;
+/** Интервал опроса TG→MAX потоков (мс). По умолчанию 60_000, минимум 5_000. */
+export declare function getFlowPollIntervalMs(): number;
 export interface Config {
     BOT_TOKEN: string;
     /** Опционально: TG_TOKEN из .env (дублирует getTelegramToken на старте). */

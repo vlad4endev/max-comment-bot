@@ -25,6 +25,7 @@ const userMiniappSettingsStore_1 = require("../services/userMiniappSettingsStore
 const adminPanelSession_1 = require("../utils/adminPanelSession");
 const adminPanelState_1 = require("./adminPanelState");
 const analyticsService_1 = require("../services/analyticsService");
+const adminLogFormat_1 = require("../utils/adminLogFormat");
 const logger_1 = require("../utils/logger");
 const RUNTIME_LOG_PATH = (0, node_path_1.join)(process.cwd(), 'data', 'runtime.log');
 function isRecord(value) {
@@ -451,7 +452,12 @@ function createAdminRouter(deps) {
     });
     secured.get('/logs', async (req, res) => {
         const levelRaw = typeof req.query.level === 'string' ? req.query.level.toUpperCase() : '';
-        const level = levelRaw === 'INFO' || levelRaw === 'WARN' || levelRaw === 'ERROR' ? levelRaw : null;
+        const levelFilter = levelRaw === 'INFO' ||
+            levelRaw === 'WARN' ||
+            levelRaw === 'ERROR' ||
+            levelRaw === 'DEBUG'
+            ? levelRaw
+            : null;
         const filter = typeof req.query.filter === 'string' ? req.query.filter.trim().toLowerCase() : '';
         const limitRaw = typeof req.query.limit === 'string' ? Number.parseInt(req.query.limit, 10) : 200;
         const limit = Number.isInteger(limitRaw) && limitRaw > 0 ? Math.min(limitRaw, 500) : 200;
@@ -466,13 +472,31 @@ function createAdminRouter(deps) {
         catch {
             /* use memory */
         }
-        if (level) {
-            lines = lines.filter((l) => l.includes(` [${level}] `));
+        let entries = lines
+            .map(adminLogFormat_1.parseAdminLogLine)
+            .filter((e) => e !== null);
+        if (levelFilter) {
+            entries = entries.filter((e) => e.level === levelFilter);
         }
         if (filter) {
-            lines = lines.filter((l) => l.toLowerCase().includes(filter));
+            entries = entries.filter((e) => {
+                const hay = `${e.message} ${e.raw}`.toLowerCase();
+                return hay.includes(filter);
+            });
         }
-        res.json({ lines: lines.slice(-limit) });
+        const slice = entries.slice(-limit);
+        const stats = {
+            total: slice.length,
+            info: slice.filter((e) => e.level === 'INFO').length,
+            warn: slice.filter((e) => e.level === 'WARN').length,
+            error: slice.filter((e) => e.level === 'ERROR').length,
+            debug: slice.filter((e) => e.level === 'DEBUG').length,
+        };
+        res.json({
+            entries: slice,
+            stats,
+            lines: slice.map((e) => e.raw),
+        });
     });
     secured.get('/channel/:chatId', async (req, res) => {
         const chatId = parseNonZeroInt(req.params.chatId);

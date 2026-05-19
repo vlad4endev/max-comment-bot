@@ -5,6 +5,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.config = void 0;
 exports.getTelegramToken = getTelegramToken;
+exports.getFlowPollIntervalMs = getFlowPollIntervalMs;
 const node_crypto_1 = require("node:crypto");
 const dotenv_1 = __importDefault(require("dotenv"));
 const logger_1 = require("./utils/logger");
@@ -19,6 +20,16 @@ function computeAdminToken(ownerUserId, botToken) {
 function getTelegramToken() {
     return (process.env.TG_TOKEN ?? process.env.TELEGRAM_TOKEN ?? process.env.TG_BOT_TOKEN ?? '')
         .trim();
+}
+/** Интервал опроса TG→MAX потоков (мс). По умолчанию 60_000, минимум 5_000. */
+function getFlowPollIntervalMs() {
+    const raw = (process.env.FLOW_POLL_INTERVAL_MS ?? '').trim();
+    if (raw === '')
+        return 60_000;
+    const parsed = Number.parseInt(raw, 10);
+    if (!Number.isFinite(parsed) || parsed < 5_000)
+        return 60_000;
+    return Math.min(parsed, 300_000);
 }
 const WEBHOOK_SECRET_RE = /^[a-zA-Z0-9_-]{5,256}$/;
 function parseReceiveMode(raw, nodeEnv) {

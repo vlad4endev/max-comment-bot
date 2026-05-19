@@ -45,6 +45,7 @@ import {
   updateTgChain,
 } from './adminPanelState'
 import { buildDashboardAnalytics, parseDashboardPeriodDays } from '../services/analyticsService'
+import { parseAdminLogLine, type AdminLogEntry, type AdminLogLevel } from '../utils/adminLogFormat'
 import { getAdminLogTail, logger } from '../utils/logger'
 
 const RUNTIME_LOG_PATH = join(process.cwd(), 'data', 'runtime.log')
@@ -544,8 +545,13 @@ export function createAdminRouter(deps: AdminRouterDeps): express.Router {
 
   secured.get('/logs', async (req, res) => {
     const levelRaw = typeof req.query.level === 'string' ? req.query.level.toUpperCase() : ''
-    const level =
-      levelRaw === 'INFO' || levelRaw === 'WARN' || levelRaw === 'ERROR' ? levelRaw : null
+    const levelFilter: AdminLogLevel | null =
+      levelRaw === 'INFO' ||
+      levelRaw === 'WARN' ||
+      levelRaw === 'ERROR' ||
+      levelRaw === 'DEBUG'
+        ? levelRaw
+        : null
     const filter =
       typeof req.query.filter === 'string' ? req.query.filter.trim().toLowerCase() : ''
     const limitRaw = typeof req.query.limit === 'string' ? Number.parseInt(req.query.limit, 10) : 200
@@ -561,13 +567,35 @@ export function createAdminRouter(deps: AdminRouterDeps): express.Router {
     } catch {
       /* use memory */
     }
-    if (level) {
-      lines = lines.filter((l) => l.includes(` [${level}] `))
+
+    let entries: AdminLogEntry[] = lines
+      .map(parseAdminLogLine)
+      .filter((e): e is AdminLogEntry => e !== null)
+
+    if (levelFilter) {
+      entries = entries.filter((e) => e.level === levelFilter)
     }
     if (filter) {
-      lines = lines.filter((l) => l.toLowerCase().includes(filter))
+      entries = entries.filter((e) => {
+        const hay = `${e.message} ${e.raw}`.toLowerCase()
+        return hay.includes(filter)
+      })
     }
-    res.json({ lines: lines.slice(-limit) })
+
+    const slice = entries.slice(-limit)
+    const stats = {
+      total: slice.length,
+      info: slice.filter((e) => e.level === 'INFO').length,
+      warn: slice.filter((e) => e.level === 'WARN').length,
+      error: slice.filter((e) => e.level === 'ERROR').length,
+      debug: slice.filter((e) => e.level === 'DEBUG').length,
+    }
+
+    res.json({
+      entries: slice,
+      stats,
+      lines: slice.map((e) => e.raw),
+    })
   })
 
   secured.get('/channel/:chatId', async (req, res) => {

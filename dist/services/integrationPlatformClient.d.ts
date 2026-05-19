@@ -22,7 +22,7 @@ export declare function validateTelegramToken(token: string): Promise<PlatformTe
 export declare function validateVkToken(token: string, groupId?: string): Promise<PlatformTestResult>;
 export declare function testIntegration(platform: IntegrationPlatform, token: string, groupId?: string): Promise<PlatformTestResult>;
 /** Чаты/каналы, с которыми бот взаимодействовал (из getUpdates + my_chat_member). */
-export declare function listTelegramBotChats(token: string): Promise<PlatformChannelInfo[]>;
+export declare function listTelegramBotChats(token: string, integrationId?: string): Promise<PlatformChannelInfo[]>;
 export declare function listTelegramAdminChannels(token: string): Promise<PlatformChannelInfo[]>;
 export declare function listVkGroups(token: string, groupId?: string): Promise<PlatformChannelInfo[]>;
 export interface ExternalPost {
@@ -31,7 +31,11 @@ export interface ExternalPost {
     hasMedia: boolean;
     createdAt?: number;
 }
-export declare function fetchTelegramChannelPosts(token: string, channelId: string, afterMessageId: number): Promise<{
+/**
+ * Новые посты/сообщения из TG-канала, группы или супергруппы через getUpdates.
+ * Каналы: channel_post; группы/чаты: message.
+ */
+export declare function fetchTelegramChannelPosts(token: string, integrationId: string, channelId: string, afterMessageId: number): Promise<{
     posts: ExternalPost[];
     lastMessageId: number;
 }>;

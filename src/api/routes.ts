@@ -32,6 +32,7 @@ import {
   userMiniappSettingsStore,
 } from '../services/userMiniappSettingsStore'
 import { fullyRemoveUserFromBot } from '../services/userAccessCleanup'
+import { resolveMemberAvatarUrls } from '../utils/memberAvatar'
 import { logger } from '../utils/logger'
 
 export interface CommentApiRouterDeps {
@@ -173,6 +174,7 @@ function toWireComment(c: Comment): {
   username: string
   text: string
   timestamp: string
+  avatar_url?: string
   reply?: { text: string; timestamp: string; admin_name?: string }
 } {
   return {
@@ -182,8 +184,40 @@ function toWireComment(c: Comment): {
     username: c.username,
     text: c.text,
     timestamp: c.timestamp,
+    ...(c.avatar_url ? { avatar_url: c.avatar_url } : {}),
     reply: c.reply,
   }
+}
+
+async function enrichCommentsWithAvatars(
+  bot: Bot,
+  channelChatId: number,
+  comments: Comment[],
+): Promise<Comment[]> {
+  const missingUserIds = new Set<number>()
+  for (const c of comments) {
+    if (!c.avatar_url?.trim()) {
+      missingUserIds.add(c.user_id)
+    }
+  }
+  if (missingUserIds.size === 0) {
+    return comments
+  }
+  const urls = await resolveMemberAvatarUrls(bot, channelChatId, [...missingUserIds])
+  if (urls.size === 0) {
+    return comments
+  }
+  for (const c of comments) {
+    if (c.avatar_url?.trim()) {
+      continue
+    }
+    const url = urls.get(c.user_id)
+    if (url) {
+      commentStore.setCommentAvatarUrl(c.comment_id, url)
+      c.avatar_url = url
+    }
+  }
+  return comments
 }
 
 type AdminCommentAccess =
@@ -720,9 +754,21 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
     })
   })
 
-  router.get('/comments/:postId', (req, res) => {
-    const list = commentStore.getComments(req.params.postId).map(toWireComment)
-    res.json(list)
+  router.get('/comments/:postId', async (req, res) => {
+    const postId = req.params.postId
+    const post = postStore.getPost(postId)
+    if (!post) {
+      res.status(404).json({ error: 'post not found' })
+      return
+    }
+    try {
+      const comments = commentStore.getComments(postId)
+      const enriched = await enrichCommentsWithAvatars(deps.bot, post.chat_id, comments)
+      res.json(enriched.map(toWireComment))
+    } catch (err: unknown) {
+      logger.error('GET /api/comments/:postId failed', { postId, err })
+      res.status(500).json({ error: 'internal error' })
+    }
   })
 
   router.post('/comment', async (req, res) => {
@@ -736,6 +782,8 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
     const userId = parsePositiveInt(body.user_id)
     const username = parseNonEmptyString(body.username)
     const text = parseNonEmptyString(body.text)
+    const avatarFromClient =
+      parseNonEmptyString(body.avatar_url) ?? parseNonEmptyString(body.photo_url)
     if (!postId || !chatId || !userId || !username || !text) {
       res.status(400).json({ error: 'missing or invalid fields' })
       return
@@ -751,11 +799,18 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
       return
     }
 
+    let avatarUrl = avatarFromClient
+    if (!avatarUrl) {
+      const resolved = await resolveMemberAvatarUrls(deps.bot, chatId, [userId])
+      avatarUrl = resolved.get(userId) ?? null
+    }
+
     const saved = commentStore.saveComment({
       post_id: postId,
       user_id: userId,
       username,
       text,
+      ...(avatarUrl ? { avatar_url: avatarUrl } : {}),
     })
 
     const newCount = postStore.incrementCommentCount(postId)

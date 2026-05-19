@@ -13,10 +13,12 @@ interface FlowCursor {
 
 interface FlowStateFile {
   flows: Record<string, FlowCursor>
+  /** Последний подтверждённый update_id Telegram Bot API (на интеграцию). */
+  telegramOffsets?: Record<string, number>
 }
 
 function defaultState(): FlowStateFile {
-  return { flows: {} }
+  return { flows: {}, telegramOffsets: {} }
 }
 
 class FlowStateStore {
@@ -31,7 +33,14 @@ class FlowStateStore {
       if (typeof parsed === 'object' && parsed !== null) {
         const o = parsed as Record<string, unknown>
         if (typeof o.flows === 'object' && o.flows !== null) {
-          this.data = { flows: o.flows as Record<string, FlowCursor> }
+          const offsets =
+            typeof o.telegramOffsets === 'object' && o.telegramOffsets !== null
+              ? (o.telegramOffsets as Record<string, number>)
+              : {}
+          this.data = {
+            flows: o.flows as Record<string, FlowCursor>,
+            telegramOffsets: offsets,
+          }
         }
       }
     } catch (err: unknown) {
@@ -75,6 +84,18 @@ class FlowStateStore {
     }
     this.data.flows[flowId] = cur
     return this.persist()
+  }
+
+  getTelegramUpdateOffset(integrationId: string): number | undefined {
+    return this.data.telegramOffsets?.[integrationId]
+  }
+
+  async setTelegramUpdateOffset(integrationId: string, offset: number): Promise<void> {
+    if (!this.data.telegramOffsets) {
+      this.data.telegramOffsets = {}
+    }
+    this.data.telegramOffsets[integrationId] = offset
+    await this.persist()
   }
 
   popReadyDelayedPosts(flowId: string, now: number): string[] {

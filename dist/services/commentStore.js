@@ -55,6 +55,9 @@ function normalizeCommentFromDisk(raw) {
     if (o.notification_text !== undefined && typeof o.notification_text !== 'string') {
         return null;
     }
+    if (o.avatar_url !== undefined && typeof o.avatar_url !== 'string') {
+        return null;
+    }
     if (o.notification_mids !== undefined) {
         if (!Array.isArray(o.notification_mids)) {
             return null;
@@ -72,6 +75,9 @@ function normalizeCommentFromDisk(raw) {
         username: o.username,
         text: o.text,
         timestamp: o.timestamp,
+        ...(typeof o.avatar_url === 'string' && o.avatar_url.trim()
+            ? { avatar_url: o.avatar_url.trim() }
+            : {}),
         ...(o.reply !== undefined ? { reply: o.reply } : {}),
         ...(o.notification_text !== undefined
             ? { notification_text: o.notification_text }
@@ -143,6 +149,20 @@ class CommentStore {
         c.text = text;
         this.saveRow(c);
         logger_1.logger.info(`commentStore: updated text ${commentId}`);
+        return c;
+    }
+    /** Persists author avatar URL when resolved from MAX API or Mini App. */
+    setCommentAvatarUrl(commentId, avatarUrl) {
+        const c = this.getComment(commentId);
+        if (!c) {
+            return null;
+        }
+        const trimmed = avatarUrl.trim();
+        if (!trimmed || c.avatar_url === trimmed) {
+            return c;
+        }
+        c.avatar_url = trimmed;
+        this.saveRow(c);
         return c;
     }
     /**

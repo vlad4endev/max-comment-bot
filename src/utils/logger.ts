@@ -9,6 +9,7 @@
 import { existsSync, renameSync, statSync } from 'node:fs'
 import { appendFile, mkdir } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
+import { serializeAdminLogLine } from './adminLogFormat'
 
 const RUNTIME_LOG_PATH = join(process.cwd(), 'data', 'runtime.log')
 const MAX_LOG_SIZE = 50 * 1024 * 1024
@@ -117,11 +118,7 @@ export class Logger {
   ): void {
     const timestamp = new Date().toISOString()
     const header = `${color}${timestamp} [${level}] ${message}${RESET}`
-    const plain =
-      extra !== undefined
-        ? `${timestamp} [${level}] ${message} ${typeof extra === 'object' ? JSON.stringify(extra) : String(extra)}`
-        : `${timestamp} [${level}] ${message}`
-    pushAdminLogLine(plain)
+    pushAdminLogLine(serializeAdminLogLine(level, message, extra))
 
     if (extra !== undefined) {
       write(header, extra)

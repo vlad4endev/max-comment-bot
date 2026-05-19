@@ -2,6 +2,7 @@ import axios from 'axios'
 
 import { logger } from '../utils/logger'
 import type { IntegrationPlatform } from './integrationsStore'
+import { flowStateStore } from './flowStateStore'
 
 export interface PlatformTestResult {
   ok: boolean
@@ -173,9 +174,16 @@ function ingestTelegramUpdate(seen: Map<string, PlatformChannelInfo>, upd: Recor
 }
 
 /** Чаты/каналы, с которыми бот взаимодействовал (из getUpdates + my_chat_member). */
-export async function listTelegramBotChats(token: string): Promise<PlatformChannelInfo[]> {
+export async function listTelegramBotChats(
+  token: string,
+  integrationId?: string,
+): Promise<PlatformChannelInfo[]> {
   const seen = new Map<string, PlatformChannelInfo>()
-  let offset: number | undefined
+  await flowStateStore.load()
+  let offset =
+    integrationId !== undefined
+      ? flowStateStore.getTelegramUpdateOffset(integrationId)
+      : undefined
 
   try {
     for (let page = 0; page < 8; page++) {
@@ -203,6 +211,9 @@ export async function listTelegramBotChats(token: string): Promise<PlatformChann
       if (data.result.length < 100) {
         break
       }
+    }
+    if (integrationId !== undefined && offset !== undefined) {
+      await flowStateStore.setTelegramUpdateOffset(integrationId, offset)
     }
   } catch (err: unknown) {
     logger.warn('listTelegramBotChats: getUpdates failed', err)
@@ -293,15 +304,73 @@ function channelPostMatchesTarget(
     : chatKey === targetId.toLowerCase().replace(/^@/, '')
 }
 
-async function probeTelegramChannelAccess(
-  token: string,
-  channelId: string,
-  afterMessageId: number,
-): Promise<void> {
-  logger.warn('fetchTelegramChannelPosts: getUpdates empty, checking channel access', {
-    channelId,
-    afterMessageId,
+function extractTelegramMessageFromUpdate(
+  upd: Record<string, unknown>,
+): Record<string, unknown> | undefined {
+  for (const key of ['channel_post', 'edited_channel_post', 'message', 'edited_message']) {
+    const msg = upd[key] as Record<string, unknown> | undefined
+    if (msg) return msg
+  }
+  return undefined
+}
+
+function isTelegramServiceMessage(msg: Record<string, unknown>): boolean {
+  return (
+    msg.new_chat_members != null ||
+    msg.left_chat_member != null ||
+    msg.new_chat_title != null ||
+    msg.pinned_message != null ||
+    msg.group_chat_created != null ||
+    msg.supergroup_chat_created != null ||
+    msg.channel_chat_created != null
+  )
+}
+
+const telegramFetchLocks = new Map<string, Promise<void>>()
+
+async function withTelegramIntegrationLock<T>(
+  integrationId: string,
+  fn: () => Promise<T>,
+): Promise<T> {
+  const prev = telegramFetchLocks.get(integrationId) ?? Promise.resolve()
+  let release!: () => void
+  const gate = new Promise<void>((resolve) => {
+    release = resolve
   })
+  telegramFetchLocks.set(
+    integrationId,
+    prev.then(() => gate),
+  )
+  await prev
+  try {
+    return await fn()
+  } finally {
+    release()
+    if (telegramFetchLocks.get(integrationId) === gate) {
+      telegramFetchLocks.delete(integrationId)
+    }
+  }
+}
+
+async function warnIfTelegramWebhookActive(token: string): Promise<void> {
+  try {
+    const { data } = await axios.get<{
+      ok: boolean
+      result?: { url?: string }
+    }>(`${TG_API}/bot${token}/getWebhookInfo`, { timeout: 10_000 })
+    const url = data.result?.url
+    if (data.ok && url && url.trim() !== '') {
+      logger.error(
+        'fetchTelegramChannelPosts: у бота включён webhook — getUpdates пустой. Удалите webhook: deleteWebhook',
+        { webhookUrl: url },
+      )
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
+async function probeTelegramChannelAccess(token: string, channelId: string): Promise<void> {
   try {
     const { data } = await axios.get<{
       ok: boolean
@@ -311,7 +380,7 @@ async function probeTelegramChannelAccess(
       timeout: 15_000,
     })
     if (data.ok && data.result) {
-      logger.info('fetchTelegramChannelPosts: channel accessible via getChat', {
+      logger.info('fetchTelegramChannelPosts: chat accessible via getChat', {
         channelId,
         title: data.result.title,
         type: data.result.type,
@@ -319,64 +388,102 @@ async function probeTelegramChannelAccess(
     }
   } catch (err: unknown) {
     const axErr = axios.isAxiosError(err) ? err : null
-    logger.error('fetchTelegramChannelPosts: channel not accessible', {
+    logger.error('fetchTelegramChannelPosts: chat not accessible', {
       channelId,
       error: axErr?.response?.data,
     })
   }
 }
 
+/**
+ * Новые посты/сообщения из TG-канала, группы или супергруппы через getUpdates.
+ * Каналы: channel_post; группы/чаты: message.
+ */
 export async function fetchTelegramChannelPosts(
   token: string,
+  integrationId: string,
   channelId: string,
   afterMessageId: number,
 ): Promise<{ posts: ExternalPost[]; lastMessageId: number }> {
-  try {
-    const { data } = await axios.get<{
-      ok: boolean
-      result?: Array<Record<string, unknown>>
-    }>(`${TG_API}/bot${token}/getUpdates`, {
-      params: { limit: 100, allowed_updates: ['channel_post'] },
-      timeout: 15_000,
-    })
-    if (!data.ok || !data.result) return { posts: [], lastMessageId: afterMessageId }
+  return withTelegramIntegrationLock(integrationId, async () => {
+    await flowStateStore.load()
+    try {
+      const storedOffset = flowStateStore.getTelegramUpdateOffset(integrationId)
+      const params: Record<string, string | number> = {
+        limit: 100,
+        timeout: 0,
+      }
+      if (storedOffset !== undefined) {
+        params.offset = storedOffset
+      }
 
-    const posts: ExternalPost[] = []
-    let maxMessageId = afterMessageId
-    let maxUpdateId = 0
+      const { data } = await axios.get<{
+        ok: boolean
+        result?: Array<Record<string, unknown>>
+      }>(`${TG_API}/bot${token}/getUpdates`, { params, timeout: 20_000 })
 
-    for (const upd of data.result) {
-      const updateId = typeof upd.update_id === 'number' ? upd.update_id : 0
-      if (updateId > maxUpdateId) maxUpdateId = updateId
+      if (!data.ok || !data.result?.length) {
+        if (storedOffset === undefined) {
+          await warnIfTelegramWebhookActive(token)
+        }
+        return { posts: [], lastMessageId: afterMessageId }
+      }
 
-      const msg = upd.channel_post as Record<string, unknown> | undefined
-      if (!msg) continue
-      const chat = msg.chat as Record<string, unknown> | undefined
-      if (!chat || !channelPostMatchesTarget(chat, channelId)) continue
+      const posts: ExternalPost[] = []
+      let maxMessageId = afterMessageId
+      let maxUpdateId = storedOffset ?? 0
+      let matchedInBatch = 0
+      let seenForTarget = 0
 
-      const messageId = typeof msg.message_id === 'number' ? msg.message_id : 0
-      if (messageId <= afterMessageId) continue
+      for (const upd of data.result) {
+        const updateId = typeof upd.update_id === 'number' ? upd.update_id : 0
+        if (updateId >= maxUpdateId) {
+          maxUpdateId = updateId + 1
+        }
 
-      maxMessageId = Math.max(maxMessageId, messageId)
-      posts.push(mapTelegramChannelPost(msg))
-    }
+        const msg = extractTelegramMessageFromUpdate(upd)
+        if (!msg || isTelegramServiceMessage(msg)) continue
 
-    if (maxUpdateId > 0) {
-      await axios.get(`${TG_API}/bot${token}/getUpdates`, {
-        params: { offset: maxUpdateId + 1, limit: 1 },
-        timeout: 15_000,
+        const from = msg.from as Record<string, unknown> | undefined
+        if (from?.is_bot === true) continue
+
+        const chat = msg.chat as Record<string, unknown> | undefined
+        if (!chat || !channelPostMatchesTarget(chat, channelId)) continue
+
+        seenForTarget += 1
+        const messageId = typeof msg.message_id === 'number' ? msg.message_id : 0
+        if (messageId > maxMessageId) {
+          maxMessageId = messageId
+        }
+        if (messageId <= afterMessageId) continue
+
+        matchedInBatch += 1
+        posts.push(mapTelegramChannelPost(msg))
+      }
+
+      if (maxUpdateId > (storedOffset ?? 0)) {
+        await flowStateStore.setTelegramUpdateOffset(integrationId, maxUpdateId)
+      }
+
+      logger.info('fetchTelegramChannelPosts: batch', {
+        channelId,
+        updates: data.result.length,
+        seenForTarget,
+        newPosts: posts.length,
+        afterMessageId,
+        lastMessageId: maxMessageId,
       })
-    }
 
-    if (posts.length === 0 && afterMessageId > 0) {
-      await probeTelegramChannelAccess(token, channelId, afterMessageId)
-    }
+      if (posts.length === 0 && afterMessageId > 0 && seenForTarget === 0) {
+        await probeTelegramChannelAccess(token, channelId)
+      }
 
-    return { posts, lastMessageId: maxMessageId }
-  } catch (err: unknown) {
-    logger.warn('fetchTelegramChannelPosts failed', err)
-    return { posts: [], lastMessageId: afterMessageId }
-  }
+      return { posts, lastMessageId: maxMessageId }
+    } catch (err: unknown) {
+      logger.warn('fetchTelegramChannelPosts failed', err)
+      return { posts: [], lastMessageId: afterMessageId }
+    }
+  })
 }
 
 export async function fetchVkWallPosts(

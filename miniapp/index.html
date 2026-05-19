@@ -1216,6 +1216,7 @@
       align-items: center;
       justify-content: center;
       line-height: 1;
+      overflow: hidden;
     }
     #view-comments .msg-user .av-u {
       background: var(--teal-strong-bg);
@@ -1534,6 +1535,14 @@
       justify-content: center;
       background: var(--teal-strong-bg);
       color: var(--teal);
+      overflow: hidden;
+    }
+    #view-comments .composer .av-composer img,
+    #view-comments .msg-user .av img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      border-radius: 50%;
     }
     #view-comments .composer input[type="text"] {
       flex: 1;
@@ -2026,6 +2035,22 @@
         if (Number.isFinite(fromBridge) && fromBridge > 0) return fromBridge
       }
       return null
+    }
+
+    /** Profile photo from MAX WebApp bridge (`photo_url` and fallbacks). */
+    function getBridgeUserPhotoUrl(bridgeUser) {
+      if (!bridgeUser || typeof bridgeUser !== 'object') return null
+      var raw =
+        bridgeUser.photo_url ||
+        bridgeUser.avatar_url ||
+        (bridgeUser.photo &&
+          (typeof bridgeUser.photo === 'string'
+            ? bridgeUser.photo
+            : bridgeUser.photo.url)) ||
+        null
+      if (typeof raw !== 'string') return null
+      var trimmed = raw.trim()
+      return trimmed || null
     }
 
     function buildMergedSearchParams(user, startParam) {
@@ -2619,8 +2644,9 @@
         uid != null ? 'user_id: ' + uid : 'user_id: — (откройте из MAX или задайте в URL)';
 
       var avEl = document.getElementById('homeUserAv');
-      if (user.photo_url) {
-        avEl.innerHTML = '<img src="' + esc(user.photo_url) + '" alt="" />';
+      var homePhotoUrl = getBridgeUserPhotoUrl(user);
+      if (homePhotoUrl) {
+        avEl.innerHTML = '<img src="' + esc(homePhotoUrl) + '" alt="" />';
       } else {
         avEl.textContent = initials(displayName);
       }
@@ -3253,7 +3279,27 @@
         return t.slice(0, 2).toUpperCase();
       }
 
-      if (composerAvEl) composerAvEl.textContent = initials(username);
+      var currentUserPhotoUrl = getBridgeUserPhotoUrl(user);
+
+      function setAvatarEl(el, photoUrl, fallbackName) {
+        if (!el) return;
+        var url = photoUrl && String(photoUrl).trim();
+        if (url) {
+          el.innerHTML = '<img src="' + esc(url) + '" alt="" />';
+        } else {
+          el.textContent = initials(fallbackName);
+        }
+      }
+
+      function avatarBlockHtml(photoUrl, fallbackName) {
+        var url = photoUrl && String(photoUrl).trim();
+        if (url) {
+          return '<img src="' + esc(url) + '" alt="" />';
+        }
+        return esc(initials(fallbackName));
+      }
+
+      setAvatarEl(composerAvEl, currentUserPhotoUrl, username);
 
       function updateBadgeFromCount(n) {
         var v = typeof n === 'number' && n >= 0 ? n : knownIds.size;
@@ -3424,8 +3470,18 @@
         );
       }
 
+      function resolveCommentAvatarUrl(c) {
+        if (c.avatar_url && String(c.avatar_url).trim()) {
+          return String(c.avatar_url).trim();
+        }
+        if (c.user_id != null && String(c.user_id) === String(userId) && currentUserPhotoUrl) {
+          return currentUserPhotoUrl;
+        }
+        return null;
+      }
+
       function buildUserBlock(c) {
-        var av = initials(c.username);
+        var av = avatarBlockHtml(resolveCommentAvatarUrl(c), c.username);
         var replyHtml = '';
         if (c.reply) {
           replyHtml = buildReplyBlockHtml(c);
@@ -3453,7 +3509,7 @@
           '>' +
           '<div class="msg-user">' +
           '<div class="av av-u">' +
-          esc(av) +
+          av +
           '</div>' +
           '<div class="bubble-u">' +
           (isAdmin
@@ -3969,9 +4025,11 @@
         var tempId = 'temp-' + Date.now();
         var optimistic = {
           comment_id: tempId,
+          user_id: Number(userId),
           username: username,
           text: text,
           timestamp: new Date().toISOString(),
+          avatar_url: currentUserPhotoUrl || undefined,
         };
         if (feedEl.querySelector('.feed-empty')) {
           feedEl.innerHTML = '';
@@ -3994,6 +4052,7 @@
             user_id: Number(userId),
             username: username,
             text: text,
+            avatar_url: currentUserPhotoUrl || undefined,
           }),
         })
           .then(function (r) {

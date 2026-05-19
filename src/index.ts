@@ -24,7 +24,7 @@ import { postStore } from './services/postStore'
 import { userMiniappSettingsStore } from './services/userMiniappSettingsStore'
 import { logger, startRuntimeLogRotationScheduler } from './utils/logger'
 import { upsertRootEnvVar } from './utils/envFile'
-import { getTelegramToken } from './config'
+import { getFlowPollIntervalMs, getTelegramToken } from './config'
 import { WEBHOOK_CONCURRENCY } from './utils/updateQueue'
 import { flowProcessor } from './services/flowProcessor'
 import { integrationsStore } from './services/integrationsStore'
@@ -63,12 +63,21 @@ async function main(): Promise<void> {
   const channelCount = channelRegistry
     .getAllChannels()
     .filter((c) => c.type === 'channel').length
+  const enabledFlows = integrationsStore.getFlows().filter((f) => f.enabled)
   logger.info('🚀 Бот запущен', {
     channelCount,
     pollerConcurrency: POLL_CONCURRENCY,
     webhookConcurrency: WEBHOOK_CONCURRENCY,
     logRotation: true,
     receiveMode: config.receiveMode,
+    telegramConnected: !!tgIntegration,
+    flowProcessorEnabledFlows: enabledFlows.length,
+    flowPollIntervalMs: getFlowPollIntervalMs(),
+    flows: enabledFlows.map((f) => ({
+      id: f.id,
+      from: `${f.source.platform}:${f.source.channelUsername ?? f.source.channelId ?? '?'}`,
+      to: `${f.destination.platform}:${f.destination.channelId}`,
+    })),
   })
 
   const listenPort = config.listenPort

@@ -82,7 +82,7 @@ async function resolveTelegramLinkedChats(
   if (!refresh && integ.linkedChats && integ.linkedChats.length > 0) {
     return { integrationId: integ.id, channels: integ.linkedChats }
   }
-  const channels = await listTelegramBotChats(token)
+  const channels = await listTelegramBotChats(token, integ.id)
   await integrationsStore.setLinkedChats(integ.id, channels)
   return { integrationId: integ.id, channels }
 }
@@ -182,7 +182,7 @@ export function createIntegrationsRouter(deps: IntegrationsRouterDeps): express.
 
     let channels: Awaited<ReturnType<typeof listTelegramBotChats>> = []
     if (platform === 'telegram') {
-      channels = await listTelegramBotChats(token)
+      channels = await listTelegramBotChats(token, record.id)
       await integrationsStore.setLinkedChats(record.id, channels)
     }
 
@@ -246,7 +246,7 @@ export function createIntegrationsRouter(deps: IntegrationsRouterDeps): express.
         res.json({ channels: integ.linkedChats })
         return
       }
-      const channels = await listTelegramBotChats(token)
+      const channels = await listTelegramBotChats(token, integ.id)
       await integrationsStore.setLinkedChats(integ.id, channels)
       res.json({ channels })
       return

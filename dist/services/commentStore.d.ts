@@ -19,6 +19,8 @@ export interface Comment {
     username: string;
     text: string;
     timestamp: string;
+    /** Author profile photo (MAX `avatar_url` / `full_avatar_url`). */
+    avatar_url?: string;
     reply?: CommentReply;
     /** Original admin-notification body (before «✅ Отвечено» line is appended). */
     notification_text?: string;
@@ -39,6 +41,8 @@ export declare class CommentStore {
      * Updates comment body text. Returns updated comment or `null`.
      */
     updateCommentText(commentId: string, text: string): Comment | null;
+    /** Persists author avatar URL when resolved from MAX API or Mini App. */
+    setCommentAvatarUrl(commentId: string, avatarUrl: string): Comment | null;
     /**
      * Updates an existing admin reply (preserves original timestamp). Returns `null` if missing.
      */
