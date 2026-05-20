@@ -30,8 +30,19 @@ const TG_CHAIN_IDLE_MS = 3_000
 const MAX_SEND_INTERVAL_MS = 2_500
 const UPLOAD_STAGGER_MS = 450
 const TG_CHAIN_MAX_API_RETRIES = 6
+/** Буферизация Telegram-альбомов по media_group_id. */
+const TG_ALBUM_BUFFER_MS = 900
+/** Telegram media group ограничен 10 элементами. */
+const TG_ALBUM_MAX_MEDIA_PER_POST = 10
 
 const lastMaxSendAt = new Map<number, number>()
+type BufferedAlbum = {
+  chain: TgChainRecord
+  tgToken: string
+  messages: TgMessage[]
+  flushAt: number
+}
+const albumBuffer = new Map<string, BufferedAlbum>()
 
 async function throttleMaxChatSend(chatId: number): Promise<void> {
   const now = Date.now()
@@ -110,6 +121,70 @@ function pickAlbumCaption(messages: TgMessage[], addSignature: boolean): string 
     }
   }
   return ''
+}
+
+function buildAlbumBufferKey(chain: TgChainRecord, msg: TgMessage): string | null {
+  const gid = msg.media_group_id?.trim()
+  if (!gid) return null
+  return `${chain.id}:${msg.chat.id}:${gid}`
+}
+
+/**
+ * Складывает сообщение media group в буфер и продлевает окно ожидания,
+ * чтобы собрать альбом целиком даже при раздельных батчах getUpdates.
+ */
+function queueAlbumMessage(chain: TgChainRecord, tgToken: string, msg: TgMessage): void {
+  const key = buildAlbumBufferKey(chain, msg)
+  if (!key) return
+  const now = Date.now()
+  const existing = albumBuffer.get(key)
+  if (existing) {
+    if (!existing.messages.some((m) => m.message_id === msg.message_id)) {
+      existing.messages.push(msg)
+      existing.messages.sort((a, b) => a.message_id - b.message_id)
+    }
+    existing.flushAt = now + TG_ALBUM_BUFFER_MS
+    return
+  }
+  albumBuffer.set(key, {
+    chain,
+    tgToken,
+    messages: [msg],
+    flushAt: now + TG_ALBUM_BUFFER_MS,
+  })
+}
+
+function getAlbumBufferDelayMs(now: number = Date.now(), tgToken?: string): number | null {
+  let minDelay: number | null = null
+  for (const entry of albumBuffer.values()) {
+    if (tgToken && entry.tgToken !== tgToken) continue
+    const delay = Math.max(0, entry.flushAt - now)
+    if (minDelay === null || delay < minDelay) {
+      minDelay = delay
+    }
+  }
+  return minDelay
+}
+
+function takeReadyAlbumEntries(now: number = Date.now()): BufferedAlbum[] {
+  const ready: BufferedAlbum[] = []
+  for (const [key, entry] of albumBuffer.entries()) {
+    if (entry.flushAt <= now) {
+      ready.push(entry)
+      albumBuffer.delete(key)
+    }
+  }
+  ready.sort((a, b) => a.messages[0]!.message_id - b.messages[0]!.message_id)
+  return ready
+}
+
+function chunkAlbumMessages(messages: TgMessage[]): TgMessage[][] {
+  if (messages.length <= TG_ALBUM_MAX_MEDIA_PER_POST) return [messages]
+  const chunks: TgMessage[][] = []
+  for (let i = 0; i < messages.length; i += TG_ALBUM_MAX_MEDIA_PER_POST) {
+    chunks.push(messages.slice(i, i + TG_ALBUM_MAX_MEDIA_PER_POST))
+  }
+  return chunks
 }
 
 /** Разбивает апдейты: одиночные посты и альбомы (несколько channel_post с media_group_id). */
@@ -286,10 +361,9 @@ async function forwardAlbumToMax(
   messages: TgMessage[],
   tgToken: string,
   maxChatId: number,
-  addSignature: boolean,
+  caption: string,
 ): Promise<string | null> {
   const chatId = resolveCanonicalChannelChatId(maxChatId) ?? maxChatId
-  const caption = pickAlbumCaption(messages, addSignature)
   const messageText = caption.trim() || '\u00a0'
 
   const photoMessages = messages.filter((m) => m.photo && m.photo.length > 0)
@@ -365,21 +439,29 @@ async function processChainMessageGroup(
     let published = 0
     let resultMid: string | null = null
     if (isAlbum) {
-      resultMid = await forwardAlbumToMax(
-        bot,
-        pending,
-        tgToken,
-        chain.max_chat_id,
-        chain.add_signature,
-      )
-      if (resultMid) {
-        published = 1
-        if (attachComments) {
-          const chatId = resolveCanonicalChannelChatId(chain.max_chat_id) ?? chain.max_chat_id
-          const mid: string = resultMid
-          const post = await maxApi(() => ensurePostFromChannelMessage(bot, chatId, mid))
-          if (!post) {
-            scheduleCommentButtonRetry(chatId, mid)
+      // Для media group > 10 отправляем несколькими постами (по 10 вложений).
+      // Подпись Telegram переносим только в первый чанк, чтобы текст не дублировался.
+      const ordered = [...pending].sort((a, b) => a.message_id - b.message_id)
+      const chunks = chunkAlbumMessages(ordered)
+      const firstCaption = pickAlbumCaption(ordered, chain.add_signature)
+      for (let i = 0; i < chunks.length; i += 1) {
+        const chunkCaption = i === 0 ? firstCaption : ''
+        resultMid = await forwardAlbumToMax(
+          bot,
+          chunks[i]!,
+          tgToken,
+          chain.max_chat_id,
+          chunkCaption,
+        )
+        if (resultMid) {
+          published += 1
+          if (attachComments) {
+            const chatId = resolveCanonicalChannelChatId(chain.max_chat_id) ?? chain.max_chat_id
+            const mid: string = resultMid
+            const post = await maxApi(() => ensurePostFromChannelMessage(bot, chatId, mid))
+            if (!post) {
+              scheduleCommentButtonRetry(chatId, mid)
+            }
           }
         }
       }
@@ -449,17 +531,28 @@ async function processChainMessageGroup(
   }
 }
 
+async function flushReadyAlbums(): Promise<boolean> {
+  const ready = takeReadyAlbumEntries()
+  if (ready.length === 0) return false
+  for (const entry of ready) {
+    await processChainMessageGroup(entry.chain, entry.messages, entry.tgToken)
+  }
+  return true
+}
+
 export async function runTgChainsOnce(): Promise<boolean> {
+  // Сначала освобождаем альбомы, чей таймер буфера уже истёк.
+  let receivedAny = await flushReadyAlbums()
   if (!botRef) {
     logger.warn('[tgChain] MAX bot not set — skip tick')
-    return false
+    return receivedAny
   }
 
   const chains = (await listTgChains()).filter(
     (c) => c.active && c.forward_posts && chainSourceKey(c) !== '',
   )
   if (chains.length === 0) {
-    return false
+    return receivedAny
   }
 
   const tokenByChain = new Map<string, string>()
@@ -481,8 +574,6 @@ export async function runTgChainsOnce(): Promise<boolean> {
     tokenGroups.set(token, list)
   }
 
-  let receivedAny = false
-
   for (const [tgToken, group] of tokenGroups) {
     const pollErr = await assertTelegramPollingReady(tgToken)
     if (pollErr) {
@@ -493,7 +584,13 @@ export async function runTgChainsOnce(): Promise<boolean> {
     const offset = getReaderOffset(tgToken)
     let batch: Array<{ update_id: number; channel_post: TgMessage }>
     try {
-      batch = await getTelegramUpdatesWithIds(tgToken, offset, TG_CHAIN_LONG_POLL_SEC)
+      // При ожидающемся flush альбома не блокируемся длинным long-poll.
+      const pendingAlbumDelayMs = getAlbumBufferDelayMs(Date.now(), tgToken)
+      const timeoutSec =
+        pendingAlbumDelayMs === null
+          ? TG_CHAIN_LONG_POLL_SEC
+          : Math.max(0, Math.min(TG_CHAIN_LONG_POLL_SEC, Math.ceil(pendingAlbumDelayMs / 1000)))
+      batch = await getTelegramUpdatesWithIds(tgToken, offset, timeoutSec)
     } catch (err: unknown) {
       if (err instanceof TelegramGetUpdatesConflictError) {
         await sleep(10_000)
@@ -522,6 +619,13 @@ export async function runTgChainsOnce(): Promise<boolean> {
       const forChain = channelPosts.filter((m) => telegramChannelMatchesTarget(m.chat, sourceKey))
       const chainGroups = groupChannelPostsForForward(forChain)
       for (const msgs of chainGroups) {
+        const isMediaGroup = msgs.length > 1 || Boolean(msgs[0]?.media_group_id)
+        if (isMediaGroup) {
+          for (const msg of msgs) {
+            queueAlbumMessage(chain, tgToken, msg)
+          }
+          continue
+        }
         await processChainMessageGroup(chain, msgs, tgToken)
       }
     }
@@ -529,6 +633,10 @@ export async function runTgChainsOnce(): Promise<boolean> {
     if (nextOffset > offset) {
       setReaderOffset(tgToken, nextOffset)
     }
+  }
+
+  if (await flushReadyAlbums()) {
+    receivedAny = true
   }
 
   return receivedAny
@@ -545,7 +653,13 @@ export function startTgChainForwarder(): void {
       try {
         const hadUpdates = await runTgChainsOnce()
         if (!hadUpdates) {
-          await sleep(TG_CHAIN_IDLE_MS)
+          const albumDelayMs = getAlbumBufferDelayMs()
+          if (albumDelayMs === null) {
+            await sleep(TG_CHAIN_IDLE_MS)
+          } else {
+            // Не спим дольше, чем осталось до ближайшего flush альбома.
+            await sleep(Math.min(TG_CHAIN_IDLE_MS, Math.max(50, albumDelayMs)))
+          }
         }
       } catch (err: unknown) {
         if (err instanceof TelegramGetUpdatesConflictError) {

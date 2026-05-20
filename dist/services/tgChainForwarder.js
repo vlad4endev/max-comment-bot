@@ -27,7 +27,12 @@ const TG_CHAIN_IDLE_MS = 3_000;
 const MAX_SEND_INTERVAL_MS = 2_500;
 const UPLOAD_STAGGER_MS = 450;
 const TG_CHAIN_MAX_API_RETRIES = 6;
+/** Буферизация Telegram-альбомов по media_group_id. */
+const TG_ALBUM_BUFFER_MS = 900;
+/** Telegram media group ограничен 10 элементами. */
+const TG_ALBUM_MAX_MEDIA_PER_POST = 10;
 const lastMaxSendAt = new Map();
+const albumBuffer = new Map();
 async function throttleMaxChatSend(chatId) {
     const now = Date.now();
     const last = lastMaxSendAt.get(chatId) ?? 0;
@@ -91,6 +96,69 @@ function pickAlbumCaption(messages, addSignature) {
         }
     }
     return '';
+}
+function buildAlbumBufferKey(chain, msg) {
+    const gid = msg.media_group_id?.trim();
+    if (!gid)
+        return null;
+    return `${chain.id}:${msg.chat.id}:${gid}`;
+}
+/**
+ * Складывает сообщение media group в буфер и продлевает окно ожидания,
+ * чтобы собрать альбом целиком даже при раздельных батчах getUpdates.
+ */
+function queueAlbumMessage(chain, tgToken, msg) {
+    const key = buildAlbumBufferKey(chain, msg);
+    if (!key)
+        return;
+    const now = Date.now();
+    const existing = albumBuffer.get(key);
+    if (existing) {
+        if (!existing.messages.some((m) => m.message_id === msg.message_id)) {
+            existing.messages.push(msg);
+            existing.messages.sort((a, b) => a.message_id - b.message_id);
+        }
+        existing.flushAt = now + TG_ALBUM_BUFFER_MS;
+        return;
+    }
+    albumBuffer.set(key, {
+        chain,
+        tgToken,
+        messages: [msg],
+        flushAt: now + TG_ALBUM_BUFFER_MS,
+    });
+}
+function getAlbumBufferDelayMs(now = Date.now(), tgToken) {
+    let minDelay = null;
+    for (const entry of albumBuffer.values()) {
+        if (tgToken && entry.tgToken !== tgToken)
+            continue;
+        const delay = Math.max(0, entry.flushAt - now);
+        if (minDelay === null || delay < minDelay) {
+            minDelay = delay;
+        }
+    }
+    return minDelay;
+}
+function takeReadyAlbumEntries(now = Date.now()) {
+    const ready = [];
+    for (const [key, entry] of albumBuffer.entries()) {
+        if (entry.flushAt <= now) {
+            ready.push(entry);
+            albumBuffer.delete(key);
+        }
+    }
+    ready.sort((a, b) => a.messages[0].message_id - b.messages[0].message_id);
+    return ready;
+}
+function chunkAlbumMessages(messages) {
+    if (messages.length <= TG_ALBUM_MAX_MEDIA_PER_POST)
+        return [messages];
+    const chunks = [];
+    for (let i = 0; i < messages.length; i += TG_ALBUM_MAX_MEDIA_PER_POST) {
+        chunks.push(messages.slice(i, i + TG_ALBUM_MAX_MEDIA_PER_POST));
+    }
+    return chunks;
 }
 /** Разбивает апдейты: одиночные посты и альбомы (несколько channel_post с media_group_id). */
 function groupChannelPostsForForward(posts) {
@@ -235,9 +303,8 @@ async function buildAlbumImageAttachments(bot, photoMessages, tgToken) {
     return mergeAlbumImageAttachments(uploaded);
 }
 /** Альбом TG → один пост MAX (все фото в одном сообщении, как в Telegram). */
-async function forwardAlbumToMax(bot, messages, tgToken, maxChatId, addSignature) {
+async function forwardAlbumToMax(bot, messages, tgToken, maxChatId, caption) {
     const chatId = (0, resolveChannelChatId_1.resolveCanonicalChannelChatId)(maxChatId) ?? maxChatId;
-    const caption = pickAlbumCaption(messages, addSignature);
     const messageText = caption.trim() || '\u00a0';
     const photoMessages = messages.filter((m) => m.photo && m.photo.length > 0);
     const attachments = [];
@@ -297,15 +364,23 @@ async function processChainMessageGroup(chain, messages, tgToken) {
         let published = 0;
         let resultMid = null;
         if (isAlbum) {
-            resultMid = await forwardAlbumToMax(bot, pending, tgToken, chain.max_chat_id, chain.add_signature);
-            if (resultMid) {
-                published = 1;
-                if (attachComments) {
-                    const chatId = (0, resolveChannelChatId_1.resolveCanonicalChannelChatId)(chain.max_chat_id) ?? chain.max_chat_id;
-                    const mid = resultMid;
-                    const post = await maxApi(() => (0, channelPostActions_1.ensurePostFromChannelMessage)(bot, chatId, mid));
-                    if (!post) {
-                        (0, commentButtonRetryQueue_1.scheduleCommentButtonRetry)(chatId, mid);
+            // Для media group > 10 отправляем несколькими постами (по 10 вложений).
+            // Подпись Telegram переносим только в первый чанк, чтобы текст не дублировался.
+            const ordered = [...pending].sort((a, b) => a.message_id - b.message_id);
+            const chunks = chunkAlbumMessages(ordered);
+            const firstCaption = pickAlbumCaption(ordered, chain.add_signature);
+            for (let i = 0; i < chunks.length; i += 1) {
+                const chunkCaption = i === 0 ? firstCaption : '';
+                resultMid = await forwardAlbumToMax(bot, chunks[i], tgToken, chain.max_chat_id, chunkCaption);
+                if (resultMid) {
+                    published += 1;
+                    if (attachComments) {
+                        const chatId = (0, resolveChannelChatId_1.resolveCanonicalChannelChatId)(chain.max_chat_id) ?? chain.max_chat_id;
+                        const mid = resultMid;
+                        const post = await maxApi(() => (0, channelPostActions_1.ensurePostFromChannelMessage)(bot, chatId, mid));
+                        if (!post) {
+                            (0, commentButtonRetryQueue_1.scheduleCommentButtonRetry)(chatId, mid);
+                        }
                     }
                 }
             }
@@ -366,14 +441,25 @@ async function processChainMessageGroup(chain, messages, tgToken) {
         await (0, adminPanelState_1.updateTgChain)(chain.id, { errors_today: errorsToday });
     }
 }
+async function flushReadyAlbums() {
+    const ready = takeReadyAlbumEntries();
+    if (ready.length === 0)
+        return false;
+    for (const entry of ready) {
+        await processChainMessageGroup(entry.chain, entry.messages, entry.tgToken);
+    }
+    return true;
+}
 async function runTgChainsOnce() {
+    // Сначала освобождаем альбомы, чей таймер буфера уже истёк.
+    let receivedAny = await flushReadyAlbums();
     if (!botRef) {
         logger_1.logger.warn('[tgChain] MAX bot not set — skip tick');
-        return false;
+        return receivedAny;
     }
     const chains = (await (0, adminPanelState_1.listTgChains)()).filter((c) => c.active && c.forward_posts && chainSourceKey(c) !== '');
     if (chains.length === 0) {
-        return false;
+        return receivedAny;
     }
     const tokenByChain = new Map();
     for (const chain of chains) {
@@ -393,7 +479,6 @@ async function runTgChainsOnce() {
         list.push(chain);
         tokenGroups.set(token, list);
     }
-    let receivedAny = false;
     for (const [tgToken, group] of tokenGroups) {
         const pollErr = await (0, channelImportService_1.assertTelegramPollingReady)(tgToken);
         if (pollErr) {
@@ -403,7 +488,12 @@ async function runTgChainsOnce() {
         const offset = getReaderOffset(tgToken);
         let batch;
         try {
-            batch = await (0, telegramReader_1.getTelegramUpdatesWithIds)(tgToken, offset, TG_CHAIN_LONG_POLL_SEC);
+            // При ожидающемся flush альбома не блокируемся длинным long-poll.
+            const pendingAlbumDelayMs = getAlbumBufferDelayMs(Date.now(), tgToken);
+            const timeoutSec = pendingAlbumDelayMs === null
+                ? TG_CHAIN_LONG_POLL_SEC
+                : Math.max(0, Math.min(TG_CHAIN_LONG_POLL_SEC, Math.ceil(pendingAlbumDelayMs / 1000)));
+            batch = await (0, telegramReader_1.getTelegramUpdatesWithIds)(tgToken, offset, timeoutSec);
         }
         catch (err) {
             if (err instanceof telegramReader_1.TelegramGetUpdatesConflictError) {
@@ -431,12 +521,22 @@ async function runTgChainsOnce() {
             const forChain = channelPosts.filter((m) => (0, tgChannelMatch_1.telegramChannelMatchesTarget)(m.chat, sourceKey));
             const chainGroups = groupChannelPostsForForward(forChain);
             for (const msgs of chainGroups) {
+                const isMediaGroup = msgs.length > 1 || Boolean(msgs[0]?.media_group_id);
+                if (isMediaGroup) {
+                    for (const msg of msgs) {
+                        queueAlbumMessage(chain, tgToken, msg);
+                    }
+                    continue;
+                }
                 await processChainMessageGroup(chain, msgs, tgToken);
             }
         }
         if (nextOffset > offset) {
             setReaderOffset(tgToken, nextOffset);
         }
+    }
+    if (await flushReadyAlbums()) {
+        receivedAny = true;
     }
     return receivedAny;
 }
@@ -451,7 +551,14 @@ function startTgChainForwarder() {
             try {
                 const hadUpdates = await runTgChainsOnce();
                 if (!hadUpdates) {
-                    await sleep(TG_CHAIN_IDLE_MS);
+                    const albumDelayMs = getAlbumBufferDelayMs();
+                    if (albumDelayMs === null) {
+                        await sleep(TG_CHAIN_IDLE_MS);
+                    }
+                    else {
+                        // Не спим дольше, чем осталось до ближайшего flush альбома.
+                        await sleep(Math.min(TG_CHAIN_IDLE_MS, Math.max(50, albumDelayMs)));
+                    }
                 }
             }
             catch (err) {
