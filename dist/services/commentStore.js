@@ -111,6 +111,9 @@ function normalizeCommentFromDisk(raw) {
             }
         }
     }
+    if (o.posted_as_channel !== undefined && typeof o.posted_as_channel !== 'boolean') {
+        return null;
+    }
     const comment = {
         comment_id: o.comment_id,
         post_id: o.post_id,
@@ -143,6 +146,7 @@ function normalizeCommentFromDisk(raw) {
                 notification_reply_log: o.notification_reply_log,
             }
             : {}),
+        ...(o.posted_as_channel === true ? { posted_as_channel: true } : {}),
     };
     ensureCommentReplyIds(comment);
     return comment;

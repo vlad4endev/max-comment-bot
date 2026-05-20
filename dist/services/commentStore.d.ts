@@ -42,6 +42,8 @@ export interface Comment {
     notification_mids?: CommentAdminNotificationMid[];
     /** Chronology of channel replies appended to the single admin notification. */
     notification_reply_log?: CommentNotificationReplyLogEntry[];
+    /** Mini App: admin posted from composer without «Ответить» — show as channel, not personal profile. */
+    posted_as_channel?: boolean;
 }
 export declare function replyToNotificationLogEntry(reply: CommentReply, notificationReplierName?: string): CommentNotificationReplyLogEntry;
 export declare class CommentStore {

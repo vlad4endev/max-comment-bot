@@ -54,6 +54,8 @@ export interface Comment {
   notification_mids?: CommentAdminNotificationMid[]
   /** Chronology of channel replies appended to the single admin notification. */
   notification_reply_log?: CommentNotificationReplyLogEntry[]
+  /** Mini App: admin posted from composer without «Ответить» — show as channel, not personal profile. */
+  posted_as_channel?: boolean
 }
 
 function isCommentReply(value: unknown): value is CommentReply {
@@ -170,6 +172,9 @@ function normalizeCommentFromDisk(raw: unknown): Comment | null {
       }
     }
   }
+  if (o.posted_as_channel !== undefined && typeof o.posted_as_channel !== 'boolean') {
+    return null
+  }
   const comment: Comment = {
     comment_id: o.comment_id,
     post_id: o.post_id,
@@ -202,6 +207,7 @@ function normalizeCommentFromDisk(raw: unknown): Comment | null {
           notification_reply_log: o.notification_reply_log as CommentNotificationReplyLogEntry[],
         }
       : {}),
+    ...(o.posted_as_channel === true ? { posted_as_channel: true } : {}),
   }
   ensureCommentReplyIds(comment)
   return comment
