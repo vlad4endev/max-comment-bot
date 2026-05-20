@@ -65,7 +65,7 @@ export class PostStore {
   savePost(post: Post): void {
     try {
       this.ensureChannelRow(post.chat_id)
-      this.getStatements().upsert.run(
+      const result = this.getStatements().upsert.run(
         post.post_id,
         post.chat_id,
         post.message_mid,
@@ -78,8 +78,15 @@ export class PostStore {
         post.timestamp,
         JSON.stringify(post),
       )
+      const isNew = result.changes > 0 && result.lastInsertRowid !== undefined
+      logger.info(isNew ? 'db: пост сохранён' : 'db: пост обновлён', {
+        postId: post.post_id,
+        chatId: post.chat_id,
+        messageMid: post.message_mid,
+        pending: post.button_attach_pending ?? false,
+      })
     } catch (err: unknown) {
-      logger.error('postStore.savePost: failed', {
+      logger.error('db: ошибка сохранения поста', {
         postId: post.post_id,
         chatId: post.chat_id,
         messageMid: post.message_mid,
@@ -94,11 +101,15 @@ export class PostStore {
    */
   private ensureChannelRow(chatId: number): void {
     try {
-      getDb().prepare(
+      const r = getDb().prepare(
         "INSERT OR IGNORE INTO channels (chat_id, title, type, date_added, active) VALUES (?, NULL, 'channel', datetime('now'), 1)",
       ).run(chatId)
-    } catch {
+      if (r.changes > 0) {
+        logger.warn('db: канал не найден при сохранении поста — создана заглушка', { chatId })
+      }
+    } catch (err: unknown) {
       // non-fatal — the main upsert will surface any real constraint error
+      logger.warn('db: ensureChannelRow failed', { chatId, err })
     }
   }
 
@@ -169,6 +180,7 @@ export class PostStore {
       return []
     }
     this.getStatements().deleteByChatId.run(chatId)
+    logger.info('db: посты канала удалены', { chatId, count: rows.length })
     return rows.map((row) => row.post_id)
   }
 

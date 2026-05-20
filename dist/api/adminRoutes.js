@@ -450,6 +450,22 @@ function createAdminRouter(deps) {
         }
         res.json({ ok: true });
     });
+    secured.get('/db-stats', (_req, res) => {
+        try {
+            const db = require('../db/database').getDb();
+            const posts = db.prepare('SELECT COUNT(*) AS n FROM posts').get().n;
+            const pendingButtons = db.prepare("SELECT COUNT(*) AS n FROM posts WHERE json_extract(data, '$.button_attach_pending') = 1").get().n;
+            const channels = db.prepare('SELECT COUNT(*) AS n FROM channels WHERE active = 1').get().n;
+            const comments = db.prepare('SELECT COUNT(*) AS n FROM comments').get().n;
+            const subscribers = db.prepare('SELECT COUNT(*) AS n FROM subscribers').get().n;
+            const retryQueueSize = require('../services/commentButtonRetryQueue').getCommentButtonRetryQueueSize();
+            res.json({ posts, pending_buttons: pendingButtons, channels, comments, subscribers, retry_queue: retryQueueSize });
+        }
+        catch (err) {
+            logger_1.logger.error('admin /db-stats failed', err);
+            res.status(500).json({ error: 'internal error' });
+        }
+    });
     secured.get('/logs', async (req, res) => {
         const levelRaw = typeof req.query.level === 'string' ? req.query.level.toUpperCase() : '';
         const levelFilter = levelRaw === 'INFO' ||

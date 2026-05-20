@@ -22,10 +22,17 @@ class PostStore {
     savePost(post) {
         try {
             this.ensureChannelRow(post.chat_id);
-            this.getStatements().upsert.run(post.post_id, post.chat_id, post.message_mid, post.comments_ui_message_mid ?? null, post.sender_name ?? null, post.text, post.photo_url ?? null, post.media_attachments ? JSON.stringify(post.media_attachments) : null, post.comment_count, post.timestamp, JSON.stringify(post));
+            const result = this.getStatements().upsert.run(post.post_id, post.chat_id, post.message_mid, post.comments_ui_message_mid ?? null, post.sender_name ?? null, post.text, post.photo_url ?? null, post.media_attachments ? JSON.stringify(post.media_attachments) : null, post.comment_count, post.timestamp, JSON.stringify(post));
+            const isNew = result.changes > 0 && result.lastInsertRowid !== undefined;
+            logger_1.logger.info(isNew ? 'db: пост сохранён' : 'db: пост обновлён', {
+                postId: post.post_id,
+                chatId: post.chat_id,
+                messageMid: post.message_mid,
+                pending: post.button_attach_pending ?? false,
+            });
         }
         catch (err) {
-            logger_1.logger.error('postStore.savePost: failed', {
+            logger_1.logger.error('db: ошибка сохранения поста', {
                 postId: post.post_id,
                 chatId: post.chat_id,
                 messageMid: post.message_mid,
@@ -39,10 +46,14 @@ class PostStore {
      */
     ensureChannelRow(chatId) {
         try {
-            (0, database_1.getDb)().prepare("INSERT OR IGNORE INTO channels (chat_id, title, type, date_added, active) VALUES (?, NULL, 'channel', datetime('now'), 1)").run(chatId);
+            const r = (0, database_1.getDb)().prepare("INSERT OR IGNORE INTO channels (chat_id, title, type, date_added, active) VALUES (?, NULL, 'channel', datetime('now'), 1)").run(chatId);
+            if (r.changes > 0) {
+                logger_1.logger.warn('db: канал не найден при сохранении поста — создана заглушка', { chatId });
+            }
         }
-        catch {
+        catch (err) {
             // non-fatal — the main upsert will surface any real constraint error
+            logger_1.logger.warn('db: ensureChannelRow failed', { chatId, err });
         }
     }
     getPost(postId) {
@@ -100,6 +111,7 @@ class PostStore {
             return [];
         }
         this.getStatements().deleteByChatId.run(chatId);
+        logger_1.logger.info('db: посты канала удалены', { chatId, count: rows.length });
         return rows.map((row) => row.post_id);
     }
     clearAllPosts() {

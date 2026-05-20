@@ -3802,6 +3802,15 @@
     clearLogsTimer();
     main.innerHTML =
       '<p class="text-sm muted">Журнал работы бота: события, предупреждения и ошибки. Новые записи сверху.</p>' +
+      '<div id="db_stats_bar" style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px;padding:10px 12px;background:var(--surface-2,#f4f5f7);border-radius:8px;font-size:13px;align-items:center">' +
+      '<span style="font-weight:600;color:var(--text-2,#555)">БД:</span>' +
+      '<span id="dbs_posts" class="log-stat" title="Всего постов в БД">📄 посты: <strong>…</strong></span>' +
+      '<span id="dbs_pending" class="log-stat" title="Посты без кнопки (pending)">⏳ без кнопки: <strong>…</strong></span>' +
+      '<span id="dbs_channels" class="log-stat" title="Активных каналов">📡 каналы: <strong>…</strong></span>' +
+      '<span id="dbs_comments" class="log-stat" title="Комментариев">💬 коммент: <strong>…</strong></span>' +
+      '<span id="dbs_retry" class="log-stat" title="В очереди повторной привязки кнопки">🔄 ретрай: <strong>…</strong></span>' +
+      '<button type="button" class="btn btn-ghost btn-sm" id="dbs_refresh" style="margin-left:auto">↻ Обновить</button>' +
+      '</div>' +
       '<div class="search-bar log-toolbar">' +
       '<select class="select" id="log_level" style="max-width:150px"><option value="">Все уровни</option>' +
       '<option value="ERROR">Ошибки</option>' +
@@ -3809,10 +3818,20 @@
       '<option value="INFO">Инфо</option>' +
       '<option value="DEBUG">Отладка</option>' +
       '</select>' +
-      '<input class="input" id="log_filter" placeholder="Поиск по тексту…" style="max-width:240px"/>' +
-      '<input class="input mono" id="log_limit" style="max-width:90px" placeholder="200" value="200" title="Сколько строк"/>' +
+      '<input class="input" id="log_filter" placeholder="Поиск по тексту…" style="max-width:220px"/>' +
+      '<input class="input mono" id="log_limit" style="max-width:80px" placeholder="200" value="200" title="Сколько строк"/>' +
       '<label class="log-auto-label"><input type="checkbox" id="log_auto" checked/> Авто 5 с</label>' +
       '<button type="button" class="btn btn-primary" id="log_run">Обновить</button>' +
+      '</div>' +
+      '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px">' +
+      '<button type="button" class="btn btn-ghost btn-sm log-quick-filter" data-filter="db:">🗄 БД</button>' +
+      '<button type="button" class="btn btn-ghost btn-sm log-quick-filter" data-filter="commentButton">🔘 Кнопки</button>' +
+      '<button type="button" class="btn btn-ghost btn-sm log-quick-filter" data-filter="attach_failed">❌ attach_failed</button>' +
+      '<button type="button" class="btn btn-ghost btn-sm log-quick-filter" data-filter="commentButtonRetry">🔄 Ретрай</button>' +
+      '<button type="button" class="btn btn-ghost btn-sm log-quick-filter" data-filter="rate limit">⚡ Rate limit</button>' +
+      '<button type="button" class="btn btn-ghost btn-sm log-quick-filter" data-filter="postStore.savePost">💾 savePost</button>' +
+      '<button type="button" class="btn btn-ghost btn-sm log-quick-filter" data-filter="" data-level="ERROR">🔴 Все ошибки</button>' +
+      '<button type="button" class="btn btn-ghost btn-sm" id="log_clear_filter" title="Сбросить фильтры">✕ Сброс</button>' +
       '</div>' +
       '<div class="log-stats" id="log_stats"></div>' +
       '<div class="log-viewer" id="log_body"></div>';
@@ -3901,6 +3920,58 @@
       logsRefreshTimer = window.setInterval(function () {
         if (currentRoute === 'logs') run(true);
       }, 5000);
+    }
+
+    function loadDbStats() {
+      getJson('/db-stats')
+        .then(function (d) {
+          var posts = qs('#dbs_posts', main);
+          var pending = qs('#dbs_pending', main);
+          var channels = qs('#dbs_channels', main);
+          var comments = qs('#dbs_comments', main);
+          var retry = qs('#dbs_retry', main);
+          if (posts) posts.querySelector('strong').textContent = String(d.posts ?? '?');
+          if (pending) {
+            var n = d.pending_buttons ?? 0;
+            pending.querySelector('strong').textContent = String(n);
+            pending.style.color = n > 0 ? 'var(--warning,#e07b00)' : '';
+          }
+          if (channels) channels.querySelector('strong').textContent = String(d.channels ?? '?');
+          if (comments) comments.querySelector('strong').textContent = String(d.comments ?? '?');
+          if (retry) {
+            var nr = d.retry_queue ?? 0;
+            retry.querySelector('strong').textContent = String(nr);
+            retry.style.color = nr > 0 ? 'var(--warning,#e07b00)' : '';
+          }
+        })
+        .catch(function () {});
+    }
+
+    var dbsRefreshBtn = qs('#dbs_refresh', main);
+    if (dbsRefreshBtn) dbsRefreshBtn.addEventListener('click', loadDbStats);
+    loadDbStats();
+
+    qsa('.log-quick-filter', main).forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var filterVal = btn.getAttribute('data-filter') || '';
+        var levelVal = btn.getAttribute('data-level') || '';
+        var filterEl2 = qs('#log_filter', main);
+        var levelEl = qs('#log_level', main);
+        if (filterEl2) filterEl2.value = filterVal;
+        if (levelEl) levelEl.value = levelVal;
+        run(false);
+      });
+    });
+
+    var clearFilterBtn = qs('#log_clear_filter', main);
+    if (clearFilterBtn) {
+      clearFilterBtn.addEventListener('click', function () {
+        var filterEl2 = qs('#log_filter', main);
+        var levelEl = qs('#log_level', main);
+        if (filterEl2) filterEl2.value = '';
+        if (levelEl) levelEl.value = '';
+        run(false);
+      });
     }
 
     qs('#log_run', main).addEventListener('click', function () {

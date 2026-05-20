@@ -8,6 +8,11 @@ exports.closeDb = closeDb;
 const node_fs_1 = __importDefault(require("node:fs"));
 const node_path_1 = __importDefault(require("node:path"));
 const better_sqlite3_1 = __importDefault(require("better-sqlite3"));
+// Lazy import to avoid circular dependency at module load time
+function getLogger() {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    return require('../utils/logger').logger;
+}
 const DATA_DIR = node_path_1.default.resolve(__dirname, '../../data');
 const DB_PATH = node_path_1.default.join(DATA_DIR, 'bot.db');
 let db = null;
@@ -153,19 +158,27 @@ function migrateChannelImportSchema(database) {
  * Deduplicates existing rows first (keeps the row with the lowest rowid for each pair).
  */
 function migratePostsSchema(database) {
+    const log = getLogger();
     const indexes = database.prepare("PRAGMA index_list(posts)").all();
     const hasUnique = indexes.some((i) => i.name === 'idx_posts_unique_chat_mid');
     if (hasUnique) {
         return;
     }
+    log.info('db.migrate: добавляем UNIQUE(chat_id, message_mid) — дедупликация постов');
     // Deduplicate: keep lowest rowid per (chat_id, message_mid)
+    const before = database.prepare('SELECT COUNT(*) AS n FROM posts').get().n;
     database.exec(`
     DELETE FROM posts
     WHERE rowid NOT IN (
       SELECT MIN(rowid) FROM posts GROUP BY chat_id, message_mid
     )
   `);
+    const after = database.prepare('SELECT COUNT(*) AS n FROM posts').get().n;
+    if (before !== after) {
+        log.warn('db.migrate: удалены дубли постов', { removed: before - after, remaining: after });
+    }
     database.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_posts_unique_chat_mid ON posts(chat_id, message_mid)');
+    log.info('db.migrate: UNIQUE индекс создан', { posts: after });
 }
 function closeDb() {
     if (!db) {

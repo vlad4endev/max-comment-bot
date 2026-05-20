@@ -547,6 +547,22 @@ export function createAdminRouter(deps: AdminRouterDeps): express.Router {
     res.json({ ok: true })
   })
 
+  secured.get('/db-stats', (_req, res) => {
+    try {
+      const db = (require('../db/database') as { getDb: () => import('better-sqlite3').Database }).getDb()
+      const posts = (db.prepare('SELECT COUNT(*) AS n FROM posts').get() as { n: number }).n
+      const pendingButtons = (db.prepare("SELECT COUNT(*) AS n FROM posts WHERE json_extract(data, '$.button_attach_pending') = 1").get() as { n: number }).n
+      const channels = (db.prepare('SELECT COUNT(*) AS n FROM channels WHERE active = 1').get() as { n: number }).n
+      const comments = (db.prepare('SELECT COUNT(*) AS n FROM comments').get() as { n: number }).n
+      const subscribers = (db.prepare('SELECT COUNT(*) AS n FROM subscribers').get() as { n: number }).n
+      const retryQueueSize = (require('../services/commentButtonRetryQueue') as { getCommentButtonRetryQueueSize: () => number }).getCommentButtonRetryQueueSize()
+      res.json({ posts, pending_buttons: pendingButtons, channels, comments, subscribers, retry_queue: retryQueueSize })
+    } catch (err: unknown) {
+      logger.error('admin /db-stats failed', err)
+      res.status(500).json({ error: 'internal error' })
+    }
+  })
+
   secured.get('/logs', async (req, res) => {
     const levelRaw = typeof req.query.level === 'string' ? req.query.level.toUpperCase() : ''
     const levelFilter: AdminLogLevel | null =
