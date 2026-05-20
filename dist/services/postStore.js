@@ -13,6 +13,7 @@ const database_1 = require("../db/database");
 const resolveChannelChatId_1 = require("./resolveChannelChatId");
 const startappPayload_1 = require("../utils/startappPayload");
 const logger_1 = require("../utils/logger");
+const maxApiRetry_1 = require("../utils/maxApiRetry");
 class PostStore {
     statements = null;
     async loadFromDisk() {
@@ -111,10 +112,7 @@ class PostStore {
         }
         const attachments = usesReplyUi || media.length === 0 ? [kb] : [...media, kb];
         try {
-            await bot.api.editMessage(targetMid, {
-                text,
-                attachments,
-            });
+            await (0, maxApiRetry_1.apiCallWithRetry)(() => bot.api.editMessage(targetMid, { text, attachments }));
             return true;
         }
         catch (err) {
@@ -155,6 +153,18 @@ class PostStore {
 exports.PostStore = PostStore;
 /** MAX rejects edits when attachments exceed this count (observed: 5 photos + keyboard fails). */
 exports.MAX_MESSAGE_ATTACHMENTS = 5;
+/** Min gap between consecutive MAX API writes (edit/reply) to the same channel to avoid 429. */
+const ATTACH_THROTTLE_MS = 1_200;
+const lastAttachAt = new Map();
+async function throttleChannelAttach(chatId) {
+    const now = Date.now();
+    const last = lastAttachAt.get(chatId) ?? 0;
+    const wait = ATTACH_THROTTLE_MS - (now - last);
+    if (wait > 0) {
+        await new Promise((r) => setTimeout(r, wait));
+    }
+    lastAttachAt.set(chatId, Date.now());
+}
 /** True when original media plus an inline keyboard fit in one {@link Bot.api.editMessage}. */
 function canMergeKeyboardWithMedia(mediaCount) {
     return mediaCount + 1 <= exports.MAX_MESSAGE_ATTACHMENTS;
@@ -235,6 +245,7 @@ async function attachCommentButtonToChannelPost(bot, post, editText, keyboard, l
         const apiDuration = apiDurationMs >= 1000 ? `${(apiDurationMs / 1000).toFixed(2)} с` : `${apiDurationMs} мс`;
         return { apiDurationMs, apiDuration };
     };
+    await throttleChannelAttach(post.chat_id);
     if (mergeMediaInEdit) {
         const attachments = media.length > 0 ? [...media, keyboard] : [keyboard];
         logger_1.logger.info('commentButton: пробуем editMessage на посте канала', {
@@ -243,10 +254,7 @@ async function attachCommentButtonToChannelPost(bot, post, editText, keyboard, l
         });
         try {
             const editStartedAt = performance.now();
-            await bot.api.editMessage(post.message_mid, {
-                text: editText,
-                attachments,
-            });
+            await (0, maxApiRetry_1.apiCallWithRetry)(() => bot.api.editMessage(post.message_mid, { text: editText, attachments }));
             const editMs = Math.round(performance.now() - editStartedAt);
             const timing = apiDuration();
             logger_1.logger.info(`commentButton: кнопка добавлена через edit поста (${timing.apiDuration})`, {
@@ -269,10 +277,10 @@ async function attachCommentButtonToChannelPost(bot, post, editText, keyboard, l
     try {
         const replyStartedAt = performance.now();
         const replyStub = '\u00a0';
-        const sent = await bot.api.sendMessageToChat(post.chat_id, replyStub, {
+        const sent = await (0, maxApiRetry_1.apiCallWithRetry)(() => bot.api.sendMessageToChat(post.chat_id, replyStub, {
             attachments: [keyboard],
             link: { type: 'reply', mid: post.message_mid },
-        });
+        }));
         const replyMs = Math.round(performance.now() - replyStartedAt);
         const uiMid = sent.body.mid;
         exports.postStore.savePost({ ...post, comments_ui_message_mid: uiMid });

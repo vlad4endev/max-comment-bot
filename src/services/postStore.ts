@@ -13,6 +13,7 @@ import { getDb } from '../db/database'
 import { resolveCanonicalChannelChatId } from './resolveChannelChatId'
 import { encodeMessageMidForStartapp } from '../utils/startappPayload'
 import { logger } from '../utils/logger'
+import { apiCallWithRetry } from '../utils/maxApiRetry'
 
 /**
  * Channel post tracked for Mini App comments (MAX message id is {@link Post.message_mid}).
@@ -184,10 +185,9 @@ export class PostStore {
     const attachments: AttachmentRequest[] =
       usesReplyUi || media.length === 0 ? [kb] : [...media, kb]
     try {
-      await bot.api.editMessage(targetMid, {
-        text,
-        attachments,
-      })
+      await apiCallWithRetry(() =>
+        bot.api.editMessage(targetMid, { text, attachments }),
+      )
       return true
     } catch (err: unknown) {
       logger.warn('postStore.updateButtonCaption: editMessage failed', {
@@ -237,6 +237,20 @@ export class PostStore {
 
 /** MAX rejects edits when attachments exceed this count (observed: 5 photos + keyboard fails). */
 export const MAX_MESSAGE_ATTACHMENTS = 5
+
+/** Min gap between consecutive MAX API writes (edit/reply) to the same channel to avoid 429. */
+const ATTACH_THROTTLE_MS = 1_200
+const lastAttachAt = new Map<number, number>()
+
+async function throttleChannelAttach(chatId: number): Promise<void> {
+  const now = Date.now()
+  const last = lastAttachAt.get(chatId) ?? 0
+  const wait = ATTACH_THROTTLE_MS - (now - last)
+  if (wait > 0) {
+    await new Promise((r) => setTimeout(r, wait))
+  }
+  lastAttachAt.set(chatId, Date.now())
+}
 
 /** True when original media plus an inline keyboard fit in one {@link Bot.api.editMessage}. */
 export function canMergeKeyboardWithMedia(mediaCount: number): boolean {
@@ -335,6 +349,8 @@ export async function attachCommentButtonToChannelPost(
     return { apiDurationMs, apiDuration }
   }
 
+  await throttleChannelAttach(post.chat_id)
+
   if (mergeMediaInEdit) {
     const attachments: AttachmentRequest[] =
       media.length > 0 ? [...media, keyboard] : [keyboard]
@@ -344,10 +360,9 @@ export async function attachCommentButtonToChannelPost(
     })
     try {
       const editStartedAt = performance.now()
-      await bot.api.editMessage(post.message_mid, {
-        text: editText,
-        attachments,
-      })
+      await apiCallWithRetry(() =>
+        bot.api.editMessage(post.message_mid, { text: editText, attachments }),
+      )
       const editMs = Math.round(performance.now() - editStartedAt)
       const timing = apiDuration()
       logger.info(`commentButton: кнопка добавлена через edit поста (${timing.apiDuration})`, {
@@ -369,10 +384,12 @@ export async function attachCommentButtonToChannelPost(
   try {
     const replyStartedAt = performance.now()
     const replyStub = '\u00a0'
-    const sent = await bot.api.sendMessageToChat(post.chat_id, replyStub, {
-      attachments: [keyboard],
-      link: { type: 'reply', mid: post.message_mid },
-    })
+    const sent = await apiCallWithRetry(() =>
+      bot.api.sendMessageToChat(post.chat_id, replyStub, {
+        attachments: [keyboard],
+        link: { type: 'reply', mid: post.message_mid },
+      }),
+    )
     const replyMs = Math.round(performance.now() - replyStartedAt)
     const uiMid = sent.body.mid
     postStore.savePost({ ...post, comments_ui_message_mid: uiMid })

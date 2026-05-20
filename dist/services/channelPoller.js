@@ -21,7 +21,7 @@ const postStore_1 = require("./postStore");
 const MIN_POLL_INTERVAL_MS = 3_000;
 /** Верхняя граница интервала опроса одного канала (стабильность важнее редкого глобального 30 с). */
 const PER_CHANNEL_CAP_MS = 6_000;
-const FETCH_COUNT = 30;
+const FETCH_COUNT = 15;
 /** Admin «обновить кнопки» scans more history than the periodic poller. */
 const REFRESH_BUTTONS_FETCH_COUNT = 100;
 /** Exported for startup diagnostics. */

@@ -40,24 +40,42 @@ export function isMaxRateLimitError(err: unknown): boolean {
     return true
   }
   if (err instanceof Error) {
-    return /too-many-chat-messages/i.test(err.message)
+    return /too-many-chat-messages|too.many.requests|rate.limit/i.test(err.message)
+  }
+  return false
+}
+
+/** Transient server-side errors that are safe to retry (5xx, network issues). */
+export function isMaxTransientError(err: unknown): boolean {
+  const status = getApiErrorStatus(err)
+  if (status !== undefined && status >= 500 && status < 600) {
+    return true
+  }
+  if (err instanceof Error) {
+    return /ECONNRESET|ETIMEDOUT|ENOTFOUND|socket hang up|network/i.test(err.message)
   }
   return false
 }
 
 /**
- * Retries `fn` on MAX API rate limit (HTTP 429) with exponential backoff.
+ * Retries `fn` on MAX API rate limit (HTTP 429) or transient errors with exponential backoff.
+ * Default 5 retries for attach operations (large channels hit 429 often).
  */
-export async function apiCallWithRetry<T>(fn: () => Promise<T>, retries = 3): Promise<T> {
+export async function apiCallWithRetry<T>(fn: () => Promise<T>, retries = 5): Promise<T> {
   let lastErr: unknown
   for (let i = 0; i < retries; i += 1) {
     try {
       return await fn()
     } catch (err: unknown) {
       lastErr = err
-      if (isMaxRateLimitError(err) && i < retries - 1) {
-        const delay = 2 ** i * 1500 + Math.random() * 800
-        logger.warn(`MAX API rate limited, retry ${i + 1}/${retries - 1} in ${Math.round(delay)}ms`)
+      const retryable = isMaxRateLimitError(err) || isMaxTransientError(err)
+      if (retryable && i < retries - 1) {
+        const base = isMaxRateLimitError(err) ? 2_000 : 500
+        const delay = Math.min(2 ** i * base + Math.random() * 500, 30_000)
+        logger.warn(`MAX API retryable error, attempt ${i + 1}/${retries} in ${Math.round(delay)}ms`, {
+          status: getApiErrorStatus(err),
+          message: err instanceof Error ? err.message : String(err),
+        })
         await new Promise((r) => setTimeout(r, delay))
         continue
       }
