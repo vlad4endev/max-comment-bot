@@ -49,6 +49,10 @@ export declare class PostStore {
     private parsePost;
     private getStatements;
 }
+/** MAX rejects edits when attachments exceed this count (observed: 5 photos + keyboard fails). */
+export declare const MAX_MESSAGE_ATTACHMENTS = 5;
+/** True when original media plus an inline keyboard fit in one {@link Bot.api.editMessage}. */
+export declare function canMergeKeyboardWithMedia(mediaCount: number): boolean;
 /**
  * Non-keyboard parts of {@link Message.body.attachments} for merging into {@link Bot.api.editMessage}.
  * Incoming {@link Attachment} shapes (e.g. image `payload.url` / `token` / `photo_id`) are accepted by the edit API as {@link AttachmentRequest}.

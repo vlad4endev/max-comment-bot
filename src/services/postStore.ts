@@ -178,6 +178,9 @@ export class PostStore {
           : post.text
     const usesReplyUi = post.comments_ui_message_mid !== undefined
     const { media } = usesReplyUi ? { media: [] as AttachmentRequest[] } : await resolveChannelPostMediaForEdit(bot, post)
+    if (!usesReplyUi && media.length > 0 && !canMergeKeyboardWithMedia(media.length)) {
+      return false
+    }
     const attachments: AttachmentRequest[] =
       usesReplyUi || media.length === 0 ? [kb] : [...media, kb]
     try {
@@ -230,6 +233,14 @@ export class PostStore {
     }
     return this.statements
   }
+}
+
+/** MAX rejects edits when attachments exceed this count (observed: 5 photos + keyboard fails). */
+export const MAX_MESSAGE_ATTACHMENTS = 5
+
+/** True when original media plus an inline keyboard fit in one {@link Bot.api.editMessage}. */
+export function canMergeKeyboardWithMedia(mediaCount: number): boolean {
+  return mediaCount + 1 <= MAX_MESSAGE_ATTACHMENTS
 }
 
 /**
@@ -303,18 +314,20 @@ export async function attachCommentButtonToChannelPost(
     messageMid: post.message_mid,
   }
   const { media, warnMissingSnapshot } = await resolveChannelPostMediaForEdit(bot, post)
-  const attachments: AttachmentRequest[] =
-    media.length > 0 ? [...media, keyboard] : [keyboard]
+  const mergeMediaInEdit = canMergeKeyboardWithMedia(media.length)
   if (warnMissingSnapshot) {
     logger.warn(
       'commentButton: нет снимка вложений поста — edit только с клавиатурой (медиа может пропасть)',
       logBase,
     )
   }
-  logger.info('commentButton: пробуем editMessage на посте канала', {
-    ...logBase,
-    attachmentCount: attachments.length,
-  })
+  if (media.length > 0 && !mergeMediaInEdit) {
+    logger.info('commentButton: слишком много медиа для edit — кнопка через reply под постом', {
+      ...logBase,
+      mediaCount: media.length,
+      maxAttachments: MAX_MESSAGE_ATTACHMENTS,
+    })
+  }
   const apiDuration = (): { apiDurationMs: number; apiDuration: string } => {
     const apiDurationMs = Math.round(performance.now() - apiStartedAt)
     const apiDuration =
@@ -322,27 +335,36 @@ export async function attachCommentButtonToChannelPost(
     return { apiDurationMs, apiDuration }
   }
 
-  try {
-    const editStartedAt = performance.now()
-    await bot.api.editMessage(post.message_mid, {
-      text: editText,
-      attachments,
-    })
-    const editMs = Math.round(performance.now() - editStartedAt)
-    const timing = apiDuration()
-    logger.info(`commentButton: кнопка добавлена через edit поста (${timing.apiDuration})`, {
+  if (mergeMediaInEdit) {
+    const attachments: AttachmentRequest[] =
+      media.length > 0 ? [...media, keyboard] : [keyboard]
+    logger.info('commentButton: пробуем editMessage на посте канала', {
       ...logBase,
-      method: 'edit',
-      editMs,
-      ...timing,
+      attachmentCount: attachments.length,
     })
-    return true
-  } catch (err: unknown) {
-    logger.warn('commentButton: editMessage не удался — пробуем reply с кнопкой', {
-      ...logBase,
-      ...apiDuration(),
-      err,
-    })
+    try {
+      const editStartedAt = performance.now()
+      await bot.api.editMessage(post.message_mid, {
+        text: editText,
+        attachments,
+      })
+      const editMs = Math.round(performance.now() - editStartedAt)
+      const timing = apiDuration()
+      logger.info(`commentButton: кнопка добавлена через edit поста (${timing.apiDuration})`, {
+        ...logBase,
+        method: 'edit',
+        editMs,
+        ...timing,
+      })
+      return true
+    } catch (err: unknown) {
+      logger.warn('commentButton: editMessage не удался — пробуем reply с кнопкой', {
+        ...logBase,
+        attachmentCount: attachments.length,
+        ...apiDuration(),
+        err,
+      })
+    }
   }
   try {
     const replyStartedAt = performance.now()
