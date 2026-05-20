@@ -1,17 +1,12 @@
 import { createHash } from 'node:crypto'
 
+import axios from 'axios'
 import type { Bot } from '@maxhub/max-bot-api'
-import type { Message } from '@maxhub/max-bot-api/types'
+import type { AttachmentRequest, Message } from '@maxhub/max-bot-api/types'
 
 import { getTelegramToken } from '../config'
 import { getDb } from '../db/database'
 import { getTgFileUrl, getTelegramUpdatesWithIds, type TgMessage } from '../forwarder/telegramReader'
-import {
-  sendDocumentToMax,
-  sendPhotoToMax,
-  sendTextToMax,
-  sendVideoToMax,
-} from '../forwarder/maxPublisher'
 import { listTgChains, updateTgChain, type TgChainRecord } from '../api/adminPanelState'
 import { assertTelegramPollingReady } from './channelImportService'
 import { ensurePostFromChannelMessage } from './channelPostActions'
@@ -82,45 +77,54 @@ function resolveTgToken(chain: TgChainRecord): string {
 }
 
 async function forwardMessageToMax(
+  bot: Bot,
   msg: TgMessage,
   tgToken: string,
-  maxToken: string,
   maxChatId: number,
   addSignature: boolean,
 ): Promise<void> {
-  const maxChannelId = String(maxChatId)
+  const chatId = resolveCanonicalChannelChatId(maxChatId) ?? maxChatId
   let text = (msg.text || msg.caption || '').trim()
   if (addSignature && text) {
     text = `${text}\n\n— TG`
   }
+  const messageText = text || '\u00a0'
 
   if (msg.photo && msg.photo.length > 0) {
     const largest = msg.photo[msg.photo.length - 1]
     const url = await getTgFileUrl(tgToken, largest.file_id)
     if (url) {
-      await sendPhotoToMax(maxToken, maxChannelId, url, text)
+      const image = await bot.api.uploadImage({ url })
+      await bot.api.sendMessageToChat(chatId, messageText, {
+        attachments: [image.toJson() as AttachmentRequest],
+      })
       return
     }
   }
   if (msg.video?.file_id) {
     const url = await getTgFileUrl(tgToken, msg.video.file_id)
     if (url) {
-      await sendVideoToMax(maxToken, maxChannelId, url, text)
+      const res = await axios.get<ArrayBuffer>(url, { responseType: 'arraybuffer' })
+      const video = await bot.api.uploadVideo({ source: Buffer.from(res.data) })
+      await bot.api.sendMessageToChat(chatId, messageText, {
+        attachments: [video.toJson() as AttachmentRequest],
+      })
       return
     }
   }
   if (msg.document?.file_id) {
     const url = await getTgFileUrl(tgToken, msg.document.file_id)
     if (url) {
-      await sendDocumentToMax(maxToken, maxChannelId, url, text, {
-        filename: msg.document.file_name,
-        contentType: msg.document.mime_type,
+      const res = await axios.get<ArrayBuffer>(url, { responseType: 'arraybuffer' })
+      const file = await bot.api.uploadFile({ source: Buffer.from(res.data) })
+      await bot.api.sendMessageToChat(chatId, messageText, {
+        attachments: [file.toJson() as AttachmentRequest],
       })
       return
     }
   }
   if (text) {
-    await sendTextToMax(maxToken, maxChannelId, text)
+    await bot.api.sendMessageToChat(chatId, text)
   }
 }
 
@@ -159,7 +163,6 @@ async function processChainMessage(
   chain: TgChainRecord,
   msg: TgMessage,
   tgToken: string,
-  maxToken: string,
 ): Promise<void> {
   const sourceKey = chainSourceKey(chain)
   if (!telegramChannelMatchesTarget(msg.chat, sourceKey)) {
@@ -168,9 +171,12 @@ async function processChainMessage(
   if (isAlreadyForwarded(chain.id, msg.message_id)) {
     return
   }
+  if (!botRef) {
+    throw new Error('MAX bot not initialized (setTgChainForwarderBot)')
+  }
 
   try {
-    await forwardMessageToMax(msg, tgToken, maxToken, chain.max_chat_id, chain.add_signature)
+    await forwardMessageToMax(botRef, msg, tgToken, chain.max_chat_id, chain.add_signature)
     if (chain.add_comments_button !== false && botRef) {
       await sleep(600)
       await attachCommentsButtonOnLatestBotPost(botRef, chain.max_chat_id)
@@ -187,11 +193,16 @@ async function processChainMessage(
     })
     await sleep(800 + Math.random() * 400)
   } catch (err: unknown) {
+    const axiosDetail =
+      axios.isAxiosError(err) && err.response
+        ? { status: err.response.status, data: err.response.data }
+        : undefined
     logger.error('[tgChain] forward failed', {
       chainId: chain.id,
       from: sourceKey,
       to: chain.max_chat_id,
       err,
+      axiosDetail,
     })
     const errorsToday = chain.errors_today + 1
     chain.errors_today = errorsToday
@@ -200,8 +211,8 @@ async function processChainMessage(
 }
 
 export async function runTgChainsOnce(): Promise<boolean> {
-  const maxToken = (process.env.BOT_TOKEN || '').trim()
-  if (!maxToken) {
+  if (!botRef) {
+    logger.warn('[tgChain] MAX bot not set — skip tick')
     return false
   }
 
@@ -251,7 +262,7 @@ export async function runTgChainsOnce(): Promise<boolean> {
       if (!msg) continue
 
       for (const chain of group) {
-        await processChainMessage(chain, msg, tgToken, maxToken)
+        await processChainMessage(chain, msg, tgToken)
       }
     }
 

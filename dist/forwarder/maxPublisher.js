@@ -14,57 +14,75 @@ const promises_1 = __importDefault(require("node:fs/promises"));
 const node_path_1 = __importDefault(require("node:path"));
 const axios_1 = __importDefault(require("axios"));
 const form_data_1 = __importDefault(require("form-data"));
-const MAX_API = 'https://botapi.max.ru';
-async function sendTextToMax(token, chatId, text) {
-    await axios_1.default.post(`${MAX_API}/messages/sendMessage`, {
-        token,
-        chat_id: chatId,
-        text: text.substring(0, 4096),
+/** Официальный API MAX (как в @maxhub/max-bot-api). Старый botapi.max.ru/messages/sendMessage даёт 404. */
+const MAX_API = 'https://platform-api.max.ru';
+function maxAuthHeaders(token) {
+    return { Authorization: token.trim() };
+}
+async function postMessage(token, chatId, body) {
+    await axios_1.default.post(`${MAX_API}/messages`, body, {
+        params: { chat_id: chatId },
+        headers: {
+            ...maxAuthHeaders(token),
+            'Content-Type': 'application/json',
+        },
     });
+}
+async function uploadBufferToMax(token, type, buffer, filename, contentType) {
+    const slot = await axios_1.default.post(`${MAX_API}/uploads`, null, {
+        params: { type },
+        headers: maxAuthHeaders(token),
+    });
+    const uploadUrl = slot.data.url;
+    const uploadToken = slot.data.token;
+    const form = new form_data_1.default();
+    form.append('data', buffer, { filename, contentType });
+    await axios_1.default.post(uploadUrl, form, { headers: form.getHeaders() });
+    if (!uploadToken) {
+        throw new Error('MAX upload: missing token in uploads response');
+    }
+    return uploadToken;
+}
+async function sendTextToMax(token, chatId, text) {
+    await postMessage(token, chatId, { text: text.substring(0, 4096) });
 }
 async function sendPhotoFileToMax(token, chatId, filePath, caption) {
     const buffer = await promises_1.default.readFile(filePath);
-    const form = new form_data_1.default();
-    form.append('token', token);
-    form.append('chat_id', chatId);
-    form.append('caption', caption.substring(0, 1024));
-    form.append('photo', buffer, { filename: node_path_1.default.basename(filePath), contentType: 'image/jpeg' });
-    await axios_1.default.post(`${MAX_API}/messages/sendPhoto`, form, { headers: form.getHeaders() });
+    const name = node_path_1.default.basename(filePath);
+    const uploadToken = await uploadBufferToMax(token, 'image', buffer, name, 'image/jpeg');
+    await postMessage(token, chatId, {
+        text: caption.substring(0, 1024) || '\u00a0',
+        attachments: [{ type: 'image', payload: { token: uploadToken } }],
+    });
 }
 async function sendVideoFileToMax(token, chatId, filePath, caption) {
     const buffer = await promises_1.default.readFile(filePath);
     const name = node_path_1.default.basename(filePath);
     const ext = node_path_1.default.extname(name).toLowerCase();
     const contentType = ext === '.webm' ? 'video/webm' : ext === '.mov' ? 'video/quicktime' : 'video/mp4';
-    const form = new form_data_1.default();
-    form.append('token', token);
-    form.append('chat_id', chatId);
-    form.append('caption', caption.substring(0, 1024));
-    form.append('video', buffer, { filename: name, contentType });
-    await axios_1.default.post(`${MAX_API}/messages/sendVideo`, form, { headers: form.getHeaders() });
+    const uploadToken = await uploadBufferToMax(token, 'video', buffer, name, contentType);
+    await postMessage(token, chatId, {
+        text: caption.substring(0, 1024) || '\u00a0',
+        attachments: [{ type: 'video', payload: { token: uploadToken } }],
+    });
 }
 async function sendDocumentFileToMax(token, chatId, filePath, caption, options) {
     const buffer = await promises_1.default.readFile(filePath);
     const name = options?.filename ?? node_path_1.default.basename(filePath);
     const contentType = options?.contentType ?? 'application/octet-stream';
-    const form = new form_data_1.default();
-    form.append('token', token);
-    form.append('chat_id', chatId);
-    form.append('caption', caption.substring(0, 1024));
-    form.append('document', buffer, { filename: name, contentType });
-    await axios_1.default.post(`${MAX_API}/messages/sendDocument`, form, { headers: form.getHeaders() });
+    const uploadToken = await uploadBufferToMax(token, 'file', buffer, name, contentType);
+    await postMessage(token, chatId, {
+        text: caption.substring(0, 1024) || '\u00a0',
+        attachments: [{ type: 'file', payload: { token: uploadToken } }],
+    });
 }
 async function sendPhotoToMax(token, chatId, photoUrl, caption) {
-    // Download photo from Telegram
     const response = await axios_1.default.get(photoUrl, { responseType: 'arraybuffer' });
     const buffer = Buffer.from(response.data);
-    const form = new form_data_1.default();
-    form.append('token', token);
-    form.append('chat_id', chatId);
-    form.append('caption', caption.substring(0, 1024));
-    form.append('photo', buffer, { filename: 'photo.jpg', contentType: 'image/jpeg' });
-    await axios_1.default.post(`${MAX_API}/messages/sendPhoto`, form, {
-        headers: form.getHeaders(),
+    const uploadToken = await uploadBufferToMax(token, 'image', buffer, 'photo.jpg', 'image/jpeg');
+    await postMessage(token, chatId, {
+        text: caption.substring(0, 1024) || '\u00a0',
+        attachments: [{ type: 'image', payload: { token: uploadToken } }],
     });
 }
 async function sendVideoToMax(token, chatId, videoUrl, caption) {
@@ -74,13 +92,10 @@ async function sendVideoToMax(token, chatId, videoUrl, caption) {
     const ext = node_path_1.default.extname(name).toLowerCase();
     const filename = ext === '.mp4' || ext === '.webm' || ext === '.mov' ? name : `${name}.mp4`;
     const contentType = ext === '.webm' ? 'video/webm' : ext === '.mov' ? 'video/quicktime' : 'video/mp4';
-    const form = new form_data_1.default();
-    form.append('token', token);
-    form.append('chat_id', chatId);
-    form.append('caption', caption.substring(0, 1024));
-    form.append('video', buffer, { filename, contentType });
-    await axios_1.default.post(`${MAX_API}/messages/sendVideo`, form, {
-        headers: form.getHeaders(),
+    const uploadToken = await uploadBufferToMax(token, 'video', buffer, filename, contentType);
+    await postMessage(token, chatId, {
+        text: caption.substring(0, 1024) || '\u00a0',
+        attachments: [{ type: 'video', payload: { token: uploadToken } }],
     });
 }
 async function sendDocumentToMax(token, chatId, documentUrl, caption, options) {
@@ -88,13 +103,10 @@ async function sendDocumentToMax(token, chatId, documentUrl, caption, options) {
     const buffer = Buffer.from(response.data);
     const name = options?.filename ?? guessFilenameFromUrl(documentUrl, 'file.bin');
     const contentType = options?.contentType ?? 'application/octet-stream';
-    const form = new form_data_1.default();
-    form.append('token', token);
-    form.append('chat_id', chatId);
-    form.append('caption', caption.substring(0, 1024));
-    form.append('document', buffer, { filename: name, contentType });
-    await axios_1.default.post(`${MAX_API}/messages/sendDocument`, form, {
-        headers: form.getHeaders(),
+    const uploadToken = await uploadBufferToMax(token, 'file', buffer, name, contentType);
+    await postMessage(token, chatId, {
+        text: caption.substring(0, 1024) || '\u00a0',
+        attachments: [{ type: 'file', payload: { token: uploadToken } }],
     });
 }
 function guessFilenameFromUrl(url, fallback) {

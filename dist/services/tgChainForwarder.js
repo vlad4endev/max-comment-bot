@@ -1,13 +1,16 @@
 "use strict";
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.setTgChainForwarderBot = setTgChainForwarderBot;
 exports.runTgChainsOnce = runTgChainsOnce;
 exports.startTgChainForwarder = startTgChainForwarder;
 const node_crypto_1 = require("node:crypto");
+const axios_1 = __importDefault(require("axios"));
 const config_1 = require("../config");
 const database_1 = require("../db/database");
 const telegramReader_1 = require("../forwarder/telegramReader");
-const maxPublisher_1 = require("../forwarder/maxPublisher");
 const adminPanelState_1 = require("../api/adminPanelState");
 const channelImportService_1 = require("./channelImportService");
 const channelPostActions_1 = require("./channelPostActions");
@@ -62,39 +65,48 @@ function resolveTgToken(chain) {
         return fromChain;
     return (process.env.TG_READER_BOT_TOKEN || '').trim() || (0, config_1.getTelegramToken)();
 }
-async function forwardMessageToMax(msg, tgToken, maxToken, maxChatId, addSignature) {
-    const maxChannelId = String(maxChatId);
+async function forwardMessageToMax(bot, msg, tgToken, maxChatId, addSignature) {
+    const chatId = (0, resolveChannelChatId_1.resolveCanonicalChannelChatId)(maxChatId) ?? maxChatId;
     let text = (msg.text || msg.caption || '').trim();
     if (addSignature && text) {
         text = `${text}\n\n— TG`;
     }
+    const messageText = text || '\u00a0';
     if (msg.photo && msg.photo.length > 0) {
         const largest = msg.photo[msg.photo.length - 1];
         const url = await (0, telegramReader_1.getTgFileUrl)(tgToken, largest.file_id);
         if (url) {
-            await (0, maxPublisher_1.sendPhotoToMax)(maxToken, maxChannelId, url, text);
+            const image = await bot.api.uploadImage({ url });
+            await bot.api.sendMessageToChat(chatId, messageText, {
+                attachments: [image.toJson()],
+            });
             return;
         }
     }
     if (msg.video?.file_id) {
         const url = await (0, telegramReader_1.getTgFileUrl)(tgToken, msg.video.file_id);
         if (url) {
-            await (0, maxPublisher_1.sendVideoToMax)(maxToken, maxChannelId, url, text);
+            const res = await axios_1.default.get(url, { responseType: 'arraybuffer' });
+            const video = await bot.api.uploadVideo({ source: Buffer.from(res.data) });
+            await bot.api.sendMessageToChat(chatId, messageText, {
+                attachments: [video.toJson()],
+            });
             return;
         }
     }
     if (msg.document?.file_id) {
         const url = await (0, telegramReader_1.getTgFileUrl)(tgToken, msg.document.file_id);
         if (url) {
-            await (0, maxPublisher_1.sendDocumentToMax)(maxToken, maxChannelId, url, text, {
-                filename: msg.document.file_name,
-                contentType: msg.document.mime_type,
+            const res = await axios_1.default.get(url, { responseType: 'arraybuffer' });
+            const file = await bot.api.uploadFile({ source: Buffer.from(res.data) });
+            await bot.api.sendMessageToChat(chatId, messageText, {
+                attachments: [file.toJson()],
             });
             return;
         }
     }
     if (text) {
-        await (0, maxPublisher_1.sendTextToMax)(maxToken, maxChannelId, text);
+        await bot.api.sendMessageToChat(chatId, text);
     }
 }
 /** После публикации в MAX — кнопка «Комментарии» на свежем посте бота. */
@@ -127,7 +139,7 @@ async function attachCommentsButtonOnLatestBotPost(bot, maxChatId) {
     logger_1.logger.warn('[tgChain] no new bot post found for comment button', { chatId });
     return false;
 }
-async function processChainMessage(chain, msg, tgToken, maxToken) {
+async function processChainMessage(chain, msg, tgToken) {
     const sourceKey = chainSourceKey(chain);
     if (!(0, tgChannelMatch_1.telegramChannelMatchesTarget)(msg.chat, sourceKey)) {
         return;
@@ -135,8 +147,11 @@ async function processChainMessage(chain, msg, tgToken, maxToken) {
     if (isAlreadyForwarded(chain.id, msg.message_id)) {
         return;
     }
+    if (!botRef) {
+        throw new Error('MAX bot not initialized (setTgChainForwarderBot)');
+    }
     try {
-        await forwardMessageToMax(msg, tgToken, maxToken, chain.max_chat_id, chain.add_signature);
+        await forwardMessageToMax(botRef, msg, tgToken, chain.max_chat_id, chain.add_signature);
         if (chain.add_comments_button !== false && botRef) {
             await sleep(600);
             await attachCommentsButtonOnLatestBotPost(botRef, chain.max_chat_id);
@@ -154,11 +169,15 @@ async function processChainMessage(chain, msg, tgToken, maxToken) {
         await sleep(800 + Math.random() * 400);
     }
     catch (err) {
+        const axiosDetail = axios_1.default.isAxiosError(err) && err.response
+            ? { status: err.response.status, data: err.response.data }
+            : undefined;
         logger_1.logger.error('[tgChain] forward failed', {
             chainId: chain.id,
             from: sourceKey,
             to: chain.max_chat_id,
             err,
+            axiosDetail,
         });
         const errorsToday = chain.errors_today + 1;
         chain.errors_today = errorsToday;
@@ -166,8 +185,8 @@ async function processChainMessage(chain, msg, tgToken, maxToken) {
     }
 }
 async function runTgChainsOnce() {
-    const maxToken = (process.env.BOT_TOKEN || '').trim();
-    if (!maxToken) {
+    if (!botRef) {
+        logger_1.logger.warn('[tgChain] MAX bot not set — skip tick');
         return false;
     }
     const chains = (await (0, adminPanelState_1.listTgChains)()).filter((c) => c.active && c.forward_posts && chainSourceKey(c) !== '');
@@ -209,7 +228,7 @@ async function runTgChainsOnce() {
             if (!msg)
                 continue;
             for (const chain of group) {
-                await processChainMessage(chain, msg, tgToken, maxToken);
+                await processChainMessage(chain, msg, tgToken);
             }
         }
         if (nextOffset > offset) {
