@@ -63,19 +63,43 @@ export class PostStore {
   }
 
   savePost(post: Post): void {
-    this.getStatements().upsert.run(
-      post.post_id,
-      post.chat_id,
-      post.message_mid,
-      post.comments_ui_message_mid ?? null,
-      post.sender_name ?? null,
-      post.text,
-      post.photo_url ?? null,
-      post.media_attachments ? JSON.stringify(post.media_attachments) : null,
-      post.comment_count,
-      post.timestamp,
-      JSON.stringify(post),
-    )
+    try {
+      this.ensureChannelRow(post.chat_id)
+      this.getStatements().upsert.run(
+        post.post_id,
+        post.chat_id,
+        post.message_mid,
+        post.comments_ui_message_mid ?? null,
+        post.sender_name ?? null,
+        post.text,
+        post.photo_url ?? null,
+        post.media_attachments ? JSON.stringify(post.media_attachments) : null,
+        post.comment_count,
+        post.timestamp,
+        JSON.stringify(post),
+      )
+    } catch (err: unknown) {
+      logger.error('postStore.savePost: failed', {
+        postId: post.post_id,
+        chatId: post.chat_id,
+        messageMid: post.message_mid,
+        err,
+      })
+    }
+  }
+
+  /**
+   * Ensures a placeholder row exists in `channels` so FK constraint never blocks post save.
+   * Real channel data is managed by channelRegistry; this is a safety net only.
+   */
+  private ensureChannelRow(chatId: number): void {
+    try {
+      getDb().prepare(
+        "INSERT OR IGNORE INTO channels (chat_id, title, type, date_added, active) VALUES (?, NULL, 'channel', datetime('now'), 1)",
+      ).run(chatId)
+    } catch {
+      // non-fatal — the main upsert will surface any real constraint error
+    }
   }
 
   getPost(postId: string): Post | null {
@@ -221,10 +245,19 @@ export class PostStore {
         'SELECT data FROM posts WHERE chat_id = ? AND comments_ui_message_mid = ? LIMIT 1',
       ),
       upsert: db.prepare(
-        `INSERT OR REPLACE INTO posts (
+        `INSERT INTO posts (
           post_id, chat_id, message_mid, comments_ui_message_mid, sender_name, text,
           photo_url, media_attachments, comment_count, timestamp, data
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(chat_id, message_mid) DO UPDATE SET
+          post_id                 = CASE WHEN excluded.post_id != '' THEN excluded.post_id ELSE post_id END,
+          comments_ui_message_mid = excluded.comments_ui_message_mid,
+          sender_name             = excluded.sender_name,
+          text                    = excluded.text,
+          photo_url               = excluded.photo_url,
+          media_attachments       = excluded.media_attachments,
+          comment_count           = excluded.comment_count,
+          data                    = excluded.data`,
       ),
       selectIdsByChatId: db.prepare('SELECT post_id FROM posts WHERE chat_id = ?'),
       deleteByChatId: db.prepare('DELETE FROM posts WHERE chat_id = ?'),

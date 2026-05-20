@@ -32,6 +32,11 @@ export declare class PostStore {
     private statements;
     loadFromDisk(): Promise<void>;
     savePost(post: Post): void;
+    /**
+     * Ensures a placeholder row exists in `channels` so FK constraint never blocks post save.
+     * Real channel data is managed by channelRegistry; this is a safety net only.
+     */
+    private ensureChannelRow;
     getPost(postId: string): Post | null;
     getPostsByChatId(chatId: number): Post[];
     findPostByChannelMessage(chatId: number, messageMid: string): Post | null;

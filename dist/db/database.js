@@ -140,12 +140,32 @@ function initSchema(targetDb) {
     );
   `);
     migrateChannelImportSchema(targetDb);
+    migratePostsSchema(targetDb);
 }
 function migrateChannelImportSchema(database) {
     const cols = database.prepare('PRAGMA table_info(channel_import_jobs)').all();
     if (!cols.some((c) => c.name === 'import_source')) {
         database.exec("ALTER TABLE channel_import_jobs ADD COLUMN import_source TEXT NOT NULL DEFAULT 'bot_queue'");
     }
+}
+/**
+ * Adds a unique index on (chat_id, message_mid) to prevent duplicate post rows.
+ * Deduplicates existing rows first (keeps the row with the lowest rowid for each pair).
+ */
+function migratePostsSchema(database) {
+    const indexes = database.prepare("PRAGMA index_list(posts)").all();
+    const hasUnique = indexes.some((i) => i.name === 'idx_posts_unique_chat_mid');
+    if (hasUnique) {
+        return;
+    }
+    // Deduplicate: keep lowest rowid per (chat_id, message_mid)
+    database.exec(`
+    DELETE FROM posts
+    WHERE rowid NOT IN (
+      SELECT MIN(rowid) FROM posts GROUP BY chat_id, message_mid
+    )
+  `);
+    database.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_posts_unique_chat_mid ON posts(chat_id, message_mid)');
 }
 function closeDb() {
     if (!db) {
