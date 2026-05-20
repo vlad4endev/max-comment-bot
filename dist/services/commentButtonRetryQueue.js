@@ -35,7 +35,8 @@ function scheduleCommentButtonRetry(chatId, messageMid) {
         return;
     }
     const canonical = (0, resolveChannelChatId_1.resolveCanonicalChannelChatId)(chatId) ?? chatId;
-    if (postStore_1.postStore.findPostByChannelMessage(canonical, mid)) {
+    const existing = postStore_1.postStore.findPostByChannelMessage(canonical, mid);
+    if (existing && existing.button_attach_pending !== true) {
         return;
     }
     const key = queueKey(canonical, mid);

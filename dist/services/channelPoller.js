@@ -21,9 +21,9 @@ const postStore_1 = require("./postStore");
 const MIN_POLL_INTERVAL_MS = 3_000;
 /** Верхняя граница интервала опроса одного канала (стабильность важнее редкого глобального 30 с). */
 const PER_CHANNEL_CAP_MS = 6_000;
-const FETCH_COUNT = 15;
+const FETCH_COUNT = 30;
 /** Admin «обновить кнопки» scans more history than the periodic poller. */
-const REFRESH_BUTTONS_FETCH_COUNT = 50;
+const REFRESH_BUTTONS_FETCH_COUNT = 100;
 /** Exported for startup diagnostics. */
 exports.POLL_CONCURRENCY = 8;
 const DISABLE_AFTER_ERRORS = 5;
@@ -129,6 +129,29 @@ function syncPerChannelPollers(bot) {
         fetchCount: FETCH_COUNT,
     });
 }
+function applyRefreshAttachResult(stats, r, wasInDb) {
+    if (r.ok) {
+        if (wasInDb) {
+            stats.refreshed += 1;
+        }
+        else {
+            stats.created += 1;
+        }
+        return;
+    }
+    if (r.reason === 'already_exists') {
+        stats.refreshed += 1;
+        return;
+    }
+    if (r.reason === 'skip_bot' ||
+        r.reason === 'no_mid' ||
+        r.reason === 'no_chat_id' ||
+        r.reason === 'not_admin') {
+        stats.skipped += 1;
+        return;
+    }
+    stats.failed += 1;
+}
 class RefreshButtonsError extends Error {
     code;
     constructor(code, message) {
@@ -153,12 +176,38 @@ async function runChannelPollerForChat(bot, chatId) {
     const stats = {
         chat_id: reg.chat_id,
         messages_fetched: 0,
+        posts_in_db: 0,
         created: 0,
         refreshed: 0,
         skipped: 0,
         failed: 0,
     };
     const botUid = bot.botInfo?.user_id;
+    const knownPosts = postStore_1.postStore.getPostsByChatId(reg.chat_id);
+    stats.posts_in_db = knownPosts.length;
+    const processedMids = new Set();
+    for (const post of knownPosts) {
+        processedMids.add(post.message_mid);
+        if (post.comments_ui_message_mid) {
+            processedMids.add(post.comments_ui_message_mid);
+        }
+        const message = await (0, channelPostActions_1.loadChannelPostMessage)(bot, post);
+        if (!message?.body?.mid) {
+            stats.failed += 1;
+            (0, commentButtonRetryQueue_1.scheduleCommentButtonRetry)(reg.chat_id, post.message_mid);
+            continue;
+        }
+        const r = await (0, channelPostActions_1.tryAttachCommentsToChannelPost)(bot, message, {
+            botUserId: botUid,
+            channelChatIdOverride: reg.chat_id,
+            skipAuthorAdminCheck: true,
+            source: 'refresh',
+        });
+        applyRefreshAttachResult(stats, r, true);
+        if (!r.ok && r.reason === 'attach_failed') {
+            (0, commentButtonRetryQueue_1.scheduleCommentButtonRetry)(reg.chat_id, post.message_mid);
+        }
+    }
     let messages;
     try {
         const result = await (0, maxApiRetry_1.apiCallWithRetry)(() => bot.api.getMessages(reg.chat_id, { count: REFRESH_BUTTONS_FETCH_COUNT }));
@@ -173,31 +222,27 @@ async function runChannelPollerForChat(bot, chatId) {
     }
     stats.messages_fetched = messages.length;
     for (const message of messages) {
+        const mid = message.body?.mid;
+        if (typeof mid !== 'string' || mid.trim() === '' || processedMids.has(mid)) {
+            continue;
+        }
+        const linkedPost = postStore_1.postStore.findPostByCommentsUiMessage(reg.chat_id, mid);
+        if (linkedPost) {
+            processedMids.add(mid);
+            continue;
+        }
+        const wasInDb = postStore_1.postStore.findPostByChannelMessage(reg.chat_id, mid) !== null;
         const r = await (0, channelPostActions_1.tryAttachCommentsToChannelPost)(bot, message, {
             botUserId: botUid,
             channelChatIdOverride: reg.chat_id,
             skipAuthorAdminCheck: true,
             source: 'refresh',
         });
-        if (r.ok) {
-            stats.created += 1;
+        applyRefreshAttachResult(stats, r, wasInDb);
+        if (!r.ok && r.reason === 'attach_failed' && mid) {
+            (0, commentButtonRetryQueue_1.scheduleCommentButtonRetry)(reg.chat_id, mid);
         }
-        else if (r.reason === 'already_exists') {
-            stats.refreshed += 1;
-        }
-        else if (r.reason === 'skip_bot' ||
-            r.reason === 'no_mid' ||
-            r.reason === 'no_chat_id' ||
-            r.reason === 'not_admin') {
-            stats.skipped += 1;
-        }
-        else {
-            stats.failed += 1;
-            const mid = message.body?.mid;
-            if (typeof mid === 'string' && mid.trim() !== '') {
-                (0, commentButtonRetryQueue_1.scheduleCommentButtonRetry)(reg.chat_id, mid);
-            }
-        }
+        processedMids.add(mid);
     }
     logger_1.logger.info('channelPoller: runChannelPollerForChat done', stats);
     return stats;

@@ -8,15 +8,19 @@ import { scheduleCommentButtonRetry } from './commentButtonRetryQueue'
 import { resolveCanonicalChannelChatId } from './resolveChannelChatId'
 import { logger } from '../utils/logger'
 import { apiCallWithRetry } from '../utils/maxApiRetry'
-import { tryAttachCommentsToChannelPost } from './channelPostActions'
+import {
+  loadChannelPostMessage,
+  tryAttachCommentsToChannelPost,
+  type AttachChannelCommentsResult,
+} from './channelPostActions'
 import { isMiniAppOpenUrlConfigured, postStore } from './postStore'
 
 const MIN_POLL_INTERVAL_MS = 3_000
 /** Верхняя граница интервала опроса одного канала (стабильность важнее редкого глобального 30 с). */
 const PER_CHANNEL_CAP_MS = 6_000
-const FETCH_COUNT = 15
+const FETCH_COUNT = 30
 /** Admin «обновить кнопки» scans more history than the periodic poller. */
-const REFRESH_BUTTONS_FETCH_COUNT = 50
+const REFRESH_BUTTONS_FETCH_COUNT = 100
 /** Exported for startup diagnostics. */
 export const POLL_CONCURRENCY = 8
 const DISABLE_AFTER_ERRORS = 5
@@ -144,10 +148,41 @@ export function syncPerChannelPollers(bot: Bot): void {
 export interface RefreshButtonsStats {
   chat_id: number
   messages_fetched: number
+  /** Постов в базе бота для этого канала (перепривязка кнопки по каждому). */
+  posts_in_db: number
   created: number
   refreshed: number
   skipped: number
   failed: number
+}
+
+function applyRefreshAttachResult(
+  stats: RefreshButtonsStats,
+  r: AttachChannelCommentsResult,
+  wasInDb: boolean,
+): void {
+  if (r.ok) {
+    if (wasInDb) {
+      stats.refreshed += 1
+    } else {
+      stats.created += 1
+    }
+    return
+  }
+  if (r.reason === 'already_exists') {
+    stats.refreshed += 1
+    return
+  }
+  if (
+    r.reason === 'skip_bot' ||
+    r.reason === 'no_mid' ||
+    r.reason === 'no_chat_id' ||
+    r.reason === 'not_admin'
+  ) {
+    stats.skipped += 1
+    return
+  }
+  stats.failed += 1
 }
 
 export class RefreshButtonsError extends Error {
@@ -183,6 +218,7 @@ export async function runChannelPollerForChat(
   const stats: RefreshButtonsStats = {
     chat_id: reg.chat_id,
     messages_fetched: 0,
+    posts_in_db: 0,
     created: 0,
     refreshed: 0,
     skipped: 0,
@@ -190,6 +226,33 @@ export async function runChannelPollerForChat(
   }
 
   const botUid = bot.botInfo?.user_id
+  const knownPosts = postStore.getPostsByChatId(reg.chat_id)
+  stats.posts_in_db = knownPosts.length
+  const processedMids = new Set<string>()
+
+  for (const post of knownPosts) {
+    processedMids.add(post.message_mid)
+    if (post.comments_ui_message_mid) {
+      processedMids.add(post.comments_ui_message_mid)
+    }
+    const message = await loadChannelPostMessage(bot, post)
+    if (!message?.body?.mid) {
+      stats.failed += 1
+      scheduleCommentButtonRetry(reg.chat_id, post.message_mid)
+      continue
+    }
+    const r = await tryAttachCommentsToChannelPost(bot, message, {
+      botUserId: botUid,
+      channelChatIdOverride: reg.chat_id,
+      skipAuthorAdminCheck: true,
+      source: 'refresh',
+    })
+    applyRefreshAttachResult(stats, r, true)
+    if (!r.ok && r.reason === 'attach_failed') {
+      scheduleCommentButtonRetry(reg.chat_id, post.message_mid)
+    }
+  }
+
   let messages: Awaited<ReturnType<typeof bot.api.getMessages>>['messages']
   try {
     const result = await apiCallWithRetry(() =>
@@ -209,30 +272,27 @@ export async function runChannelPollerForChat(
 
   stats.messages_fetched = messages.length
   for (const message of messages) {
+    const mid = message.body?.mid
+    if (typeof mid !== 'string' || mid.trim() === '' || processedMids.has(mid)) {
+      continue
+    }
+    const linkedPost = postStore.findPostByCommentsUiMessage(reg.chat_id, mid)
+    if (linkedPost) {
+      processedMids.add(mid)
+      continue
+    }
+    const wasInDb = postStore.findPostByChannelMessage(reg.chat_id, mid) !== null
     const r = await tryAttachCommentsToChannelPost(bot, message, {
       botUserId: botUid,
       channelChatIdOverride: reg.chat_id,
       skipAuthorAdminCheck: true,
       source: 'refresh',
     })
-    if (r.ok) {
-      stats.created += 1
-    } else if (r.reason === 'already_exists') {
-      stats.refreshed += 1
-    } else if (
-      r.reason === 'skip_bot' ||
-      r.reason === 'no_mid' ||
-      r.reason === 'no_chat_id' ||
-      r.reason === 'not_admin'
-    ) {
-      stats.skipped += 1
-    } else {
-      stats.failed += 1
-      const mid = message.body?.mid
-      if (typeof mid === 'string' && mid.trim() !== '') {
-        scheduleCommentButtonRetry(reg.chat_id, mid)
-      }
+    applyRefreshAttachResult(stats, r, wasInDb)
+    if (!r.ok && r.reason === 'attach_failed' && mid) {
+      scheduleCommentButtonRetry(reg.chat_id, mid)
     }
+    processedMids.add(mid)
   }
 
   logger.info('channelPoller: runChannelPollerForChat done', stats)

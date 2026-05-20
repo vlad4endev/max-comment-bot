@@ -1,8 +1,9 @@
 import { Bot, Keyboard } from '@maxhub/max-bot-api'
-import type { Message } from '@maxhub/max-bot-api/types'
+import type { Message, User } from '@maxhub/max-bot-api/types'
 import { v4 as uuidv4 } from 'uuid'
 
 import { logger } from '../utils/logger'
+import { scheduleCommentButtonRetry } from './commentButtonRetryQueue'
 import { pushAdminActivity } from './adminActivityStore'
 import { channelRegistry } from './channelRegistry'
 import { resolveCanonicalChannelChatId } from './resolveChannelChatId'
@@ -200,6 +201,44 @@ function logCommentButtonSkip(
   })
 }
 
+function buildPostFromChannelMessage(
+  message: Message,
+  chatId: number,
+  postId: string,
+  user?: User,
+): Post {
+  const mid = message.body?.mid ?? ''
+  const text = message.body.text?.trim() ?? ''
+  const photoUrl = firstImageUrlFromMessage(message)
+  const media_attachments = mediaAttachmentRequestsFromMessageBody(message.body.attachments)
+  const channelPostUrl =
+    typeof message.url === 'string' && message.url.trim() !== '' ? message.url.trim() : undefined
+  return {
+    post_id: postId,
+    chat_id: chatId,
+    message_mid: mid,
+    sender_name: user?.name ?? 'Канал',
+    text,
+    photo_url: photoUrl,
+    channel_post_url: channelPostUrl,
+    media_attachments,
+    comment_count: 0,
+    timestamp: new Date().toISOString(),
+  }
+}
+
+function clearButtonAttachPending(post: Post): void {
+  if (post.button_attach_pending === true) {
+    postStore.savePost({ ...post, button_attach_pending: false })
+  }
+}
+
+function markButtonAttachPending(post: Post): void {
+  if (post.button_attach_pending !== true) {
+    postStore.savePost({ ...post, button_attach_pending: true })
+  }
+}
+
 function logCommentButtonOk(
   source: CommentButtonAttachSource | undefined,
   ctx: Record<string, unknown>,
@@ -270,7 +309,7 @@ export async function tryAttachCommentsToChannelPost(
   const existingPost = postStore.findPostByChannelMessage(chatId, mid)
   if (existingPost) {
     /** Периодический поллер не трогает MAX API для постов с кнопкой — иначе очередь каналов растягивается на минуты. */
-    if (source === 'poller') {
+    if (source === 'poller' && existingPost.button_attach_pending !== true) {
       const result = { ok: false as const, reason: 'already_exists' as const }
       logCommentButtonSkip(
         source,
@@ -286,39 +325,52 @@ export async function tryAttachCommentsToChannelPost(
       return result
     }
 
-    const captionStartedAt = performance.now()
-    const captionOk = await postStore.updateButtonCaption(bot, existingPost)
-    const captionTiming = durationFields(captionStartedAt)
-    if (captionOk) {
-      logCommentButton('info', `commentButton: пост уже с кнопкой — обновлена подпись (${captionTiming.duration})`, {
+    /** Админ «Обновить кнопки» — всегда полная перепривязка (ссылка startapp), не только счётчик. */
+    const forceReattach = source === 'refresh'
+
+    if (!forceReattach) {
+      const captionStartedAt = performance.now()
+      const captionOk = await postStore.updateButtonCaption(bot, existingPost)
+      const captionTiming = durationFields(captionStartedAt)
+      if (captionOk) {
+        clearButtonAttachPending(existingPost)
+        logCommentButton('info', `commentButton: пост уже с кнопкой — обновлена подпись (${captionTiming.duration})`, {
+          source: source ?? 'unknown',
+          chatId,
+          messageMid: mid,
+          postId: existingPost.post_id,
+          captionUpdateMs: captionTiming.durationMs,
+        })
+        const result = { ok: false as const, reason: 'already_exists' as const }
+        logCommentButtonSkip(
+          source,
+          result.reason,
+          {
+            chatId,
+            messageMid: mid,
+            postId: existingPost.post_id,
+            captionRefreshed: true,
+            captionUpdateMs: captionTiming.durationMs,
+          },
+          attachStartedAt,
+        )
+        return result
+      }
+    }
+
+    logCommentButton(
+      forceReattach ? 'info' : 'warn',
+      forceReattach
+        ? 'commentButton: обновление кнопки — полная перепривязка'
+        : 'commentButton: пост в базе, кнопка не видна — повторное присвоение',
+      {
         source: source ?? 'unknown',
         chatId,
         messageMid: mid,
         postId: existingPost.post_id,
-        captionUpdateMs: captionTiming.durationMs,
-      })
-      const result = { ok: false as const, reason: 'already_exists' as const }
-      logCommentButtonSkip(
-        source,
-        result.reason,
-        {
-          chatId,
-          messageMid: mid,
-          postId: existingPost.post_id,
-          captionRefreshed: true,
-          captionUpdateMs: captionTiming.durationMs,
-        },
-        attachStartedAt,
-      )
-      return result
-    }
-
-    logCommentButton('warn', 'commentButton: пост в базе, кнопка не видна — повторное присвоение', {
-      source: source ?? 'unknown',
-      chatId,
-      messageMid: mid,
-      postId: existingPost.post_id,
-    })
+        forceReattach,
+      },
+    )
     const openUrl = buildMiniAppUrl(existingPost.post_id, chatId, undefined, mid)
     const kb = Keyboard.inlineKeyboard([
       [Keyboard.button.link(`💬 Комментарии (${existingPost.comment_count})`, openUrl)],
@@ -329,6 +381,7 @@ export async function tryAttachCommentsToChannelPost(
       phase: 'reattach',
     })
     if (reattached) {
+      clearButtonAttachPending(existingPost)
       logCommentButtonOk(
         source,
         {
@@ -341,6 +394,8 @@ export async function tryAttachCommentsToChannelPost(
       )
       return { ok: true }
     }
+    markButtonAttachPending(existingPost)
+    scheduleCommentButtonRetry(chatId, mid)
     const fail = { ok: false as const, reason: 'attach_failed' as const }
     logCommentButtonSkip(
       source,
@@ -402,38 +457,33 @@ export async function tryAttachCommentsToChannelPost(
   })
 
   const postId = uuidv4()
-  const text = message.body.text?.trim() ?? ''
-  const photoUrl = firstImageUrlFromMessage(message)
-  const media_attachments = mediaAttachmentRequestsFromMessageBody(message.body.attachments)
-  const channelPostUrl =
-    typeof message.url === 'string' && message.url.trim() !== '' ? message.url.trim() : undefined
   const post: Post = {
-    post_id: postId,
-    chat_id: chatId,
-    message_mid: mid,
-    sender_name: user?.name ?? 'Канал',
-    text,
-    photo_url: photoUrl,
-    channel_post_url: channelPostUrl,
-    media_attachments,
-    comment_count: 0,
-    timestamp: new Date().toISOString(),
+    ...buildPostFromChannelMessage(message, chatId, postId, user),
+    button_attach_pending: true,
   }
+  postStore.savePost(post)
+
   const openUrl = buildMiniAppUrl(postId, chatId, undefined, mid)
   const kb = Keyboard.inlineKeyboard([[Keyboard.button.link('💬 Комментарии (0)', openUrl)]])
-  const editText = text === '' ? '\u00a0' : text
+  const editText = post.text === '' ? '\u00a0' : post.text
 
   const attached = await attachCommentButtonToChannelPost(bot, post, editText, kb, {
     source: source ?? 'unknown',
     phase: 'new',
   })
   if (!attached) {
+    scheduleCommentButtonRetry(chatId, mid)
     const result = { ok: false as const, reason: 'attach_failed' as const }
-    logCommentButtonSkip(source, result.reason, { chatId, messageMid: mid, postId }, attachStartedAt)
+    logCommentButtonSkip(
+      source,
+      result.reason,
+      { chatId, messageMid: mid, postId, postRegistered: true },
+      attachStartedAt,
+    )
     return result
   }
 
-  postStore.savePost(post)
+  clearButtonAttachPending(post)
   pushAdminActivity('new_post_button', {
     chat_id: chatId,
     post_id: postId,
@@ -441,6 +491,27 @@ export async function tryAttachCommentsToChannelPost(
   })
   logCommentButtonOk(source, { chatId, messageMid: mid, postId }, attachStartedAt)
   return { ok: true }
+}
+
+/** Loads the original channel post message for a stored {@link Post}. */
+export async function loadChannelPostMessage(bot: Bot, post: Post): Promise<Message | null> {
+  try {
+    return await bot.api.getMessage(post.message_mid)
+  } catch {
+    try {
+      const { messages } = await bot.api.getMessages(post.chat_id, {
+        message_ids: [post.message_mid],
+      })
+      return messages[0] ?? null
+    } catch (err: unknown) {
+      logger.warn('loadChannelPostMessage: could not load message', {
+        postId: post.post_id,
+        messageMid: post.message_mid,
+        err,
+      })
+      return null
+    }
+  }
 }
 
 /**
@@ -454,7 +525,7 @@ export async function ensurePostFromChannelMessage(
 ): Promise<Post | null> {
   const canonicalChatId = resolveCanonicalChannelChatId(chatId) ?? chatId
   const existing = postStore.findPostByChannelMessage(canonicalChatId, messageMid)
-  if (existing) {
+  if (existing && existing.button_attach_pending !== true) {
     return existing
   }
   let message: Message | undefined
@@ -483,13 +554,15 @@ export async function ensurePostFromChannelMessage(
     skipAuthorAdminCheck: true,
     source: 'ensure',
   })
-  if (r.ok || r.reason === 'already_exists') {
-    return postStore.findPostByChannelMessage(canonicalChatId, messageMid)
+  const registered = postStore.findPostByChannelMessage(canonicalChatId, messageMid)
+  if (registered) {
+    return registered
   }
-  if (r.reason === 'attach_failed') {
-    logger.warn('ensurePostFromChannelMessage: button attach failed', {
+  if (!r.ok) {
+    logger.warn('ensurePostFromChannelMessage: post row missing after attach attempt', {
       chatId: canonicalChatId,
       messageMid,
+      outcome: r.reason,
     })
   }
   return null

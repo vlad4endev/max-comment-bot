@@ -36,6 +36,11 @@ export interface Post {
   media_attachments?: AttachmentRequest[]
   comment_count: number
   timestamp: string
+  /**
+   * True when the post row exists but MAX still has no working «Комментарии» button
+   * (attach failed). Poller and retry queue keep trying until cleared.
+   */
+  button_attach_pending?: boolean
 }
 
 export class PostStore {

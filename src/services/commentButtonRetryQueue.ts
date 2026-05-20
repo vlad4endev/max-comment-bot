@@ -38,7 +38,8 @@ export function scheduleCommentButtonRetry(chatId: number, messageMid: string): 
     return
   }
   const canonical = resolveCanonicalChannelChatId(chatId) ?? chatId
-  if (postStore.findPostByChannelMessage(canonical, mid)) {
+  const existing = postStore.findPostByChannelMessage(canonical, mid)
+  if (existing && existing.button_attach_pending !== true) {
     return
   }
   const key = queueKey(canonical, mid)

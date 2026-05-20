@@ -8,6 +8,8 @@ export declare function syncPerChannelPollers(bot: Bot): void;
 export interface RefreshButtonsStats {
     chat_id: number;
     messages_fetched: number;
+    /** Постов в базе бота для этого канала (перепривязка кнопки по каждому). */
+    posts_in_db: number;
     created: number;
     refreshed: number;
     skipped: number;

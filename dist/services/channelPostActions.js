@@ -5,10 +5,12 @@ exports.lookupRegisteredChannelForMessage = lookupRegisteredChannelForMessage;
 exports.isLikelyChannelPost = isLikelyChannelPost;
 exports.isUserChannelAdmin = isUserChannelAdmin;
 exports.tryAttachCommentsToChannelPost = tryAttachCommentsToChannelPost;
+exports.loadChannelPostMessage = loadChannelPostMessage;
 exports.ensurePostFromChannelMessage = ensurePostFromChannelMessage;
 const max_bot_api_1 = require("@maxhub/max-bot-api");
 const uuid_1 = require("uuid");
 const logger_1 = require("../utils/logger");
+const commentButtonRetryQueue_1 = require("./commentButtonRetryQueue");
 const adminActivityStore_1 = require("./adminActivityStore");
 const channelRegistry_1 = require("./channelRegistry");
 const resolveChannelChatId_1 = require("./resolveChannelChatId");
@@ -145,6 +147,35 @@ function logCommentButtonSkip(source, reason, ctx, since) {
         ...ctx,
     });
 }
+function buildPostFromChannelMessage(message, chatId, postId, user) {
+    const mid = message.body?.mid ?? '';
+    const text = message.body.text?.trim() ?? '';
+    const photoUrl = firstImageUrlFromMessage(message);
+    const media_attachments = (0, postStore_1.mediaAttachmentRequestsFromMessageBody)(message.body.attachments);
+    const channelPostUrl = typeof message.url === 'string' && message.url.trim() !== '' ? message.url.trim() : undefined;
+    return {
+        post_id: postId,
+        chat_id: chatId,
+        message_mid: mid,
+        sender_name: user?.name ?? 'Канал',
+        text,
+        photo_url: photoUrl,
+        channel_post_url: channelPostUrl,
+        media_attachments,
+        comment_count: 0,
+        timestamp: new Date().toISOString(),
+    };
+}
+function clearButtonAttachPending(post) {
+    if (post.button_attach_pending === true) {
+        postStore_1.postStore.savePost({ ...post, button_attach_pending: false });
+    }
+}
+function markButtonAttachPending(post) {
+    if (post.button_attach_pending !== true) {
+        postStore_1.postStore.savePost({ ...post, button_attach_pending: true });
+    }
+}
 function logCommentButtonOk(source, ctx, since) {
     const timing = durationFields(since);
     logCommentButton('info', `commentButton: кнопка «Комментарии» присвоена (${timing.duration})`, {
@@ -196,7 +227,7 @@ async function tryAttachCommentsToChannelPost(bot, message, options = {}) {
     const existingPost = postStore_1.postStore.findPostByChannelMessage(chatId, mid);
     if (existingPost) {
         /** Периодический поллер не трогает MAX API для постов с кнопкой — иначе очередь каналов растягивается на минуты. */
-        if (source === 'poller') {
+        if (source === 'poller' && existingPost.button_attach_pending !== true) {
             const result = { ok: false, reason: 'already_exists' };
             logCommentButtonSkip(source, result.reason, {
                 chatId,
@@ -206,32 +237,40 @@ async function tryAttachCommentsToChannelPost(bot, message, options = {}) {
             }, attachStartedAt);
             return result;
         }
-        const captionStartedAt = performance.now();
-        const captionOk = await postStore_1.postStore.updateButtonCaption(bot, existingPost);
-        const captionTiming = durationFields(captionStartedAt);
-        if (captionOk) {
-            logCommentButton('info', `commentButton: пост уже с кнопкой — обновлена подпись (${captionTiming.duration})`, {
-                source: source ?? 'unknown',
-                chatId,
-                messageMid: mid,
-                postId: existingPost.post_id,
-                captionUpdateMs: captionTiming.durationMs,
-            });
-            const result = { ok: false, reason: 'already_exists' };
-            logCommentButtonSkip(source, result.reason, {
-                chatId,
-                messageMid: mid,
-                postId: existingPost.post_id,
-                captionRefreshed: true,
-                captionUpdateMs: captionTiming.durationMs,
-            }, attachStartedAt);
-            return result;
+        /** Админ «Обновить кнопки» — всегда полная перепривязка (ссылка startapp), не только счётчик. */
+        const forceReattach = source === 'refresh';
+        if (!forceReattach) {
+            const captionStartedAt = performance.now();
+            const captionOk = await postStore_1.postStore.updateButtonCaption(bot, existingPost);
+            const captionTiming = durationFields(captionStartedAt);
+            if (captionOk) {
+                clearButtonAttachPending(existingPost);
+                logCommentButton('info', `commentButton: пост уже с кнопкой — обновлена подпись (${captionTiming.duration})`, {
+                    source: source ?? 'unknown',
+                    chatId,
+                    messageMid: mid,
+                    postId: existingPost.post_id,
+                    captionUpdateMs: captionTiming.durationMs,
+                });
+                const result = { ok: false, reason: 'already_exists' };
+                logCommentButtonSkip(source, result.reason, {
+                    chatId,
+                    messageMid: mid,
+                    postId: existingPost.post_id,
+                    captionRefreshed: true,
+                    captionUpdateMs: captionTiming.durationMs,
+                }, attachStartedAt);
+                return result;
+            }
         }
-        logCommentButton('warn', 'commentButton: пост в базе, кнопка не видна — повторное присвоение', {
+        logCommentButton(forceReattach ? 'info' : 'warn', forceReattach
+            ? 'commentButton: обновление кнопки — полная перепривязка'
+            : 'commentButton: пост в базе, кнопка не видна — повторное присвоение', {
             source: source ?? 'unknown',
             chatId,
             messageMid: mid,
             postId: existingPost.post_id,
+            forceReattach,
         });
         const openUrl = (0, postStore_1.buildMiniAppUrl)(existingPost.post_id, chatId, undefined, mid);
         const kb = max_bot_api_1.Keyboard.inlineKeyboard([
@@ -243,6 +282,7 @@ async function tryAttachCommentsToChannelPost(bot, message, options = {}) {
             phase: 'reattach',
         });
         if (reattached) {
+            clearButtonAttachPending(existingPost);
             logCommentButtonOk(source, {
                 chatId,
                 messageMid: mid,
@@ -251,6 +291,8 @@ async function tryAttachCommentsToChannelPost(bot, message, options = {}) {
             }, attachStartedAt);
             return { ok: true };
         }
+        markButtonAttachPending(existingPost);
+        (0, commentButtonRetryQueue_1.scheduleCommentButtonRetry)(chatId, mid);
         const fail = { ok: false, reason: 'attach_failed' };
         logCommentButtonSkip(source, fail.reason, {
             chatId,
@@ -293,35 +335,25 @@ async function tryAttachCommentsToChannelPost(bot, message, options = {}) {
         senderId: user?.user_id,
     });
     const postId = (0, uuid_1.v4)();
-    const text = message.body.text?.trim() ?? '';
-    const photoUrl = firstImageUrlFromMessage(message);
-    const media_attachments = (0, postStore_1.mediaAttachmentRequestsFromMessageBody)(message.body.attachments);
-    const channelPostUrl = typeof message.url === 'string' && message.url.trim() !== '' ? message.url.trim() : undefined;
     const post = {
-        post_id: postId,
-        chat_id: chatId,
-        message_mid: mid,
-        sender_name: user?.name ?? 'Канал',
-        text,
-        photo_url: photoUrl,
-        channel_post_url: channelPostUrl,
-        media_attachments,
-        comment_count: 0,
-        timestamp: new Date().toISOString(),
+        ...buildPostFromChannelMessage(message, chatId, postId, user),
+        button_attach_pending: true,
     };
+    postStore_1.postStore.savePost(post);
     const openUrl = (0, postStore_1.buildMiniAppUrl)(postId, chatId, undefined, mid);
     const kb = max_bot_api_1.Keyboard.inlineKeyboard([[max_bot_api_1.Keyboard.button.link('💬 Комментарии (0)', openUrl)]]);
-    const editText = text === '' ? '\u00a0' : text;
+    const editText = post.text === '' ? '\u00a0' : post.text;
     const attached = await (0, postStore_1.attachCommentButtonToChannelPost)(bot, post, editText, kb, {
         source: source ?? 'unknown',
         phase: 'new',
     });
     if (!attached) {
+        (0, commentButtonRetryQueue_1.scheduleCommentButtonRetry)(chatId, mid);
         const result = { ok: false, reason: 'attach_failed' };
-        logCommentButtonSkip(source, result.reason, { chatId, messageMid: mid, postId }, attachStartedAt);
+        logCommentButtonSkip(source, result.reason, { chatId, messageMid: mid, postId, postRegistered: true }, attachStartedAt);
         return result;
     }
-    postStore_1.postStore.savePost(post);
+    clearButtonAttachPending(post);
     (0, adminActivityStore_1.pushAdminActivity)('new_post_button', {
         chat_id: chatId,
         post_id: postId,
@@ -330,6 +362,28 @@ async function tryAttachCommentsToChannelPost(bot, message, options = {}) {
     logCommentButtonOk(source, { chatId, messageMid: mid, postId }, attachStartedAt);
     return { ok: true };
 }
+/** Loads the original channel post message for a stored {@link Post}. */
+async function loadChannelPostMessage(bot, post) {
+    try {
+        return await bot.api.getMessage(post.message_mid);
+    }
+    catch {
+        try {
+            const { messages } = await bot.api.getMessages(post.chat_id, {
+                message_ids: [post.message_mid],
+            });
+            return messages[0] ?? null;
+        }
+        catch (err) {
+            logger_1.logger.warn('loadChannelPostMessage: could not load message', {
+                postId: post.post_id,
+                messageMid: post.message_mid,
+                err,
+            });
+            return null;
+        }
+    }
+}
 /**
  * Loads a channel message from MAX and registers it in {@link postStore} if missing.
  * Used when Mini App opens with `message_mid` but the post row was lost (DB reset, migration).
@@ -337,7 +391,7 @@ async function tryAttachCommentsToChannelPost(bot, message, options = {}) {
 async function ensurePostFromChannelMessage(bot, chatId, messageMid) {
     const canonicalChatId = (0, resolveChannelChatId_1.resolveCanonicalChannelChatId)(chatId) ?? chatId;
     const existing = postStore_1.postStore.findPostByChannelMessage(canonicalChatId, messageMid);
-    if (existing) {
+    if (existing && existing.button_attach_pending !== true) {
         return existing;
     }
     let message;
@@ -368,13 +422,15 @@ async function ensurePostFromChannelMessage(bot, chatId, messageMid) {
         skipAuthorAdminCheck: true,
         source: 'ensure',
     });
-    if (r.ok || r.reason === 'already_exists') {
-        return postStore_1.postStore.findPostByChannelMessage(canonicalChatId, messageMid);
+    const registered = postStore_1.postStore.findPostByChannelMessage(canonicalChatId, messageMid);
+    if (registered) {
+        return registered;
     }
-    if (r.reason === 'attach_failed') {
-        logger_1.logger.warn('ensurePostFromChannelMessage: button attach failed', {
+    if (!r.ok) {
+        logger_1.logger.warn('ensurePostFromChannelMessage: post row missing after attach attempt', {
             chatId: canonicalChatId,
             messageMid,
+            outcome: r.reason,
         });
     }
     return null;

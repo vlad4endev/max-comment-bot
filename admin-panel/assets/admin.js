@@ -1526,16 +1526,26 @@
               .then(function (r) {
                 var created = r && typeof r.created === 'number' ? r.created : 0;
                 var refreshed = r && typeof r.refreshed === 'number' ? r.refreshed : 0;
+                var failed = r && typeof r.failed === 'number' ? r.failed : 0;
                 var fetched = r && typeof r.messages_fetched === 'number' ? r.messages_fetched : 0;
-                if (fetched === 0) {
+                var postsInDb = r && typeof r.posts_in_db === 'number' ? r.posts_in_db : 0;
+                if (fetched === 0 && postsInDb === 0) {
                   showToast('Сообщения канала не получены — проверьте права бота', 'error');
                   return;
                 }
                 if (created === 0 && refreshed === 0) {
+                  var errHint =
+                    failed > 0
+                      ? 'ошибок при привязке: ' + failed
+                      : 'нет прав или только служебные сообщения';
                   showToast(
-                    'За ' +
+                    'Кнопки не обновлены (' +
+                      errHint +
+                      '). В базе ' +
+                      postsInDb +
+                      ' постов, просмотрено ' +
                       fetched +
-                      ' сообщ. кнопки не обновлены (нет прав или только служебные сообщения)',
+                      ' сообщ.',
                     'error',
                   );
                   return;
@@ -1545,7 +1555,9 @@
                     created +
                     ' новых, ' +
                     refreshed +
-                    ' обновлено (из ' +
+                    ' обновлено (в базе ' +
+                    postsInDb +
+                    ' постов, просмотрено ' +
                     fetched +
                     ' сообщ.)',
                   'success',
