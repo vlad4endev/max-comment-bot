@@ -14,7 +14,43 @@ const node_path_1 = __importDefault(require("node:path"));
 const telegram_1 = require("telegram");
 const sessions_1 = require("telegram/sessions");
 const logger_1 = require("../utils/logger");
+const tgChannelMatch_1 = require("../utils/tgChannelMatch");
 const mtprotoConfigStore_1 = require("./mtprotoConfigStore");
+const MEDIA_DOWNLOAD_TIMEOUT_MS = 120_000;
+const ARCHIVE_FETCH_TIMEOUT_MS = 20 * 60_000;
+function withTimeout(promise, ms, label) {
+    return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error(`Таймаут (${label})`)), ms);
+        promise
+            .then((v) => {
+            clearTimeout(timer);
+            resolve(v);
+        })
+            .catch((e) => {
+            clearTimeout(timer);
+            reject(e);
+        });
+    });
+}
+function telegramRpcMessage(err) {
+    if (err instanceof Error && err.message)
+        return err.message;
+    if (typeof err === 'object' && err !== null && 'errorMessage' in err) {
+        const rpc = String(err.errorMessage || '');
+        if (rpc === 'CHANNEL_PRIVATE') {
+            return 'Канал закрыт: user-аккаунт должен быть подписан на канал';
+        }
+        if (rpc === 'USERNAME_NOT_OCCUPIED' || rpc === 'USERNAME_INVALID') {
+            return 'Канал не найден по username — проверьте @ или укажите -100… id';
+        }
+        if (rpc === 'FLOOD_WAIT') {
+            return 'Telegram просит подождать (FLOOD_WAIT) — повторите через минуту';
+        }
+        if (rpc)
+            return rpc;
+    }
+    return 'Ошибка Telegram MTProto';
+}
 function telegramUserArchiveConfigured() {
     const { apiId, apiHash, session } = (0, mtprotoConfigStore_1.resolveMtprotoCredentials)();
     return apiId !== null && apiHash !== '' && session !== '';
@@ -55,7 +91,7 @@ async function mapMessageToPayload(client, msg, tmpDir) {
     if (!media) {
         return caption ? { kind: 'text', text: caption } : null;
     }
-    const downloaded = await client.downloadMedia(msg, {});
+    const downloaded = await withTimeout(client.downloadMedia(msg, {}), MEDIA_DOWNLOAD_TIMEOUT_MS, 'скачивание медиа');
     if (!downloaded || !Buffer.isBuffer(downloaded)) {
         return caption ? { kind: 'text', text: caption } : null;
     }
@@ -86,32 +122,76 @@ async function mapMessageToPayload(client, msg, tmpDir) {
     }
     return caption ? { kind: 'text', text: caption } : null;
 }
-async function fetchChannelArchiveForImport(channelKey, limit, jobId) {
-    const client = await createUserClient();
-    const tmpDir = node_path_1.default.join(node_os_1.default.tmpdir(), 'maxcomment-import', String(jobId));
-    await promises_1.default.mkdir(tmpDir, { recursive: true });
-    try {
-        const entity = await client.getEntity(channelKey);
-        const messages = await client.getMessages(entity, { limit, reverse: true });
-        const out = [];
-        for (const msg of messages) {
-            if (!msg || typeof msg.id !== 'number')
-                continue;
-            const payload = await mapMessageToPayload(client, msg, tmpDir);
-            if (!payload)
-                continue;
-            out.push({ messageId: msg.id, payload });
+async function resolveChannelEntity(client, channelKey) {
+    const normalized = (0, tgChannelMatch_1.normalizeTelegramChannelKey)(channelKey);
+    const candidates = [normalized, normalized.replace(/^@/, '')].filter((v, i, a) => v && a.indexOf(v) === i);
+    let lastErr;
+    for (const key of candidates) {
+        try {
+            return await client.getEntity(key);
         }
-        logger_1.logger.info('[telegramUserArchive] fetched', {
-            channelKey,
-            limit,
-            jobId,
-            count: out.length,
-        });
-        return out;
+        catch (err) {
+            lastErr = err;
+        }
     }
-    finally {
-        await client.disconnect();
-    }
+    throw new Error(telegramRpcMessage(lastErr));
+}
+async function fetchChannelArchiveForImport(channelKey, limit, jobId, onPost) {
+    const run = async () => {
+        const client = await createUserClient();
+        const tmpDir = node_path_1.default.join(node_os_1.default.tmpdir(), 'maxcomment-import', String(jobId));
+        await promises_1.default.mkdir(tmpDir, { recursive: true });
+        try {
+            const entity = await resolveChannelEntity(client, channelKey);
+            const messages = await client.getMessages(entity, { limit, reverse: true });
+            if (!messages.length) {
+                throw new Error('В канале нет доступных сообщений. User-аккаунт должен быть участником/админом канала.');
+            }
+            let staged = 0;
+            let scanned = 0;
+            for (const msg of messages) {
+                if (!msg || typeof msg.id !== 'number')
+                    continue;
+                scanned += 1;
+                let payload = null;
+                try {
+                    payload = await mapMessageToPayload(client, msg, tmpDir);
+                }
+                catch (err) {
+                    logger_1.logger.warn('[telegramUserArchive] skip message', {
+                        jobId,
+                        messageId: msg.id,
+                        err: err instanceof Error ? err.message : String(err),
+                    });
+                    const caption = messageCaption(msg);
+                    if (caption) {
+                        payload = { kind: 'text', text: caption };
+                    }
+                }
+                if (!payload)
+                    continue;
+                const post = { messageId: msg.id, payload };
+                if (onPost) {
+                    await onPost(post);
+                }
+                staged += 1;
+            }
+            logger_1.logger.info('[telegramUserArchive] fetched', {
+                channelKey,
+                limit,
+                jobId,
+                scanned,
+                staged,
+            });
+            if (staged === 0) {
+                throw new Error(`Просмотрено сообщений: ${scanned}, подходящих постов: 0 (пустые или неподдерживаемый формат).`);
+            }
+            return staged;
+        }
+        finally {
+            await client.disconnect();
+        }
+    };
+    return withTimeout(run(), ARCHIVE_FETCH_TIMEOUT_MS, 'загрузка архива');
 }
 //# sourceMappingURL=telegramUserArchive.js.map

@@ -230,6 +230,10 @@ export function createChannelImportRouter(): express.Router {
       res.status(404).json({ error: 'not found' })
       return
     }
+    if (job.status === 'archive_fetch') {
+      res.json({ ok: true, job: toChannelImportJobView(job) })
+      return
+    }
     if (job.status !== 'scanning') {
       res.json({ ok: true, job: toChannelImportJobView(job) })
       return

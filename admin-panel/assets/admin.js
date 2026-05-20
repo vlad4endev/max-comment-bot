@@ -2559,7 +2559,9 @@
           if (job.status === 'ready' || job.status === 'error' || job.status === 'publishing') {
             clearChannelImportPoll();
             if (startBtn) startBtn.disabled = false;
-            if (job.status === 'ready') {
+            if (job.status === 'error' && job.error_message) {
+              showToast(String(job.error_message), 'error');
+            } else if (job.status === 'ready') {
               showToast(
                 Number(job.staged_count || 0) > 0
                   ? 'Найдено постов: ' + job.staged_count

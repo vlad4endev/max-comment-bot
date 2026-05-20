@@ -61,7 +61,10 @@ function toChannelImportJobView(job) {
     const staged = job.staged_count ?? 0;
     let statusHint = null;
     if (job.status === 'archive_fetch') {
-        statusHint = 'Загрузка архива канала через user-аккаунт (MTProto)…';
+        statusHint =
+            staged > 0
+                ? `Загрузка архива… подготовлено постов: ${staged}`
+                : 'Загрузка архива канала через user-аккаунт (MTProto)…';
     }
     else if (job.status === 'scanning') {
         const step = Math.min(job.scan_idle_rounds + 1, exports.SCAN_IDLE_MAX);
@@ -69,7 +72,9 @@ function toChannelImportJobView(job) {
     }
     else if (job.status === 'ready' && staged === 0) {
         statusHint =
-            'В очереди обновлений бота нет постов этого канала. Опубликуйте новый пост в TG или проверьте, что reader-бот — админ в канале.';
+            job.import_source === 'user_archive'
+                ? 'Архив не дал постов: нет доступа user-аккаунта к каналу или сообщения без текста/медиа.'
+                : 'В очереди обновлений бота нет постов этого канала. Опубликуйте новый пост в TG или проверьте, что reader-бот — админ в канале.';
     }
     else if (job.status === 'ready' && staged > 0) {
         statusHint = 'Можно публиковать в MAX.';
@@ -162,16 +167,17 @@ async function runArchiveImportJob(jobId, limit) {
         return;
     }
     try {
-        const posts = await (0, telegramUserArchive_1.fetchChannelArchiveForImport)(job.tg_channel, limit, jobId);
-        for (const p of posts) {
-            (0, database_1.getDb)()
-                .prepare('INSERT OR IGNORE INTO channel_import_staged (job_id, tg_message_id, payload) VALUES (?, ?, ?)')
-                .run(jobId, p.messageId, JSON.stringify(p.payload));
-        }
-        const stagedRow = (0, database_1.getDb)()
-            .prepare('SELECT COUNT(*) AS c FROM channel_import_staged WHERE job_id = ?')
-            .get(jobId);
-        const stagedCount = stagedRow?.c ?? 0;
+        const insertStmt = (0, database_1.getDb)().prepare('INSERT OR IGNORE INTO channel_import_staged (job_id, tg_message_id, payload) VALUES (?, ?, ?)');
+        const bumpProgress = (0, database_1.getDb)().prepare(`UPDATE channel_import_jobs
+       SET staged_count = ?, updated_at = datetime('now')
+       WHERE id = ? AND status = 'archive_fetch'`);
+        const stagedCount = await (0, telegramUserArchive_1.fetchChannelArchiveForImport)(job.tg_channel, limit, jobId, async (post) => {
+            insertStmt.run(jobId, post.messageId, JSON.stringify(post.payload));
+            const row = (0, database_1.getDb)()
+                .prepare('SELECT COUNT(*) AS c FROM channel_import_staged WHERE job_id = ?')
+                .get(jobId);
+            bumpProgress.run(row?.c ?? 0, jobId);
+        });
         (0, database_1.getDb)()
             .prepare(`UPDATE channel_import_jobs
          SET status = 'ready', staged_count = ?, scan_idle_rounds = 0, error_message = NULL, updated_at = datetime('now')
