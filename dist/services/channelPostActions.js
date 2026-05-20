@@ -301,6 +301,7 @@ async function tryAttachCommentsToChannelPost(bot, message, options = {}) {
         const reattached = await (0, postStore_1.attachCommentButtonToChannelPost)(bot, existingPost, editText, kb, {
             source: source ?? 'unknown',
             phase: 'reattach',
+            inlineOnly: options.inlineOnly,
         });
         if (reattached) {
             clearButtonAttachPending(existingPost);
@@ -388,6 +389,7 @@ async function tryAttachCommentsToChannelPost(bot, message, options = {}) {
     const attached = await (0, postStore_1.attachCommentButtonToChannelPost)(bot, post, editText, kb, {
         source: source ?? 'unknown',
         phase: 'new',
+        inlineOnly: options.inlineOnly,
     });
     if (!attached) {
         (0, commentButtonRetryQueue_1.scheduleCommentButtonRetry)(chatId, mid);
@@ -430,7 +432,7 @@ async function loadChannelPostMessage(bot, post) {
  * Loads a channel message from MAX and registers it in {@link postStore} if missing.
  * Used when Mini App opens with `message_mid` but the post row was lost (DB reset, migration).
  */
-async function ensurePostFromChannelMessage(bot, chatId, messageMid) {
+async function ensurePostFromChannelMessage(bot, chatId, messageMid, options = {}) {
     const canonicalChatId = (0, resolveChannelChatId_1.resolveCanonicalChannelChatId)(chatId) ?? chatId;
     const existing = postStore_1.postStore.findPostByChannelMessage(canonicalChatId, messageMid);
     if (existing && existing.button_attach_pending !== true) {
@@ -463,6 +465,7 @@ async function ensurePostFromChannelMessage(bot, chatId, messageMid) {
         channelChatIdOverride: canonicalChatId,
         skipAuthorAdminCheck: true,
         source: 'ensure',
+        inlineOnly: options.inlineOnly,
     });
     const registered = postStore_1.postStore.findPostByChannelMessage(canonicalChatId, messageMid);
     if (registered) {

@@ -267,6 +267,7 @@ export async function tryAttachCommentsToChannelPost(
     channelChatIdOverride?: number
     skipAuthorAdminCheck?: boolean
     source?: CommentButtonAttachSource
+    inlineOnly?: boolean
   } = {},
 ): Promise<AttachChannelCommentsResult> {
   const attachStartedAt = performance.now()
@@ -399,6 +400,7 @@ export async function tryAttachCommentsToChannelPost(
     const reattached = await attachCommentButtonToChannelPost(bot, existingPost, editText, kb, {
       source: source ?? 'unknown',
       phase: 'reattach',
+      inlineOnly: options.inlineOnly,
     })
     if (reattached) {
       clearButtonAttachPending(existingPost)
@@ -510,6 +512,7 @@ export async function tryAttachCommentsToChannelPost(
   const attached = await attachCommentButtonToChannelPost(bot, post, editText, kb, {
     source: source ?? 'unknown',
     phase: 'new',
+    inlineOnly: options.inlineOnly,
   })
   if (!attached) {
     scheduleCommentButtonRetry(chatId, mid)
@@ -562,6 +565,7 @@ export async function ensurePostFromChannelMessage(
   bot: Bot,
   chatId: number,
   messageMid: string,
+  options: { inlineOnly?: boolean } = {},
 ): Promise<Post | null> {
   const canonicalChatId = resolveCanonicalChannelChatId(chatId) ?? chatId
   const existing = postStore.findPostByChannelMessage(canonicalChatId, messageMid)
@@ -593,6 +597,7 @@ export async function ensurePostFromChannelMessage(
     channelChatIdOverride: canonicalChatId,
     skipAuthorAdminCheck: true,
     source: 'ensure',
+    inlineOnly: options.inlineOnly,
   })
   const registered = postStore.findPostByChannelMessage(canonicalChatId, messageMid)
   if (registered) {

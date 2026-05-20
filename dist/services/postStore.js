@@ -372,6 +372,13 @@ async function attachCommentButtonToChannelPost(bot, post, editText, keyboard, l
             mediaCount: media.length,
             maxAttachments: exports.MAX_MESSAGE_ATTACHMENTS,
         });
+        if (logCtx?.inlineOnly) {
+            logger_1.logger.info('commentButton: inline-only mode, skip reply fallback', {
+                ...logBase,
+                mediaCount: media.length,
+            });
+            return false;
+        }
     }
     const apiDuration = () => {
         const apiDurationMs = Math.round(performance.now() - apiStartedAt);
@@ -405,6 +412,12 @@ async function attachCommentButtonToChannelPost(bot, post, editText, keyboard, l
                 ...apiDuration(),
                 err,
             });
+            if (logCtx?.inlineOnly) {
+                logger_1.logger.info('commentButton: inline-only mode, skip reply fallback after edit failure', {
+                    ...logBase,
+                });
+                return false;
+            }
         }
     }
     try {

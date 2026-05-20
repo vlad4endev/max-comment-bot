@@ -76,6 +76,7 @@ export declare function mediaAttachmentRequestsFromMessageBody(attachments: Atta
 export declare function attachCommentButtonToChannelPost(bot: Bot, post: Post, editText: string, keyboard: InlineKeyboardAttachmentRequest, logCtx?: {
     source?: string;
     phase?: string;
+    inlineOnly?: boolean;
 }): Promise<boolean>;
 /** True if we can build a link that opens the Mini App (MAX deep link or legacy MINI_APP_URL). */
 export declare function isMiniAppOpenUrlConfigured(): boolean;

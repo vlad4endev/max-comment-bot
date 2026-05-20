@@ -470,7 +470,7 @@ export async function attachCommentButtonToChannelPost(
   post: Post,
   editText: string,
   keyboard: InlineKeyboardAttachmentRequest,
-  logCtx?: { source?: string; phase?: string },
+  logCtx?: { source?: string; phase?: string; inlineOnly?: boolean },
 ): Promise<boolean> {
   const apiStartedAt = performance.now()
   const logBase = {
@@ -494,6 +494,13 @@ export async function attachCommentButtonToChannelPost(
       mediaCount: media.length,
       maxAttachments: MAX_MESSAGE_ATTACHMENTS,
     })
+    if (logCtx?.inlineOnly) {
+      logger.info('commentButton: inline-only mode, skip reply fallback', {
+        ...logBase,
+        mediaCount: media.length,
+      })
+      return false
+    }
   }
   const apiDuration = (): { apiDurationMs: number; apiDuration: string } => {
     const apiDurationMs = Math.round(performance.now() - apiStartedAt)
@@ -532,6 +539,12 @@ export async function attachCommentButtonToChannelPost(
         ...apiDuration(),
         err,
       })
+      if (logCtx?.inlineOnly) {
+        logger.info('commentButton: inline-only mode, skip reply fallback after edit failure', {
+          ...logBase,
+        })
+        return false
+      }
     }
   }
   try {

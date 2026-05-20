@@ -575,7 +575,7 @@ async function processChainMessageGroup(chain, messages, tgToken) {
                     if (attachComments) {
                         const chatId = (0, resolveChannelChatId_1.resolveCanonicalChannelChatId)(chain.max_chat_id) ?? chain.max_chat_id;
                         const mid = resultMid;
-                        const post = await maxApi(() => (0, channelPostActions_1.ensurePostFromChannelMessage)(bot, chatId, mid));
+                        const post = await maxApi(() => (0, channelPostActions_1.ensurePostFromChannelMessage)(bot, chatId, mid, { inlineOnly: true }));
                         if (!post) {
                             (0, commentButtonRetryQueue_1.scheduleCommentButtonRetry)(chatId, mid);
                         }
@@ -596,7 +596,7 @@ async function processChainMessageGroup(chain, messages, tgToken) {
                 if (attachComments) {
                     const chatId = (0, resolveChannelChatId_1.resolveCanonicalChannelChatId)(chain.max_chat_id) ?? chain.max_chat_id;
                     const mid = resultMid;
-                    const post = await maxApi(() => (0, channelPostActions_1.ensurePostFromChannelMessage)(bot, chatId, mid));
+                    const post = await maxApi(() => (0, channelPostActions_1.ensurePostFromChannelMessage)(bot, chatId, mid, { inlineOnly: true }));
                     if (!post) {
                         (0, commentButtonRetryQueue_1.scheduleCommentButtonRetry)(chatId, mid);
                     }

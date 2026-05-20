@@ -707,7 +707,9 @@ async function processChainMessageGroup(
           if (attachComments) {
             const chatId = resolveCanonicalChannelChatId(chain.max_chat_id) ?? chain.max_chat_id
             const mid: string = resultMid
-            const post = await maxApi(() => ensurePostFromChannelMessage(bot, chatId, mid))
+            const post = await maxApi(() =>
+              ensurePostFromChannelMessage(bot, chatId, mid, { inlineOnly: true }),
+            )
             if (!post) {
               scheduleCommentButtonRetry(chatId, mid)
             }
@@ -733,7 +735,9 @@ async function processChainMessageGroup(
         if (attachComments) {
           const chatId = resolveCanonicalChannelChatId(chain.max_chat_id) ?? chain.max_chat_id
           const mid: string = resultMid
-          const post = await maxApi(() => ensurePostFromChannelMessage(bot, chatId, mid))
+          const post = await maxApi(() =>
+            ensurePostFromChannelMessage(bot, chatId, mid, { inlineOnly: true }),
+          )
           if (!post) {
             scheduleCommentButtonRetry(chatId, mid)
           }

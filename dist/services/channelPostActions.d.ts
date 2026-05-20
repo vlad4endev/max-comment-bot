@@ -37,6 +37,7 @@ export declare function tryAttachCommentsToChannelPost(bot: Bot, message: Messag
     channelChatIdOverride?: number;
     skipAuthorAdminCheck?: boolean;
     source?: CommentButtonAttachSource;
+    inlineOnly?: boolean;
 }): Promise<AttachChannelCommentsResult>;
 /** Loads the original channel post message for a stored {@link Post}. */
 export declare function loadChannelPostMessage(bot: Bot, post: Post): Promise<Message | null>;
@@ -44,4 +45,6 @@ export declare function loadChannelPostMessage(bot: Bot, post: Post): Promise<Me
  * Loads a channel message from MAX and registers it in {@link postStore} if missing.
  * Used when Mini App opens with `message_mid` but the post row was lost (DB reset, migration).
  */
-export declare function ensurePostFromChannelMessage(bot: Bot, chatId: number, messageMid: string): Promise<Post | null>;
+export declare function ensurePostFromChannelMessage(bot: Bot, chatId: number, messageMid: string, options?: {
+    inlineOnly?: boolean;
+}): Promise<Post | null>;
