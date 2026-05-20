@@ -6,11 +6,62 @@ exports.parseAdminLogLine = parseAdminLogLine;
 exports.formatAdminLogExtra = formatAdminLogExtra;
 const ANSI_RE = /\x1b\[[0-9;]*m/g;
 const LEGACY_RE = /^(\d{4}-\d{2}-\d{2}T[\d:.]+(?:Z|[+-]\d{2}:?\d{2})?)\s+\[(INFO|WARN|ERROR|DEBUG)\]\s+(.*)$/;
-function normalizeLogExtra(extra) {
-    if (extra instanceof Error) {
-        return { name: extra.name, message: extra.message, stack: extra.stack };
+function isRecord(v) {
+    return typeof v === 'object' && v !== null && !Array.isArray(v);
+}
+function errorToPlain(err) {
+    const out = {
+        name: err.name,
+        message: err.message,
+        stack: err.stack,
+    };
+    const cause = err.cause;
+    if (cause !== undefined) {
+        out.cause = normalizeLogExtra(cause);
     }
-    return extra;
+    return out;
+}
+/** Нормализует extra для JSON Lines: Error, вложенные объекты, циклические ссылки. */
+function normalizeLogExtra(extra, depth = 0) {
+    if (extra === undefined || extra === null) {
+        return extra;
+    }
+    if (extra instanceof Error) {
+        return errorToPlain(extra);
+    }
+    if (typeof extra === 'bigint') {
+        return String(extra);
+    }
+    if (typeof extra !== 'object') {
+        return extra;
+    }
+    if (depth > 4) {
+        return '[max depth]';
+    }
+    if (Array.isArray(extra)) {
+        return extra.map((item) => normalizeLogExtra(item, depth + 1));
+    }
+    if (isRecord(extra)) {
+        const axiosLike = 'response' in extra &&
+            isRecord(extra.response) &&
+            ('status' in extra.response || 'data' in extra.response);
+        if (axiosLike) {
+            const res = extra.response;
+            return {
+                message: extra.message,
+                code: extra.code,
+                status: res.status,
+                statusText: res.statusText,
+                data: normalizeLogExtra(res.data, depth + 1),
+            };
+        }
+        const out = {};
+        for (const [k, v] of Object.entries(extra)) {
+            out[k] = normalizeLogExtra(v, depth + 1);
+        }
+        return out;
+    }
+    return String(extra);
 }
 /** Строка для буфера админки и data/runtime.log (JSON Lines). */
 function serializeAdminLogLine(level, message, extra) {

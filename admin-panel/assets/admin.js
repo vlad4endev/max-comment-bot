@@ -98,6 +98,43 @@
       .replace(/"/g, '&quot;');
   }
 
+  function escTextarea(s) {
+    return String(s == null ? '' : s).replace(/<\/textarea/gi, '<\\/textarea');
+  }
+
+  function copyTextToClipboard(text, okMessage) {
+    var v = String(text || '');
+    if (!v) {
+      showToast('Нечего копировать', 'info');
+      return;
+    }
+    function onOk() {
+      showToast(okMessage || 'Скопировано в буфер обмена', 'success');
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(v).then(onOk).catch(fallbackCopy);
+      return;
+    }
+    fallbackCopy();
+
+    function fallbackCopy() {
+      var ta = document.createElement('textarea');
+      ta.value = v;
+      ta.setAttribute('readonly', '');
+      ta.style.position = 'fixed';
+      ta.style.left = '-9999px';
+      document.body.appendChild(ta);
+      ta.select();
+      try {
+        if (document.execCommand('copy')) onOk();
+        else showToast(v.slice(0, 500), 'info');
+      } catch (_e) {
+        showToast(v.slice(0, 500), 'info');
+      }
+      document.body.removeChild(ta);
+    }
+  }
+
   function channelInitials(title) {
     var t = String(title || '').trim();
     if (!t) return '?';
@@ -3629,6 +3666,27 @@
     }
   }
 
+  function formatLogEntryForCopy(entry) {
+    var level = entry.level || 'UNKNOWN';
+    var ts = entry.ts || '';
+    var msg = entry.message || entry.raw || '';
+    var extraText = formatLogExtra(entry.extra);
+    var lines = [];
+    lines.push('[' + (ts || '—') + '] ' + level);
+    lines.push(msg);
+    if (extraText) {
+      lines.push('');
+      lines.push('--- details ---');
+      lines.push(extraText);
+    }
+    if (entry.raw && entry.raw !== msg && entry.raw !== JSON.stringify(entry)) {
+      lines.push('');
+      lines.push('--- raw ---');
+      lines.push(String(entry.raw));
+    }
+    return lines.join('\n');
+  }
+
   function highlightLogText(text, needle) {
     var safe = esc(String(text || ''));
     if (!needle) return safe;
@@ -3655,6 +3713,7 @@
     var level = entry.level || 'UNKNOWN';
     var label = LOG_LEVEL_LABELS[level] || level;
     var extraText = formatLogExtra(entry.extra);
+    var copyPayload = formatLogEntryForCopy(entry);
     var html =
       '<article class="log-entry level-' +
       esc(level.toLowerCase()) +
@@ -3668,16 +3727,30 @@
       '<span class="log-badge">' +
       esc(label) +
       '</span>' +
+      '<div class="log-entry-actions">' +
+      '<button type="button" class="btn btn-ghost btn-sm log-copy-btn" data-copy-log-entry title="Скопировать запись целиком">' +
+      '<i data-lucide="copy"></i> Копировать</button>' +
       '</div>' +
+      '</div>' +
+      '<textarea class="log-copy-payload" readonly tabindex="-1" aria-hidden="true">' +
+      escTextarea(copyPayload) +
+      '</textarea>' +
       '<p class="log-message">' +
       highlightLogText(entry.message || entry.raw || '', filter) +
       '</p>';
     if (extraText) {
-      if (extraText.length > 280) {
+      var lineCount = extraText.split('\n').length;
+      var useDetails = extraText.length > 120 || lineCount > 6;
+      if (useDetails) {
         html +=
           '<details class="log-extra-wrap"><summary class="log-extra-summary">Детали (' +
-          esc(String(extraText.split('\n').length)) +
-          ' строк)</summary><pre class="log-extra mono">' +
+          esc(String(lineCount)) +
+          ' строк)</summary>' +
+          '<div class="log-extra-toolbar">' +
+          '<button type="button" class="btn btn-ghost btn-sm log-copy-btn" data-copy-log-entry title="Скопировать сообщение и детали ошибки">' +
+          '<i data-lucide="copy"></i> Копировать ошибку</button>' +
+          '</div>' +
+          '<pre class="log-extra mono">' +
           esc(extraText) +
           '</pre></details>';
       } else {
@@ -3686,6 +3759,29 @@
     }
     html += '</article>';
     return html;
+  }
+
+  function bindLogViewer(body) {
+    if (!body || body.getAttribute('data-log-bound') === '1') return;
+    body.setAttribute('data-log-bound', '1');
+    body.addEventListener('click', function (ev) {
+      var btn = ev.target.closest('[data-copy-log-entry]');
+      if (!btn || !body.contains(btn)) return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      var article = btn.closest('.log-entry');
+      if (!article) return;
+      var ta = qs('.log-copy-payload', article);
+      var text = ta ? ta.value : '';
+      if (!text) {
+        var msg = qs('.log-message', article);
+        var extra = qs('.log-extra', article);
+        var time = qs('.log-time', article);
+        text = (time ? time.getAttribute('datetime') || time.textContent : '') + '\n' + (msg ? msg.textContent : '');
+        if (extra) text += '\n\n--- details ---\n' + extra.textContent;
+      }
+      copyTextToClipboard(text, 'Запись скопирована — можно вставить в анализ');
+    });
   }
 
   function renderLogs() {
@@ -3768,6 +3864,7 @@
               html += logEntryHtml(entry, filter);
             });
           body.innerHTML = html;
+          refreshIcons();
           if (atTop || !silent) {
             body.scrollTop = 0;
           }
@@ -3781,6 +3878,9 @@
           loading = false;
         });
     }
+
+    var logBody = qs('#log_body', main);
+    if (logBody) bindLogViewer(logBody);
 
     function scheduleLogsRefresh() {
       clearLogsTimer();

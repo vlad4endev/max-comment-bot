@@ -12,11 +12,65 @@ const ANSI_RE = /\x1b\[[0-9;]*m/g
 const LEGACY_RE =
   /^(\d{4}-\d{2}-\d{2}T[\d:.]+(?:Z|[+-]\d{2}:?\d{2})?)\s+\[(INFO|WARN|ERROR|DEBUG)\]\s+(.*)$/
 
-export function normalizeLogExtra(extra: unknown): unknown {
-  if (extra instanceof Error) {
-    return { name: extra.name, message: extra.message, stack: extra.stack }
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === 'object' && v !== null && !Array.isArray(v)
+}
+
+function errorToPlain(err: Error): Record<string, unknown> {
+  const out: Record<string, unknown> = {
+    name: err.name,
+    message: err.message,
+    stack: err.stack,
   }
-  return extra
+  const cause = (err as Error & { cause?: unknown }).cause
+  if (cause !== undefined) {
+    out.cause = normalizeLogExtra(cause)
+  }
+  return out
+}
+
+/** Нормализует extra для JSON Lines: Error, вложенные объекты, циклические ссылки. */
+export function normalizeLogExtra(extra: unknown, depth = 0): unknown {
+  if (extra === undefined || extra === null) {
+    return extra
+  }
+  if (extra instanceof Error) {
+    return errorToPlain(extra)
+  }
+  if (typeof extra === 'bigint') {
+    return String(extra)
+  }
+  if (typeof extra !== 'object') {
+    return extra
+  }
+  if (depth > 4) {
+    return '[max depth]'
+  }
+  if (Array.isArray(extra)) {
+    return extra.map((item) => normalizeLogExtra(item, depth + 1))
+  }
+  if (isRecord(extra)) {
+    const axiosLike =
+      'response' in extra &&
+      isRecord(extra.response) &&
+      ('status' in extra.response || 'data' in extra.response)
+    if (axiosLike) {
+      const res = extra.response as Record<string, unknown>
+      return {
+        message: extra.message,
+        code: extra.code,
+        status: res.status,
+        statusText: res.statusText,
+        data: normalizeLogExtra(res.data, depth + 1),
+      }
+    }
+    const out: Record<string, unknown> = {}
+    for (const [k, v] of Object.entries(extra)) {
+      out[k] = normalizeLogExtra(v, depth + 1)
+    }
+    return out
+  }
+  return String(extra)
 }
 
 /** Строка для буфера админки и data/runtime.log (JSON Lines). */

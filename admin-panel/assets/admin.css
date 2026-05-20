@@ -1429,8 +1429,33 @@ tbody tr:hover td {
 .log-entry-head {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 0.5rem;
   margin-bottom: 0.25rem;
+}
+
+.log-entry-actions {
+  margin-left: auto;
+}
+
+.log-copy-btn {
+  font-size: 0.72rem;
+  padding: 0.15rem 0.45rem;
+  gap: 0.25rem;
+}
+
+.log-copy-btn i {
+  width: 0.85rem;
+  height: 0.85rem;
+}
+
+.log-copy-payload {
+  position: absolute;
+  left: -9999px;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
 }
 
 .log-time {
@@ -1482,11 +1507,25 @@ tbody tr:hover td {
   color: var(--text-secondary);
 }
 
+.log-extra-wrap {
+  margin-top: 0.35rem;
+}
+
 .log-extra-wrap summary {
   cursor: pointer;
   font-size: 0.78rem;
   color: var(--accent);
-  margin-top: 0.35rem;
+  user-select: none;
+}
+
+.log-extra-wrap[open] .log-extra {
+  max-height: min(50vh, 32rem);
+}
+
+.log-extra-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin: 0.35rem 0 0.25rem;
 }
 
 .log-hl {
