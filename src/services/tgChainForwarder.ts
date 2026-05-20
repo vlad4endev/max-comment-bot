@@ -6,7 +6,12 @@ import type { AttachmentRequest, ImageAttachmentRequest } from '@maxhub/max-bot-
 
 import { getTelegramToken } from '../config'
 import { getDb } from '../db/database'
-import { getTgFileUrl, getTelegramUpdatesWithIds, type TgMessage } from '../forwarder/telegramReader'
+import {
+  TelegramGetUpdatesConflictError,
+  getTgFileUrl,
+  getTelegramUpdatesWithIds,
+  type TgMessage,
+} from '../forwarder/telegramReader'
 import { listTgChains, updateTgChain, type TgChainRecord } from '../api/adminPanelState'
 import { assertTelegramPollingReady } from './channelImportService'
 import { ensurePostFromChannelMessage } from './channelPostActions'
@@ -486,7 +491,21 @@ export async function runTgChainsOnce(): Promise<boolean> {
     }
 
     const offset = getReaderOffset(tgToken)
-    const batch = await getTelegramUpdatesWithIds(tgToken, offset, TG_CHAIN_LONG_POLL_SEC)
+    let batch: Array<{ update_id: number; channel_post: TgMessage }>
+    try {
+      batch = await getTelegramUpdatesWithIds(tgToken, offset, TG_CHAIN_LONG_POLL_SEC)
+    } catch (err: unknown) {
+      if (err instanceof TelegramGetUpdatesConflictError) {
+        await sleep(10_000)
+        continue
+      }
+      if (axios.isAxiosError(err) && err.response?.status === 409) {
+        logger.warn('[tgChain] 409 conflict — another instance may be running, waiting 10s')
+        await sleep(10_000)
+        continue
+      }
+      throw err
+    }
     let nextOffset = offset
 
     const channelPosts: TgMessage[] = []
@@ -529,6 +548,16 @@ export function startTgChainForwarder(): void {
           await sleep(TG_CHAIN_IDLE_MS)
         }
       } catch (err: unknown) {
+        if (err instanceof TelegramGetUpdatesConflictError) {
+          logger.warn('[tgChain] 409 conflict — another instance may be running, waiting 10s')
+          await sleep(10_000)
+          continue
+        }
+        if (axios.isAxiosError(err) && err.response?.status === 409) {
+          logger.warn('[tgChain] 409 conflict — another instance may be running, waiting 10s')
+          await sleep(10_000)
+          continue
+        }
         logger.error('[tgChain] loop error', err)
         await sleep(TG_CHAIN_IDLE_MS)
       }

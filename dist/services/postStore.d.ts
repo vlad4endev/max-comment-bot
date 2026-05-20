@@ -38,6 +38,12 @@ export declare class PostStore {
      */
     private ensureChannelRow;
     getPost(postId: string): Post | null;
+    /**
+     * Resolves a post by UUID, compact UUID, `message_mid`, or `chat_id` + `message_mid`.
+     */
+    findPost(identifier: string, chatId?: number): Post | null;
+    findByMessageMid(messageMid: string): Post | null;
+    findByCommentsUiMessageMid(commentsUiMid: string): Post | null;
     getPostsByChatId(chatId: number): Post[];
     findPostByChannelMessage(chatId: number, messageMid: string): Post | null;
     /** Reply-stub message id when edit on the original post failed and the bot sent a threaded keyboard. */

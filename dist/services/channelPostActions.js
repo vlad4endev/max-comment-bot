@@ -273,6 +273,27 @@ async function tryAttachCommentsToChannelPost(bot, message, options = {}) {
             forceReattach,
         });
         const openUrl = (0, postStore_1.buildMiniAppUrl)(existingPost.post_id, chatId, undefined, mid);
+        const reattachStartParam = (() => {
+            try {
+                return new URL(openUrl).searchParams.get('startapp');
+            }
+            catch {
+                return null;
+            }
+        })();
+        logger_1.logger.info('commentButton: creating button', {
+            postId: existingPost.post_id,
+            chatId,
+            messageMid: mid,
+            buttonUrl: openUrl,
+        });
+        logger_1.logger.info('commentButton: button payload', {
+            buttonUrl: openUrl,
+            startParam: reattachStartParam,
+            postId: existingPost.post_id,
+            chatId,
+            messageMid: mid,
+        });
         const kb = max_bot_api_1.Keyboard.inlineKeyboard([
             [max_bot_api_1.Keyboard.button.link(`💬 Комментарии (${existingPost.comment_count})`, openUrl)],
         ]);
@@ -341,6 +362,27 @@ async function tryAttachCommentsToChannelPost(bot, message, options = {}) {
     };
     postStore_1.postStore.savePost(post);
     const openUrl = (0, postStore_1.buildMiniAppUrl)(postId, chatId, undefined, mid);
+    const startParam = (() => {
+        try {
+            return new URL(openUrl).searchParams.get('startapp');
+        }
+        catch {
+            return null;
+        }
+    })();
+    logger_1.logger.info('commentButton: creating button', {
+        postId,
+        chatId,
+        messageMid: mid,
+        buttonUrl: openUrl,
+    });
+    logger_1.logger.info('commentButton: button payload', {
+        buttonUrl: openUrl,
+        startParam,
+        postId,
+        chatId,
+        messageMid: mid,
+    });
     const kb = max_bot_api_1.Keyboard.inlineKeyboard([[max_bot_api_1.Keyboard.button.link('💬 Комментарии (0)', openUrl)]]);
     const editText = post.text === '' ? '\u00a0' : post.text;
     const attached = await (0, postStore_1.attachCommentButtonToChannelPost)(bot, post, editText, kb, {

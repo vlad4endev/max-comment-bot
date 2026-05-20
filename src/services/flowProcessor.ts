@@ -5,6 +5,7 @@ import { channelRegistry } from './channelRegistry'
 import {
   fetchTelegramChannelPosts,
   fetchVkWallPosts,
+  mergePlatformChannels,
   publishVkWallPost,
   type ExternalPost,
 } from './integrationPlatformClient'
@@ -265,7 +266,7 @@ export class FlowProcessor {
       const tgToken = (integ.token || getTelegramToken()).trim()
       if (!tgToken) return { posts: [], lastMessageId: cursorBefore, cursorBefore }
       const channelKey = flow.source.channelId ?? flow.source.channelUsername ?? ''
-      const { posts, lastMessageId } = await fetchTelegramChannelPosts(
+      const { posts, lastMessageId, discoveredChats } = await fetchTelegramChannelPosts(
         tgToken,
         flow.source.integrationId,
         channelKey,
@@ -273,6 +274,17 @@ export class FlowProcessor {
       )
       if (lastMessageId > cursorBefore) {
         await flowStateStore.setLastMessageId(flow.id, lastMessageId)
+      }
+      // Merge bot-became-admin events captured inline so new channels appear
+      // in linkedChats without waiting for the next manual refresh.
+      if (discoveredChats.length > 0) {
+        const existing = integ.linkedChats ?? []
+        const merged = mergePlatformChannels(existing, discoveredChats)
+        await integrationsStore.setLinkedChats(flow.source.integrationId, merged)
+        logger.info('flowProcessor: обнаружены новые каналы (my_chat_member)', {
+          flowId: flow.id,
+          newChannels: discoveredChats.map((c) => ({ id: c.id, title: c.title })),
+        })
       }
       return { posts, lastMessageId, cursorBefore }
     }

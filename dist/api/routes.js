@@ -21,6 +21,7 @@ const commentStore_1 = require("../services/commentStore");
 const subscriberStore_1 = require("../services/subscriberStore");
 const notificationService_1 = require("../services/notificationService");
 const postStore_1 = require("../services/postStore");
+const startappPayload_1 = require("../utils/startappPayload");
 const stateManager_1 = require("../services/stateManager");
 const userMiniappSettingsStore_1 = require("../services/userMiniappSettingsStore");
 const userAccessCleanup_1 = require("../services/userAccessCleanup");
@@ -737,19 +738,46 @@ function createCommentApiRouter(deps) {
             res.status(500).json({ error: 'internal error' });
         }
     });
+    function buildMiniappPostLookup(pathPostId, chatIdRaw, messageMid, startParamRaw) {
+        let postId = pathPostId.trim();
+        let chatId = chatIdRaw;
+        let mid = messageMid;
+        let startParamUsed = null;
+        const startCandidates = [
+            startParamRaw,
+            pathPostId.trim().toLowerCase().startsWith('pid_') ? pathPostId.trim() : null,
+        ].filter((v) => typeof v === 'string' && v.trim() !== '');
+        for (const raw of startCandidates) {
+            const parsed = (0, startappPayload_1.parseStartappPayload)(raw);
+            if (!parsed?.post_id) {
+                continue;
+            }
+            startParamUsed = raw.trim();
+            postId = parsed.post_id;
+            if (parsed.chat_id !== undefined) {
+                chatId = parsed.chat_id;
+            }
+            if (parsed.message_mid) {
+                mid = parsed.message_mid;
+            }
+        }
+        return { postId, chatIdRaw: chatId, messageMid: mid, startParamUsed };
+    }
     function resolvePostForMiniApp(postId, chatIdRaw, messageMid) {
-        const direct = postStore_1.postStore.getPost(postId);
+        if (!postId.trim()) {
+            return null;
+        }
+        const direct = postStore_1.postStore.findPost(postId, chatIdRaw ?? undefined);
         if (direct) {
             return direct;
         }
         if (chatIdRaw !== null && messageMid) {
-            const canonicalChatId = (0, resolveChannelChatId_1.resolveCanonicalChannelChatId)(chatIdRaw) ?? chatIdRaw;
-            const byMid = postStore_1.postStore.findPostByChannelMessage(canonicalChatId, messageMid);
+            const byMid = postStore_1.postStore.findPost(messageMid, chatIdRaw);
             if (byMid) {
                 logger_1.logger.info('GET /post: resolved by message_mid', {
                     requestedPostId: postId,
                     postId: byMid.post_id,
-                    chatId: canonicalChatId,
+                    chatId: chatIdRaw,
                     messageMid,
                 });
                 return byMid;
@@ -757,30 +785,40 @@ function createCommentApiRouter(deps) {
         }
         return null;
     }
-    async function resolvePostForMiniAppOpen(postId, chatIdRaw, messageMid) {
-        let post = resolvePostForMiniApp(postId, chatIdRaw, messageMid);
+    async function resolvePostForMiniAppOpen(pathPostId, chatIdRaw, messageMid, startParamRaw = null) {
+        const lookup = buildMiniappPostLookup(pathPostId, chatIdRaw, messageMid, startParamRaw);
+        if (lookup.startParamUsed) {
+            logger_1.logger.info('miniapp: resolved lookup from start_param', {
+                pathPostId,
+                startParam: lookup.startParamUsed,
+                postId: lookup.postId,
+                chatId: lookup.chatIdRaw,
+                messageMid: lookup.messageMid,
+            });
+        }
+        let post = resolvePostForMiniApp(lookup.postId, lookup.chatIdRaw, lookup.messageMid);
         if (post) {
             return post;
         }
         await sleepMs(MINIAPP_POST_LOOKUP_RETRY_MS);
-        post = resolvePostForMiniApp(postId, chatIdRaw, messageMid);
+        post = resolvePostForMiniApp(lookup.postId, lookup.chatIdRaw, lookup.messageMid);
         if (post) {
             logger_1.logger.info('resolvePostForMiniAppOpen: post found after retry', {
-                postId,
-                chatId: chatIdRaw,
-                messageMid,
+                postId: lookup.postId,
+                chatId: lookup.chatIdRaw,
+                messageMid: lookup.messageMid,
             });
             return post;
         }
-        if (chatIdRaw !== null && messageMid) {
-            const canonicalChatId = (0, resolveChannelChatId_1.resolveCanonicalChannelChatId)(chatIdRaw) ?? chatIdRaw;
-            post = await (0, channelPostActions_1.ensurePostFromChannelMessage)(deps.bot, canonicalChatId, messageMid);
-            if (post && post.post_id !== postId) {
+        if (lookup.chatIdRaw !== null && lookup.messageMid) {
+            const canonicalChatId = (0, resolveChannelChatId_1.resolveCanonicalChannelChatId)(lookup.chatIdRaw) ?? lookup.chatIdRaw;
+            post = await (0, channelPostActions_1.ensurePostFromChannelMessage)(deps.bot, canonicalChatId, lookup.messageMid);
+            if (post && post.post_id !== lookup.postId) {
                 logger_1.logger.info('resolvePostForMiniAppOpen: backfilled from message_mid', {
-                    requestedPostId: postId,
+                    requestedPostId: lookup.postId,
                     postId: post.post_id,
                     chatId: canonicalChatId,
-                    messageMid,
+                    messageMid: lookup.messageMid,
                 });
             }
         }
@@ -789,7 +827,28 @@ function createCommentApiRouter(deps) {
     router.get('/post/:postId', async (req, res) => {
         const chatIdRaw = parseNonZeroInt(req.query.chat_id);
         const messageMid = parseNonEmptyString(req.query.message_mid);
-        const post = await resolvePostForMiniAppOpen(req.params.postId, chatIdRaw, messageMid);
+        const startParamHeader = parseNonEmptyString(req.headers['x-miniapp-start-param']);
+        const initDataHeader = parseNonEmptyString(req.headers['x-miniapp-init-data']);
+        const requestUserId = parseNonEmptyString(req.headers['x-miniapp-user-id']) ?? parseNonEmptyString(req.query.user_id);
+        logger_1.logger.info('miniapp: opened', {
+            startParam: startParamHeader,
+            userId: requestUserId,
+            chatId: chatIdRaw,
+            raw: initDataHeader,
+        });
+        const post = await resolvePostForMiniAppOpen(req.params.postId, chatIdRaw, messageMid, startParamHeader);
+        logger_1.logger.info('miniapp: post lookup', {
+            identifier: req.params.postId,
+            receivedPostId: req.params.postId,
+            startParam: startParamHeader,
+            chatId: chatIdRaw,
+            messageMid,
+            found: Boolean(post),
+            foundInDb: Boolean(post),
+            postId: post?.post_id,
+            requestHeaders: req.headers,
+            queryParams: req.query,
+        });
         if (!post) {
             res.status(404).json({ error: 'post not found' });
             return;
@@ -821,7 +880,28 @@ function createCommentApiRouter(deps) {
         const postId = req.params.postId;
         const chatIdRaw = parseNonZeroInt(req.query.chat_id);
         const messageMid = parseNonEmptyString(req.query.message_mid);
-        const post = await resolvePostForMiniAppOpen(postId, chatIdRaw, messageMid);
+        const startParamHeader = parseNonEmptyString(req.headers['x-miniapp-start-param']);
+        const initDataHeader = parseNonEmptyString(req.headers['x-miniapp-init-data']);
+        const requestUserId = parseNonEmptyString(req.headers['x-miniapp-user-id']) ?? parseNonEmptyString(req.query.user_id);
+        logger_1.logger.info('miniapp: opened', {
+            startParam: startParamHeader,
+            userId: requestUserId,
+            chatId: chatIdRaw,
+            raw: initDataHeader,
+        });
+        const post = await resolvePostForMiniAppOpen(postId, chatIdRaw, messageMid, startParamHeader);
+        logger_1.logger.info('miniapp: post lookup', {
+            identifier: postId,
+            receivedPostId: postId,
+            startParam: startParamHeader,
+            chatId: chatIdRaw,
+            messageMid,
+            found: Boolean(post),
+            foundInDb: Boolean(post),
+            postId: post?.post_id,
+            requestHeaders: req.headers,
+            queryParams: req.query,
+        });
         if (!post) {
             res.status(404).json({ error: 'post not found' });
             return;
@@ -830,6 +910,10 @@ function createCommentApiRouter(deps) {
         try {
             const comments = commentStore_1.commentStore.getComments(resolvedPostId);
             const enriched = await enrichCommentsWithAvatars(deps.bot, post.chat_id, comments);
+            logger_1.logger.info('miniapp: comments loaded', {
+                postId: resolvedPostId,
+                commentCount: enriched.length,
+            });
             res.json(enriched.map(toWireComment));
         }
         catch (err) {
@@ -870,12 +954,14 @@ function createCommentApiRouter(deps) {
             res.status(400).json({ error: 'missing or invalid fields' });
             return;
         }
-        const post = postStore_1.postStore.getPost(postId);
+        const post = postStore_1.postStore.findPost(postId, chatId);
         if (!post) {
             res.status(404).json({ error: 'post not found' });
             return;
         }
-        if (post.chat_id !== chatId) {
+        const canonicalPostChatId = (0, resolveChannelChatId_1.resolveCanonicalChannelChatId)(post.chat_id) ?? post.chat_id;
+        const canonicalRequestChatId = (0, resolveChannelChatId_1.resolveCanonicalChannelChatId)(chatId) ?? chatId;
+        if (canonicalPostChatId !== canonicalRequestChatId) {
             res.status(403).json({ error: 'Доступ запрещён' });
             return;
         }

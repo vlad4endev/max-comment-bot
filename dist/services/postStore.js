@@ -38,6 +38,7 @@ class PostStore {
                 messageMid: post.message_mid,
                 err,
             });
+            throw err;
         }
     }
     /**
@@ -57,7 +58,73 @@ class PostStore {
         }
     }
     getPost(postId) {
-        const row = this.getStatements().getPost.get(postId);
+        const id = postId.trim();
+        if (!id) {
+            return null;
+        }
+        let row = this.getStatements().getPost.get(id);
+        if (!row) {
+            const lower = id.toLowerCase();
+            if (lower !== id) {
+                row = this.getStatements().getPost.get(lower);
+            }
+        }
+        return row ? this.parsePost(row.data) : null;
+    }
+    /**
+     * Resolves a post by UUID, compact UUID, `message_mid`, or `chat_id` + `message_mid`.
+     */
+    findPost(identifier, chatId) {
+        const id = identifier.trim();
+        if (!id) {
+            return null;
+        }
+        let post = this.getPost(id);
+        if (post) {
+            return post;
+        }
+        const fromCompact = (0, startappPayload_1.compactUuidToStandard)(id);
+        if (fromCompact && fromCompact !== id) {
+            post = this.getPost(fromCompact);
+            if (post) {
+                return post;
+            }
+        }
+        if (chatId !== undefined) {
+            post = this.findPostByChannelMessage(chatId, id);
+            if (post) {
+                return post;
+            }
+            post = this.findPostByCommentsUiMessage(chatId, id);
+            if (post) {
+                return post;
+            }
+        }
+        post = this.findByMessageMid(id);
+        if (post) {
+            return post;
+        }
+        post = this.findByCommentsUiMessageMid(id);
+        if (post) {
+            return post;
+        }
+        logger_1.logger.warn('findPost: not found', { identifier: id, chatId });
+        return null;
+    }
+    findByMessageMid(messageMid) {
+        const mid = messageMid.trim();
+        if (!mid) {
+            return null;
+        }
+        const row = this.getStatements().findByMid.get(mid);
+        return row ? this.parsePost(row.data) : null;
+    }
+    findByCommentsUiMessageMid(commentsUiMid) {
+        const mid = commentsUiMid.trim();
+        if (!mid) {
+            return null;
+        }
+        const row = this.getStatements().findByCommentsUiMidAnyChat.get(mid);
         return row ? this.parsePost(row.data) : null;
     }
     getPostsByChatId(chatId) {
@@ -131,6 +198,27 @@ class PostStore {
             return false;
         }
         const url = buildMiniAppUrl(post.post_id, post.chat_id, undefined, post.message_mid);
+        const startParam = (() => {
+            try {
+                return new URL(url).searchParams.get('startapp');
+            }
+            catch {
+                return null;
+            }
+        })();
+        logger_1.logger.info('commentButton: creating button', {
+            postId: post.post_id,
+            chatId: post.chat_id,
+            messageMid: post.message_mid,
+            buttonUrl: url,
+        });
+        logger_1.logger.info('commentButton: button payload', {
+            buttonUrl: url,
+            startParam,
+            postId: post.post_id,
+            chatId: post.chat_id,
+            messageMid: post.message_mid,
+        });
         const kb = max_bot_api_1.Keyboard.inlineKeyboard([
             [max_bot_api_1.Keyboard.button.link(`💬 Комментарии (${post.comment_count})`, url)],
         ]);
@@ -173,6 +261,8 @@ class PostStore {
             findByChatAndMid: db.prepare('SELECT data FROM posts WHERE chat_id = ? AND message_mid = ?'),
             findByAbsChatAndMid: db.prepare('SELECT data FROM posts WHERE ABS(chat_id) = ? AND message_mid = ? LIMIT 1'),
             findByCommentsUiMid: db.prepare('SELECT data FROM posts WHERE chat_id = ? AND comments_ui_message_mid = ? LIMIT 1'),
+            findByMid: db.prepare('SELECT data FROM posts WHERE message_mid = ? ORDER BY timestamp DESC, post_id DESC LIMIT 1'),
+            findByCommentsUiMidAnyChat: db.prepare('SELECT data FROM posts WHERE comments_ui_message_mid = ? ORDER BY timestamp DESC, post_id DESC LIMIT 1'),
             upsert: db.prepare(`INSERT INTO posts (
           post_id, chat_id, message_mid, comments_ui_message_mid, sender_name, text,
           photo_url, media_attachments, comment_count, timestamp, data
@@ -399,25 +489,29 @@ async function resolveChannelPostUrl(bot, post) {
 function buildMiniAppUrl(postId, chatId, extra, messageMid) {
     const payload = maxStartappPayload(postId, chatId, messageMid, extra);
     const nick = config_1.config.botNickname.trim();
+    let buttonUrl;
     if (nick) {
-        return `https://max.ru/${nick}?startapp=${payload}`;
+        buttonUrl = `https://max.ru/${nick}?startapp=${payload}`;
     }
-    const base = config_1.config.miniAppUrl;
-    if (!base) {
-        throw new Error('buildMiniAppUrl: задайте BOT_NICKNAME или MINI_APP_URL');
-    }
-    const u = new URL(base.replace(/\/+$/, ''));
-    u.searchParams.set('post_id', postId);
-    u.searchParams.set('chat_id', String(chatId));
-    if (messageMid && messageMid.trim() !== '') {
-        u.searchParams.set('message_mid', messageMid.trim());
-    }
-    if (extra) {
-        for (const [k, v] of Object.entries(extra)) {
-            u.searchParams.set(k, v);
+    else {
+        const base = config_1.config.miniAppUrl;
+        if (!base) {
+            throw new Error('buildMiniAppUrl: задайте BOT_NICKNAME или MINI_APP_URL');
         }
+        const u = new URL(base.replace(/\/+$/, ''));
+        u.searchParams.set('post_id', postId);
+        u.searchParams.set('chat_id', String(chatId));
+        if (messageMid && messageMid.trim() !== '') {
+            u.searchParams.set('message_mid', messageMid.trim());
+        }
+        if (extra) {
+            for (const [k, v] of Object.entries(extra)) {
+                u.searchParams.set(k, v);
+            }
+        }
+        buttonUrl = u.toString();
     }
-    return u.toString();
+    return buttonUrl;
 }
 exports.postStore = new PostStore();
 //# sourceMappingURL=postStore.js.map

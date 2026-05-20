@@ -11,7 +11,10 @@ import type Database from 'better-sqlite3'
 import { config } from '../config'
 import { getDb } from '../db/database'
 import { resolveCanonicalChannelChatId } from './resolveChannelChatId'
-import { encodeMessageMidForStartapp } from '../utils/startappPayload'
+import {
+  compactUuidToStandard,
+  encodeMessageMidForStartapp,
+} from '../utils/startappPayload'
 import { logger } from '../utils/logger'
 import { apiCallWithRetry } from '../utils/maxApiRetry'
 
@@ -51,6 +54,8 @@ export class PostStore {
     findByChatAndMid: Database.Statement
     findByAbsChatAndMid: Database.Statement
     findByCommentsUiMid: Database.Statement
+    findByMid: Database.Statement
+    findByCommentsUiMidAnyChat: Database.Statement
     upsert: Database.Statement
     deleteByChatId: Database.Statement
     selectIdsByChatId: Database.Statement
@@ -92,6 +97,7 @@ export class PostStore {
         messageMid: post.message_mid,
         err,
       })
+      throw err
     }
   }
 
@@ -114,7 +120,84 @@ export class PostStore {
   }
 
   getPost(postId: string): Post | null {
-    const row = this.getStatements().getPost.get(postId) as { data: string } | undefined
+    const id = postId.trim()
+    if (!id) {
+      return null
+    }
+    let row = this.getStatements().getPost.get(id) as { data: string } | undefined
+    if (!row) {
+      const lower = id.toLowerCase()
+      if (lower !== id) {
+        row = this.getStatements().getPost.get(lower) as { data: string } | undefined
+      }
+    }
+    return row ? this.parsePost(row.data) : null
+  }
+
+  /**
+   * Resolves a post by UUID, compact UUID, `message_mid`, or `chat_id` + `message_mid`.
+   */
+  findPost(identifier: string, chatId?: number): Post | null {
+    const id = identifier.trim()
+    if (!id) {
+      return null
+    }
+
+    let post = this.getPost(id)
+    if (post) {
+      return post
+    }
+
+    const fromCompact = compactUuidToStandard(id)
+    if (fromCompact && fromCompact !== id) {
+      post = this.getPost(fromCompact)
+      if (post) {
+        return post
+      }
+    }
+
+    if (chatId !== undefined) {
+      post = this.findPostByChannelMessage(chatId, id)
+      if (post) {
+        return post
+      }
+      post = this.findPostByCommentsUiMessage(chatId, id)
+      if (post) {
+        return post
+      }
+    }
+
+    post = this.findByMessageMid(id)
+    if (post) {
+      return post
+    }
+
+    post = this.findByCommentsUiMessageMid(id)
+    if (post) {
+      return post
+    }
+
+    logger.warn('findPost: not found', { identifier: id, chatId })
+    return null
+  }
+
+  findByMessageMid(messageMid: string): Post | null {
+    const mid = messageMid.trim()
+    if (!mid) {
+      return null
+    }
+    const row = this.getStatements().findByMid.get(mid) as { data: string } | undefined
+    return row ? this.parsePost(row.data) : null
+  }
+
+  findByCommentsUiMessageMid(commentsUiMid: string): Post | null {
+    const mid = commentsUiMid.trim()
+    if (!mid) {
+      return null
+    }
+    const row = this.getStatements().findByCommentsUiMidAnyChat.get(mid) as
+      | { data: string }
+      | undefined
     return row ? this.parsePost(row.data) : null
   }
 
@@ -203,6 +286,26 @@ export class PostStore {
       return false
     }
     const url = buildMiniAppUrl(post.post_id, post.chat_id, undefined, post.message_mid)
+    const startParam = (() => {
+      try {
+        return new URL(url).searchParams.get('startapp')
+      } catch {
+        return null
+      }
+    })()
+    logger.info('commentButton: creating button', {
+      postId: post.post_id,
+      chatId: post.chat_id,
+      messageMid: post.message_mid,
+      buttonUrl: url,
+    })
+    logger.info('commentButton: button payload', {
+      buttonUrl: url,
+      startParam,
+      postId: post.post_id,
+      chatId: post.chat_id,
+      messageMid: post.message_mid,
+    })
     const kb = Keyboard.inlineKeyboard([
       [Keyboard.button.link(`💬 Комментарии (${post.comment_count})`, url)],
     ])
@@ -255,6 +358,12 @@ export class PostStore {
       ),
       findByCommentsUiMid: db.prepare(
         'SELECT data FROM posts WHERE chat_id = ? AND comments_ui_message_mid = ? LIMIT 1',
+      ),
+      findByMid: db.prepare(
+        'SELECT data FROM posts WHERE message_mid = ? ORDER BY timestamp DESC, post_id DESC LIMIT 1',
+      ),
+      findByCommentsUiMidAnyChat: db.prepare(
+        'SELECT data FROM posts WHERE comments_ui_message_mid = ? ORDER BY timestamp DESC, post_id DESC LIMIT 1',
       ),
       upsert: db.prepare(
         `INSERT INTO posts (
@@ -521,25 +630,28 @@ export function buildMiniAppUrl(
 ): string {
   const payload = maxStartappPayload(postId, chatId, messageMid, extra)
   const nick = config.botNickname.trim()
+  let buttonUrl: string
   if (nick) {
-    return `https://max.ru/${nick}?startapp=${payload}`
-  }
-  const base = config.miniAppUrl
-  if (!base) {
-    throw new Error('buildMiniAppUrl: задайте BOT_NICKNAME или MINI_APP_URL')
-  }
-  const u = new URL(base.replace(/\/+$/, ''))
-  u.searchParams.set('post_id', postId)
-  u.searchParams.set('chat_id', String(chatId))
-  if (messageMid && messageMid.trim() !== '') {
-    u.searchParams.set('message_mid', messageMid.trim())
-  }
-  if (extra) {
-    for (const [k, v] of Object.entries(extra)) {
-      u.searchParams.set(k, v)
+    buttonUrl = `https://max.ru/${nick}?startapp=${payload}`
+  } else {
+    const base = config.miniAppUrl
+    if (!base) {
+      throw new Error('buildMiniAppUrl: задайте BOT_NICKNAME или MINI_APP_URL')
     }
+    const u = new URL(base.replace(/\/+$/, ''))
+    u.searchParams.set('post_id', postId)
+    u.searchParams.set('chat_id', String(chatId))
+    if (messageMid && messageMid.trim() !== '') {
+      u.searchParams.set('message_mid', messageMid.trim())
+    }
+    if (extra) {
+      for (const [k, v] of Object.entries(extra)) {
+        u.searchParams.set(k, v)
+      }
+    }
+    buttonUrl = u.toString()
   }
-  return u.toString()
+  return buttonUrl
 }
 
 export const postStore = new PostStore()

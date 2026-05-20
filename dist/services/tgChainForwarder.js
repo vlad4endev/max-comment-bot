@@ -401,7 +401,22 @@ async function runTgChainsOnce() {
             continue;
         }
         const offset = getReaderOffset(tgToken);
-        const batch = await (0, telegramReader_1.getTelegramUpdatesWithIds)(tgToken, offset, TG_CHAIN_LONG_POLL_SEC);
+        let batch;
+        try {
+            batch = await (0, telegramReader_1.getTelegramUpdatesWithIds)(tgToken, offset, TG_CHAIN_LONG_POLL_SEC);
+        }
+        catch (err) {
+            if (err instanceof telegramReader_1.TelegramGetUpdatesConflictError) {
+                await sleep(10_000);
+                continue;
+            }
+            if (axios_1.default.isAxiosError(err) && err.response?.status === 409) {
+                logger_1.logger.warn('[tgChain] 409 conflict — another instance may be running, waiting 10s');
+                await sleep(10_000);
+                continue;
+            }
+            throw err;
+        }
         let nextOffset = offset;
         const channelPosts = [];
         for (const u of batch) {
@@ -440,6 +455,16 @@ function startTgChainForwarder() {
                 }
             }
             catch (err) {
+                if (err instanceof telegramReader_1.TelegramGetUpdatesConflictError) {
+                    logger_1.logger.warn('[tgChain] 409 conflict — another instance may be running, waiting 10s');
+                    await sleep(10_000);
+                    continue;
+                }
+                if (axios_1.default.isAxiosError(err) && err.response?.status === 409) {
+                    logger_1.logger.warn('[tgChain] 409 conflict — another instance may be running, waiting 10s');
+                    await sleep(10_000);
+                    continue;
+                }
                 logger_1.logger.error('[tgChain] loop error', err);
                 await sleep(TG_CHAIN_IDLE_MS);
             }

@@ -1,3 +1,6 @@
+export declare class TelegramGetUpdatesConflictError extends Error {
+    constructor(message: string);
+}
 export interface TgMessage {
     message_id: number;
     text?: string;

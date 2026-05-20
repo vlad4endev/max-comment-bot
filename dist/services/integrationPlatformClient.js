@@ -440,6 +440,13 @@ async function probeTelegramChannelAccess(token, channelId) {
 /**
  * Новые посты/сообщения из TG-канала, группы или супергруппы через getUpdates.
  * Каналы: channel_post; группы/чаты: message.
+ *
+ * Попутно собирает my_chat_member-события, где бот становится администратором,
+ * и возвращает их в {@link discoveredChats} для немедленного обновления linkedChats.
+ * Это необходимо, потому что оба механизма (опрос постов и обнаружение каналов)
+ * используют один и тот же getUpdates offset — без такой инлайн-обработки
+ * my_chat_member-события будут «съедены» поллером постов до того, как
+ * listTelegramBotChats получит шанс их увидеть.
  */
 async function fetchTelegramChannelPosts(token, integrationId, channelId, afterMessageId) {
     return withTelegramIntegrationLock(integrationId, async () => {
@@ -459,9 +466,10 @@ async function fetchTelegramChannelPosts(token, integrationId, channelId, afterM
                 if (storedOffset === undefined) {
                     await warnIfTelegramWebhookActive(token);
                 }
-                return { posts: [], lastMessageId: afterMessageId };
+                return { posts: [], lastMessageId: afterMessageId, discoveredChats: [] };
             }
             const posts = [];
+            const newAdminChats = new Map();
             let maxMessageId = afterMessageId;
             let maxUpdateId = storedOffset ?? 0;
             let matchedInBatch = 0;
@@ -470,6 +478,18 @@ async function fetchTelegramChannelPosts(token, integrationId, channelId, afterM
                 const updateId = typeof upd.update_id === 'number' ? upd.update_id : 0;
                 if (updateId >= maxUpdateId) {
                     maxUpdateId = updateId + 1;
+                }
+                // Capture bot becoming admin in a channel/group so the caller can update linkedChats
+                // immediately — without this, the event would be consumed by this loop and lost
+                // before listTelegramBotChats ever gets a chance to see it.
+                const mcm = upd.my_chat_member;
+                if (mcm) {
+                    const mcmChat = mcm.chat;
+                    const newMember = mcm.new_chat_member;
+                    const status = typeof newMember?.status === 'string' ? newMember.status : '';
+                    if ((status === 'administrator' || status === 'creator') && mcmChat) {
+                        mergeTelegramChat(newAdminChats, mcmChat, true);
+                    }
                 }
                 const msg = extractTelegramMessageFromUpdate(upd);
                 if (!msg || isTelegramServiceMessage(msg))
@@ -493,6 +513,7 @@ async function fetchTelegramChannelPosts(token, integrationId, channelId, afterM
             if (maxUpdateId > (storedOffset ?? 0)) {
                 await flowStateStore_1.flowStateStore.setTelegramUpdateOffset(integrationId, maxUpdateId);
             }
+            const discoveredChats = [...newAdminChats.values()];
             logger_1.logger.info('fetchTelegramChannelPosts: batch', {
                 channelId,
                 updates: data.result.length,
@@ -500,15 +521,16 @@ async function fetchTelegramChannelPosts(token, integrationId, channelId, afterM
                 newPosts: posts.length,
                 afterMessageId,
                 lastMessageId: maxMessageId,
+                newAdminChats: discoveredChats.length,
             });
             if (posts.length === 0 && afterMessageId > 0 && seenForTarget === 0) {
                 await probeTelegramChannelAccess(token, channelId);
             }
-            return { posts, lastMessageId: maxMessageId };
+            return { posts, lastMessageId: maxMessageId, discoveredChats };
         }
         catch (err) {
             logger_1.logger.warn('fetchTelegramChannelPosts failed', err);
-            return { posts: [], lastMessageId: afterMessageId };
+            return { posts: [], lastMessageId: afterMessageId, discoveredChats: [] };
         }
     });
 }

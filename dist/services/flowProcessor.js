@@ -220,9 +220,20 @@ class FlowProcessor {
             if (!tgToken)
                 return { posts: [], lastMessageId: cursorBefore, cursorBefore };
             const channelKey = flow.source.channelId ?? flow.source.channelUsername ?? '';
-            const { posts, lastMessageId } = await (0, integrationPlatformClient_1.fetchTelegramChannelPosts)(tgToken, flow.source.integrationId, channelKey, cursorBefore);
+            const { posts, lastMessageId, discoveredChats } = await (0, integrationPlatformClient_1.fetchTelegramChannelPosts)(tgToken, flow.source.integrationId, channelKey, cursorBefore);
             if (lastMessageId > cursorBefore) {
                 await flowStateStore_1.flowStateStore.setLastMessageId(flow.id, lastMessageId);
+            }
+            // Merge bot-became-admin events captured inline so new channels appear
+            // in linkedChats without waiting for the next manual refresh.
+            if (discoveredChats.length > 0) {
+                const existing = integ.linkedChats ?? [];
+                const merged = (0, integrationPlatformClient_1.mergePlatformChannels)(existing, discoveredChats);
+                await integrationsStore_1.integrationsStore.setLinkedChats(flow.source.integrationId, merged);
+                logger_1.logger.info('flowProcessor: обнаружены новые каналы (my_chat_member)', {
+                    flowId: flow.id,
+                    newChannels: discoveredChats.map((c) => ({ id: c.id, title: c.title })),
+                });
             }
             return { posts, lastMessageId, cursorBefore };
         }

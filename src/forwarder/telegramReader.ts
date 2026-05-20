@@ -1,6 +1,14 @@
 import axios from 'axios'
+import { logger } from '../utils/logger'
 
 const TG_API = 'https://api.telegram.org/bot'
+
+export class TelegramGetUpdatesConflictError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'TelegramGetUpdatesConflictError'
+  }
+}
 
 export interface TgMessage {
   message_id: number
@@ -16,11 +24,26 @@ export interface TgMessage {
 
 export async function getTgUpdates(token: string, offset: number = 0): Promise<TgMessage[]> {
   const url = `${TG_API}${token}/getUpdates?offset=${offset}&timeout=10&allowed_updates=["channel_post"]`
-  const res = await axios.get(url)
-  const updates = res.data?.result || []
-  return updates
-    .filter((u: any) => u.channel_post)
-    .map((u: any) => u.channel_post)
+  for (let attempt = 0; attempt < 5; attempt++) {
+    try {
+      const res = await axios.get(url)
+      const updates = res.data?.result || []
+      return updates
+        .filter((u: any) => u.channel_post)
+        .map((u: any) => u.channel_post)
+    } catch (err: unknown) {
+      if (axios.isAxiosError(err) && err.response?.status === 409) {
+        logger.warn('[tgChain] 409 conflict — another instance may be running, waiting 10s', {
+          offset,
+          attempt,
+        })
+        await new Promise((r) => setTimeout(r, 10_000))
+        continue
+      }
+      throw err
+    }
+  }
+  throw new TelegramGetUpdatesConflictError('telegram getUpdates conflict (409)')
 }
 
 export async function getTgFileUrl(token: string, fileId: string): Promise<string | null> {
@@ -42,15 +65,33 @@ export async function getTelegramUpdatesWithIds(
   offset: number,
   timeoutSec: number = 0,
 ): Promise<Array<{ update_id: number; channel_post: TgMessage }>> {
-  const res = await axios.get(`${TG_API}${token}/getUpdates`, {
-    params: {
-      offset,
-      timeout: timeoutSec,
-      allowed_updates: JSON.stringify(['channel_post']),
-    },
-  })
-  const updates = res.data?.result || []
-  return updates
-    .filter((u: any) => u.channel_post && typeof u.update_id === 'number')
-    .map((u: any) => ({ update_id: u.update_id as number, channel_post: u.channel_post as TgMessage }))
+  for (let attempt = 0; attempt < 5; attempt++) {
+    try {
+      const res = await axios.get(`${TG_API}${token}/getUpdates`, {
+        params: {
+          offset,
+          timeout: timeoutSec,
+          allowed_updates: JSON.stringify(['channel_post']),
+        },
+      })
+      const updates = res.data?.result || []
+      return updates
+        .filter((u: any) => u.channel_post && typeof u.update_id === 'number')
+        .map((u: any) => ({
+          update_id: u.update_id as number,
+          channel_post: u.channel_post as TgMessage,
+        }))
+    } catch (err: unknown) {
+      if (axios.isAxiosError(err) && err.response?.status === 409) {
+        logger.warn('[tgChain] 409 conflict — another instance may be running, waiting 10s', {
+          offset,
+          attempt,
+        })
+        await new Promise((r) => setTimeout(r, 10_000))
+        continue
+      }
+      throw err
+    }
+  }
+  throw new TelegramGetUpdatesConflictError('telegram getUpdates conflict (409)')
 }

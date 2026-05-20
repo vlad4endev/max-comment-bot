@@ -372,6 +372,26 @@ export async function tryAttachCommentsToChannelPost(
       },
     )
     const openUrl = buildMiniAppUrl(existingPost.post_id, chatId, undefined, mid)
+    const reattachStartParam = (() => {
+      try {
+        return new URL(openUrl).searchParams.get('startapp')
+      } catch {
+        return null
+      }
+    })()
+    logger.info('commentButton: creating button', {
+      postId: existingPost.post_id,
+      chatId,
+      messageMid: mid,
+      buttonUrl: openUrl,
+    })
+    logger.info('commentButton: button payload', {
+      buttonUrl: openUrl,
+      startParam: reattachStartParam,
+      postId: existingPost.post_id,
+      chatId,
+      messageMid: mid,
+    })
     const kb = Keyboard.inlineKeyboard([
       [Keyboard.button.link(`💬 Комментарии (${existingPost.comment_count})`, openUrl)],
     ])
@@ -464,6 +484,26 @@ export async function tryAttachCommentsToChannelPost(
   postStore.savePost(post)
 
   const openUrl = buildMiniAppUrl(postId, chatId, undefined, mid)
+  const startParam = (() => {
+    try {
+      return new URL(openUrl).searchParams.get('startapp')
+    } catch {
+      return null
+    }
+  })()
+  logger.info('commentButton: creating button', {
+    postId,
+    chatId,
+    messageMid: mid,
+    buttonUrl: openUrl,
+  })
+  logger.info('commentButton: button payload', {
+    buttonUrl: openUrl,
+    startParam,
+    postId,
+    chatId,
+    messageMid: mid,
+  })
   const kb = Keyboard.inlineKeyboard([[Keyboard.button.link('💬 Комментарии (0)', openUrl)]])
   const editText = post.text === '' ? '\u00a0' : post.text
 

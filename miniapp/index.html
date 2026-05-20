@@ -2305,15 +2305,46 @@
   </div>
 
   <script>
+    function collectStartParam(unsafe, webApp) {
+      var candidates = []
+      if (unsafe && typeof unsafe === 'object') {
+        candidates.push(unsafe.start_param, unsafe.startapp, unsafe.startApp)
+      }
+      if (webApp && typeof webApp === 'object') {
+        candidates.push(webApp.start_param, webApp.startapp)
+      }
+      try {
+        var sp = new URLSearchParams(location.search)
+        candidates.push(sp.get('startapp'), sp.get('start_param'))
+      } catch (e) {}
+      var hash = String(location.hash || '').replace(/^#/, '').trim()
+      if (hash) {
+        if (hash.indexOf('=') >= 0) {
+          try {
+            var hp = new URLSearchParams(hash.indexOf('?') >= 0 ? hash.split('?').pop() : hash)
+            candidates.push(hp.get('startapp'), hp.get('start_param'))
+          } catch (e2) {}
+        } else if (/^pid_/i.test(hash) || /^join\d+$/i.test(hash)) {
+          candidates.push(hash)
+        }
+      }
+      for (var i = 0; i < candidates.length; i++) {
+        var v = candidates[i]
+        if (v != null && String(v).trim() !== '' && String(v).trim() !== 'start') {
+          return String(v).trim()
+        }
+      }
+      return ''
+    }
+
     function decodeStartParam(raw) {
       if (!raw || raw === 'start') return null
       var trimmed = String(raw).trim()
-      if (/^join\d+$/i.test(trimmed)) {
-        var j = trimmed.toLowerCase()
-        return { join_channel_id: '-' + j.slice(4) }
+      var joinMatch = /^join(\d+)$/i.exec(trimmed)
+      if (joinMatch) {
+        return { join_channel_id: '-' + joinMatch[1] }
       }
-      var s = trimmed.toLowerCase()
-      var m = s.match(/^pid_([a-f0-9]+)_cid_(\d+)(?:_mid_([A-Za-z0-9_-]+))?(_admin)?$/)
+      var m = trimmed.match(/^pid_([a-f0-9]+)_cid_(\d+)(?:_mid_([A-Za-z0-9_-]+))?(_admin)?$/i)
       if (!m) return null
       var id = m[1]
       var uuid = [id.slice(0,8), id.slice(8,12), id.slice(12,16), id.slice(16,20), id.slice(20)].join('-')
@@ -2377,11 +2408,11 @@
       var raw = String(startParam || '').trim();
       var fromStart = decodeStartParam(raw);
       if (fromStart) {
-        if (fromStart.post_id && !sp.get('post_id')) sp.set('post_id', fromStart.post_id);
-        if (fromStart.chat_id && !sp.get('chat_id')) sp.set('chat_id', fromStart.chat_id);
-        if (fromStart.message_mid && !sp.get('message_mid')) sp.set('message_mid', fromStart.message_mid);
-        if (fromStart.admin && !sp.get('admin')) sp.set('admin', '1');
-        if (fromStart.join_channel_id && !sp.get('join_channel_id')) {
+        if (fromStart.post_id) sp.set('post_id', fromStart.post_id);
+        if (fromStart.chat_id) sp.set('chat_id', fromStart.chat_id);
+        if (fromStart.message_mid) sp.set('message_mid', fromStart.message_mid);
+        if (fromStart.admin) sp.set('admin', '1');
+        if (fromStart.join_channel_id) {
           sp.set('join_channel_id', fromStart.join_channel_id);
         }
       }
@@ -2391,7 +2422,7 @@
           var q2 = new URLSearchParams(inner);
           ['post_id', 'chat_id', 'message_mid', 'user_id', 'username', 'admin', 'subscribers', 'join_channel_id'].forEach(function (k) {
             var v = q2.get(k);
-            if (v && !sp.get(k)) sp.set(k, v);
+            if (v) sp.set(k, v);
           });
         } catch (e) {}
       }
@@ -2698,12 +2729,21 @@
 
       var unsafe = tg.initDataUnsafe || {};
       var user = unsafe.user || {};
-      var startParam =
-        unsafe.start_param ||
-        new URLSearchParams(location.search).get('startapp') ||
-        '';
+      var startParam = collectStartParam(unsafe, tg);
 
       var mergedParams = buildMergedSearchParams(user, startParam);
+      var rawInitData = '';
+      try {
+        rawInitData = JSON.stringify(unsafe || {});
+      } catch (e) {
+        rawInitData = '';
+      }
+      console.info('miniapp: opened', {
+        startParam: startParam || null,
+        userId: getBridgeNumericUserId(user),
+        chatId: mergedParams.get('chat_id'),
+        raw: rawInitData,
+      });
       var postId = mergedParams.get('post_id');
       var chatId = mergedParams.get('chat_id');
       var joinChannelId = mergedParams.get('join_channel_id');
@@ -4766,21 +4806,57 @@
         });
       }
 
+      function resolveLookupIds() {
+        var lookupPostId = postId;
+        var lookupChatId = chatId;
+        var lookupMid = params.get('message_mid');
+        if ((!lookupPostId || !lookupChatId) && startParam) {
+          var decoded = decodeStartParam(startParam);
+          if (decoded) {
+            if (decoded.post_id) lookupPostId = decoded.post_id;
+            if (decoded.chat_id) lookupChatId = decoded.chat_id;
+            if (decoded.message_mid) lookupMid = decoded.message_mid;
+          }
+        }
+        return {
+          postId: lookupPostId,
+          chatId: lookupChatId,
+          messageMid: lookupMid,
+        };
+      }
+
       function postApiQuery() {
+        var ids = resolveLookupIds();
         var parts = [];
-        if (chatId) parts.push('chat_id=' + encodeURIComponent(chatId));
-        var mid = params.get('message_mid');
-        if (mid) parts.push('message_mid=' + encodeURIComponent(mid));
+        if (ids.chatId) parts.push('chat_id=' + encodeURIComponent(ids.chatId));
+        if (ids.messageMid) parts.push('message_mid=' + encodeURIComponent(ids.messageMid));
         return parts.length ? '?' + parts.join('&') : '';
       }
 
+      function miniappLookupHeaders() {
+        var hdr = {};
+        if (startParam) hdr['X-Miniapp-Start-Param'] = String(startParam);
+        if (rawInitData) hdr['X-Miniapp-Init-Data'] = String(rawInitData).slice(0, 4000);
+        if (userId && String(userId).trim()) hdr['X-Miniapp-User-Id'] = String(userId).trim();
+        return hdr;
+      }
+
       function loadPost() {
-        if (!postId) {
+        var ids = resolveLookupIds();
+        if (!ids.postId) {
           setErr('Нет post_id');
           postPreviewTextEl.textContent = '';
           return Promise.resolve(false);
         }
-        return fetch('/api/post/' + encodeURIComponent(postId) + postApiQuery())
+        console.info('miniapp: post lookup request', {
+          postId: ids.postId,
+          chatId: ids.chatId,
+          messageMid: ids.messageMid || null,
+          startParam: startParam || null,
+        });
+        return fetch('/api/post/' + encodeURIComponent(ids.postId) + postApiQuery(), {
+          headers: miniappLookupHeaders(),
+        })
           .then(function (r) {
             if (r.status === 404) throw new Error('Пост не найден. Откройте комментарии с кнопки под постом или обновите кнопки в админке.');
             if (!r.ok) throw new Error('Не удалось загрузить пост');
@@ -4817,8 +4893,11 @@
       }
 
       function loadComments(initial) {
-        if (!postId) return Promise.resolve();
-        return fetch('/api/comments/' + encodeURIComponent(postId) + postApiQuery())
+        var ids = resolveLookupIds();
+        if (!ids.postId) return Promise.resolve();
+        return fetch('/api/comments/' + encodeURIComponent(ids.postId) + postApiQuery(), {
+          headers: miniappLookupHeaders(),
+        })
           .then(function (r) {
             if (r.status === 404) throw new Error('Пост не найден. Откройте комментарии с кнопки под постом.');
             if (!r.ok) throw new Error('Не удалось загрузить комментарии');
@@ -5150,12 +5229,21 @@
     }
 
     function startAppWhenReady() {
-      if (window.WebApp) {
+      function run() {
+        var unsafe = (window.WebApp && window.WebApp.initDataUnsafe) || {};
+        var sp = collectStartParam(unsafe, window.WebApp || null);
+        if (!sp && window.WebApp) {
+          window.setTimeout(initApp, 250);
+          return;
+        }
         initApp();
+      }
+      if (window.WebApp) {
+        run();
         return;
       }
       window.addEventListener('load', function () {
-        setTimeout(initApp, 100);
+        window.setTimeout(run, 100);
       });
     }
 

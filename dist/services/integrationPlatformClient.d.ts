@@ -39,10 +39,18 @@ export interface ExternalPost {
 /**
  * Новые посты/сообщения из TG-канала, группы или супергруппы через getUpdates.
  * Каналы: channel_post; группы/чаты: message.
+ *
+ * Попутно собирает my_chat_member-события, где бот становится администратором,
+ * и возвращает их в {@link discoveredChats} для немедленного обновления linkedChats.
+ * Это необходимо, потому что оба механизма (опрос постов и обнаружение каналов)
+ * используют один и тот же getUpdates offset — без такой инлайн-обработки
+ * my_chat_member-события будут «съедены» поллером постов до того, как
+ * listTelegramBotChats получит шанс их увидеть.
  */
 export declare function fetchTelegramChannelPosts(token: string, integrationId: string, channelId: string, afterMessageId: number): Promise<{
     posts: ExternalPost[];
     lastMessageId: number;
+    discoveredChats: PlatformChannelInfo[];
 }>;
 export declare function fetchVkWallPosts(token: string, groupId: string, afterPostId: number): Promise<{
     posts: ExternalPost[];
