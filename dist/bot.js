@@ -9,6 +9,7 @@ const config_1 = require("./config");
 const events_1 = require("./handlers/events");
 const subscriptions_1 = require("./maxPlatform/subscriptions");
 const channelPoller_1 = require("./services/channelPoller");
+const commentButtonRetryQueue_1 = require("./services/commentButtonRetryQueue");
 const flowProcessor_1 = require("./services/flowProcessor");
 const stateManager_1 = require("./services/stateManager");
 const logger_1 = require("./utils/logger");
@@ -45,6 +46,7 @@ function setupGracefulShutdown(bot, options) {
         void (async () => {
             logger_1.logger.info('👋 Получен сигнал выключения...');
             (0, channelPoller_1.stopChannelPostPoller)();
+            (0, commentButtonRetryQueue_1.stopCommentButtonRetryLoop)();
             flowProcessor_1.flowProcessor.stop();
             (0, logger_1.stopRuntimeLogRotationScheduler)();
             stateManager_1.stateManager.destroy();

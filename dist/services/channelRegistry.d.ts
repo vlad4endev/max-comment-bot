@@ -1,4 +1,6 @@
 import type { ChatType } from '@maxhub/max-bot-api/types';
+/** Регистрирует колбэк (поллер каналов) без циклического import. */
+export declare function setChannelRegistryChangeHandler(handler: (() => void) | null): void;
 /**
  * Persisted metadata for a chat where the bot is (or was) present.
  */

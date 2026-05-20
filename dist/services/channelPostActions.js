@@ -1,6 +1,7 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.resolveMessageChatId = resolveMessageChatId;
+exports.lookupRegisteredChannelForMessage = lookupRegisteredChannelForMessage;
 exports.isLikelyChannelPost = isLikelyChannelPost;
 exports.isUserChannelAdmin = isUserChannelAdmin;
 exports.tryAttachCommentsToChannelPost = tryAttachCommentsToChannelPost;
@@ -9,6 +10,7 @@ const max_bot_api_1 = require("@maxhub/max-bot-api");
 const uuid_1 = require("uuid");
 const logger_1 = require("../utils/logger");
 const adminActivityStore_1 = require("./adminActivityStore");
+const channelRegistry_1 = require("./channelRegistry");
 const resolveChannelChatId_1 = require("./resolveChannelChatId");
 const disabledAdminStore_1 = require("./disabledAdminStore");
 const postStore_1 = require("./postStore");
@@ -21,6 +23,23 @@ function resolveMessageChatId(message, fallbackUserId) {
         return rid;
     }
     return fallbackUserId;
+}
+/**
+ * Сообщение из канала, уже записанного в реестр бота (без лишнего getChat).
+ */
+function lookupRegisteredChannelForMessage(message) {
+    const rid = message.recipient?.chat_id;
+    if (typeof rid !== 'number' || !Number.isFinite(rid)) {
+        return null;
+    }
+    const canonical = (0, resolveChannelChatId_1.resolveCanonicalChannelChatId)(rid) ?? rid;
+    const reg = channelRegistry_1.channelRegistry.getChannel(canonical) ??
+        channelRegistry_1.channelRegistry.getChannel(rid) ??
+        channelRegistry_1.channelRegistry.getChannel(-Math.abs(canonical));
+    if (!reg || reg.type !== 'channel') {
+        return null;
+    }
+    return { chatId: reg.chat_id, title: reg.title };
 }
 /**
  * Channel posts usually have `recipient.chat_type === 'channel'`; otherwise confirm via getChat.

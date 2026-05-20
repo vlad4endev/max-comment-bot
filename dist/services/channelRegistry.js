@@ -1,9 +1,23 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.channelRegistry = exports.ChannelRegistry = void 0;
+exports.setChannelRegistryChangeHandler = setChannelRegistryChangeHandler;
 const adminActivityStore_1 = require("./adminActivityStore");
 const database_1 = require("../db/database");
 const logger_1 = require("../utils/logger");
+let onRegistryChanged = null;
+/** Регистрирует колбэк (поллер каналов) без циклического import. */
+function setChannelRegistryChangeHandler(handler) {
+    onRegistryChanged = handler;
+}
+function emitRegistryChanged() {
+    try {
+        onRegistryChanged?.();
+    }
+    catch (err) {
+        logger_1.logger.warn('channelRegistry: onRegistryChanged handler failed', err);
+    }
+}
 function isChatType(value) {
     return value === 'dialog' || value === 'chat' || value === 'channel';
 }
@@ -48,6 +62,7 @@ class ChannelRegistry {
                 title: record.title,
             });
         }
+        emitRegistryChanged();
     }
     /**
      * Исключает канал из поллера и реестра без удаления постов/комментариев (повторные ошибки API).
@@ -64,6 +79,7 @@ class ChannelRegistry {
             return null;
         }
         this.getStatements().deleteById.run(chatId);
+        emitRegistryChanged();
         return prev;
     }
     /**

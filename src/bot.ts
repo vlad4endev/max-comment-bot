@@ -10,6 +10,7 @@ import {
   deleteWebhookSubscription,
 } from './maxPlatform/subscriptions'
 import { stopChannelPostPoller } from './services/channelPoller'
+import { stopCommentButtonRetryLoop } from './services/commentButtonRetryQueue'
 import { flowProcessor } from './services/flowProcessor'
 import { stateManager } from './services/stateManager'
 import { logger, stopRuntimeLogRotationScheduler } from './utils/logger'
@@ -54,6 +55,7 @@ function setupGracefulShutdown(bot: Bot, options: GracefulShutdownOptions): void
     void (async () => {
       logger.info('👋 Получен сигнал выключения...')
       stopChannelPostPoller()
+      stopCommentButtonRetryLoop()
       flowProcessor.stop()
       stopRuntimeLogRotationScheduler()
       stateManager.destroy()

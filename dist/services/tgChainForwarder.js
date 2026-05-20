@@ -14,6 +14,7 @@ const telegramReader_1 = require("../forwarder/telegramReader");
 const adminPanelState_1 = require("../api/adminPanelState");
 const channelImportService_1 = require("./channelImportService");
 const channelPostActions_1 = require("./channelPostActions");
+const commentButtonRetryQueue_1 = require("./commentButtonRetryQueue");
 const resolveChannelChatId_1 = require("./resolveChannelChatId");
 const tgChannelMatch_1 = require("../utils/tgChannelMatch");
 const logger_1 = require("../utils/logger");
@@ -161,36 +162,77 @@ async function forwardOneTgMessageToMax(bot, msg, tgToken, maxChatId, caption) {
     }
     return null;
 }
-/** Загружает все фото альбома и собирает одно image-вложение (несколько photos в одном посте MAX). */
-async function buildAlbumImageAttachment(bot, photoMessages, tgToken) {
+/** Загружает одно TG-фото в MAX (тот же путь, что и для одиночного поста — через URL). */
+async function uploadTgPhotoAttachment(bot, tgToken, fileId) {
+    const url = await (0, telegramReader_1.getTgFileUrl)(tgToken, fileId);
+    if (!url)
+        return null;
+    const uploaded = await maxApi(() => bot.api.uploadImage({ url }));
+    const json = uploaded.toJson();
+    if (json.type !== 'image' || !json.payload) {
+        return null;
+    }
+    const { token, url: imageUrl, photos } = json.payload;
+    if (token || imageUrl || (photos && Object.keys(photos).length > 0)) {
+        return json;
+    }
+    return null;
+}
+/**
+ * Собирает вложения альбома: при нескольких token — один image с `photos`,
+ * при url (типично для uploadImage({ url })) — отдельные image-вложения.
+ */
+function mergeAlbumImageAttachments(images) {
+    if (images.length === 0)
+        return [];
+    if (images.length === 1)
+        return [images[0]];
     const photosMap = {};
-    let index = 0;
+    let tokenCount = 0;
+    let hasUrlOnly = false;
+    for (const img of images) {
+        const p = img.payload;
+        if (p?.token) {
+            photosMap[String(tokenCount)] = { token: p.token };
+            tokenCount++;
+        }
+        else if (p?.url) {
+            hasUrlOnly = true;
+        }
+        else if (p?.photos) {
+            for (const entry of Object.values(p.photos)) {
+                if (entry?.token) {
+                    photosMap[String(tokenCount)] = { token: entry.token };
+                    tokenCount++;
+                }
+            }
+        }
+    }
+    if (tokenCount > 1 && !hasUrlOnly) {
+        return [{ type: 'image', payload: { photos: photosMap } }];
+    }
+    if (tokenCount === 1 && !hasUrlOnly) {
+        return [{ type: 'image', payload: { token: photosMap['0'].token } }];
+    }
+    return images;
+}
+/** Загружает все фото альбома для одного поста MAX. */
+async function buildAlbumImageAttachments(bot, photoMessages, tgToken) {
+    const uploaded = [];
     for (let i = 0; i < photoMessages.length; i += 1) {
         const msg = photoMessages[i];
         if (!msg.photo?.length)
             continue;
         const largest = msg.photo[msg.photo.length - 1];
-        const url = await (0, telegramReader_1.getTgFileUrl)(tgToken, largest.file_id);
-        if (!url)
-            continue;
-        const res = await axios_1.default.get(url, { responseType: 'arraybuffer' });
-        const uploaded = await maxApi(() => bot.api.uploadImage({ source: Buffer.from(res.data) }));
-        const json = uploaded.toJson();
-        const token = json.payload?.token;
-        if (token) {
-            photosMap[String(index)] = { token };
-            index++;
-            if (i < photoMessages.length - 1) {
-                await sleep(UPLOAD_STAGGER_MS);
-            }
+        const att = await uploadTgPhotoAttachment(bot, tgToken, largest.file_id);
+        if (att) {
+            uploaded.push(att);
+        }
+        if (i < photoMessages.length - 1) {
+            await sleep(UPLOAD_STAGGER_MS);
         }
     }
-    if (index === 0)
-        return null;
-    if (index === 1) {
-        return { type: 'image', payload: { token: photosMap['0'].token } };
-    }
-    return { type: 'image', payload: { photos: photosMap } };
+    return mergeAlbumImageAttachments(uploaded);
 }
 /** Альбом TG → один пост MAX (все фото в одном сообщении, как в Telegram). */
 async function forwardAlbumToMax(bot, messages, tgToken, maxChatId, addSignature) {
@@ -199,9 +241,14 @@ async function forwardAlbumToMax(bot, messages, tgToken, maxChatId, addSignature
     const messageText = caption.trim() || '\u00a0';
     const photoMessages = messages.filter((m) => m.photo && m.photo.length > 0);
     const attachments = [];
-    const imageAtt = await buildAlbumImageAttachment(bot, photoMessages, tgToken);
-    if (imageAtt) {
-        attachments.push(imageAtt);
+    const imageAtts = await buildAlbumImageAttachments(bot, photoMessages, tgToken);
+    attachments.push(...imageAtts);
+    if (photoMessages.length > 0 && imageAtts.length === 0) {
+        logger_1.logger.error('[tgChain] album: photos failed to upload', {
+            photoCount: photoMessages.length,
+            messageIds: messages.map((m) => m.message_id),
+        });
+        return null;
     }
     for (const msg of messages) {
         if (msg.photo?.length)
@@ -225,7 +272,7 @@ async function forwardAlbumToMax(bot, messages, tgToken, maxChatId, addSignature
             }
         }
     }
-    if (attachments.length === 0 && !caption.trim()) {
+    if (attachments.length === 0) {
         return null;
     }
     await throttleMaxChatSend(chatId);
@@ -256,7 +303,10 @@ async function processChainMessageGroup(chain, messages, tgToken) {
                 if (attachComments) {
                     const chatId = (0, resolveChannelChatId_1.resolveCanonicalChannelChatId)(chain.max_chat_id) ?? chain.max_chat_id;
                     const mid = resultMid;
-                    await maxApi(() => (0, channelPostActions_1.ensurePostFromChannelMessage)(bot, chatId, mid));
+                    const post = await maxApi(() => (0, channelPostActions_1.ensurePostFromChannelMessage)(bot, chatId, mid));
+                    if (!post) {
+                        (0, commentButtonRetryQueue_1.scheduleCommentButtonRetry)(chatId, mid);
+                    }
                 }
             }
         }
@@ -272,7 +322,10 @@ async function processChainMessageGroup(chain, messages, tgToken) {
                 if (attachComments) {
                     const chatId = (0, resolveChannelChatId_1.resolveCanonicalChannelChatId)(chain.max_chat_id) ?? chain.max_chat_id;
                     const mid = resultMid;
-                    await maxApi(() => (0, channelPostActions_1.ensurePostFromChannelMessage)(bot, chatId, mid));
+                    const post = await maxApi(() => (0, channelPostActions_1.ensurePostFromChannelMessage)(bot, chatId, mid));
+                    if (!post) {
+                        (0, commentButtonRetryQueue_1.scheduleCommentButtonRetry)(chatId, mid);
+                    }
                 }
             }
         }

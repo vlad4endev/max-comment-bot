@@ -5,6 +5,21 @@ import { pushAdminActivity } from './adminActivityStore'
 import { getDb } from '../db/database'
 import { logger } from '../utils/logger'
 
+let onRegistryChanged: (() => void) | null = null
+
+/** Регистрирует колбэк (поллер каналов) без циклического import. */
+export function setChannelRegistryChangeHandler(handler: (() => void) | null): void {
+  onRegistryChanged = handler
+}
+
+function emitRegistryChanged(): void {
+  try {
+    onRegistryChanged?.()
+  } catch (err: unknown) {
+    logger.warn('channelRegistry: onRegistryChanged handler failed', err)
+  }
+}
+
 /**
  * Persisted metadata for a chat where the bot is (or was) present.
  */
@@ -86,6 +101,7 @@ export class ChannelRegistry {
         title: record.title,
       })
     }
+    emitRegistryChanged()
   }
 
   /**
@@ -104,6 +120,7 @@ export class ChannelRegistry {
       return null
     }
     this.getStatements().deleteById.run(chatId)
+    emitRegistryChanged()
     return prev
   }
 

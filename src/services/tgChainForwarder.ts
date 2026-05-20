@@ -10,6 +10,7 @@ import { getTgFileUrl, getTelegramUpdatesWithIds, type TgMessage } from '../forw
 import { listTgChains, updateTgChain, type TgChainRecord } from '../api/adminPanelState'
 import { assertTelegramPollingReady } from './channelImportService'
 import { ensurePostFromChannelMessage } from './channelPostActions'
+import { scheduleCommentButtonRetry } from './commentButtonRetryQueue'
 import { resolveCanonicalChannelChatId } from './resolveChannelChatId'
 import { telegramChannelMatchesTarget } from '../utils/tgChannelMatch'
 import { logger } from '../utils/logger'
@@ -192,39 +193,86 @@ async function forwardOneTgMessageToMax(
   return null
 }
 
-/** Загружает все фото альбома и собирает одно image-вложение (несколько photos в одном посте MAX). */
-async function buildAlbumImageAttachment(
+/** Загружает одно TG-фото в MAX (тот же путь, что и для одиночного поста — через URL). */
+async function uploadTgPhotoAttachment(
   bot: Bot,
-  photoMessages: TgMessage[],
   tgToken: string,
-): Promise<AttachmentRequest | null> {
-  const photosMap: NonNullable<ImageAttachmentRequest['payload']['photos']> = {}
-  let index = 0
+  fileId: string,
+): Promise<ImageAttachmentRequest | null> {
+  const url = await getTgFileUrl(tgToken, fileId)
+  if (!url) return null
+  const uploaded = await maxApi(() => bot.api.uploadImage({ url }))
+  const json = uploaded.toJson() as ImageAttachmentRequest
+  if (json.type !== 'image' || !json.payload) {
+    return null
+  }
+  const { token, url: imageUrl, photos } = json.payload
+  if (token || imageUrl || (photos && Object.keys(photos).length > 0)) {
+    return json
+  }
+  return null
+}
 
-  for (let i = 0; i < photoMessages.length; i += 1) {
-    const msg = photoMessages[i]!
-    if (!msg.photo?.length) continue
-    const largest = msg.photo[msg.photo.length - 1]
-    const url = await getTgFileUrl(tgToken, largest.file_id)
-    if (!url) continue
-    const res = await axios.get<ArrayBuffer>(url, { responseType: 'arraybuffer' })
-    const uploaded = await maxApi(() => bot.api.uploadImage({ source: Buffer.from(res.data) }))
-    const json = uploaded.toJson() as ImageAttachmentRequest
-    const token = json.payload?.token
-    if (token) {
-      photosMap[String(index)] = { token }
-      index++
-      if (i < photoMessages.length - 1) {
-        await sleep(UPLOAD_STAGGER_MS)
+/**
+ * Собирает вложения альбома: при нескольких token — один image с `photos`,
+ * при url (типично для uploadImage({ url })) — отдельные image-вложения.
+ */
+function mergeAlbumImageAttachments(images: ImageAttachmentRequest[]): AttachmentRequest[] {
+  if (images.length === 0) return []
+  if (images.length === 1) return [images[0]!]
+
+  const photosMap: NonNullable<ImageAttachmentRequest['payload']['photos']> = {}
+  let tokenCount = 0
+  let hasUrlOnly = false
+
+  for (const img of images) {
+    const p = img.payload
+    if (p?.token) {
+      photosMap[String(tokenCount)] = { token: p.token }
+      tokenCount++
+    } else if (p?.url) {
+      hasUrlOnly = true
+    } else if (p?.photos) {
+      for (const entry of Object.values(p.photos)) {
+        if (entry?.token) {
+          photosMap[String(tokenCount)] = { token: entry.token }
+          tokenCount++
+        }
       }
     }
   }
 
-  if (index === 0) return null
-  if (index === 1) {
-    return { type: 'image', payload: { token: photosMap['0']!.token } }
+  if (tokenCount > 1 && !hasUrlOnly) {
+    return [{ type: 'image', payload: { photos: photosMap } }]
   }
-  return { type: 'image', payload: { photos: photosMap } }
+  if (tokenCount === 1 && !hasUrlOnly) {
+    return [{ type: 'image', payload: { token: photosMap['0']!.token } }]
+  }
+  return images
+}
+
+/** Загружает все фото альбома для одного поста MAX. */
+async function buildAlbumImageAttachments(
+  bot: Bot,
+  photoMessages: TgMessage[],
+  tgToken: string,
+): Promise<AttachmentRequest[]> {
+  const uploaded: ImageAttachmentRequest[] = []
+
+  for (let i = 0; i < photoMessages.length; i += 1) {
+    const msg = photoMessages[i]!
+    if (!msg.photo?.length) continue
+    const largest = msg.photo[msg.photo.length - 1]!
+    const att = await uploadTgPhotoAttachment(bot, tgToken, largest.file_id)
+    if (att) {
+      uploaded.push(att)
+    }
+    if (i < photoMessages.length - 1) {
+      await sleep(UPLOAD_STAGGER_MS)
+    }
+  }
+
+  return mergeAlbumImageAttachments(uploaded)
 }
 
 /** Альбом TG → один пост MAX (все фото в одном сообщении, как в Telegram). */
@@ -242,9 +290,15 @@ async function forwardAlbumToMax(
   const photoMessages = messages.filter((m) => m.photo && m.photo.length > 0)
   const attachments: AttachmentRequest[] = []
 
-  const imageAtt = await buildAlbumImageAttachment(bot, photoMessages, tgToken)
-  if (imageAtt) {
-    attachments.push(imageAtt)
+  const imageAtts = await buildAlbumImageAttachments(bot, photoMessages, tgToken)
+  attachments.push(...imageAtts)
+
+  if (photoMessages.length > 0 && imageAtts.length === 0) {
+    logger.error('[tgChain] album: photos failed to upload', {
+      photoCount: photoMessages.length,
+      messageIds: messages.map((m) => m.message_id),
+    })
+    return null
   }
 
   for (const msg of messages) {
@@ -268,7 +322,7 @@ async function forwardAlbumToMax(
     }
   }
 
-  if (attachments.length === 0 && !caption.trim()) {
+  if (attachments.length === 0) {
     return null
   }
 
@@ -318,7 +372,10 @@ async function processChainMessageGroup(
         if (attachComments) {
           const chatId = resolveCanonicalChannelChatId(chain.max_chat_id) ?? chain.max_chat_id
           const mid: string = resultMid
-          await maxApi(() => ensurePostFromChannelMessage(bot, chatId, mid))
+          const post = await maxApi(() => ensurePostFromChannelMessage(bot, chatId, mid))
+          if (!post) {
+            scheduleCommentButtonRetry(chatId, mid)
+          }
         }
       }
     } else {
@@ -339,7 +396,10 @@ async function processChainMessageGroup(
         if (attachComments) {
           const chatId = resolveCanonicalChannelChatId(chain.max_chat_id) ?? chain.max_chat_id
           const mid: string = resultMid
-          await maxApi(() => ensurePostFromChannelMessage(bot, chatId, mid))
+          const post = await maxApi(() => ensurePostFromChannelMessage(bot, chatId, mid))
+          if (!post) {
+            scheduleCommentButtonRetry(chatId, mid)
+          }
         }
       }
     }

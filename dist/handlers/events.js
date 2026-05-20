@@ -6,6 +6,7 @@ const max_bot_api_1 = require("@maxhub/max-bot-api");
 const config_1 = require("../config");
 const botChannelMembership_1 = require("../services/botChannelMembership");
 const channelAdminJoinNotified_1 = require("../services/channelAdminJoinNotified");
+const commentButtonRetryQueue_1 = require("../services/commentButtonRetryQueue");
 const channelPoller_1 = require("../services/channelPoller");
 const channelPostActions_1 = require("../services/channelPostActions");
 const channelRegistry_1 = require("../services/channelRegistry");
@@ -849,9 +850,34 @@ ${inviteUrl}
             await ctx.reply(`Could not add the button (${r.reason}).`);
             return;
         }
+        const registered = (0, channelPostActions_1.lookupRegisteredChannelForMessage)(message);
+        if (registered) {
+            const mid = message.body.mid;
+            logger_1.logger.info('message_created: registered channel post', {
+                chatId: registered.chatId,
+                messageMid: mid,
+                title: registered.title,
+            });
+            const r = await (0, channelPostActions_1.tryAttachCommentsToChannelPost)(bot, message, {
+                botUserId: ctx.myId,
+                channelChatIdOverride: registered.chatId,
+                skipAuthorAdminCheck: true,
+                source: 'webhook',
+            });
+            if (!r.ok && mid) {
+                if (r.reason === 'attach_failed') {
+                    (0, commentButtonRetryQueue_1.scheduleCommentButtonRetry)(registered.chatId, mid);
+                }
+                logger_1.logger.info('message_created: кнопка не присвоена (см. commentButton / retry)', {
+                    messageMid: mid,
+                    reason: r.reason,
+                });
+            }
+            return;
+        }
         const channelLikely = await (0, channelPostActions_1.isLikelyChannelPost)(bot, message);
         if (channelLikely) {
-            logger_1.logger.info('message_created: channel-shaped message', {
+            logger_1.logger.info('message_created: channel-shaped message (not in registry)', {
                 chatId,
                 recipientChatType: message.recipient.chat_type,
                 messageMid: message.body.mid,

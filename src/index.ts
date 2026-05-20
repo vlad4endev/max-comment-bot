@@ -13,13 +13,18 @@ import {
   setWebhookSubscription,
 } from './maxPlatform/subscriptions'
 import { channelNotifyLinkStore } from './services/channelNotifyLinkStore'
-import { channelRegistry } from './services/channelRegistry'
+import { channelRegistry, setChannelRegistryChangeHandler } from './services/channelRegistry'
 import { channelSettingsStore } from './services/channelSettingsStore'
 import { commentStore } from './services/commentStore'
 import { adminRuntimeSettingsStore } from './services/adminRuntimeSettingsStore'
 import { disabledAdminStore } from './services/disabledAdminStore'
 import { subscriberStore } from './services/subscriberStore'
-import { POLL_CONCURRENCY, startChannelPostPoller } from './services/channelPoller'
+import {
+  notifyChannelRegistryChanged,
+  POLL_CONCURRENCY,
+  startChannelPostPoller,
+} from './services/channelPoller'
+import { startCommentButtonRetryLoop } from './services/commentButtonRetryQueue'
 import { postStore } from './services/postStore'
 import { userMiniappSettingsStore } from './services/userMiniappSettingsStore'
 import { logger, startRuntimeLogRotationScheduler } from './utils/logger'
@@ -63,7 +68,9 @@ async function main(): Promise<void> {
   flowProcessor.setBot(bot)
   setTgChainForwarderBot(bot)
   startRuntimeLogRotationScheduler()
+  setChannelRegistryChangeHandler(() => notifyChannelRegistryChanged())
   startChannelPostPoller(bot)
+  startCommentButtonRetryLoop(bot)
   // До HTTP: иначе при EADDRINUSE channelPoller уже в логах, а flowProcessor — нет.
   await flowProcessor.start()
 

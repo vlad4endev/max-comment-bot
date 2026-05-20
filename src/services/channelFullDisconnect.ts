@@ -8,6 +8,7 @@ import { channelRegistry } from './channelRegistry'
 import { channelSettingsStore } from './channelSettingsStore'
 import { clearAdminJoinNotifiedForChannel } from './channelAdminJoinNotified'
 import { clearChannelPollerErrors } from './channelPoller'
+import { clearCommentButtonRetriesForChannel } from './commentButtonRetryQueue'
 import { commentStore } from './commentStore'
 import { integrationsStore } from './integrationsStore'
 import {
@@ -90,6 +91,7 @@ export async function purgeAllChannelData(chatId: number): Promise<void> {
   stateManager.clearPendingAdminJoinsForChannel(chatId)
   clearAdminJoinNotifiedForChannel(chatId)
   clearChannelPollerErrors(chatId)
+  clearCommentButtonRetriesForChannel(chatId)
 
   channelNotifyLinkStore.removeAllForChannel(chatId)
   channelSettingsStore.removeChannel(chatId)

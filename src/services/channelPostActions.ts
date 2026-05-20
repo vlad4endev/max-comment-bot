@@ -4,6 +4,7 @@ import { v4 as uuidv4 } from 'uuid'
 
 import { logger } from '../utils/logger'
 import { pushAdminActivity } from './adminActivityStore'
+import { channelRegistry } from './channelRegistry'
 import { resolveCanonicalChannelChatId } from './resolveChannelChatId'
 import { disabledAdminStore } from './disabledAdminStore'
 import {
@@ -24,6 +25,30 @@ export function resolveMessageChatId(message: Message, fallbackUserId: number): 
     return rid
   }
   return fallbackUserId
+}
+
+export type RegisteredChannelLookup = {
+  chatId: number
+  title: string | null
+}
+
+/**
+ * Сообщение из канала, уже записанного в реестр бота (без лишнего getChat).
+ */
+export function lookupRegisteredChannelForMessage(message: Message): RegisteredChannelLookup | null {
+  const rid = message.recipient?.chat_id
+  if (typeof rid !== 'number' || !Number.isFinite(rid)) {
+    return null
+  }
+  const canonical = resolveCanonicalChannelChatId(rid) ?? rid
+  const reg =
+    channelRegistry.getChannel(canonical) ??
+    channelRegistry.getChannel(rid) ??
+    channelRegistry.getChannel(-Math.abs(canonical))
+  if (!reg || reg.type !== 'channel') {
+    return null
+  }
+  return { chatId: reg.chat_id, title: reg.title }
 }
 
 /**

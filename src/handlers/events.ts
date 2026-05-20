@@ -13,11 +13,13 @@ import {
   hasChannelAdminJoinNotified,
   markChannelAdminJoinNotified,
 } from '../services/channelAdminJoinNotified'
+import { scheduleCommentButtonRetry } from '../services/commentButtonRetryQueue'
 import { runChannelPollerForChat } from '../services/channelPoller'
 import {
   isLikelyChannelPost,
   isUserChannelAdmin,
   resolveMessageChatId,
+  lookupRegisteredChannelForMessage,
   tryAttachCommentsToChannelPost,
 } from '../services/channelPostActions'
 import { channelRegistry } from '../services/channelRegistry'
@@ -1023,9 +1025,35 @@ ${inviteUrl}
       return
     }
 
+    const registered = lookupRegisteredChannelForMessage(message)
+    if (registered) {
+      const mid = message.body.mid
+      logger.info('message_created: registered channel post', {
+        chatId: registered.chatId,
+        messageMid: mid,
+        title: registered.title,
+      })
+      const r = await tryAttachCommentsToChannelPost(bot, message, {
+        botUserId: ctx.myId,
+        channelChatIdOverride: registered.chatId,
+        skipAuthorAdminCheck: true,
+        source: 'webhook',
+      })
+      if (!r.ok && mid) {
+        if (r.reason === 'attach_failed') {
+          scheduleCommentButtonRetry(registered.chatId, mid)
+        }
+        logger.info('message_created: кнопка не присвоена (см. commentButton / retry)', {
+          messageMid: mid,
+          reason: r.reason,
+        })
+      }
+      return
+    }
+
     const channelLikely = await isLikelyChannelPost(bot, message)
     if (channelLikely) {
-      logger.info('message_created: channel-shaped message', {
+      logger.info('message_created: channel-shaped message (not in registry)', {
         chatId,
         recipientChatType: message.recipient.chat_type,
         messageMid: message.body.mid,

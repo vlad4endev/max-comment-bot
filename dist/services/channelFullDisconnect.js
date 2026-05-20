@@ -12,6 +12,7 @@ const channelRegistry_1 = require("./channelRegistry");
 const channelSettingsStore_1 = require("./channelSettingsStore");
 const channelAdminJoinNotified_1 = require("./channelAdminJoinNotified");
 const channelPoller_1 = require("./channelPoller");
+const commentButtonRetryQueue_1 = require("./commentButtonRetryQueue");
 const commentStore_1 = require("./commentStore");
 const integrationsStore_1 = require("./integrationsStore");
 const notificationService_1 = require("./notificationService");
@@ -71,6 +72,7 @@ async function purgeAllChannelData(chatId) {
     stateManager_1.stateManager.clearPendingAdminJoinsForChannel(chatId);
     (0, channelAdminJoinNotified_1.clearAdminJoinNotifiedForChannel)(chatId);
     (0, channelPoller_1.clearChannelPollerErrors)(chatId);
+    (0, commentButtonRetryQueue_1.clearCommentButtonRetriesForChannel)(chatId);
     channelNotifyLinkStore_1.channelNotifyLinkStore.removeAllForChannel(chatId);
     channelSettingsStore_1.channelSettingsStore.removeChannel(chatId);
     const postIds = postStore_1.postStore.removePostsForChatId(chatId);

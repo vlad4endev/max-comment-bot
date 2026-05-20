@@ -1,6 +1,10 @@
 import type { Bot } from '@maxhub/max-bot-api';
 /** Exported for startup diagnostics. */
-export declare const POLL_CONCURRENCY = 5;
+export declare const POLL_CONCURRENCY = 8;
+/**
+ * У каждого канала свой таймер — очередь не блокирует «хвостовые» каналы на минуты.
+ */
+export declare function syncPerChannelPollers(bot: Bot): void;
 export interface RefreshButtonsStats {
     chat_id: number;
     messages_fetched: number;
@@ -18,17 +22,19 @@ export declare class RefreshButtonsError extends Error {
  */
 export declare function runChannelPollerForChat(bot: Bot, chatId: number): Promise<RefreshButtonsStats>;
 /**
- * One sweep: for each registered channel, fetch recent messages and attach the comment button to new admin posts.
+ * @deprecated Используется syncPerChannelPollers; оставлено для совместимости вызовов.
  */
 export declare function runChannelPollerTick(bot: Bot): Promise<void>;
 /**
- * Starts periodic polling of registered channels. No-op if Mini App open URL is not configured.
+ * Запускает опрос каждого канала по отдельному таймеру + синхронизацию при изменении реестра.
  */
 export declare function startChannelPostPoller(bot: Bot, intervalMs?: number): void;
 /**
- * Перезапуск таймера с разрешением из {@link adminRuntimeSettingsStore}.
+ * Перезапуск таймеров с разрешением из {@link adminRuntimeSettingsStore}.
  */
 export declare function restartChannelPostPoller(bot: Bot): void;
 /** Сбрасывает счётчик ошибок поллера для канала (после полного отключения). */
 export declare function clearChannelPollerErrors(chatId: number): void;
 export declare function stopChannelPostPoller(): void;
+/** Вызвать после добавления/удаления канала в реестре (если поллер уже запущен). */
+export declare function notifyChannelRegistryChanged(): void;

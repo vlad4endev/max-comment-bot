@@ -1,60 +1,73 @@
 "use strict";
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.RefreshButtonsError = exports.POLL_CONCURRENCY = void 0;
+exports.syncPerChannelPollers = syncPerChannelPollers;
 exports.runChannelPollerForChat = runChannelPollerForChat;
 exports.runChannelPollerTick = runChannelPollerTick;
 exports.startChannelPostPoller = startChannelPostPoller;
 exports.restartChannelPostPoller = restartChannelPostPoller;
 exports.clearChannelPollerErrors = clearChannelPollerErrors;
 exports.stopChannelPostPoller = stopChannelPostPoller;
-const p_limit_1 = __importDefault(require("p-limit"));
+exports.notifyChannelRegistryChanged = notifyChannelRegistryChanged;
 const adminRuntimeSettingsStore_1 = require("./adminRuntimeSettingsStore");
 const channelAdminJoinNotified_1 = require("./channelAdminJoinNotified");
 const channelRegistry_1 = require("./channelRegistry");
+const commentButtonRetryQueue_1 = require("./commentButtonRetryQueue");
 const resolveChannelChatId_1 = require("./resolveChannelChatId");
 const logger_1 = require("../utils/logger");
 const maxApiRetry_1 = require("../utils/maxApiRetry");
 const channelPostActions_1 = require("./channelPostActions");
 const postStore_1 = require("./postStore");
 const MIN_POLL_INTERVAL_MS = 3_000;
-const FETCH_COUNT = 30;
+/** Верхняя граница интервала опроса одного канала (стабильность важнее редкого глобального 30 с). */
+const PER_CHANNEL_CAP_MS = 6_000;
+const FETCH_COUNT = 15;
 /** Admin «обновить кнопки» scans more history than the periodic poller. */
 const REFRESH_BUTTONS_FETCH_COUNT = 50;
 /** Exported for startup diagnostics. */
-exports.POLL_CONCURRENCY = 5;
+exports.POLL_CONCURRENCY = 8;
 const DISABLE_AFTER_ERRORS = 5;
-let intervalId;
-let tickInFlight = false;
+const channelTimers = new Map();
 const errorCount = new Map();
-function logTickFired() {
-    const channels = channelRegistry_1.channelRegistry.getAllChannels();
-    logger_1.logger.info('channelPoller: tick fired', {
-        channelCount: channels.length,
-        channels: channels.map((c) => c.chat_id),
-    });
+let botRef = null;
+let perChannelIntervalMs = PER_CHANNEL_CAP_MS;
+function resolvePerChannelIntervalMs(globalMs) {
+    return Math.max(MIN_POLL_INTERVAL_MS, Math.min(globalMs, PER_CHANNEL_CAP_MS));
 }
 async function pollChannel(bot, channel, botUid) {
+    const stats = { fetched: 0, candidates: 0, attached: 0, failed: 0 };
     const { messages } = await (0, maxApiRetry_1.apiCallWithRetry)(() => bot.api.getMessages(channel.chat_id, { count: FETCH_COUNT }));
-    logger_1.logger.info('channelPoller: getMessages result', {
-        chatId: channel.chat_id,
-        messageCount: messages.length,
-        mids: messages.map((m) => m.body?.mid),
-    });
-    if (messages.length === 0) {
-        logger_1.logger.info('channelPoller: no messages returned for channel', { chatId: channel.chat_id });
-    }
+    stats.fetched = messages.length;
     for (const message of messages) {
-        await (0, channelPostActions_1.tryAttachCommentsToChannelPost)(bot, message, {
+        const mid = message.body?.mid;
+        if (typeof mid !== 'string' || mid.trim() === '') {
+            continue;
+        }
+        if (postStore_1.postStore.findPostByChannelMessage(channel.chat_id, mid)) {
+            continue;
+        }
+        stats.candidates += 1;
+        const r = await (0, channelPostActions_1.tryAttachCommentsToChannelPost)(bot, message, {
             botUserId: botUid,
             channelChatIdOverride: channel.chat_id,
-            /** Channel posts often have no admin-shaped sender; poller only runs on registered channels. */
             skipAuthorAdminCheck: true,
             source: 'poller',
         });
+        if (r.ok) {
+            stats.attached += 1;
+        }
+        else if (r.reason === 'attach_failed') {
+            stats.failed += 1;
+            (0, commentButtonRetryQueue_1.scheduleCommentButtonRetry)(channel.chat_id, mid);
+        }
     }
+    if (stats.candidates > 0 || stats.attached > 0) {
+        logger_1.logger.info('channelPoller: channel sweep', {
+            chatId: channel.chat_id,
+            ...stats,
+        });
+    }
+    return stats;
 }
 async function pollChannelSafe(bot, channel, botUid) {
     try {
@@ -70,8 +83,51 @@ async function pollChannelSafe(bot, channel, botUid) {
             (0, channelAdminJoinNotified_1.clearAdminJoinNotifiedForChannel)(channel.chat_id);
             channelRegistry_1.channelRegistry.deactivate(channel.chat_id);
             errorCount.delete(channel.chat_id);
+            stopChannelTimer(channel.chat_id);
         }
     }
+}
+function stopChannelTimer(chatId) {
+    const t = channelTimers.get(chatId);
+    if (t !== undefined) {
+        clearInterval(t);
+        channelTimers.delete(chatId);
+    }
+}
+/**
+ * У каждого канала свой таймер — очередь не блокирует «хвостовые» каналы на минуты.
+ */
+function syncPerChannelPollers(bot) {
+    if (!(0, postStore_1.isMiniAppOpenUrlConfigured)()) {
+        return;
+    }
+    botRef = bot;
+    const channels = channelRegistry_1.channelRegistry.getAllChannels().filter((c) => c.type === 'channel');
+    const activeIds = new Set(channels.map((c) => c.chat_id));
+    for (const chatId of [...channelTimers.keys()]) {
+        if (!activeIds.has(chatId)) {
+            stopChannelTimer(chatId);
+        }
+    }
+    const botUid = bot.botInfo?.user_id;
+    for (const channel of channels) {
+        if (channelTimers.has(channel.chat_id)) {
+            continue;
+        }
+        void pollChannelSafe(bot, channel, botUid);
+        const timer = setInterval(() => {
+            if (!botRef) {
+                return;
+            }
+            void pollChannelSafe(botRef, channel, botRef.botInfo?.user_id);
+        }, perChannelIntervalMs);
+        channelTimers.set(channel.chat_id, timer);
+    }
+    logger_1.logger.info('channelPoller: per-channel timers synced', {
+        channelCount: channels.length,
+        perChannelIntervalMs,
+        fetchCount: FETCH_COUNT,
+    });
 }
 class RefreshButtonsError extends Error {
     code;
@@ -137,25 +193,23 @@ async function runChannelPollerForChat(bot, chatId) {
         }
         else {
             stats.failed += 1;
+            const mid = message.body?.mid;
+            if (typeof mid === 'string' && mid.trim() !== '') {
+                (0, commentButtonRetryQueue_1.scheduleCommentButtonRetry)(reg.chat_id, mid);
+            }
         }
     }
     logger_1.logger.info('channelPoller: runChannelPollerForChat done', stats);
     return stats;
 }
 /**
- * One sweep: for each registered channel, fetch recent messages and attach the comment button to new admin posts.
+ * @deprecated Используется syncPerChannelPollers; оставлено для совместимости вызовов.
  */
 async function runChannelPollerTick(bot) {
-    if (!(0, postStore_1.isMiniAppOpenUrlConfigured)()) {
-        return;
-    }
-    const channels = channelRegistry_1.channelRegistry.getAllChannels().filter((c) => c.type === 'channel');
-    const botUid = bot.botInfo?.user_id;
-    const limit = (0, p_limit_1.default)(exports.POLL_CONCURRENCY);
-    await Promise.all(channels.map((c) => limit(() => pollChannelSafe(bot, c, botUid))));
+    syncPerChannelPollers(bot);
 }
 /**
- * Starts periodic polling of registered channels. No-op if Mini App open URL is not configured.
+ * Запускает опрос каждого канала по отдельному таймеру + синхронизацию при изменении реестра.
  */
 function startChannelPostPoller(bot, intervalMs) {
     if (!(0, postStore_1.isMiniAppOpenUrlConfigured)()) {
@@ -165,48 +219,18 @@ function startChannelPostPoller(bot, intervalMs) {
     const fromStoreOrArg = intervalMs !== undefined && Number.isFinite(intervalMs)
         ? intervalMs
         : adminRuntimeSettingsStore_1.adminRuntimeSettingsStore.getPollIntervalMs();
-    const ms = Math.max(MIN_POLL_INTERVAL_MS, fromStoreOrArg);
+    perChannelIntervalMs = resolvePerChannelIntervalMs(fromStoreOrArg);
     stopChannelPostPoller();
-    const channelCount = channelRegistry_1.channelRegistry
-        .getAllChannels()
-        .filter((c) => c.type === 'channel').length;
-    logTickFired();
-    void (async () => {
-        try {
-            await runChannelPollerTick(bot);
-        }
-        catch (err) {
-            logger_1.logger.error('channelPoller: tick error', err);
-        }
-    })();
-    intervalId = setInterval(() => {
-        logTickFired();
-        if (tickInFlight) {
-            logger_1.logger.info('channelPoller: skipping tick (previous still running)');
-            return;
-        }
-        tickInFlight = true;
-        void (async () => {
-            try {
-                await runChannelPollerTick(bot);
-            }
-            catch (err) {
-                logger_1.logger.error('channelPoller: tick error', err);
-            }
-            finally {
-                tickInFlight = false;
-            }
-        })();
-    }, ms);
-    logger_1.logger.info('channelPoller: started', {
-        channelCount,
-        concurrency: exports.POLL_CONCURRENCY,
-        intervalMs: ms,
+    syncPerChannelPollers(bot);
+    logger_1.logger.info('channelPoller: started (per-channel)', {
+        channelCount: channelRegistry_1.channelRegistry.getAllChannels().filter((c) => c.type === 'channel').length,
+        perChannelIntervalMs,
         fetchCount: FETCH_COUNT,
+        pollConcurrency: exports.POLL_CONCURRENCY,
     });
 }
 /**
- * Перезапуск таймера с разрешением из {@link adminRuntimeSettingsStore}.
+ * Перезапуск таймеров с разрешением из {@link adminRuntimeSettingsStore}.
  */
 function restartChannelPostPoller(bot) {
     startChannelPostPoller(bot);
@@ -221,10 +245,16 @@ function clearChannelPollerErrors(chatId) {
     }
 }
 function stopChannelPostPoller() {
-    if (intervalId !== undefined) {
-        clearInterval(intervalId);
-        intervalId = undefined;
-        logger_1.logger.info('channelPoller: stopped');
+    for (const chatId of [...channelTimers.keys()]) {
+        stopChannelTimer(chatId);
+    }
+    botRef = null;
+    logger_1.logger.info('channelPoller: stopped');
+}
+/** Вызвать после добавления/удаления канала в реестре (если поллер уже запущен). */
+function notifyChannelRegistryChanged() {
+    if (botRef) {
+        syncPerChannelPollers(botRef);
     }
 }
 //# sourceMappingURL=channelPoller.js.map

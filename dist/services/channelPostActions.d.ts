@@ -5,6 +5,14 @@ import { type Post } from './postStore';
  * Resolves chat id for a message (channel/group/dialog). Falls back to sender id for 1:1.
  */
 export declare function resolveMessageChatId(message: Message, fallbackUserId: number): number;
+export type RegisteredChannelLookup = {
+    chatId: number;
+    title: string | null;
+};
+/**
+ * Сообщение из канала, уже записанного в реестр бота (без лишнего getChat).
+ */
+export declare function lookupRegisteredChannelForMessage(message: Message): RegisteredChannelLookup | null;
 /**
  * Channel posts usually have `recipient.chat_type === 'channel'`; otherwise confirm via getChat.
  */
