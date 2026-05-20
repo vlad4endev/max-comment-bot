@@ -50,7 +50,8 @@ async function pollChannel(
     if (typeof mid !== 'string' || mid.trim() === '') {
       continue
     }
-    if (postStore.findPostByChannelMessage(channel.chat_id, mid)) {
+    const knownPost = postStore.findPostByChannelMessage(channel.chat_id, mid)
+    if (knownPost && knownPost.button_attach_pending !== true) {
       continue
     }
     stats.candidates += 1

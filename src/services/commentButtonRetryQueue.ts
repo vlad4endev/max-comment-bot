@@ -65,7 +65,7 @@ export function scheduleCommentButtonRetry(chatId: number, messageMid: string): 
 
 async function processOneRetry(bot: Bot, entry: RetryEntry, key: string): Promise<void> {
   const post = await ensurePostFromChannelMessage(bot, entry.chatId, entry.messageMid)
-  if (post) {
+  if (post && post.button_attach_pending !== true) {
     queue.delete(key)
     logger.info('commentButtonRetry: success', {
       chatId: entry.chatId,

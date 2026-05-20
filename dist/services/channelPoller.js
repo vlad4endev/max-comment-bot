@@ -43,7 +43,8 @@ async function pollChannel(bot, channel, botUid) {
         if (typeof mid !== 'string' || mid.trim() === '') {
             continue;
         }
-        if (postStore_1.postStore.findPostByChannelMessage(channel.chat_id, mid)) {
+        const knownPost = postStore_1.postStore.findPostByChannelMessage(channel.chat_id, mid);
+        if (knownPost && knownPost.button_attach_pending !== true) {
             continue;
         }
         stats.candidates += 1;
