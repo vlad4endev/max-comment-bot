@@ -213,6 +213,27 @@ async function listChannelChatIdsWhereUserIsAdmin(bot: Bot, userId: number): Pro
   return flags.filter((x): x is number => x !== null).sort((a, b) => a - b)
 }
 
+async function resolveChannelBranding(
+  bot: Bot,
+  chatId: number,
+): Promise<{ title: string; avatar_url: string | null }> {
+  const title = channelRegistry.getChannel(chatId)?.title?.trim() || 'Канал'
+  let avatar_url: string | null = null
+  try {
+    const chat = await bot.api.getChat(chatId)
+    const raw = chat.icon?.url
+    if (typeof raw === 'string') {
+      const trimmed = raw.trim()
+      if (trimmed) {
+        avatar_url = trimmed
+      }
+    }
+  } catch (err: unknown) {
+    logger.warn('resolveChannelBranding: getChat failed', { chatId, err })
+  }
+  return { title, avatar_url }
+}
+
 function toWireComment(c: Comment): {
   comment_id: string
   post_id: string
@@ -222,6 +243,7 @@ function toWireComment(c: Comment): {
   timestamp: string
   avatar_url?: string
   photo_urls?: string[]
+  posted_as_channel?: boolean
   reply?: {
     reply_id?: string
     text: string
@@ -254,6 +276,7 @@ function toWireComment(c: Comment): {
     ...(Array.isArray(c.photo_urls) && c.photo_urls.length > 0
       ? { photo_urls: c.photo_urls }
       : {}),
+    ...(c.posted_as_channel ? { posted_as_channel: true } : {}),
     ...(c.reply ? { reply: c.reply } : {}),
     ...(replies ? { replies } : {}),
   }
@@ -266,6 +289,9 @@ async function enrichCommentsWithAvatars(
 ): Promise<Comment[]> {
   const missingUserIds = new Set<number>()
   for (const c of comments) {
+    if (c.posted_as_channel) {
+      continue
+    }
     if (!c.avatar_url?.trim()) {
       missingUserIds.add(c.user_id)
     }
@@ -278,7 +304,7 @@ async function enrichCommentsWithAvatars(
     return comments
   }
   for (const c of comments) {
-    if (c.avatar_url?.trim()) {
+    if (c.posted_as_channel || c.avatar_url?.trim()) {
       continue
     }
     const url = urls.get(c.user_id)
@@ -354,6 +380,12 @@ async function resolveAdminCommentAccess(
 
 const MINIAPP_UPLOADS_PUBLIC_PREFIX = '/miniapp/uploads'
 const MINIAPP_UPLOADS_DIR = path.join(process.cwd(), 'miniapp', 'uploads')
+/** Brief wait when Mini App opens right as a new channel post is being registered. */
+const MINIAPP_POST_LOOKUP_RETRY_MS = 2000
+
+function sleepMs(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
 const MAX_UPLOAD_FILES = 10
 const MAX_UPLOAD_SIZE_BYTES = 8 * 1024 * 1024
 
@@ -841,43 +873,50 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
     return null
   }
 
-  router.get('/post/:postId', async (req, res) => {
-    const chatIdRaw = parseNonZeroInt(req.query.chat_id)
-    const messageMid = parseNonEmptyString(req.query.message_mid)
-    let post = resolvePostForMiniApp(req.params.postId, chatIdRaw, messageMid)
-    if (!post && chatIdRaw !== null && messageMid) {
+  async function resolvePostForMiniAppOpen(
+    postId: string,
+    chatIdRaw: number | null,
+    messageMid: string | null,
+  ): Promise<Post | null> {
+    let post = resolvePostForMiniApp(postId, chatIdRaw, messageMid)
+    if (post) {
+      return post
+    }
+    await sleepMs(MINIAPP_POST_LOOKUP_RETRY_MS)
+    post = resolvePostForMiniApp(postId, chatIdRaw, messageMid)
+    if (post) {
+      logger.info('resolvePostForMiniAppOpen: post found after retry', {
+        postId,
+        chatId: chatIdRaw,
+        messageMid,
+      })
+      return post
+    }
+    if (chatIdRaw !== null && messageMid) {
       const canonicalChatId = resolveCanonicalChannelChatId(chatIdRaw) ?? chatIdRaw
       post = await ensurePostFromChannelMessage(deps.bot, canonicalChatId, messageMid)
-      if (post && post.post_id !== req.params.postId) {
-        logger.info('GET /post: backfilled from message_mid', {
-          requestedPostId: req.params.postId,
+      if (post && post.post_id !== postId) {
+        logger.info('resolvePostForMiniAppOpen: backfilled from message_mid', {
+          requestedPostId: postId,
           postId: post.post_id,
           chatId: canonicalChatId,
           messageMid,
         })
       }
     }
+    return post
+  }
+
+  router.get('/post/:postId', async (req, res) => {
+    const chatIdRaw = parseNonZeroInt(req.query.chat_id)
+    const messageMid = parseNonEmptyString(req.query.message_mid)
+    const post = await resolvePostForMiniAppOpen(req.params.postId, chatIdRaw, messageMid)
     if (!post) {
       res.status(404).json({ error: 'post not found' })
       return
     }
-    const channel = channelRegistry.getChannel(post.chat_id)
-    let channel_avatar_url: string | null = null
-    try {
-      const chat = await deps.bot.api.getChat(post.chat_id)
-      const raw = chat.icon?.url
-      if (typeof raw === 'string') {
-        const trimmed = raw.trim()
-        if (trimmed) {
-          channel_avatar_url = trimmed
-        }
-      }
-    } catch (err: unknown) {
-      logger.warn('GET /post/:postId: getChat failed (channel avatar)', {
-        chatId: post.chat_id,
-        err,
-      })
-    }
+    const channelBranding = await resolveChannelBranding(deps.bot, post.chat_id)
+    const channel_avatar_url = channelBranding.avatar_url
     let channel_post_url: string | null = null
     try {
       channel_post_url = await resolveChannelPostUrl(deps.bot, post)
@@ -894,7 +933,7 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
       channel_post_url,
       chat_id: post.chat_id,
       comment_count: post.comment_count,
-      channel_title: channel?.title ?? null,
+      channel_title: channelRegistry.getChannel(post.chat_id)?.title ?? channelBranding.title,
       channel_avatar_url,
     })
   })
@@ -903,11 +942,7 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
     const postId = req.params.postId
     const chatIdRaw = parseNonZeroInt(req.query.chat_id)
     const messageMid = parseNonEmptyString(req.query.message_mid)
-    let post = resolvePostForMiniApp(postId, chatIdRaw, messageMid)
-    if (!post && chatIdRaw !== null && messageMid) {
-      const canonicalChatId = resolveCanonicalChannelChatId(chatIdRaw) ?? chatIdRaw
-      post = await ensurePostFromChannelMessage(deps.bot, canonicalChatId, messageMid)
-    }
+    const post = await resolvePostForMiniAppOpen(postId, chatIdRaw, messageMid)
     if (!post) {
       res.status(404).json({ error: 'post not found' })
       return
@@ -969,8 +1004,16 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
       return
     }
 
+    const postAsChannel = await isUserChannelAdmin(deps.bot, chatId, userId)
+    let saveUsername = username
     let avatarUrl = avatarFromClient
-    if (!avatarUrl) {
+    let postedAsChannel = false
+    if (postAsChannel) {
+      const branding = await resolveChannelBranding(deps.bot, chatId)
+      saveUsername = branding.title
+      avatarUrl = branding.avatar_url ?? null
+      postedAsChannel = true
+    } else if (!avatarUrl) {
       const resolved = await resolveMemberAvatarUrls(deps.bot, chatId, [userId])
       avatarUrl = resolved.get(userId) ?? null
     }
@@ -978,10 +1021,11 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
     const saved = commentStore.saveComment({
       post_id: postId,
       user_id: userId,
-      username,
+      username: saveUsername,
       text,
       ...(photoUrls.length > 0 ? { photo_urls: photoUrls } : {}),
       ...(avatarUrl ? { avatar_url: avatarUrl } : {}),
+      ...(postedAsChannel ? { posted_as_channel: true } : {}),
     })
 
     const newCount = postStore.incrementCommentCount(postId)
@@ -1001,7 +1045,7 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
         channelChatId: chatId,
         postText: post.text,
         channelTitle,
-        username,
+        username: saveUsername,
         commentText: text,
         commentPhotoUrls: photoUrls,
         postId,
@@ -1010,7 +1054,17 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
       logger.warn('POST /api/comment: notify admins failed', { err })
     }
 
-    res.json({ comment_id: saved.comment_id, timestamp: saved.timestamp })
+    res.json({
+      comment_id: saved.comment_id,
+      timestamp: saved.timestamp,
+      ...(saved.posted_as_channel ? { posted_as_channel: true } : {}),
+      ...(saved.avatar_url ? { avatar_url: saved.avatar_url } : {}),
+      username: saved.username,
+      text: saved.text,
+      ...(Array.isArray(saved.photo_urls) && saved.photo_urls.length > 0
+        ? { photo_urls: saved.photo_urls }
+        : {}),
+    })
   })
 
   router.post('/reply', async (req, res) => {
@@ -1034,8 +1088,7 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
       res.status(404).json({ error: 'post not found' })
       return
     }
-    const channelReplyName =
-      channelRegistry.getChannel(chatId)?.title?.trim() || 'Канал'
+    const channelReplyName = (await resolveChannelBranding(deps.bot, chatId)).title
 
     if (!(await isUserChannelAdmin(deps.bot, post.chat_id, replierUserId))) {
       res.status(403).json({ error: 'Только администраторы могут отвечать' })

@@ -177,6 +177,24 @@ async function listChannelChatIdsWhereUserIsAdmin(bot, userId) {
     const flags = await Promise.all(registered.map(async (chatId) => (await (0, channelPostActions_1.isUserChannelAdmin)(bot, chatId, userId)) ? chatId : null));
     return flags.filter((x) => x !== null).sort((a, b) => a - b);
 }
+async function resolveChannelBranding(bot, chatId) {
+    const title = channelRegistry_1.channelRegistry.getChannel(chatId)?.title?.trim() || 'Канал';
+    let avatar_url = null;
+    try {
+        const chat = await bot.api.getChat(chatId);
+        const raw = chat.icon?.url;
+        if (typeof raw === 'string') {
+            const trimmed = raw.trim();
+            if (trimmed) {
+                avatar_url = trimmed;
+            }
+        }
+    }
+    catch (err) {
+        logger_1.logger.warn('resolveChannelBranding: getChat failed', { chatId, err });
+    }
+    return { title, avatar_url };
+}
 function toWireComment(c) {
     const replies = Array.isArray(c.replies) && c.replies.length > 0
         ? c.replies
@@ -194,6 +212,7 @@ function toWireComment(c) {
         ...(Array.isArray(c.photo_urls) && c.photo_urls.length > 0
             ? { photo_urls: c.photo_urls }
             : {}),
+        ...(c.posted_as_channel ? { posted_as_channel: true } : {}),
         ...(c.reply ? { reply: c.reply } : {}),
         ...(replies ? { replies } : {}),
     };
@@ -201,6 +220,9 @@ function toWireComment(c) {
 async function enrichCommentsWithAvatars(bot, channelChatId, comments) {
     const missingUserIds = new Set();
     for (const c of comments) {
+        if (c.posted_as_channel) {
+            continue;
+        }
         if (!c.avatar_url?.trim()) {
             missingUserIds.add(c.user_id);
         }
@@ -213,7 +235,7 @@ async function enrichCommentsWithAvatars(bot, channelChatId, comments) {
         return comments;
     }
     for (const c of comments) {
-        if (c.avatar_url?.trim()) {
+        if (c.posted_as_channel || c.avatar_url?.trim()) {
             continue;
         }
         const url = urls.get(c.user_id);
@@ -265,6 +287,11 @@ async function resolveAdminCommentAccess(bot, input) {
 }
 const MINIAPP_UPLOADS_PUBLIC_PREFIX = '/miniapp/uploads';
 const MINIAPP_UPLOADS_DIR = node_path_1.default.join(process.cwd(), 'miniapp', 'uploads');
+/** Brief wait when Mini App opens right as a new channel post is being registered. */
+const MINIAPP_POST_LOOKUP_RETRY_MS = 2000;
+function sleepMs(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+}
 const MAX_UPLOAD_FILES = 10;
 const MAX_UPLOAD_SIZE_BYTES = 8 * 1024 * 1024;
 const miniappPhotoUpload = (0, multer_1.default)({
@@ -730,44 +757,45 @@ function createCommentApiRouter(deps) {
         }
         return null;
     }
-    router.get('/post/:postId', async (req, res) => {
-        const chatIdRaw = parseNonZeroInt(req.query.chat_id);
-        const messageMid = parseNonEmptyString(req.query.message_mid);
-        let post = resolvePostForMiniApp(req.params.postId, chatIdRaw, messageMid);
-        if (!post && chatIdRaw !== null && messageMid) {
+    async function resolvePostForMiniAppOpen(postId, chatIdRaw, messageMid) {
+        let post = resolvePostForMiniApp(postId, chatIdRaw, messageMid);
+        if (post) {
+            return post;
+        }
+        await sleepMs(MINIAPP_POST_LOOKUP_RETRY_MS);
+        post = resolvePostForMiniApp(postId, chatIdRaw, messageMid);
+        if (post) {
+            logger_1.logger.info('resolvePostForMiniAppOpen: post found after retry', {
+                postId,
+                chatId: chatIdRaw,
+                messageMid,
+            });
+            return post;
+        }
+        if (chatIdRaw !== null && messageMid) {
             const canonicalChatId = (0, resolveChannelChatId_1.resolveCanonicalChannelChatId)(chatIdRaw) ?? chatIdRaw;
             post = await (0, channelPostActions_1.ensurePostFromChannelMessage)(deps.bot, canonicalChatId, messageMid);
-            if (post && post.post_id !== req.params.postId) {
-                logger_1.logger.info('GET /post: backfilled from message_mid', {
-                    requestedPostId: req.params.postId,
+            if (post && post.post_id !== postId) {
+                logger_1.logger.info('resolvePostForMiniAppOpen: backfilled from message_mid', {
+                    requestedPostId: postId,
                     postId: post.post_id,
                     chatId: canonicalChatId,
                     messageMid,
                 });
             }
         }
+        return post;
+    }
+    router.get('/post/:postId', async (req, res) => {
+        const chatIdRaw = parseNonZeroInt(req.query.chat_id);
+        const messageMid = parseNonEmptyString(req.query.message_mid);
+        const post = await resolvePostForMiniAppOpen(req.params.postId, chatIdRaw, messageMid);
         if (!post) {
             res.status(404).json({ error: 'post not found' });
             return;
         }
-        const channel = channelRegistry_1.channelRegistry.getChannel(post.chat_id);
-        let channel_avatar_url = null;
-        try {
-            const chat = await deps.bot.api.getChat(post.chat_id);
-            const raw = chat.icon?.url;
-            if (typeof raw === 'string') {
-                const trimmed = raw.trim();
-                if (trimmed) {
-                    channel_avatar_url = trimmed;
-                }
-            }
-        }
-        catch (err) {
-            logger_1.logger.warn('GET /post/:postId: getChat failed (channel avatar)', {
-                chatId: post.chat_id,
-                err,
-            });
-        }
+        const channelBranding = await resolveChannelBranding(deps.bot, post.chat_id);
+        const channel_avatar_url = channelBranding.avatar_url;
         let channel_post_url = null;
         try {
             channel_post_url = await (0, postStore_1.resolveChannelPostUrl)(deps.bot, post);
@@ -785,7 +813,7 @@ function createCommentApiRouter(deps) {
             channel_post_url,
             chat_id: post.chat_id,
             comment_count: post.comment_count,
-            channel_title: channel?.title ?? null,
+            channel_title: channelRegistry_1.channelRegistry.getChannel(post.chat_id)?.title ?? channelBranding.title,
             channel_avatar_url,
         });
     });
@@ -793,11 +821,7 @@ function createCommentApiRouter(deps) {
         const postId = req.params.postId;
         const chatIdRaw = parseNonZeroInt(req.query.chat_id);
         const messageMid = parseNonEmptyString(req.query.message_mid);
-        let post = resolvePostForMiniApp(postId, chatIdRaw, messageMid);
-        if (!post && chatIdRaw !== null && messageMid) {
-            const canonicalChatId = (0, resolveChannelChatId_1.resolveCanonicalChannelChatId)(chatIdRaw) ?? chatIdRaw;
-            post = await (0, channelPostActions_1.ensurePostFromChannelMessage)(deps.bot, canonicalChatId, messageMid);
-        }
+        const post = await resolvePostForMiniAppOpen(postId, chatIdRaw, messageMid);
         if (!post) {
             res.status(404).json({ error: 'post not found' });
             return;
@@ -855,18 +879,28 @@ function createCommentApiRouter(deps) {
             res.status(403).json({ error: 'Доступ запрещён' });
             return;
         }
+        const postAsChannel = await (0, channelPostActions_1.isUserChannelAdmin)(deps.bot, chatId, userId);
+        let saveUsername = username;
         let avatarUrl = avatarFromClient;
-        if (!avatarUrl) {
+        let postedAsChannel = false;
+        if (postAsChannel) {
+            const branding = await resolveChannelBranding(deps.bot, chatId);
+            saveUsername = branding.title;
+            avatarUrl = branding.avatar_url ?? null;
+            postedAsChannel = true;
+        }
+        else if (!avatarUrl) {
             const resolved = await (0, memberAvatar_1.resolveMemberAvatarUrls)(deps.bot, chatId, [userId]);
             avatarUrl = resolved.get(userId) ?? null;
         }
         const saved = commentStore_1.commentStore.saveComment({
             post_id: postId,
             user_id: userId,
-            username,
+            username: saveUsername,
             text,
             ...(photoUrls.length > 0 ? { photo_urls: photoUrls } : {}),
             ...(avatarUrl ? { avatar_url: avatarUrl } : {}),
+            ...(postedAsChannel ? { posted_as_channel: true } : {}),
         });
         const newCount = postStore_1.postStore.incrementCommentCount(postId);
         if (newCount === null) {
@@ -884,7 +918,7 @@ function createCommentApiRouter(deps) {
                 channelChatId: chatId,
                 postText: post.text,
                 channelTitle,
-                username,
+                username: saveUsername,
                 commentText: text,
                 commentPhotoUrls: photoUrls,
                 postId,
@@ -893,7 +927,17 @@ function createCommentApiRouter(deps) {
         catch (err) {
             logger_1.logger.warn('POST /api/comment: notify admins failed', { err });
         }
-        res.json({ comment_id: saved.comment_id, timestamp: saved.timestamp });
+        res.json({
+            comment_id: saved.comment_id,
+            timestamp: saved.timestamp,
+            ...(saved.posted_as_channel ? { posted_as_channel: true } : {}),
+            ...(saved.avatar_url ? { avatar_url: saved.avatar_url } : {}),
+            username: saved.username,
+            text: saved.text,
+            ...(Array.isArray(saved.photo_urls) && saved.photo_urls.length > 0
+                ? { photo_urls: saved.photo_urls }
+                : {}),
+        });
     });
     router.post('/reply', async (req, res) => {
         const body = req.body;
@@ -916,7 +960,7 @@ function createCommentApiRouter(deps) {
             res.status(404).json({ error: 'post not found' });
             return;
         }
-        const channelReplyName = channelRegistry_1.channelRegistry.getChannel(chatId)?.title?.trim() || 'Канал';
+        const channelReplyName = (await resolveChannelBranding(deps.bot, chatId)).title;
         if (!(await (0, channelPostActions_1.isUserChannelAdmin)(deps.bot, post.chat_id, replierUserId))) {
             res.status(403).json({ error: 'Только администраторы могут отвечать' });
             return;
