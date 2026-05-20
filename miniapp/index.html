@@ -4726,6 +4726,8 @@
           if (menu.dataset.menuShield === '1') return;
           menu.dataset.menuShield = '1';
           function stopMenuEvent(e) {
+            // Не глушим клики по кнопкам меню — иначе «Удалить»/«Изменить» не срабатывают.
+            if (e.target && e.target.closest && e.target.closest('.admin-act-btn')) return;
             e.stopPropagation();
           }
           menu.addEventListener('touchstart', stopMenuEvent, { passive: true, capture: true });
