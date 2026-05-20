@@ -2,6 +2,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.extractMemberAvatarUrl = extractMemberAvatarUrl;
 exports.resolveMemberAvatarUrls = resolveMemberAvatarUrls;
+exports.resolveMemberDisplayName = resolveMemberDisplayName;
 const stateManager_1 = require("../services/stateManager");
 const logger_1 = require("./logger");
 const BATCH_SIZE = 50;
@@ -66,5 +67,46 @@ async function resolveMemberAvatarUrls(bot, channelChatId, userIds) {
         }
     }
     return out;
+}
+/**
+ * Display name for a user (e.g. who replied as channel): `name` from channel membership,
+ * then from remembered private dialog with the bot.
+ */
+async function resolveMemberDisplayName(bot, channelChatId, userId) {
+    if (!Number.isFinite(userId) || userId <= 0) {
+        return null;
+    }
+    try {
+        const { members } = await bot.api.getChatMembers(channelChatId, { user_ids: [userId] });
+        const n = members[0]?.name?.trim();
+        if (n) {
+            return n;
+        }
+    }
+    catch (err) {
+        logger_1.logger.debug('resolveMemberDisplayName: channel getChatMembers failed', {
+            channelChatId,
+            userId,
+            err,
+        });
+    }
+    const priv = stateManager_1.stateManager.getUserPrivateChatId(userId);
+    if (priv !== undefined) {
+        try {
+            const { members } = await bot.api.getChatMembers(priv, { user_ids: [userId] });
+            const n = members[0]?.name?.trim();
+            if (n) {
+                return n;
+            }
+        }
+        catch (err) {
+            logger_1.logger.debug('resolveMemberDisplayName: private getChatMembers failed', {
+                priv,
+                userId,
+                err,
+            });
+        }
+    }
+    return null;
 }
 //# sourceMappingURL=memberAvatar.js.map
