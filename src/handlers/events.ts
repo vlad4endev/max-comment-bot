@@ -995,6 +995,7 @@ ${inviteUrl}
         botUserId: ctx.myId,
         channelChatIdOverride: channelChatId,
         skipAuthorAdminCheck: true,
+        source: 'manual',
       })
       if (r.ok) {
         await ctx.reply('Button added to post.')
@@ -1012,6 +1013,12 @@ ${inviteUrl}
         await ctx.reply('Cannot attach to a message sent by the bot.')
         return
       }
+      if (r.reason === 'attach_failed') {
+        await ctx.reply(
+          'Could not attach the button (MAX API rejected edit/reply). Check bot admin rights and try «Обновить кнопки» in the admin panel.',
+        )
+        return
+      }
       await ctx.reply(`Could not add the button (${r.reason}).`)
       return
     }
@@ -1026,10 +1033,12 @@ ${inviteUrl}
       const r = await tryAttachCommentsToChannelPost(bot, message, {
         botUserId: ctx.myId,
         skipAuthorAdminCheck: true,
+        source: 'webhook',
       })
-      if (r.ok) {
-        logger.info('message_created: comment button attached (push path)', {
+      if (!r.ok) {
+        logger.info('message_created: кнопка не присвоена (см. commentButton выше)', {
           messageMid: message.body.mid,
+          reason: r.reason,
         })
       }
       return

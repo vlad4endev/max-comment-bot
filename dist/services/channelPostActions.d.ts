@@ -15,8 +15,9 @@ export type AttachChannelCommentsResult = {
     ok: true;
 } | {
     ok: false;
-    reason: 'no_chat_id' | 'no_mid' | 'skip_bot' | 'no_miniapp' | 'not_admin' | 'already_exists';
+    reason: 'no_chat_id' | 'no_mid' | 'skip_bot' | 'no_miniapp' | 'not_admin' | 'already_exists' | 'attach_failed';
 };
+export type CommentButtonAttachSource = 'webhook' | 'poller' | 'refresh' | 'manual' | 'ensure' | 'tg_chain';
 /**
  * Creates a {@link Post}, saves it, and attaches the Mini App inline button (edit or reply fallback).
  *
@@ -27,6 +28,7 @@ export declare function tryAttachCommentsToChannelPost(bot: Bot, message: Messag
     botUserId?: number;
     channelChatIdOverride?: number;
     skipAuthorAdminCheck?: boolean;
+    source?: CommentButtonAttachSource;
 }): Promise<AttachChannelCommentsResult>;
 /**
  * Loads a channel message from MAX and registers it in {@link postStore} if missing.

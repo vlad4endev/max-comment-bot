@@ -12,7 +12,7 @@ import { tryAttachCommentsToChannelPost } from './channelPostActions'
 import { isMiniAppOpenUrlConfigured } from './postStore'
 
 const MIN_POLL_INTERVAL_MS = 3_000
-const FETCH_COUNT = 10
+const FETCH_COUNT = 30
 /** Admin «обновить кнопки» scans more history than the periodic poller. */
 const REFRESH_BUTTONS_FETCH_COUNT = 50
 /** Exported for startup diagnostics. */
@@ -48,28 +48,13 @@ async function pollChannel(
     logger.info('channelPoller: no messages returned for channel', { chatId: channel.chat_id })
   }
   for (const message of messages) {
-    const r = await tryAttachCommentsToChannelPost(bot, message, {
+    await tryAttachCommentsToChannelPost(bot, message, {
       botUserId: botUid,
       channelChatIdOverride: channel.chat_id,
       /** Channel posts often have no admin-shaped sender; poller only runs on registered channels. */
       skipAuthorAdminCheck: true,
+      source: 'poller',
     })
-    const logPayload = {
-      chatId: channel.chat_id,
-      mid: message.body?.mid,
-      result: r,
-    }
-    if (!r.ok && r.reason === 'already_exists') {
-      logger.debug('channelPoller: tryAttach result', logPayload)
-    } else {
-      logger.info('channelPoller: tryAttach result', logPayload)
-    }
-    if (r.ok) {
-      logger.info('channelPoller: button attached to new post', {
-        channelChatId: channel.chat_id,
-        mid: message.body.mid,
-      })
-    }
   }
 }
 
@@ -168,12 +153,18 @@ export async function runChannelPollerForChat(
       botUserId: botUid,
       channelChatIdOverride: reg.chat_id,
       skipAuthorAdminCheck: true,
+      source: 'refresh',
     })
     if (r.ok) {
       stats.created += 1
     } else if (r.reason === 'already_exists') {
       stats.refreshed += 1
-    } else if (r.reason === 'skip_bot' || r.reason === 'no_mid' || r.reason === 'no_chat_id') {
+    } else if (
+      r.reason === 'skip_bot' ||
+      r.reason === 'no_mid' ||
+      r.reason === 'no_chat_id' ||
+      r.reason === 'not_admin'
+    ) {
       stats.skipped += 1
     } else {
       stats.failed += 1

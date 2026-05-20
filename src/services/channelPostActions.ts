@@ -46,6 +46,32 @@ export async function isLikelyChannelPost(bot: Bot, message: Message): Promise<b
   }
 }
 
+/**
+ * Bot messages that are not channel posts: reply-stub with the comments keyboard, or UI rows already in DB.
+ */
+function isBotOwnedCommentsUiMessage(
+  message: Message,
+  chatId: number,
+  botUid: number | undefined,
+): boolean {
+  const user = message.sender
+  if (!user || botUid === undefined || user.user_id !== botUid) {
+    return false
+  }
+  if (message.link?.type === 'reply') {
+    return true
+  }
+  const mid = message.body?.mid
+  if (typeof mid === 'string' && mid.trim() !== '' && postStore.findPostByCommentsUiMessage(chatId, mid)) {
+    return true
+  }
+  const atts = message.body.attachments
+  if (atts?.some((a) => a.type === 'inline_keyboard')) {
+    return true
+  }
+  return false
+}
+
 function firstImageUrlFromMessage(message: Message): string | undefined {
   const list = message.body.attachments
   if (!list || list.length === 0) {
@@ -92,7 +118,76 @@ export type AttachChannelCommentsResult =
         | 'no_miniapp'
         | 'not_admin'
         | 'already_exists'
+        | 'attach_failed'
     }
+
+export type CommentButtonAttachSource =
+  | 'webhook'
+  | 'poller'
+  | 'refresh'
+  | 'manual'
+  | 'ensure'
+  | 'tg_chain'
+
+type AttachFailReason = Extract<AttachChannelCommentsResult, { ok: false }>['reason']
+
+const COMMENT_BUTTON_REASON_RU: Record<AttachFailReason, string> = {
+  no_chat_id: 'не удалось определить chat_id канала',
+  no_mid: 'у сообщения нет mid',
+  skip_bot: 'служебное сообщение бота (reply/UI), не пост канала',
+  no_miniapp: 'не заданы BOT_NICKNAME или MINI_APP_URL',
+  not_admin: 'автор не администратор канала (или отключён в боте)',
+  already_exists: 'пост уже в базе — кнопка была привязана ранее',
+  attach_failed: 'не удалось edit поста и reply с кнопкой в MAX',
+}
+
+function durationFields(since: number): { durationMs: number; duration: string } {
+  const durationMs = Math.round(performance.now() - since)
+  const duration = durationMs >= 1000 ? `${(durationMs / 1000).toFixed(2)} с` : `${durationMs} мс`
+  return { durationMs, duration }
+}
+
+function logCommentButton(
+  level: 'info' | 'warn' | 'error',
+  message: string,
+  data: Record<string, unknown>,
+): void {
+  if (level === 'warn') logger.warn(message, data)
+  else if (level === 'error') logger.error(message, data)
+  else logger.info(message, data)
+}
+
+function logCommentButtonSkip(
+  source: CommentButtonAttachSource | undefined,
+  reason: AttachFailReason,
+  ctx: Record<string, unknown>,
+  since: number,
+): void {
+  const hint = COMMENT_BUTTON_REASON_RU[reason]
+  const timing = durationFields(since)
+  const level =
+    reason === 'no_miniapp' || reason === 'not_admin' || reason === 'attach_failed' ? 'warn' : 'info'
+  logCommentButton(level, `commentButton: не присвоена — ${hint} (${timing.duration})`, {
+    source: source ?? 'unknown',
+    outcome: reason,
+    ...timing,
+    ...ctx,
+  })
+}
+
+function logCommentButtonOk(
+  source: CommentButtonAttachSource | undefined,
+  ctx: Record<string, unknown>,
+  since: number,
+): void {
+  const timing = durationFields(since)
+  logCommentButton('info', `commentButton: кнопка «Комментарии» присвоена (${timing.duration})`, {
+    source: source ?? 'unknown',
+    outcome: 'attached',
+    ...timing,
+    ...ctx,
+  })
+}
 
 /**
  * Creates a {@link Post}, saves it, and attaches the Mini App inline button (edit or reply fallback).
@@ -107,8 +202,11 @@ export async function tryAttachCommentsToChannelPost(
     botUserId?: number
     channelChatIdOverride?: number
     skipAuthorAdminCheck?: boolean
+    source?: CommentButtonAttachSource
   } = {},
 ): Promise<AttachChannelCommentsResult> {
+  const attachStartedAt = performance.now()
+  const source = options.source
   const user = message.sender ?? undefined
   const override = options.channelChatIdOverride
   const overrideOk =
@@ -117,57 +215,165 @@ export async function tryAttachCommentsToChannelPost(
   const recipientChatId = typeof rid === 'number' && Number.isFinite(rid) ? rid : undefined
   const rawChatId = overrideOk ?? recipientChatId ?? null
   if (rawChatId === null) {
-    return { ok: false, reason: 'no_chat_id' }
+    const result = { ok: false as const, reason: 'no_chat_id' as const }
+    logCommentButtonSkip(source, result.reason, { recipientChatType: message.recipient?.chat_type }, attachStartedAt)
+    return result
   }
   const chatId = resolveCanonicalChannelChatId(rawChatId) ?? rawChatId
 
-  const botUid = options.botUserId ?? bot.botInfo?.user_id
-  if (user && botUid !== undefined && user.user_id === botUid) {
-    return { ok: false, reason: 'skip_bot' }
-  }
-
   if (!isMiniAppOpenUrlConfigured()) {
-    logger.debug('tryAttachCommentsToChannelPost: BOT_NICKNAME / MINI_APP_URL not set for Mini App links')
-    return { ok: false, reason: 'no_miniapp' }
+    const result = { ok: false as const, reason: 'no_miniapp' as const }
+    logCommentButtonSkip(source, result.reason, { chatId }, attachStartedAt)
+    return result
   }
 
   const mid = message.body?.mid
   if (typeof mid !== 'string' || mid.trim() === '') {
-    return { ok: false, reason: 'no_mid' }
+    const result = { ok: false as const, reason: 'no_mid' as const }
+    logCommentButtonSkip(source, result.reason, { chatId }, attachStartedAt)
+    return result
   }
+
+  logCommentButton('info', 'commentButton: проверка поста', {
+    source: source ?? 'unknown',
+    chatId,
+    messageMid: mid,
+    senderId: user?.user_id,
+    recipientChatType: message.recipient.chat_type,
+  })
 
   const existingPost = postStore.findPostByChannelMessage(chatId, mid)
   if (existingPost) {
-    try {
-      await postStore.updateButtonCaption(bot, existingPost)
-    } catch (err: unknown) {
-      logger.warn('tryAttachCommentsToChannelPost: refresh button failed', {
-        postId: existingPost.post_id,
-        chatId,
-        mid,
-        err,
-      })
+    /** Периодический поллер не трогает MAX API для постов с кнопкой — иначе очередь каналов растягивается на минуты. */
+    if (source === 'poller') {
+      const result = { ok: false as const, reason: 'already_exists' as const }
+      logCommentButtonSkip(
+        source,
+        result.reason,
+        {
+          chatId,
+          messageMid: mid,
+          postId: existingPost.post_id,
+          pollerSkipApi: true,
+        },
+        attachStartedAt,
+      )
+      return result
     }
-    return { ok: false, reason: 'already_exists' }
+
+    const captionStartedAt = performance.now()
+    const captionOk = await postStore.updateButtonCaption(bot, existingPost)
+    const captionTiming = durationFields(captionStartedAt)
+    if (captionOk) {
+      logCommentButton('info', `commentButton: пост уже с кнопкой — обновлена подпись (${captionTiming.duration})`, {
+        source: source ?? 'unknown',
+        chatId,
+        messageMid: mid,
+        postId: existingPost.post_id,
+        captionUpdateMs: captionTiming.durationMs,
+      })
+      const result = { ok: false as const, reason: 'already_exists' as const }
+      logCommentButtonSkip(
+        source,
+        result.reason,
+        {
+          chatId,
+          messageMid: mid,
+          postId: existingPost.post_id,
+          captionRefreshed: true,
+          captionUpdateMs: captionTiming.durationMs,
+        },
+        attachStartedAt,
+      )
+      return result
+    }
+
+    logCommentButton('warn', 'commentButton: пост в базе, кнопка не видна — повторное присвоение', {
+      source: source ?? 'unknown',
+      chatId,
+      messageMid: mid,
+      postId: existingPost.post_id,
+    })
+    const openUrl = buildMiniAppUrl(existingPost.post_id, chatId, undefined, mid)
+    const kb = Keyboard.inlineKeyboard([
+      [Keyboard.button.link(`💬 Комментарии (${existingPost.comment_count})`, openUrl)],
+    ])
+    const editText = existingPost.text.trim() === '' ? '\u00a0' : existingPost.text
+    const reattached = await attachCommentButtonToChannelPost(bot, existingPost, editText, kb, {
+      source: source ?? 'unknown',
+      phase: 'reattach',
+    })
+    if (reattached) {
+      logCommentButtonOk(
+        source,
+        {
+          chatId,
+          messageMid: mid,
+          postId: existingPost.post_id,
+          reattached: true,
+        },
+        attachStartedAt,
+      )
+      return { ok: true }
+    }
+    const fail = { ok: false as const, reason: 'attach_failed' as const }
+    logCommentButtonSkip(
+      source,
+      fail.reason,
+      {
+        chatId,
+        messageMid: mid,
+        postId: existingPost.post_id,
+        reattachAttempt: true,
+      },
+      attachStartedAt,
+    )
+    return fail
+  }
+
+  const botUid = options.botUserId ?? bot.botInfo?.user_id
+  if (isBotOwnedCommentsUiMessage(message, chatId, botUid)) {
+    const result = { ok: false as const, reason: 'skip_bot' as const }
+    logCommentButtonSkip(
+      source,
+      result.reason,
+      {
+        chatId,
+        messageMid: mid,
+        linkType: message.link?.type,
+      },
+      attachStartedAt,
+    )
+    return result
   }
 
   const needsAdminCheck = Boolean(user) && !options.skipAuthorAdminCheck
   if (needsAdminCheck && user) {
+    const adminStartedAt = performance.now()
     const adminOk = await isUserChannelAdmin(bot, chatId, user.user_id)
+    const adminTiming = durationFields(adminStartedAt)
     if (!adminOk) {
-      logger.debug('tryAttachCommentsToChannelPost: skip (sender not channel admin)', {
-        chatId,
-        userId: user.user_id,
-      })
-      return { ok: false, reason: 'not_admin' }
+      const result = { ok: false as const, reason: 'not_admin' as const }
+      logCommentButtonSkip(
+        source,
+        result.reason,
+        {
+          chatId,
+          messageMid: mid,
+          senderId: user.user_id,
+          adminCheckMs: adminTiming.durationMs,
+        },
+        attachStartedAt,
+      )
+      return result
     }
   }
 
-  logger.info('tryAttachCommentsToChannelPost: attaching', {
+  logCommentButton('info', 'commentButton: присваиваем кнопку новому посту', {
+    source: source ?? 'unknown',
     chatId,
-    senderId: user?.user_id,
     messageMid: mid,
-    recipientChatType: message.recipient.chat_type,
+    senderId: user?.user_id,
   })
 
   const postId = uuidv4()
@@ -188,18 +394,27 @@ export async function tryAttachCommentsToChannelPost(
     comment_count: 0,
     timestamp: new Date().toISOString(),
   }
-  postStore.savePost(post)
-
   const openUrl = buildMiniAppUrl(postId, chatId, undefined, mid)
   const kb = Keyboard.inlineKeyboard([[Keyboard.button.link('💬 Комментарии (0)', openUrl)]])
   const editText = text === '' ? '\u00a0' : text
 
-  await attachCommentButtonToChannelPost(bot, post, editText, kb)
+  const attached = await attachCommentButtonToChannelPost(bot, post, editText, kb, {
+    source: source ?? 'unknown',
+    phase: 'new',
+  })
+  if (!attached) {
+    const result = { ok: false as const, reason: 'attach_failed' as const }
+    logCommentButtonSkip(source, result.reason, { chatId, messageMid: mid, postId }, attachStartedAt)
+    return result
+  }
+
+  postStore.savePost(post)
   pushAdminActivity('new_post_button', {
     chat_id: chatId,
     post_id: postId,
     message_mid: mid,
   })
+  logCommentButtonOk(source, { chatId, messageMid: mid, postId }, attachStartedAt)
   return { ok: true }
 }
 
@@ -241,9 +456,16 @@ export async function ensurePostFromChannelMessage(
   const r = await tryAttachCommentsToChannelPost(bot, message, {
     channelChatIdOverride: canonicalChatId,
     skipAuthorAdminCheck: true,
+    source: 'ensure',
   })
   if (r.ok || r.reason === 'already_exists') {
     return postStore.findPostByChannelMessage(canonicalChatId, messageMid)
+  }
+  if (r.reason === 'attach_failed') {
+    logger.warn('ensurePostFromChannelMessage: button attach failed', {
+      chatId: canonicalChatId,
+      messageMid,
+    })
   }
   return null
 }

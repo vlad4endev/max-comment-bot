@@ -30,6 +30,8 @@ export declare class PostStore {
     getPost(postId: string): Post | null;
     getPostsByChatId(chatId: number): Post[];
     findPostByChannelMessage(chatId: number, messageMid: string): Post | null;
+    /** Reply-stub message id when edit on the original post failed and the bot sent a threaded keyboard. */
+    findPostByCommentsUiMessage(chatId: number, commentsUiMid: string): Post | null;
     incrementCommentCount(postId: string): number | null;
     decrementCommentCount(postId: string): number | null;
     removePostsForChatId(chatId: number): string[];
@@ -38,7 +40,7 @@ export declare class PostStore {
     /**
      * Updates the channel message inline keyboard to show the current comment count.
      */
-    updateButtonCaption(bot: Bot, post: Post): Promise<void>;
+    updateButtonCaption(bot: Bot, post: Post): Promise<boolean>;
     private parsePost;
     private getStatements;
 }
@@ -51,7 +53,10 @@ export declare function mediaAttachmentRequestsFromMessageBody(attachments: Atta
  * Option A: {@link Bot.api.editMessage} on the original post (`message_id` + body with `attachments`).
  * Option B (fallback): {@link Bot.api.sendMessageToChat} with `link: { type: 'reply', mid }` — bot-owned message with the keyboard, because channel admins' posts are often not editable by the bot.
  */
-export declare function attachCommentButtonToChannelPost(bot: Bot, post: Post, editText: string, keyboard: InlineKeyboardAttachmentRequest): Promise<void>;
+export declare function attachCommentButtonToChannelPost(bot: Bot, post: Post, editText: string, keyboard: InlineKeyboardAttachmentRequest, logCtx?: {
+    source?: string;
+    phase?: string;
+}): Promise<boolean>;
 /** True if we can build a link that opens the Mini App (MAX deep link or legacy MINI_APP_URL). */
 export declare function isMiniAppOpenUrlConfigured(): boolean;
 /**

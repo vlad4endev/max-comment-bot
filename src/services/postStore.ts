@@ -44,6 +44,7 @@ export class PostStore {
     listByChatId: Database.Statement
     findByChatAndMid: Database.Statement
     findByAbsChatAndMid: Database.Statement
+    findByCommentsUiMid: Database.Statement
     upsert: Database.Statement
     deleteByChatId: Database.Statement
     selectIdsByChatId: Database.Statement
@@ -98,6 +99,20 @@ export class PostStore {
     return absRow ? this.parsePost(absRow.data) : null
   }
 
+  /** Reply-stub message id when edit on the original post failed and the bot sent a threaded keyboard. */
+  findPostByCommentsUiMessage(chatId: number, commentsUiMid: string): Post | null {
+    const canonical = resolveCanonicalChannelChatId(chatId) ?? chatId
+    for (const cid of [canonical, chatId]) {
+      const row = this.getStatements().findByCommentsUiMid.get(cid, commentsUiMid) as
+        | { data: string }
+        | undefined
+      if (row) {
+        return this.parsePost(row.data)
+      }
+    }
+    return null
+  }
+
   incrementCommentCount(postId: string): number | null {
     const post = this.getPost(postId)
     if (!post) {
@@ -140,10 +155,10 @@ export class PostStore {
   /**
    * Updates the channel message inline keyboard to show the current comment count.
    */
-  async updateButtonCaption(bot: Bot, post: Post): Promise<void> {
+  async updateButtonCaption(bot: Bot, post: Post): Promise<boolean> {
     if (!isMiniAppOpenUrlConfigured()) {
       logger.warn('postStore.updateButtonCaption: BOT_NICKNAME / MINI_APP_URL not usable for links')
-      return
+      return false
     }
     const url = buildMiniAppUrl(post.post_id, post.chat_id, undefined, post.message_mid)
     const kb = Keyboard.inlineKeyboard([
@@ -165,12 +180,14 @@ export class PostStore {
         text,
         attachments,
       })
+      return true
     } catch (err: unknown) {
       logger.warn('postStore.updateButtonCaption: editMessage failed', {
         postId: post.post_id,
         targetMid,
         err,
       })
+      return false
     }
   }
 
@@ -191,6 +208,9 @@ export class PostStore {
       findByChatAndMid: db.prepare('SELECT data FROM posts WHERE chat_id = ? AND message_mid = ?'),
       findByAbsChatAndMid: db.prepare(
         'SELECT data FROM posts WHERE ABS(chat_id) = ? AND message_mid = ? LIMIT 1',
+      ),
+      findByCommentsUiMid: db.prepare(
+        'SELECT data FROM posts WHERE chat_id = ? AND comments_ui_message_mid = ? LIMIT 1',
       ),
       upsert: db.prepare(
         `INSERT OR REPLACE INTO posts (
@@ -267,53 +287,84 @@ export async function attachCommentButtonToChannelPost(
   post: Post,
   editText: string,
   keyboard: InlineKeyboardAttachmentRequest,
-): Promise<void> {
+  logCtx?: { source?: string; phase?: string },
+): Promise<boolean> {
+  const apiStartedAt = performance.now()
+  const logBase = {
+    source: logCtx?.source ?? 'unknown',
+    phase: logCtx?.phase,
+    postId: post.post_id,
+    chatId: post.chat_id,
+    messageMid: post.message_mid,
+  }
   const { media, warnMissingSnapshot } = await resolveChannelPostMediaForEdit(bot, post)
   const attachments: AttachmentRequest[] =
     media.length > 0 ? [...media, keyboard] : [keyboard]
   if (warnMissingSnapshot) {
     logger.warn(
-      'attachCommentButton: could not load original message attachments; editing with keyboard only (media may be dropped if present)',
-      { postId: post.post_id, messageMid: post.message_mid, chatId: post.chat_id },
+      'commentButton: нет снимка вложений поста — edit только с клавиатурой (медиа может пропасть)',
+      logBase,
     )
   }
+  logger.info('commentButton: пробуем editMessage на посте канала', {
+    ...logBase,
+    attachmentCount: attachments.length,
+  })
+  const apiDuration = (): { apiDurationMs: number; apiDuration: string } => {
+    const apiDurationMs = Math.round(performance.now() - apiStartedAt)
+    const apiDuration =
+      apiDurationMs >= 1000 ? `${(apiDurationMs / 1000).toFixed(2)} с` : `${apiDurationMs} мс`
+    return { apiDurationMs, apiDuration }
+  }
+
   try {
+    const editStartedAt = performance.now()
     await bot.api.editMessage(post.message_mid, {
       text: editText,
       attachments,
     })
-    logger.info('attachCommentButton: edited original channel post', {
-      postId: post.post_id,
-      messageMid: post.message_mid,
+    const editMs = Math.round(performance.now() - editStartedAt)
+    const timing = apiDuration()
+    logger.info(`commentButton: кнопка добавлена через edit поста (${timing.apiDuration})`, {
+      ...logBase,
+      method: 'edit',
+      editMs,
+      ...timing,
     })
-    return
+    return true
   } catch (err: unknown) {
-    logger.warn('attachCommentButton: editMessage failed, trying reply fallback', {
-      postId: post.post_id,
-      chatId: post.chat_id,
-      messageMid: post.message_mid,
+    logger.warn('commentButton: editMessage не удался — пробуем reply с кнопкой', {
+      ...logBase,
+      ...apiDuration(),
       err,
     })
   }
   try {
+    const replyStartedAt = performance.now()
     const replyStub = '\u00a0'
     const sent = await bot.api.sendMessageToChat(post.chat_id, replyStub, {
       attachments: [keyboard],
       link: { type: 'reply', mid: post.message_mid },
     })
+    const replyMs = Math.round(performance.now() - replyStartedAt)
     const uiMid = sent.body.mid
     postStore.savePost({ ...post, comments_ui_message_mid: uiMid })
-    logger.info('attachCommentButton: sent reply message with keyboard', {
-      postId: post.post_id,
+    const timing = apiDuration()
+    logger.info(`commentButton: кнопка добавлена через reply под постом (${timing.apiDuration})`, {
+      ...logBase,
+      method: 'reply',
       commentsUiMessageMid: uiMid,
-      replyToMid: post.message_mid,
+      replyMs,
+      ...timing,
     })
+    return true
   } catch (err: unknown) {
-    logger.error('attachCommentButton: reply fallback failed', {
-      postId: post.post_id,
-      chatId: post.chat_id,
+    logger.error(`commentButton: reply с кнопкой тоже не удался (${apiDuration().apiDuration})`, {
+      ...logBase,
+      ...apiDuration(),
       err,
     })
+    return false
   }
 }
 
