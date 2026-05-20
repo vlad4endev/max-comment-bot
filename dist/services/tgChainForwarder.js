@@ -17,10 +17,28 @@ const channelPostActions_1 = require("./channelPostActions");
 const resolveChannelChatId_1 = require("./resolveChannelChatId");
 const tgChannelMatch_1 = require("../utils/tgChannelMatch");
 const logger_1 = require("../utils/logger");
+const maxApiRetry_1 = require("../utils/maxApiRetry");
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 /** Long-poll Telegram for new channel_post (сек). */
 const TG_CHAIN_LONG_POLL_SEC = 25;
 const TG_CHAIN_IDLE_MS = 3_000;
+/** MIN gap between `sendMessageToChat` to the same MAX channel (API 429). */
+const MAX_SEND_INTERVAL_MS = 2_500;
+const UPLOAD_STAGGER_MS = 450;
+const TG_CHAIN_MAX_API_RETRIES = 6;
+const lastMaxSendAt = new Map();
+async function throttleMaxChatSend(chatId) {
+    const now = Date.now();
+    const last = lastMaxSendAt.get(chatId) ?? 0;
+    const wait = MAX_SEND_INTERVAL_MS - (now - last);
+    if (wait > 0) {
+        await sleep(wait);
+    }
+    lastMaxSendAt.set(chatId, Date.now());
+}
+function maxApi(fn) {
+    return (0, maxApiRetry_1.apiCallWithRetry)(fn, TG_CHAIN_MAX_API_RETRIES);
+}
 let botRef = null;
 function setTgChainForwarderBot(bot) {
     botRef = bot;
@@ -104,10 +122,11 @@ async function forwardOneTgMessageToMax(bot, msg, tgToken, maxChatId, caption) {
         const largest = msg.photo[msg.photo.length - 1];
         const url = await (0, telegramReader_1.getTgFileUrl)(tgToken, largest.file_id);
         if (url) {
-            const image = await bot.api.uploadImage({ url });
-            const sent = await bot.api.sendMessageToChat(chatId, messageText, {
+            const image = await maxApi(() => bot.api.uploadImage({ url }));
+            await throttleMaxChatSend(chatId);
+            const sent = await maxApi(() => bot.api.sendMessageToChat(chatId, messageText, {
                 attachments: [image.toJson()],
-            });
+            }));
             return sent.body?.mid ?? null;
         }
     }
@@ -115,10 +134,11 @@ async function forwardOneTgMessageToMax(bot, msg, tgToken, maxChatId, caption) {
         const url = await (0, telegramReader_1.getTgFileUrl)(tgToken, msg.video.file_id);
         if (url) {
             const res = await axios_1.default.get(url, { responseType: 'arraybuffer' });
-            const video = await bot.api.uploadVideo({ source: Buffer.from(res.data) });
-            const sent = await bot.api.sendMessageToChat(chatId, messageText, {
+            const video = await maxApi(() => bot.api.uploadVideo({ source: Buffer.from(res.data) }));
+            await throttleMaxChatSend(chatId);
+            const sent = await maxApi(() => bot.api.sendMessageToChat(chatId, messageText, {
                 attachments: [video.toJson()],
-            });
+            }));
             return sent.body?.mid ?? null;
         }
     }
@@ -126,15 +146,17 @@ async function forwardOneTgMessageToMax(bot, msg, tgToken, maxChatId, caption) {
         const url = await (0, telegramReader_1.getTgFileUrl)(tgToken, msg.document.file_id);
         if (url) {
             const res = await axios_1.default.get(url, { responseType: 'arraybuffer' });
-            const file = await bot.api.uploadFile({ source: Buffer.from(res.data) });
-            const sent = await bot.api.sendMessageToChat(chatId, messageText, {
+            const file = await maxApi(() => bot.api.uploadFile({ source: Buffer.from(res.data) }));
+            await throttleMaxChatSend(chatId);
+            const sent = await maxApi(() => bot.api.sendMessageToChat(chatId, messageText, {
                 attachments: [file.toJson()],
-            });
+            }));
             return sent.body?.mid ?? null;
         }
     }
     if (caption.trim()) {
-        const sent = await bot.api.sendMessageToChat(chatId, caption.trim());
+        await throttleMaxChatSend(chatId);
+        const sent = await maxApi(() => bot.api.sendMessageToChat(chatId, caption.trim()));
         return sent.body?.mid ?? null;
     }
     return null;
@@ -143,7 +165,8 @@ async function forwardOneTgMessageToMax(bot, msg, tgToken, maxChatId, caption) {
 async function buildAlbumImageAttachment(bot, photoMessages, tgToken) {
     const photosMap = {};
     let index = 0;
-    for (const msg of photoMessages) {
+    for (let i = 0; i < photoMessages.length; i += 1) {
+        const msg = photoMessages[i];
         if (!msg.photo?.length)
             continue;
         const largest = msg.photo[msg.photo.length - 1];
@@ -151,12 +174,15 @@ async function buildAlbumImageAttachment(bot, photoMessages, tgToken) {
         if (!url)
             continue;
         const res = await axios_1.default.get(url, { responseType: 'arraybuffer' });
-        const uploaded = await bot.api.uploadImage({ source: Buffer.from(res.data) });
+        const uploaded = await maxApi(() => bot.api.uploadImage({ source: Buffer.from(res.data) }));
         const json = uploaded.toJson();
         const token = json.payload?.token;
         if (token) {
             photosMap[String(index)] = { token };
             index++;
+            if (i < photoMessages.length - 1) {
+                await sleep(UPLOAD_STAGGER_MS);
+            }
         }
     }
     if (index === 0)
@@ -184,25 +210,28 @@ async function forwardAlbumToMax(bot, messages, tgToken, maxChatId, addSignature
             const url = await (0, telegramReader_1.getTgFileUrl)(tgToken, msg.video.file_id);
             if (url) {
                 const res = await axios_1.default.get(url, { responseType: 'arraybuffer' });
-                const video = await bot.api.uploadVideo({ source: Buffer.from(res.data) });
+                const video = await maxApi(() => bot.api.uploadVideo({ source: Buffer.from(res.data) }));
                 attachments.push(video.toJson());
+                await sleep(UPLOAD_STAGGER_MS);
             }
         }
         else if (msg.document?.file_id) {
             const url = await (0, telegramReader_1.getTgFileUrl)(tgToken, msg.document.file_id);
             if (url) {
                 const res = await axios_1.default.get(url, { responseType: 'arraybuffer' });
-                const file = await bot.api.uploadFile({ source: Buffer.from(res.data) });
+                const file = await maxApi(() => bot.api.uploadFile({ source: Buffer.from(res.data) }));
                 attachments.push(file.toJson());
+                await sleep(UPLOAD_STAGGER_MS);
             }
         }
     }
     if (attachments.length === 0 && !caption.trim()) {
         return null;
     }
-    const sent = await bot.api.sendMessageToChat(chatId, messageText, {
+    await throttleMaxChatSend(chatId);
+    const sent = await maxApi(() => bot.api.sendMessageToChat(chatId, messageText, {
         attachments: attachments.length > 0 ? attachments : undefined,
-    });
+    }));
     return sent.body?.mid ?? null;
 }
 async function processChainMessageGroup(chain, messages, tgToken) {
@@ -211,7 +240,8 @@ async function processChainMessageGroup(chain, messages, tgToken) {
     if (pending.length === 0) {
         return;
     }
-    if (!botRef) {
+    const bot = botRef;
+    if (!bot) {
         throw new Error('MAX bot not initialized (setTgChainForwarderBot)');
     }
     const isAlbum = pending.length > 1 || Boolean(pending[0]?.media_group_id);
@@ -220,12 +250,13 @@ async function processChainMessageGroup(chain, messages, tgToken) {
         let published = 0;
         let resultMid = null;
         if (isAlbum) {
-            resultMid = await forwardAlbumToMax(botRef, pending, tgToken, chain.max_chat_id, chain.add_signature);
+            resultMid = await forwardAlbumToMax(bot, pending, tgToken, chain.max_chat_id, chain.add_signature);
             if (resultMid) {
                 published = 1;
                 if (attachComments) {
                     const chatId = (0, resolveChannelChatId_1.resolveCanonicalChannelChatId)(chain.max_chat_id) ?? chain.max_chat_id;
-                    await (0, channelPostActions_1.ensurePostFromChannelMessage)(botRef, chatId, resultMid);
+                    const mid = resultMid;
+                    await maxApi(() => (0, channelPostActions_1.ensurePostFromChannelMessage)(bot, chatId, mid));
                 }
             }
         }
@@ -235,12 +266,13 @@ async function processChainMessageGroup(chain, messages, tgToken) {
             if (chain.add_signature && caption) {
                 caption = `${caption}\n\n— TG`;
             }
-            resultMid = await forwardOneTgMessageToMax(botRef, msg, tgToken, chain.max_chat_id, caption);
+            resultMid = await forwardOneTgMessageToMax(bot, msg, tgToken, chain.max_chat_id, caption);
             if (resultMid) {
                 published = 1;
                 if (attachComments) {
                     const chatId = (0, resolveChannelChatId_1.resolveCanonicalChannelChatId)(chain.max_chat_id) ?? chain.max_chat_id;
-                    await (0, channelPostActions_1.ensurePostFromChannelMessage)(botRef, chatId, resultMid);
+                    const mid = resultMid;
+                    await maxApi(() => (0, channelPostActions_1.ensurePostFromChannelMessage)(bot, chatId, mid));
                 }
             }
         }
@@ -262,7 +294,7 @@ async function processChainMessageGroup(chain, messages, tgToken) {
                 messageIds: pending.map((m) => m.message_id),
             });
         }
-        await sleep(800 + Math.random() * 400);
+        await sleep(1_500 + Math.random() * 500);
     }
     catch (err) {
         const axiosDetail = axios_1.default.isAxiosError(err) && err.response

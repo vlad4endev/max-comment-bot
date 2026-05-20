@@ -13,12 +13,33 @@ import { ensurePostFromChannelMessage } from './channelPostActions'
 import { resolveCanonicalChannelChatId } from './resolveChannelChatId'
 import { telegramChannelMatchesTarget } from '../utils/tgChannelMatch'
 import { logger } from '../utils/logger'
+import { apiCallWithRetry } from '../utils/maxApiRetry'
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
 /** Long-poll Telegram for new channel_post (сек). */
 const TG_CHAIN_LONG_POLL_SEC = 25
 const TG_CHAIN_IDLE_MS = 3_000
+/** MIN gap between `sendMessageToChat` to the same MAX channel (API 429). */
+const MAX_SEND_INTERVAL_MS = 2_500
+const UPLOAD_STAGGER_MS = 450
+const TG_CHAIN_MAX_API_RETRIES = 6
+
+const lastMaxSendAt = new Map<number, number>()
+
+async function throttleMaxChatSend(chatId: number): Promise<void> {
+  const now = Date.now()
+  const last = lastMaxSendAt.get(chatId) ?? 0
+  const wait = MAX_SEND_INTERVAL_MS - (now - last)
+  if (wait > 0) {
+    await sleep(wait)
+  }
+  lastMaxSendAt.set(chatId, Date.now())
+}
+
+function maxApi<T>(fn: () => Promise<T>): Promise<T> {
+  return apiCallWithRetry(fn, TG_CHAIN_MAX_API_RETRIES)
+}
 
 let botRef: Bot | null = null
 
@@ -125,10 +146,13 @@ async function forwardOneTgMessageToMax(
     const largest = msg.photo[msg.photo.length - 1]
     const url = await getTgFileUrl(tgToken, largest.file_id)
     if (url) {
-      const image = await bot.api.uploadImage({ url })
-      const sent = await bot.api.sendMessageToChat(chatId, messageText, {
-        attachments: [image.toJson() as AttachmentRequest],
-      })
+      const image = await maxApi(() => bot.api.uploadImage({ url }))
+      await throttleMaxChatSend(chatId)
+      const sent = await maxApi(() =>
+        bot.api.sendMessageToChat(chatId, messageText, {
+          attachments: [image.toJson() as AttachmentRequest],
+        }),
+      )
       return sent.body?.mid ?? null
     }
   }
@@ -136,10 +160,13 @@ async function forwardOneTgMessageToMax(
     const url = await getTgFileUrl(tgToken, msg.video.file_id)
     if (url) {
       const res = await axios.get<ArrayBuffer>(url, { responseType: 'arraybuffer' })
-      const video = await bot.api.uploadVideo({ source: Buffer.from(res.data) })
-      const sent = await bot.api.sendMessageToChat(chatId, messageText, {
-        attachments: [video.toJson() as AttachmentRequest],
-      })
+      const video = await maxApi(() => bot.api.uploadVideo({ source: Buffer.from(res.data) }))
+      await throttleMaxChatSend(chatId)
+      const sent = await maxApi(() =>
+        bot.api.sendMessageToChat(chatId, messageText, {
+          attachments: [video.toJson() as AttachmentRequest],
+        }),
+      )
       return sent.body?.mid ?? null
     }
   }
@@ -147,15 +174,19 @@ async function forwardOneTgMessageToMax(
     const url = await getTgFileUrl(tgToken, msg.document.file_id)
     if (url) {
       const res = await axios.get<ArrayBuffer>(url, { responseType: 'arraybuffer' })
-      const file = await bot.api.uploadFile({ source: Buffer.from(res.data) })
-      const sent = await bot.api.sendMessageToChat(chatId, messageText, {
-        attachments: [file.toJson() as AttachmentRequest],
-      })
+      const file = await maxApi(() => bot.api.uploadFile({ source: Buffer.from(res.data) }))
+      await throttleMaxChatSend(chatId)
+      const sent = await maxApi(() =>
+        bot.api.sendMessageToChat(chatId, messageText, {
+          attachments: [file.toJson() as AttachmentRequest],
+        }),
+      )
       return sent.body?.mid ?? null
     }
   }
   if (caption.trim()) {
-    const sent = await bot.api.sendMessageToChat(chatId, caption.trim())
+    await throttleMaxChatSend(chatId)
+    const sent = await maxApi(() => bot.api.sendMessageToChat(chatId, caption.trim()))
     return sent.body?.mid ?? null
   }
   return null
@@ -170,18 +201,22 @@ async function buildAlbumImageAttachment(
   const photosMap: NonNullable<ImageAttachmentRequest['payload']['photos']> = {}
   let index = 0
 
-  for (const msg of photoMessages) {
+  for (let i = 0; i < photoMessages.length; i += 1) {
+    const msg = photoMessages[i]!
     if (!msg.photo?.length) continue
     const largest = msg.photo[msg.photo.length - 1]
     const url = await getTgFileUrl(tgToken, largest.file_id)
     if (!url) continue
     const res = await axios.get<ArrayBuffer>(url, { responseType: 'arraybuffer' })
-    const uploaded = await bot.api.uploadImage({ source: Buffer.from(res.data) })
+    const uploaded = await maxApi(() => bot.api.uploadImage({ source: Buffer.from(res.data) }))
     const json = uploaded.toJson() as ImageAttachmentRequest
     const token = json.payload?.token
     if (token) {
       photosMap[String(index)] = { token }
       index++
+      if (i < photoMessages.length - 1) {
+        await sleep(UPLOAD_STAGGER_MS)
+      }
     }
   }
 
@@ -218,15 +253,17 @@ async function forwardAlbumToMax(
       const url = await getTgFileUrl(tgToken, msg.video.file_id)
       if (url) {
         const res = await axios.get<ArrayBuffer>(url, { responseType: 'arraybuffer' })
-        const video = await bot.api.uploadVideo({ source: Buffer.from(res.data) })
+        const video = await maxApi(() => bot.api.uploadVideo({ source: Buffer.from(res.data) }))
         attachments.push(video.toJson() as AttachmentRequest)
+        await sleep(UPLOAD_STAGGER_MS)
       }
     } else if (msg.document?.file_id) {
       const url = await getTgFileUrl(tgToken, msg.document.file_id)
       if (url) {
         const res = await axios.get<ArrayBuffer>(url, { responseType: 'arraybuffer' })
-        const file = await bot.api.uploadFile({ source: Buffer.from(res.data) })
+        const file = await maxApi(() => bot.api.uploadFile({ source: Buffer.from(res.data) }))
         attachments.push(file.toJson() as AttachmentRequest)
+        await sleep(UPLOAD_STAGGER_MS)
       }
     }
   }
@@ -235,9 +272,12 @@ async function forwardAlbumToMax(
     return null
   }
 
-  const sent = await bot.api.sendMessageToChat(chatId, messageText, {
-    attachments: attachments.length > 0 ? attachments : undefined,
-  })
+  await throttleMaxChatSend(chatId)
+  const sent = await maxApi(() =>
+    bot.api.sendMessageToChat(chatId, messageText, {
+      attachments: attachments.length > 0 ? attachments : undefined,
+    }),
+  )
   return sent.body?.mid ?? null
 }
 
@@ -254,7 +294,8 @@ async function processChainMessageGroup(
   if (pending.length === 0) {
     return
   }
-  if (!botRef) {
+  const bot = botRef
+  if (!bot) {
     throw new Error('MAX bot not initialized (setTgChainForwarderBot)')
   }
 
@@ -266,7 +307,7 @@ async function processChainMessageGroup(
     let resultMid: string | null = null
     if (isAlbum) {
       resultMid = await forwardAlbumToMax(
-        botRef,
+        bot,
         pending,
         tgToken,
         chain.max_chat_id,
@@ -276,7 +317,8 @@ async function processChainMessageGroup(
         published = 1
         if (attachComments) {
           const chatId = resolveCanonicalChannelChatId(chain.max_chat_id) ?? chain.max_chat_id
-          await ensurePostFromChannelMessage(botRef, chatId, resultMid)
+          const mid: string = resultMid
+          await maxApi(() => ensurePostFromChannelMessage(bot, chatId, mid))
         }
       }
     } else {
@@ -286,7 +328,7 @@ async function processChainMessageGroup(
         caption = `${caption}\n\n— TG`
       }
       resultMid = await forwardOneTgMessageToMax(
-        botRef,
+        bot,
         msg,
         tgToken,
         chain.max_chat_id,
@@ -296,7 +338,8 @@ async function processChainMessageGroup(
         published = 1
         if (attachComments) {
           const chatId = resolveCanonicalChannelChatId(chain.max_chat_id) ?? chain.max_chat_id
-          await ensurePostFromChannelMessage(botRef, chatId, resultMid)
+          const mid: string = resultMid
+          await maxApi(() => ensurePostFromChannelMessage(bot, chatId, mid))
         }
       }
     }
@@ -321,7 +364,7 @@ async function processChainMessageGroup(
       })
     }
 
-    await sleep(800 + Math.random() * 400)
+    await sleep(1_500 + Math.random() * 500)
   } catch (err: unknown) {
     const axiosDetail =
       axios.isAxiosError(err) && err.response
