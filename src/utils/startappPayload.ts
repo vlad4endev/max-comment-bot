@@ -1,6 +1,4 @@
 /** MAX startapp allows A–Z, a–z, 0–9, _, - */
-import { parsePostIdFromStartappSegment } from './postId'
-
 export function encodeMessageMidForStartapp(messageMid: string): string {
   return Buffer.from(messageMid, 'utf8')
     .toString('base64url')
@@ -39,8 +37,8 @@ export interface ParsedStartappPayload {
 }
 
 /**
- * Parses MAX `startapp` payload from button deep links (`pid_<id>_cid_<abs>[_mid_<b64url>]`).
- * `pid` segment: decimal post id or 32-char UUID hex (legacy).
+ * Parses MAX `startapp` payload from button deep links (`pid_<hex>_cid_<abs>[_mid_<b64url>]`).
+ * Case-insensitive on structure; preserves base64url mid casing.
  */
 export function parseStartappPayload(raw: string): ParsedStartappPayload | null {
   const trimmed = raw.trim()
@@ -62,7 +60,10 @@ export function parseStartappPayload(raw: string): ParsedStartappPayload | null 
     return null
   }
 
-  const post_id = parsePostIdFromStartappSegment(m[1])
+  const pidSegment = m[1]
+  const post_id = /^\d+$/.test(pidSegment)
+    ? pidSegment
+    : compactUuidToStandard(pidSegment)
   if (!post_id) {
     return null
   }

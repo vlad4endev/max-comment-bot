@@ -764,26 +764,26 @@ function createCommentApiRouter(deps) {
         return { postId, chatIdRaw: chatId, messageMid: mid, startParamUsed };
     }
     function resolvePostForMiniApp(postId, chatIdRaw, messageMid) {
-        if (!postId.trim()) {
-            return null;
-        }
-        const direct = postStore_1.postStore.findPost(postId, chatIdRaw ?? undefined);
-        if (direct) {
-            return direct;
-        }
-        if (chatIdRaw !== null && messageMid) {
-            const byMid = postStore_1.postStore.findPost(messageMid, chatIdRaw);
-            if (byMid) {
-                logger_1.logger.info('GET /post: resolved by message_mid', {
-                    requestedPostId: postId,
-                    postId: byMid.post_id,
-                    chatId: chatIdRaw,
-                    messageMid,
-                });
-                return byMid;
+        const id = postId.trim();
+        const mid = messageMid?.trim() ?? '';
+        if (chatIdRaw !== null && mid !== '') {
+            const byChannelMessage = postStore_1.postStore.findPostByChannelMessage(chatIdRaw, mid);
+            if (byChannelMessage) {
+                if (id !== '' && byChannelMessage.post_id !== id) {
+                    logger_1.logger.warn('GET /post: post_id в ссылке не совпадает с message_mid — берём пост по mid', {
+                        requestedPostId: id,
+                        postId: byChannelMessage.post_id,
+                        chatId: chatIdRaw,
+                        messageMid: mid,
+                    });
+                }
+                return byChannelMessage;
             }
         }
-        return null;
+        if (!id) {
+            return null;
+        }
+        return postStore_1.postStore.findPost(id, chatIdRaw ?? undefined);
     }
     async function resolvePostForMiniAppOpen(pathPostId, chatIdRaw, messageMid, startParamRaw = null) {
         const lookup = buildMiniappPostLookup(pathPostId, chatIdRaw, messageMid, startParamRaw);
@@ -869,10 +869,32 @@ function createCommentApiRouter(deps) {
             photo_url: post.photo_url ?? null,
             channel_post_url,
             chat_id: post.chat_id,
+            message_mid: post.message_mid,
             comment_count: post.comment_count,
             channel_title: channelRegistry_1.channelRegistry.getChannel(post.chat_id)?.title ?? channelBranding.title,
             channel_avatar_url,
         });
+    });
+    router.get('/post/:postId/channel-url', async (req, res) => {
+        const chatIdRaw = parseNonZeroInt(req.query.chat_id);
+        const messageMid = parseNonEmptyString(req.query.message_mid);
+        const startParamHeader = parseNonEmptyString(req.headers['x-miniapp-start-param']);
+        const post = await resolvePostForMiniAppOpen(req.params.postId, chatIdRaw, messageMid, startParamHeader);
+        if (!post) {
+            res.status(404).json({ error: 'post not found' });
+            return;
+        }
+        let url = null;
+        try {
+            url = await (0, postStore_1.resolveChannelPostUrl)(deps.bot, post);
+        }
+        catch (err) {
+            logger_1.logger.warn('GET /post/:postId/channel-url: resolve failed', {
+                postId: post.post_id,
+                err,
+            });
+        }
+        res.json({ url });
     });
     router.get('/comments/:postId', async (req, res) => {
         const postId = req.params.postId;

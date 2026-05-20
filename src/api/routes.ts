@@ -895,26 +895,26 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
   }
 
   function resolvePostForMiniApp(postId: string, chatIdRaw: number | null, messageMid: string | null) {
-    if (!postId.trim()) {
-      return null
-    }
-    const direct = postStore.findPost(postId, chatIdRaw ?? undefined)
-    if (direct) {
-      return direct
-    }
-    if (chatIdRaw !== null && messageMid) {
-      const byMid = postStore.findPost(messageMid, chatIdRaw)
-      if (byMid) {
-        logger.info('GET /post: resolved by message_mid', {
-          requestedPostId: postId,
-          postId: byMid.post_id,
-          chatId: chatIdRaw,
-          messageMid,
-        })
-        return byMid
+    const id = postId.trim()
+    const mid = messageMid?.trim() ?? ''
+    if (chatIdRaw !== null && mid !== '') {
+      const byChannelMessage = postStore.findPostByChannelMessage(chatIdRaw, mid)
+      if (byChannelMessage) {
+        if (id !== '' && byChannelMessage.post_id !== id) {
+          logger.warn('GET /post: post_id в ссылке не совпадает с message_mid — берём пост по mid', {
+            requestedPostId: id,
+            postId: byChannelMessage.post_id,
+            chatId: chatIdRaw,
+            messageMid: mid,
+          })
+        }
+        return byChannelMessage
       }
     }
-    return null
+    if (!id) {
+      return null
+    }
+    return postStore.findPost(id, chatIdRaw ?? undefined)
   }
 
   async function resolvePostForMiniAppOpen(
@@ -1012,10 +1012,37 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
       photo_url: post.photo_url ?? null,
       channel_post_url,
       chat_id: post.chat_id,
+      message_mid: post.message_mid,
       comment_count: post.comment_count,
       channel_title: channelRegistry.getChannel(post.chat_id)?.title ?? channelBranding.title,
       channel_avatar_url,
     })
+  })
+
+  router.get('/post/:postId/channel-url', async (req, res) => {
+    const chatIdRaw = parseNonZeroInt(req.query.chat_id)
+    const messageMid = parseNonEmptyString(req.query.message_mid)
+    const startParamHeader = parseNonEmptyString(req.headers['x-miniapp-start-param'])
+    const post = await resolvePostForMiniAppOpen(
+      req.params.postId,
+      chatIdRaw,
+      messageMid,
+      startParamHeader,
+    )
+    if (!post) {
+      res.status(404).json({ error: 'post not found' })
+      return
+    }
+    let url: string | null = null
+    try {
+      url = await resolveChannelPostUrl(deps.bot, post)
+    } catch (err: unknown) {
+      logger.warn('GET /post/:postId/channel-url: resolve failed', {
+        postId: post.post_id,
+        err,
+      })
+    }
+    res.json({ url })
   })
 
   router.get('/comments/:postId', async (req, res) => {

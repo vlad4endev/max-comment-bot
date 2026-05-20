@@ -11,7 +11,6 @@ import type Database from 'better-sqlite3'
 import { config } from '../config'
 import { getDb } from '../db/database'
 import { resolveCanonicalChannelChatId } from './resolveChannelChatId'
-import { formatPostIdForStartapp, isNumericPostId } from '../utils/postId'
 import {
   compactUuidToStandard,
   encodeMessageMidForStartapp,
@@ -20,9 +19,7 @@ import { logger } from '../utils/logger'
 import { apiCallWithRetry } from '../utils/maxApiRetry'
 
 /**
- * Channel post tracked for Mini App comments.
- * {@link Post.post_id} — bot-owned monotonic id (like Telegram `message_id`).
- * {@link Post.message_mid} — MAX platform message id for edit/reply API.
+ * Channel post tracked for Mini App comments (MAX message id is {@link Post.message_mid}).
  */
 export interface Post {
   post_id: string
@@ -151,13 +148,11 @@ export class PostStore {
       return post
     }
 
-    if (!isNumericPostId(id)) {
-      const fromCompact = compactUuidToStandard(id)
-      if (fromCompact && fromCompact !== id) {
-        post = this.getPost(fromCompact)
-        if (post) {
-          return post
-        }
+    const fromCompact = compactUuidToStandard(id)
+    if (fromCompact && fromCompact !== id) {
+      post = this.getPost(fromCompact)
+      if (post) {
+        return post
       }
     }
 
@@ -376,7 +371,6 @@ export class PostStore {
           photo_url, media_attachments, comment_count, timestamp, data
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(chat_id, message_mid) DO UPDATE SET
-          post_id                 = CASE WHEN excluded.post_id != '' THEN excluded.post_id ELSE post_id END,
           comments_ui_message_mid = excluded.comments_ui_message_mid,
           sender_name             = excluded.sender_name,
           text                    = excluded.text,
@@ -577,7 +571,7 @@ function maxStartappPayload(
   messageMid?: string,
   extra?: Record<string, string>,
 ): string {
-  const compactId = formatPostIdForStartapp(postId)
+  const compactId = postId.replace(/-/g, '')
   const suffix = extra?.admin === '1' ? '_admin' : ''
   const midPart =
     messageMid && messageMid.trim() !== ''

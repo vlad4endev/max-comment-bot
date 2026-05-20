@@ -146,7 +146,6 @@ function initSchema(targetDb) {
   `);
     migrateChannelImportSchema(targetDb);
     migratePostsSchema(targetDb);
-    migratePostIdSequence(targetDb);
 }
 function migrateChannelImportSchema(database) {
     const cols = database.prepare('PRAGMA table_info(channel_import_jobs)').all();
@@ -180,34 +179,6 @@ function migratePostsSchema(database) {
     }
     database.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_posts_unique_chat_mid ON posts(chat_id, message_mid)');
     log.info('db.migrate: UNIQUE индекс создан', { posts: after });
-}
-/**
- * Monotonic numeric post ids (Telegram-style message_id), separate from MAX `message_mid`.
- */
-function migratePostIdSequence(database) {
-    const log = getLogger();
-    database.exec(`
-    CREATE TABLE IF NOT EXISTS post_id_sequence (
-      id      INTEGER PRIMARY KEY CHECK (id = 1),
-      next_id INTEGER NOT NULL DEFAULT 1
-    );
-    INSERT OR IGNORE INTO post_id_sequence (id, next_id) VALUES (1, 1);
-  `);
-    const row = database.prepare('SELECT next_id FROM post_id_sequence WHERE id = 1').get();
-    if (!row || row.next_id < 1) {
-        database.prepare('UPDATE post_id_sequence SET next_id = 1 WHERE id = 1').run();
-    }
-    const maxNumeric = database
-        .prepare(`SELECT MAX(CAST(post_id AS INTEGER)) AS m FROM posts
-         WHERE post_id GLOB '[0-9]*' AND CAST(post_id AS INTEGER) > 0`)
-        .get().m;
-    if (maxNumeric !== null && Number.isFinite(maxNumeric) && maxNumeric >= 1) {
-        const bumped = Math.max(row?.next_id ?? 1, maxNumeric + 1);
-        if (bumped > (row?.next_id ?? 1)) {
-            database.prepare('UPDATE post_id_sequence SET next_id = ? WHERE id = 1').run(bumped);
-            log.info('db.migrate: post_id_sequence synced from posts', { next_id: bumped });
-        }
-    }
 }
 function closeDb() {
     if (!db) {

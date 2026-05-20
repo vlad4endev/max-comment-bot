@@ -1,3 +1,4 @@
+/** MAX startapp allows A–Z, a–z, 0–9, _, - */
 export declare function encodeMessageMidForStartapp(messageMid: string): string;
 export declare function decodeMessageMidFromStartapp(encoded: string): string | null;
 /** Reconstructs standard UUID from 32-char hex (no dashes). */
@@ -11,7 +12,7 @@ export interface ParsedStartappPayload {
     join_channel_id?: number;
 }
 /**
- * Parses MAX `startapp` payload from button deep links (`pid_<id>_cid_<abs>[_mid_<b64url>]`).
- * `pid` segment: decimal post id or 32-char UUID hex (legacy).
+ * Parses MAX `startapp` payload from button deep links (`pid_<hex>_cid_<abs>[_mid_<b64url>]`).
+ * Case-insensitive on structure; preserves base64url mid casing.
  */
 export declare function parseStartappPayload(raw: string): ParsedStartappPayload | null;

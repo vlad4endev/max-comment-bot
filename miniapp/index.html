@@ -1131,22 +1131,25 @@
       text-align: left;
       font: inherit;
       color: inherit;
+      cursor: default;
+      opacity: 0.85;
     }
     #view-comments .post-preview.clickable {
       cursor: pointer;
+      opacity: 1;
       transition: background 0.15s ease;
     }
     #view-comments .post-preview.clickable:active {
       background: var(--input-bg);
     }
-    #view-comments .post-preview:disabled {
-      cursor: default;
-      opacity: 1;
-    }
-    #view-comments .post-preview-text {
+    #view-comments .post-preview-body {
       flex: 1;
       min-width: 0;
-      order: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    #view-comments .post-preview-text {
       font-size: 13px;
       line-height: 1.45;
       color: var(--text-secondary);
@@ -1154,6 +1157,15 @@
       -webkit-box-orient: vertical;
       -webkit-line-clamp: 2;
       overflow: hidden;
+    }
+    #view-comments .post-preview-action {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--teal);
+      line-height: 1.2;
+    }
+    #view-comments .post-preview.has-channel-link .post-preview-action::after {
+      content: ' →';
     }
     #view-comments .post-thumb {
       order: 1;
@@ -1167,6 +1179,82 @@
     }
     #view-comments .post-thumb.show {
       display: block;
+    }
+    #postDetailOverlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      z-index: 200;
+      background: var(--overlay-bg);
+      flex-direction: column;
+      justify-content: flex-end;
+    }
+    #postDetailOverlay.open {
+      display: flex;
+    }
+    #postDetailOverlay .post-detail-card {
+      background: var(--card-bg);
+      border-radius: 16px 16px 0 0;
+      max-height: 92vh;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      padding-bottom: env(safe-area-inset-bottom);
+    }
+    #postDetailOverlay .post-detail-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 14px 16px 10px;
+      border-bottom: 1px solid var(--comments-divider);
+    }
+    #postDetailOverlay .post-detail-title {
+      font-size: 15px;
+      font-weight: 600;
+    }
+    #postDetailOverlay .post-detail-close {
+      border: none;
+      background: transparent;
+      font-size: 20px;
+      line-height: 1;
+      color: var(--text-dim);
+      cursor: pointer;
+      padding: 4px 8px;
+    }
+    #postDetailOverlay .post-detail-scroll {
+      overflow-y: auto;
+      -webkit-overflow-scrolling: touch;
+      padding: 14px 16px 16px;
+    }
+    #postDetailOverlay .post-detail-text {
+      font-size: 15px;
+      line-height: 1.5;
+      color: var(--text-primary);
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    #postDetailOverlay .post-detail-img {
+      width: 100%;
+      border-radius: 12px;
+      margin-top: 12px;
+      display: none;
+    }
+    #postDetailOverlay .post-detail-img.show {
+      display: block;
+    }
+    #postDetailOverlay .post-detail-open-channel {
+      margin: 0 16px 16px;
+      padding: 12px 16px;
+      border: none;
+      border-radius: 12px;
+      background: var(--teal);
+      color: var(--text-on-accent);
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    #postDetailOverlay .post-detail-open-channel.hidden {
+      display: none;
     }
     #view-comments #err {
       flex: 0 0 auto;
@@ -2116,10 +2204,26 @@
               <span>Менеджер</span>
             </a>
           </div>
-          <button type="button" class="post-preview" id="postPreviewBtn" title="Открыть пост в канале" aria-label="Открыть пост в канале">
-            <div class="post-preview-text" id="postPreviewText">Загрузка…</div>
+          <button type="button" class="post-preview" id="postPreviewBtn" title="Открыть пост" aria-label="Открыть пост">
+            <div class="post-preview-body">
+              <div class="post-preview-text" id="postPreviewText">Загрузка…</div>
+              <div class="post-preview-action" id="postPreviewAction">Открыть в канале</div>
+            </div>
             <img class="post-thumb" id="postThumb" alt="" />
           </button>
+        </div>
+        <div id="postDetailOverlay" class="hidden" aria-hidden="true">
+          <div class="post-detail-card" role="dialog" aria-modal="true" aria-labelledby="postDetailTitle">
+            <div class="post-detail-header">
+              <div class="post-detail-title" id="postDetailTitle">Пост канала</div>
+              <button type="button" class="post-detail-close" id="postDetailClose" aria-label="Закрыть">✕</button>
+            </div>
+            <div class="post-detail-scroll">
+              <div class="post-detail-text" id="postDetailText"></div>
+              <img class="post-detail-img" id="postDetailImg" alt="" />
+            </div>
+            <button type="button" class="post-detail-open-channel hidden" id="postDetailOpenChannel">Открыть в канале</button>
+          </div>
         </div>
         <div id="err"></div>
         <div id="feed"></div>
@@ -3564,8 +3668,17 @@
       var chNameEl = document.getElementById('chName');
       var countBadgeEl = document.getElementById('countBadge');
       var postPreviewTextEl = document.getElementById('postPreviewText');
+      var postPreviewActionEl = document.getElementById('postPreviewAction');
       var postThumbEl = document.getElementById('postThumb');
       var postPreviewBtnEl = document.getElementById('postPreviewBtn');
+      var postDetailOverlayEl = document.getElementById('postDetailOverlay');
+      var postDetailTitleEl = document.getElementById('postDetailTitle');
+      var postDetailTextEl = document.getElementById('postDetailText');
+      var postDetailImgEl = document.getElementById('postDetailImg');
+      var postDetailCloseEl = document.getElementById('postDetailClose');
+      var postDetailOpenChannelEl = document.getElementById('postDetailOpenChannel');
+      var currentPostSnapshot = null;
+      var postPreviewReady = false;
       var replyBannerEl = document.getElementById('replyBanner');
       var replyBannerNameEl = document.getElementById('replyBannerName');
       var replyBannerCloseEl = document.getElementById('replyBannerClose');
@@ -3589,23 +3702,123 @@
         channelPostUrl = url && String(url).trim() ? String(url).trim() : null;
         if (!postPreviewBtnEl) return;
         if (channelPostUrl) {
-          postPreviewBtnEl.classList.add('clickable');
-          postPreviewBtnEl.disabled = false;
+          postPreviewBtnEl.classList.add('has-channel-link');
+          if (postPreviewActionEl) postPreviewActionEl.textContent = 'В канале';
         } else {
-          postPreviewBtnEl.classList.remove('clickable');
-          postPreviewBtnEl.disabled = true;
+          postPreviewBtnEl.classList.remove('has-channel-link');
+          if (postPreviewActionEl) postPreviewActionEl.textContent = 'Подробнее';
         }
       }
 
-      function openChannelPost() {
-        if (!channelPostUrl) return;
+      function setPostPreviewReady(ready) {
+        postPreviewReady = !!ready;
+        if (!postPreviewBtnEl) return;
+        if (ready) {
+          postPreviewBtnEl.classList.add('clickable');
+          postPreviewBtnEl.removeAttribute('disabled');
+        } else {
+          postPreviewBtnEl.classList.remove('clickable');
+          postPreviewBtnEl.setAttribute('disabled', 'disabled');
+        }
+      }
+
+      function openExternalUrl(url) {
+        if (!url) return false;
         try {
-          if (window.WebApp && typeof window.WebApp.openMaxLink === 'function') {
-            window.WebApp.openMaxLink(channelPostUrl);
-            return;
+          if (window.WebApp) {
+            if (typeof window.WebApp.openMaxLink === 'function') {
+              window.WebApp.openMaxLink(url);
+              return true;
+            }
+            if (typeof window.WebApp.openLink === 'function') {
+              window.WebApp.openLink(url);
+              return true;
+            }
           }
         } catch (err) {}
-        window.location.href = channelPostUrl;
+        try {
+          window.open(url, '_blank');
+          return true;
+        } catch (e2) {}
+        window.location.href = url;
+        return true;
+      }
+
+      function showPostDetailOverlay() {
+        if (!postDetailOverlayEl || !currentPostSnapshot) return;
+        var snap = currentPostSnapshot;
+        if (postDetailTitleEl) {
+          postDetailTitleEl.textContent = snap.channel_title || 'Пост канала';
+        }
+        if (postDetailTextEl) {
+          postDetailTextEl.textContent =
+            snap.text && snap.text.trim() ? normalizeDisplayText(snap.text) : 'Текст поста отсутствует';
+        }
+        if (postDetailImgEl) {
+          if (snap.photo_url) {
+            postDetailImgEl.src = snap.photo_url;
+            postDetailImgEl.classList.add('show');
+          } else {
+            postDetailImgEl.removeAttribute('src');
+            postDetailImgEl.classList.remove('show');
+          }
+        }
+        if (postDetailOpenChannelEl) {
+          if (channelPostUrl) {
+            postDetailOpenChannelEl.classList.remove('hidden');
+          } else {
+            postDetailOpenChannelEl.classList.add('hidden');
+          }
+        }
+        postDetailOverlayEl.classList.remove('hidden');
+        postDetailOverlayEl.classList.add('open');
+        postDetailOverlayEl.setAttribute('aria-hidden', 'false');
+      }
+
+      function hidePostDetailOverlay() {
+        if (!postDetailOverlayEl) return;
+        postDetailOverlayEl.classList.add('hidden');
+        postDetailOverlayEl.classList.remove('open');
+        postDetailOverlayEl.setAttribute('aria-hidden', 'true');
+      }
+
+      function fetchChannelPostUrl() {
+        var ids = resolveLookupIds();
+        if (!ids.postId) return Promise.resolve(null);
+        return fetch(
+          '/api/post/' + encodeURIComponent(ids.postId) + '/channel-url' + postApiQuery(),
+          { headers: miniappLookupHeaders() },
+        )
+          .then(function (r) {
+            if (!r.ok) return null;
+            return r.json();
+          })
+          .then(function (data) {
+            var url = data && data.url && String(data.url).trim() ? String(data.url).trim() : null;
+            if (url) {
+              setPostPreviewLink(url);
+            }
+            return url;
+          })
+          .catch(function () {
+            return null;
+          });
+      }
+
+      function openChannelPost() {
+        if (!postPreviewReady) return;
+        function afterUrl(url) {
+          if (url && openExternalUrl(url)) {
+            hidePostDetailOverlay();
+            return;
+          }
+          showPostDetailOverlay();
+        }
+        if (channelPostUrl) {
+          afterUrl(channelPostUrl);
+          return;
+        }
+        fetchChannelPostUrl().then(afterUrl);
       }
 
       function setErr(msg) {
@@ -4867,6 +5080,11 @@
               currentPostId = p.post_id;
             }
             setChannelHeader(p.channel_title, p.channel_avatar_url);
+            currentPostSnapshot = {
+              text: p.text || '',
+              photo_url: p.photo_url || null,
+              channel_title: p.channel_title || '',
+            };
             postPreviewTextEl.textContent =
               p.text && p.text.trim() ? normalizeDisplayText(p.text) : '\u00a0';
             if (p.photo_url) {
@@ -4881,12 +5099,15 @@
               updateBadgeFromCount(postCommentCount);
             }
             setPostPreviewLink(p.channel_post_url || null);
+            setPostPreviewReady(true);
             return true;
           })
           .catch(function (e) {
             setErr(e.message || String(e));
             postPreviewTextEl.textContent = '';
+            currentPostSnapshot = null;
             setPostPreviewLink(null);
+            setPostPreviewReady(false);
             return false;
           });
       }
@@ -5177,9 +5398,31 @@
       }
       if (postPreviewBtnEl && postPreviewBtnEl.dataset.bound !== '1') {
         postPreviewBtnEl.dataset.bound = '1';
-        postPreviewBtnEl.disabled = true;
+        setPostPreviewReady(false);
         postPreviewBtnEl.addEventListener('click', function () {
           openChannelPost();
+        });
+      }
+      if (postDetailCloseEl && postDetailCloseEl.dataset.bound !== '1') {
+        postDetailCloseEl.dataset.bound = '1';
+        postDetailCloseEl.addEventListener('click', hidePostDetailOverlay);
+      }
+      if (postDetailOverlayEl && postDetailOverlayEl.dataset.bound !== '1') {
+        postDetailOverlayEl.dataset.bound = '1';
+        postDetailOverlayEl.addEventListener('click', function (e) {
+          if (e.target === postDetailOverlayEl) hidePostDetailOverlay();
+        });
+      }
+      if (postDetailOpenChannelEl && postDetailOpenChannelEl.dataset.bound !== '1') {
+        postDetailOpenChannelEl.dataset.bound = '1';
+        postDetailOpenChannelEl.addEventListener('click', function () {
+          if (channelPostUrl) {
+            openExternalUrl(channelPostUrl);
+          } else {
+            fetchChannelPostUrl().then(function (url) {
+              if (url) openExternalUrl(url);
+            });
+          }
         });
       }
       inputEl.addEventListener('input', function () {

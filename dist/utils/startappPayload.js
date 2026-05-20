@@ -5,7 +5,6 @@ exports.decodeMessageMidFromStartapp = decodeMessageMidFromStartapp;
 exports.compactUuidToStandard = compactUuidToStandard;
 exports.parseStartappPayload = parseStartappPayload;
 /** MAX startapp allows A–Z, a–z, 0–9, _, - */
-const postId_1 = require("./postId");
 function encodeMessageMidForStartapp(messageMid) {
     return Buffer.from(messageMid, 'utf8')
         .toString('base64url')
@@ -33,8 +32,8 @@ function compactUuidToStandard(compact) {
     return `${id.slice(0, 8)}-${id.slice(8, 12)}-${id.slice(12, 16)}-${id.slice(16, 20)}-${id.slice(20)}`;
 }
 /**
- * Parses MAX `startapp` payload from button deep links (`pid_<id>_cid_<abs>[_mid_<b64url>]`).
- * `pid` segment: decimal post id or 32-char UUID hex (legacy).
+ * Parses MAX `startapp` payload from button deep links (`pid_<hex>_cid_<abs>[_mid_<b64url>]`).
+ * Case-insensitive on structure; preserves base64url mid casing.
  */
 function parseStartappPayload(raw) {
     const trimmed = raw.trim();
@@ -53,7 +52,10 @@ function parseStartappPayload(raw) {
     if (!m) {
         return null;
     }
-    const post_id = (0, postId_1.parsePostIdFromStartappSegment)(m[1]);
+    const pidSegment = m[1];
+    const post_id = /^\d+$/.test(pidSegment)
+        ? pidSegment
+        : compactUuidToStandard(pidSegment);
     if (!post_id) {
         return null;
     }

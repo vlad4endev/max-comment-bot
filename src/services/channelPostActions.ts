@@ -1,7 +1,8 @@
 import { Bot, Keyboard } from '@maxhub/max-bot-api'
 import type { Message, User } from '@maxhub/max-bot-api/types'
+import { v4 as uuidv4 } from 'uuid'
+
 import { logger } from '../utils/logger'
-import { allocatePostId } from '../utils/postId'
 import { scheduleCommentButtonRetry } from './commentButtonRetryQueue'
 import { pushAdminActivity } from './adminActivityStore'
 import { channelRegistry } from './channelRegistry'
@@ -475,7 +476,7 @@ export async function tryAttachCommentsToChannelPost(
     senderId: user?.user_id,
   })
 
-  const postId = allocatePostId()
+  const postId = uuidv4()
   const post: Post = {
     ...buildPostFromChannelMessage(message, chatId, postId, user),
     button_attach_pending: true,

@@ -1,9 +1,7 @@
 import type { Bot } from '@maxhub/max-bot-api';
 import type { Attachment, AttachmentRequest, InlineKeyboardAttachmentRequest } from '@maxhub/max-bot-api/types';
 /**
- * Channel post tracked for Mini App comments.
- * {@link Post.post_id} — bot-owned monotonic id (like Telegram `message_id`).
- * {@link Post.message_mid} — MAX platform message id for edit/reply API.
+ * Channel post tracked for Mini App comments (MAX message id is {@link Post.message_mid}).
  */
 export interface Post {
     post_id: string;
