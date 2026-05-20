@@ -8,6 +8,7 @@ import {
 } from './bot'
 import { config } from './config'
 import { migrateFromJson } from './db/migrate'
+import { migrateAutopostsFromJson } from './db/migrateAutopostsFromJson'
 import {
   BOT_WEBHOOK_UPDATE_TYPES,
   setWebhookSubscription,
@@ -33,12 +34,14 @@ import { getFlowPollIntervalMs, getTelegramToken } from './config'
 import { WEBHOOK_CONCURRENCY } from './utils/updateQueue'
 import { flowProcessor } from './services/flowProcessor'
 import { integrationsStore } from './services/integrationsStore'
+import { startAutopostScheduler } from './services/autopostScheduler'
 import { startChannelImportWorker } from './services/channelImportService'
 import { setTgChainForwarderBot, startTgChainForwarder } from './services/tgChainForwarder'
 import { createHttpApp, createWebhookApp } from './webhook/createWebhookApp'
 
 async function main(): Promise<void> {
   migrateFromJson()
+  migrateAutopostsFromJson()
   const bot = initializeBot()
   await channelRegistry.loadFromDisk()
   await channelSettingsStore.loadFromDisk()
@@ -71,6 +74,7 @@ async function main(): Promise<void> {
   setChannelRegistryChangeHandler(() => notifyChannelRegistryChanged())
   startChannelPostPoller(bot)
   startCommentButtonRetryLoop(bot)
+  startAutopostScheduler()
   // До HTTP: иначе при EADDRINUSE channelPoller уже в логах, а flowProcessor — нет.
   await flowProcessor.start()
 

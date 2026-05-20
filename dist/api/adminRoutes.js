@@ -24,6 +24,7 @@ const userAccessCleanup_1 = require("../services/userAccessCleanup");
 const userMiniappSettingsStore_1 = require("../services/userMiniappSettingsStore");
 const adminPanelSession_1 = require("../utils/adminPanelSession");
 const adminPanelState_1 = require("./adminPanelState");
+const autopostRoutes_1 = require("./autopostRoutes");
 const analyticsService_1 = require("../services/analyticsService");
 const adminLogFormat_1 = require("../utils/adminLogFormat");
 const logger_1 = require("../utils/logger");
@@ -764,46 +765,7 @@ function createAdminRouter(deps) {
         }
         res.json({ ok: true });
     });
-    secured.get('/autoposts', async (_req, res) => {
-        res.json({ posts: await (0, adminPanelState_1.listAutoposts)() });
-    });
-    secured.post('/autoposts', async (req, res) => {
-        if (!isRecord(req.body)) {
-            res.status(400).json({ error: 'invalid body' });
-            return;
-        }
-        const chatId = parseNonZeroInt(req.body.chat_id);
-        const text = parseNonEmptyString(req.body.text);
-        const scheduledAt = parseNonEmptyString(req.body.scheduled_at);
-        if (chatId === null || !text || !scheduledAt) {
-            res.status(400).json({ error: 'chat_id, text, scheduled_at required' });
-            return;
-        }
-        const repeatRaw = parseNonEmptyString(req.body.repeat) ?? 'none';
-        const repeat = repeatRaw === 'daily' || repeatRaw === 'weekly' || repeatRaw === 'monthly' ? repeatRaw : 'none';
-        const ch = channelRegistry_1.channelRegistry.getChannel(chatId);
-        const row = await (0, adminPanelState_1.createAutopost)({
-            chat_id: chatId,
-            channel_title: ch?.title ?? null,
-            text,
-            scheduled_at: scheduledAt,
-            repeat,
-        });
-        res.json({ ok: true, post: row });
-    });
-    secured.delete('/autoposts/:id', async (req, res) => {
-        const id = parseNonEmptyString(req.params.id);
-        if (!id) {
-            res.status(400).json({ error: 'invalid id' });
-            return;
-        }
-        const ok = await (0, adminPanelState_1.deleteAutopost)(id);
-        if (!ok) {
-            res.status(404).json({ error: 'not found' });
-            return;
-        }
-        res.json({ ok: true });
-    });
+    secured.use('/autoposts', (0, autopostRoutes_1.createAutopostRouter)());
     secured.post('/refresh-buttons', async (req, res) => {
         const body = req.body;
         const chatId = isRecord(body) ? parseNonZeroInt(body.chat_id) : null;

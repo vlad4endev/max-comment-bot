@@ -35,19 +35,17 @@ import {
 } from '../utils/adminPanelSession'
 import {
   countAntispamBlocksToday,
-  createAutopost,
   createTgChain,
-  deleteAutopost,
   deleteTgChain,
   getAntispamLog,
   getAntispamWords,
   getChannelExtras,
-  listAutoposts,
   listTgChains,
   saveAntispamWords,
   saveChannelExtras,
   updateTgChain,
 } from './adminPanelState'
+import { createAutopostRouter } from './autopostRoutes'
 import { buildDashboardAnalytics, parseDashboardPeriodDays } from '../services/analyticsService'
 import { parseAdminLogLine, type AdminLogEntry, type AdminLogLevel } from '../utils/adminLogFormat'
 import { getAdminLogTail, logger } from '../utils/logger'
@@ -872,49 +870,7 @@ export function createAdminRouter(deps: AdminRouterDeps): express.Router {
     res.json({ ok: true })
   })
 
-  secured.get('/autoposts', async (_req, res) => {
-    res.json({ posts: await listAutoposts() })
-  })
-
-  secured.post('/autoposts', async (req, res) => {
-    if (!isRecord(req.body)) {
-      res.status(400).json({ error: 'invalid body' })
-      return
-    }
-    const chatId = parseNonZeroInt(req.body.chat_id)
-    const text = parseNonEmptyString(req.body.text)
-    const scheduledAt = parseNonEmptyString(req.body.scheduled_at)
-    if (chatId === null || !text || !scheduledAt) {
-      res.status(400).json({ error: 'chat_id, text, scheduled_at required' })
-      return
-    }
-    const repeatRaw = parseNonEmptyString(req.body.repeat) ?? 'none'
-    const repeat =
-      repeatRaw === 'daily' || repeatRaw === 'weekly' || repeatRaw === 'monthly' ? repeatRaw : 'none'
-    const ch = channelRegistry.getChannel(chatId)
-    const row = await createAutopost({
-      chat_id: chatId,
-      channel_title: ch?.title ?? null,
-      text,
-      scheduled_at: scheduledAt,
-      repeat,
-    })
-    res.json({ ok: true, post: row })
-  })
-
-  secured.delete('/autoposts/:id', async (req, res) => {
-    const id = parseNonEmptyString(req.params.id)
-    if (!id) {
-      res.status(400).json({ error: 'invalid id' })
-      return
-    }
-    const ok = await deleteAutopost(id)
-    if (!ok) {
-      res.status(404).json({ error: 'not found' })
-      return
-    }
-    res.json({ ok: true })
-  })
+  secured.use('/autoposts', createAutopostRouter())
 
   secured.post('/refresh-buttons', async (req, res) => {
     const body = req.body

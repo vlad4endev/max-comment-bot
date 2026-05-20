@@ -146,6 +146,28 @@ function initSchema(targetDb: Database.Database): void {
       forwarded_at TEXT DEFAULT (datetime('now')),
       PRIMARY KEY (chain_id, tg_message_id)
     );
+
+    CREATE TABLE IF NOT EXISTS autoposts (
+      id TEXT PRIMARY KEY,
+      text TEXT NOT NULL DEFAULT '',
+      media_json TEXT NOT NULL DEFAULT '[]',
+      inline_button_json TEXT,
+      target_channel_id TEXT NOT NULL,
+      channel_title TEXT,
+      status TEXT NOT NULL DEFAULT 'active',
+      schedule_type TEXT NOT NULL,
+      scheduled_at TEXT NOT NULL,
+      recurring_time TEXT,
+      weekdays_json TEXT,
+      timezone TEXT NOT NULL DEFAULT 'Europe/Moscow',
+      last_sent_at TEXT,
+      last_error TEXT,
+      sent_count INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_autoposts_due
+      ON autoposts(status, scheduled_at);
   `)
   migrateChannelImportSchema(targetDb)
   migratePostsSchema(targetDb)

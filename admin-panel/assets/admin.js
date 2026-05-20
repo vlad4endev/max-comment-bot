@@ -372,7 +372,18 @@
     return authFetch(apiPath(path), { method: 'POST', body: body || {} }).then(function (r) {
       if (!r.ok) {
         return r.json().then(function (j) {
-          throw new Error(j.error || 'Ошибка');
+          throw new Error(j.error || j.message || 'Ошибка');
+        });
+      }
+      return r.json();
+    });
+  }
+
+  function postForm(path, formData) {
+    return authFetch(apiPath(path), { method: 'POST', body: formData }).then(function (r) {
+      if (!r.ok) {
+        return r.json().then(function (j) {
+          throw new Error(j.error || j.message || 'Ошибка');
         });
       }
       return r.json();
@@ -2751,80 +2762,237 @@
     showToast('Форма настройки — на странице выше', 'info');
   }
 
+  function apStatusLabel(status) {
+    var map = {
+      active: 'Активен',
+      sent: 'Отправлен',
+      paused: 'Пауза',
+      failed: 'Ошибка',
+    };
+    return map[status] || status;
+  }
+
   function renderAutoposts() {
     var main = qs('#mainContent');
     if (!main) return;
     main.innerHTML = '<div class="dash-loading muted">Загрузка…</div>';
-    Promise.all([getJson('/autoposts'), getJson('/channels').catch(function () { return { channels: [] }; })])
+    Promise.all([
+      getJson('/autoposts'),
+      getJson('/autoposts/channels').catch(function () {
+        return { channels: [], hint: 'Не удалось загрузить каналы Telegram' };
+      }),
+    ])
       .then(function (pair) {
         if (currentRoute !== 'autoposts') return;
         var posts = pair[0].posts || [];
-        var chans = pair[1].channels || channelsCache;
-        channelsCache = chans.length ? chans : channelsCache;
+        var chData = pair[1];
+        var chans = chData.channels || [];
+        var hint = chData.hint;
         var sel = chans
           .map(function (c) {
-            return (
-              '<option value="' + esc(String(c.chat_id)) + '">' + esc(c.title || String(c.chat_id)) + '</option>'
-            );
+            var label = c.title || c.id;
+            if (c.username) label += ' (@' + c.username + ')';
+            return '<option value="' + esc(String(c.id)) + '">' + esc(label) + '</option>';
           })
           .join('');
+        if (!sel) {
+          sel = '<option value="">— нет каналов —</option>';
+        }
+        var weekdayLabels = ['Вс', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб'];
+        var wdChecks = '';
+        for (var d = 0; d <= 6; d++) {
+          wdChecks +=
+            '<label class="inline-flex gap-xs" style="margin-right:0.5rem"><input type="checkbox" class="ap_wd" value="' +
+            d +
+            '"' +
+            (d >= 1 && d <= 5 ? ' checked' : '') +
+            '/> ' +
+            weekdayLabels[d] +
+            '</label>';
+        }
         var html = '<h2>Автопосты</h2>';
-        html += '<div class="card-like mb-md" style="background:var(--bg-surface);border:1px solid var(--border-subtle);border-radius:var(--radius-md);padding:1rem">';
-        html += '<h3 style="margin-top:0">Создать</h3>';
-        html += '<div class="form-row">';
-        html += '<div class="form-group"><label>Канал</label><select class="select" id="ap_chat">' + sel + '</select></div>';
         html +=
-          '<div class="form-group"><label>Расписание (ISO)</label><input class="input mono" id="ap_when" placeholder="2026-05-20T12:00:00"/></div>';
-        html += '</div>';
-        html += '<div class="form-group"><label>Текст</label><textarea class="textarea" id="ap_text"></textarea></div>';
-        html += '<div class="form-group"><label>Повтор</label><select class="select" id="ap_repeat">';
-        html += '<option value="none">Нет</option><option value="daily">Ежедневно</option>';
-        html += '<option value="weekly">Еженедельно</option><option value="monthly">Ежемесячно</option>';
+          '<p class="muted text-sm mb-md">Отложенная публикация в Telegram-каналы из раздела «Интеграции». Альбомы не поддерживают инлайн-кнопку — используйте одно фото/видео или кнопку без альбома.</p>';
+        if (hint) {
+          html += '<p class="text-sm" style="color:var(--warning,#e6a700)">' + esc(hint) + '</p>';
+        }
+        html +=
+          '<div class="card-like mb-md" style="background:var(--bg-surface);border:1px solid var(--border-subtle);border-radius:var(--radius-md);padding:1rem">';
+        html += '<h3 style="margin-top:0">Создать автопост</h3>';
+        html += '<div class="form-row">';
+        html +=
+          '<div class="form-group"><label>Канал Telegram</label><select class="select" id="ap_chat">' +
+          sel +
+          '</select></div>';
+        html +=
+          '<div class="form-group"><label>Тип расписания</label><select class="select" id="ap_schedule_type">';
+        html += '<option value="once">Единоразово</option><option value="recurring">По дням недели</option>';
         html += '</select></div>';
+        html += '</div>';
+        html += '<div id="ap_once_block" class="form-group"><label>Дата и время</label>';
+        html += '<input type="datetime-local" class="input" id="ap_when_once"/></div>';
+        html += '<div id="ap_recur_block" class="form-group" style="display:none">';
+        html += '<label>Время (каждый выбранный день)</label><input type="time" class="input" id="ap_time_recur" value="08:00"/>';
+        html += '<div class="mt-sm"><label>Дни недели</label><div>' + wdChecks + '</div></div></div>';
+        html += '<div class="form-group"><label>Текст поста</label><textarea class="textarea" id="ap_text" rows="4"></textarea></div>';
+        html +=
+          '<div class="form-group"><label>Медиа (фото/видео, до 10)</label><input type="file" class="input" id="ap_media" multiple accept="image/*,video/*"/></div>';
+        html += '<div class="form-row">';
+        html +=
+          '<div class="form-group"><label>Кнопка — текст</label><input class="input" id="ap_btn_text" placeholder="Открыть сайт"/></div>';
+        html +=
+          '<div class="form-group"><label>Кнопка — URL</label><input class="input" id="ap_btn_url" placeholder="https://"/></div>';
+        html += '</div>';
         html += '<button type="button" class="btn btn-primary" id="ap_create">Запланировать</button></div>';
         html += '<div class="table-wrap"><table><thead><tr>';
-        html += '<th>Канал</th><th>Текст</th><th>Время</th><th>Повтор</th><th>Статус</th><th></th>';
+        html +=
+          '<th>Канал</th><th>Текст</th><th>След. запуск</th><th>Расписание</th><th>Статус</th><th></th>';
         html += '</tr></thead><tbody>';
         posts.forEach(function (p) {
+          var sched =
+            p.schedule_type === 'recurring'
+              ? (p.recurring_time || '—') + ' · дни ' + (p.weekdays ? p.weekdays.join(',') : '—')
+              : 'единоразово';
           html += '<tr>';
-          html += '<td>' + esc(p.channel_title || String(p.chat_id)) + '</td>';
-          html += '<td style="max-width:220px;overflow:hidden;text-overflow:ellipsis">' + esc(p.text) + '</td>';
-          html += '<td class="mono text-sm">' + esc(p.scheduled_at) + '</td>';
-          html += '<td>' + esc(p.repeat) + '</td>';
-          html += '<td>' + esc(p.status) + '</td>';
+          html += '<td>' + esc(p.channel_title || p.target_channel_id) + '</td>';
           html +=
-            '<td><button type="button" class="btn btn-danger btn-sm" data-del-ap="' +
+            '<td style="max-width:200px;overflow:hidden;text-overflow:ellipsis" title="' +
+            esc(p.text) +
+            '">' +
+            esc(p.text || '—') +
+            (p.media && p.media.length ? ' 📎' + p.media.length : '') +
+            '</td>';
+          html += '<td class="mono text-sm">' + esc(p.scheduled_at) + '</td>';
+          html += '<td class="text-sm">' + esc(sched) + '</td>';
+          html += '<td>' + esc(apStatusLabel(p.status)) + '</td>';
+          html += '<td class="flex gap-xs" style="flex-wrap:wrap">';
+          if (p.status === 'active') {
+            html +=
+              '<button type="button" class="btn btn-ghost btn-sm" data-pause-ap="' +
+              esc(p.id) +
+              '">Пауза</button>';
+          }
+          if (p.status === 'paused' || p.status === 'failed') {
+            html +=
+              '<button type="button" class="btn btn-ghost btn-sm" data-resume-ap="' +
+              esc(p.id) +
+              '">Возобновить</button>';
+          }
+          html +=
+            '<button type="button" class="btn btn-danger btn-sm" data-del-ap="' +
             esc(p.id) +
             '">Удалить</button></td>';
           html += '</tr>';
         });
-        if (!posts.length) html += '<tr><td colspan="6" class="muted">Пусто</td></tr>';
+        if (!posts.length) html += '<tr><td colspan="6" class="muted">Нет запланированных постов</td></tr>';
         html += '</tbody></table></div>';
         main.innerHTML = html;
+
+        var scheduleTypeEl = qs('#ap_schedule_type', main);
+        var onceBlock = qs('#ap_once_block', main);
+        var recurBlock = qs('#ap_recur_block', main);
+        scheduleTypeEl.addEventListener('change', function () {
+          var recurring = scheduleTypeEl.value === 'recurring';
+          onceBlock.style.display = recurring ? 'none' : '';
+          recurBlock.style.display = recurring ? '' : 'none';
+        });
+
         qs('#ap_create', main).addEventListener('click', function () {
-          var chat_id = Number(qs('#ap_chat', main).value);
+          var channelId = (qs('#ap_chat', main).value || '').trim();
           var text = (qs('#ap_text', main).value || '').trim();
-          var scheduled_at = (qs('#ap_when', main).value || '').trim();
-          var repeat = qs('#ap_repeat', main).value || 'none';
-          if (!chat_id || !text || !scheduled_at) {
-            showToast('Заполните все поля', 'error');
+          var scheduleType = scheduleTypeEl.value;
+          var btnText = (qs('#ap_btn_text', main).value || '').trim();
+          var btnUrl = (qs('#ap_btn_url', main).value || '').trim();
+          var mediaInput = qs('#ap_media', main);
+          var files = mediaInput && mediaInput.files ? mediaInput.files : [];
+          if (!channelId) {
+            showToast('Выберите канал Telegram', 'error');
             return;
           }
-          postJson('/autoposts', { chat_id: chat_id, text: text, scheduled_at: scheduled_at, repeat: repeat })
+          if (!text && (!files || !files.length)) {
+            showToast('Укажите текст или прикрепите медиа', 'error');
+            return;
+          }
+          if (files.length > 1 && btnText && btnUrl) {
+            showToast('Инлайн-кнопка недоступна для альбома', 'error');
+            return;
+          }
+          var fd = new FormData();
+          fd.append('target_channel_id', channelId);
+          var chOpt = qs('#ap_chat', main).selectedOptions[0];
+          if (chOpt) fd.append('channel_title', chOpt.textContent || '');
+          fd.append('text', text);
+          fd.append('schedule_type', scheduleType);
+          if (scheduleType === 'once') {
+            var whenLocal = (qs('#ap_when_once', main).value || '').trim();
+            if (!whenLocal) {
+              showToast('Укажите дату и время', 'error');
+              return;
+            }
+            fd.append('scheduled_at', new Date(whenLocal).toISOString());
+          } else {
+            var timeRecur = (qs('#ap_time_recur', main).value || '08:00').trim();
+            var weekdays = [];
+            qsa('.ap_wd:checked', main).forEach(function (cb) {
+              weekdays.push(Number(cb.value));
+            });
+            if (!weekdays.length) {
+              showToast('Выберите хотя бы один день недели', 'error');
+              return;
+            }
+            fd.append('recurring_time', timeRecur);
+            fd.append('weekdays', JSON.stringify(weekdays));
+            var probe = new Date();
+            var parts = timeRecur.split(':');
+            probe.setHours(Number(parts[0]), Number(parts[1]), 0, 0);
+            fd.append('scheduled_at', probe.toISOString());
+          }
+          if (btnText && btnUrl) {
+            fd.append('inline_button_text', btnText);
+            fd.append('inline_button_url', btnUrl);
+          }
+          for (var i = 0; i < files.length; i++) {
+            fd.append('media', files[i]);
+          }
+          postForm('/autoposts', fd)
             .then(function () {
-              showToast('Создано', 'success');
+              showToast('Автопост запланирован', 'success');
               renderAutoposts();
             })
             .catch(function (e) {
               showToast(e.message || 'Ошибка', 'error');
             });
         });
+
         qsa('[data-del-ap]', main).forEach(function (b) {
           b.addEventListener('click', function () {
-            var id = b.getAttribute('data-del-ap');
-            deleteReq('/autoposts/' + encodeURIComponent(id))
+            deleteReq('/autoposts/' + encodeURIComponent(b.getAttribute('data-del-ap')))
               .then(function () {
                 showToast('Удалено', 'success');
+                renderAutoposts();
+              })
+              .catch(function (e) {
+                showToast(e.message || 'Ошибка', 'error');
+              });
+          });
+        });
+        qsa('[data-pause-ap]', main).forEach(function (b) {
+          b.addEventListener('click', function () {
+            patchJson('/autoposts/' + encodeURIComponent(b.getAttribute('data-pause-ap')) + '/pause', {})
+              .then(function () {
+                showToast('На паузе', 'success');
+                renderAutoposts();
+              })
+              .catch(function (e) {
+                showToast(e.message || 'Ошибка', 'error');
+              });
+          });
+        });
+        qsa('[data-resume-ap]', main).forEach(function (b) {
+          b.addEventListener('click', function () {
+            patchJson('/autoposts/' + encodeURIComponent(b.getAttribute('data-resume-ap')) + '/resume', {})
+              .then(function () {
+                showToast('Возобновлено', 'success');
                 renderAutoposts();
               })
               .catch(function (e) {
@@ -2836,7 +3004,7 @@
       })
       .catch(function (err) {
         if (err && err.message === 'auth') return;
-        main.innerHTML = '<p class="muted">Ошибка</p>';
+        main.innerHTML = '<p class="muted">Ошибка загрузки</p>';
       });
   }
 

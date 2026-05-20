@@ -4,6 +4,7 @@ const node_http_1 = require("node:http");
 const bot_1 = require("./bot");
 const config_1 = require("./config");
 const migrate_1 = require("./db/migrate");
+const migrateAutopostsFromJson_1 = require("./db/migrateAutopostsFromJson");
 const subscriptions_1 = require("./maxPlatform/subscriptions");
 const channelNotifyLinkStore_1 = require("./services/channelNotifyLinkStore");
 const channelRegistry_1 = require("./services/channelRegistry");
@@ -22,11 +23,13 @@ const config_2 = require("./config");
 const updateQueue_1 = require("./utils/updateQueue");
 const flowProcessor_1 = require("./services/flowProcessor");
 const integrationsStore_1 = require("./services/integrationsStore");
+const autopostScheduler_1 = require("./services/autopostScheduler");
 const channelImportService_1 = require("./services/channelImportService");
 const tgChainForwarder_1 = require("./services/tgChainForwarder");
 const createWebhookApp_1 = require("./webhook/createWebhookApp");
 async function main() {
     (0, migrate_1.migrateFromJson)();
+    (0, migrateAutopostsFromJson_1.migrateAutopostsFromJson)();
     const bot = (0, bot_1.initializeBot)();
     await channelRegistry_1.channelRegistry.loadFromDisk();
     await channelSettingsStore_1.channelSettingsStore.loadFromDisk();
@@ -60,6 +63,7 @@ async function main() {
     (0, channelRegistry_1.setChannelRegistryChangeHandler)(() => (0, channelPoller_1.notifyChannelRegistryChanged)());
     (0, channelPoller_1.startChannelPostPoller)(bot);
     (0, commentButtonRetryQueue_1.startCommentButtonRetryLoop)(bot);
+    (0, autopostScheduler_1.startAutopostScheduler)();
     // До HTTP: иначе при EADDRINUSE channelPoller уже в логах, а flowProcessor — нет.
     await flowProcessor_1.flowProcessor.start();
     const channelCount = channelRegistry_1.channelRegistry
