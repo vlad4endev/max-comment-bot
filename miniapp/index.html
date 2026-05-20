@@ -2732,17 +2732,10 @@
       var startParam = collectStartParam(unsafe, tg);
 
       var mergedParams = buildMergedSearchParams(user, startParam);
-      var rawInitData = '';
-      try {
-        rawInitData = JSON.stringify(unsafe || {});
-      } catch (e) {
-        rawInitData = '';
-      }
       console.info('miniapp: opened', {
         startParam: startParam || null,
         userId: getBridgeNumericUserId(user),
         chatId: mergedParams.get('chat_id'),
-        raw: rawInitData,
       });
       var postId = mergedParams.get('post_id');
       var chatId = mergedParams.get('chat_id');
@@ -4738,6 +4731,7 @@
       }
 
       function renderInitial(list) {
+        if (!feedEl) { console.error('renderInitial: feedEl is null'); return; }
         knownIds.clear();
         feedEl.innerHTML = '';
         if (!list.length) {
@@ -4835,8 +4829,13 @@
 
       function miniappLookupHeaders() {
         var hdr = {};
-        if (startParam) hdr['X-Miniapp-Start-Param'] = String(startParam);
-        if (rawInitData) hdr['X-Miniapp-Init-Data'] = String(rawInitData).slice(0, 4000);
+        // Only ASCII-safe values may be used as HTTP header values.
+        // X-Miniapp-Start-Param is always ASCII (hex + base64url payload).
+        if (startParam) {
+          var spSafe = String(startParam).replace(/[^\x20-\x7E]/g, '');
+          if (spSafe) hdr['X-Miniapp-Start-Param'] = spSafe;
+        }
+        // X-Miniapp-User-Id is a numeric string — always ASCII.
         if (userId && String(userId).trim()) hdr['X-Miniapp-User-Id'] = String(userId).trim();
         return hdr;
       }
@@ -5227,6 +5226,13 @@
     bootHome();
     bootComments();
     }
+
+    window.addEventListener('error', function (ev) {
+      console.error('[miniapp] Uncaught error:', ev.message, 'at', ev.filename + ':' + ev.lineno, ev.error);
+    });
+    window.addEventListener('unhandledrejection', function (ev) {
+      console.error('[miniapp] Unhandled promise rejection:', ev.reason);
+    });
 
     function startAppWhenReady() {
       function run() {

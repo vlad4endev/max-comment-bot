@@ -8,8 +8,8 @@ exports.tryAttachCommentsToChannelPost = tryAttachCommentsToChannelPost;
 exports.loadChannelPostMessage = loadChannelPostMessage;
 exports.ensurePostFromChannelMessage = ensurePostFromChannelMessage;
 const max_bot_api_1 = require("@maxhub/max-bot-api");
-const uuid_1 = require("uuid");
 const logger_1 = require("../utils/logger");
+const postId_1 = require("../utils/postId");
 const commentButtonRetryQueue_1 = require("./commentButtonRetryQueue");
 const adminActivityStore_1 = require("./adminActivityStore");
 const channelRegistry_1 = require("./channelRegistry");
@@ -355,7 +355,7 @@ async function tryAttachCommentsToChannelPost(bot, message, options = {}) {
         messageMid: mid,
         senderId: user?.user_id,
     });
-    const postId = (0, uuid_1.v4)();
+    const postId = (0, postId_1.allocatePostId)();
     const post = {
         ...buildPostFromChannelMessage(message, chatId, postId, user),
         button_attach_pending: true,

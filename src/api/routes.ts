@@ -966,14 +966,12 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
     const chatIdRaw = parseNonZeroInt(req.query.chat_id)
     const messageMid = parseNonEmptyString(req.query.message_mid)
     const startParamHeader = parseNonEmptyString(req.headers['x-miniapp-start-param'])
-    const initDataHeader = parseNonEmptyString(req.headers['x-miniapp-init-data'])
     const requestUserId =
       parseNonEmptyString(req.headers['x-miniapp-user-id']) ?? parseNonEmptyString(req.query.user_id)
     logger.info('miniapp: opened', {
       startParam: startParamHeader,
       userId: requestUserId,
       chatId: chatIdRaw,
-      raw: initDataHeader,
     })
     const post = await resolvePostForMiniAppOpen(
       req.params.postId,
@@ -1025,14 +1023,12 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
     const chatIdRaw = parseNonZeroInt(req.query.chat_id)
     const messageMid = parseNonEmptyString(req.query.message_mid)
     const startParamHeader = parseNonEmptyString(req.headers['x-miniapp-start-param'])
-    const initDataHeader = parseNonEmptyString(req.headers['x-miniapp-init-data'])
     const requestUserId =
       parseNonEmptyString(req.headers['x-miniapp-user-id']) ?? parseNonEmptyString(req.query.user_id)
     logger.info('miniapp: opened', {
       startParam: startParamHeader,
       userId: requestUserId,
       chatId: chatIdRaw,
-      raw: initDataHeader,
     })
     const post = await resolvePostForMiniAppOpen(postId, chatIdRaw, messageMid, startParamHeader)
     logger.info('miniapp: post lookup', {

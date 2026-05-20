@@ -11,6 +11,7 @@ const max_bot_api_1 = require("@maxhub/max-bot-api");
 const config_1 = require("../config");
 const database_1 = require("../db/database");
 const resolveChannelChatId_1 = require("./resolveChannelChatId");
+const postId_1 = require("../utils/postId");
 const startappPayload_1 = require("../utils/startappPayload");
 const logger_1 = require("../utils/logger");
 const maxApiRetry_1 = require("../utils/maxApiRetry");
@@ -83,11 +84,13 @@ class PostStore {
         if (post) {
             return post;
         }
-        const fromCompact = (0, startappPayload_1.compactUuidToStandard)(id);
-        if (fromCompact && fromCompact !== id) {
-            post = this.getPost(fromCompact);
-            if (post) {
-                return post;
+        if (!(0, postId_1.isNumericPostId)(id)) {
+            const fromCompact = (0, startappPayload_1.compactUuidToStandard)(id);
+            if (fromCompact && fromCompact !== id) {
+                post = this.getPost(fromCompact);
+                if (post) {
+                    return post;
+                }
             }
         }
         if (chatId !== undefined) {
@@ -438,7 +441,7 @@ async function attachCommentButtonToChannelPost(bot, post, editText, keyboard, l
     }
 }
 function maxStartappPayload(postId, chatId, messageMid, extra) {
-    const compactId = postId.replace(/-/g, '');
+    const compactId = (0, postId_1.formatPostIdForStartapp)(postId);
     const suffix = extra?.admin === '1' ? '_admin' : '';
     const midPart = messageMid && messageMid.trim() !== ''
         ? `_mid_${(0, startappPayload_1.encodeMessageMidForStartapp)(messageMid.trim())}`

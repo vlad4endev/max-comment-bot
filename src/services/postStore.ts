@@ -11,6 +11,7 @@ import type Database from 'better-sqlite3'
 import { config } from '../config'
 import { getDb } from '../db/database'
 import { resolveCanonicalChannelChatId } from './resolveChannelChatId'
+import { formatPostIdForStartapp, isNumericPostId } from '../utils/postId'
 import {
   compactUuidToStandard,
   encodeMessageMidForStartapp,
@@ -19,7 +20,9 @@ import { logger } from '../utils/logger'
 import { apiCallWithRetry } from '../utils/maxApiRetry'
 
 /**
- * Channel post tracked for Mini App comments (MAX message id is {@link Post.message_mid}).
+ * Channel post tracked for Mini App comments.
+ * {@link Post.post_id} — bot-owned monotonic id (like Telegram `message_id`).
+ * {@link Post.message_mid} — MAX platform message id for edit/reply API.
  */
 export interface Post {
   post_id: string
@@ -148,11 +151,13 @@ export class PostStore {
       return post
     }
 
-    const fromCompact = compactUuidToStandard(id)
-    if (fromCompact && fromCompact !== id) {
-      post = this.getPost(fromCompact)
-      if (post) {
-        return post
+    if (!isNumericPostId(id)) {
+      const fromCompact = compactUuidToStandard(id)
+      if (fromCompact && fromCompact !== id) {
+        post = this.getPost(fromCompact)
+        if (post) {
+          return post
+        }
       }
     }
 
@@ -572,7 +577,7 @@ function maxStartappPayload(
   messageMid?: string,
   extra?: Record<string, string>,
 ): string {
-  const compactId = postId.replace(/-/g, '')
+  const compactId = formatPostIdForStartapp(postId)
   const suffix = extra?.admin === '1' ? '_admin' : ''
   const midPart =
     messageMid && messageMid.trim() !== ''
