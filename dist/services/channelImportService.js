@@ -17,6 +17,9 @@ exports.tickChannelImportJobs = tickChannelImportJobs;
 exports.publishChannelImportJob = publishChannelImportJob;
 exports.startChannelImportWorker = startChannelImportWorker;
 const axios_1 = __importDefault(require("axios"));
+const promises_1 = __importDefault(require("node:fs/promises"));
+const node_os_1 = __importDefault(require("node:os"));
+const node_path_1 = __importDefault(require("node:path"));
 const config_1 = require("../config");
 const database_1 = require("../db/database");
 const telegramReader_1 = require("../forwarder/telegramReader");
@@ -338,7 +341,32 @@ async function publishStagedPayload(p, tgToken, maxToken, maxChannelId) {
             });
             return;
         }
+        case 'album': {
+            if (!p.items.length) {
+                throw new Error('Альбом: пустой список медиа');
+            }
+            await (0, maxPublisher_1.sendMediaAlbumFilesToMax)(maxToken, maxChannelId, p.caption, p.items.map((item) => ({
+                type: item.kind === 'photo' ? 'image' : item.kind === 'video' ? 'video' : 'file',
+                filePath: item.localPath,
+                filename: item.kind === 'document' ? item.fileName : undefined,
+                contentType: item.kind === 'document' ? item.mimeType : undefined,
+            })));
+            return;
+        }
     }
+}
+function payloadLocalPaths(payload) {
+    if (payload.kind === 'album') {
+        return payload.items.map((item) => item.localPath).filter(Boolean);
+    }
+    if ('localPath' in payload && payload.localPath) {
+        return [payload.localPath];
+    }
+    return [];
+}
+async function cleanupImportTempDirectory(jobId) {
+    const tmpDir = node_path_1.default.join(node_os_1.default.tmpdir(), 'maxcomment-import', String(jobId));
+    await promises_1.default.rm(tmpDir, { recursive: true, force: true }).catch(() => { });
 }
 async function publishChannelImportJob(jobId, tgToken, maxToken) {
     const job = getChannelImportJob(jobId);
@@ -358,8 +386,31 @@ async function publishChannelImportJob(jobId, tgToken, maxToken) {
     try {
         for (const row of rows) {
             const p = JSON.parse(row.payload);
-            await publishStagedPayload(p, tgToken, maxToken, maxDest);
-            await sleep(1500 + Math.random() * 2000);
+            logger_1.logger.info('[channelImport] Публикую пост в MAX', {
+                jobId,
+                stagedId: row.id,
+                tgMessageId: row.tg_message_id,
+                payloadKind: p.kind,
+            });
+            let published = false;
+            try {
+                await publishStagedPayload(p, tgToken, maxToken, maxDest);
+                published = true;
+            }
+            finally {
+                if (published) {
+                    const localPaths = payloadLocalPaths(p);
+                    for (const localPath of localPaths) {
+                        await promises_1.default.rm(localPath, { force: true }).catch(() => { });
+                    }
+                }
+            }
+            logger_1.logger.info('[channelImport] Пост опубликован, жду перед следующим', {
+                jobId,
+                stagedId: row.id,
+                delayMs: 1500,
+            });
+            await sleep(1500 + Math.random() * 500);
         }
     }
     catch (err) {
@@ -371,6 +422,7 @@ async function publishChannelImportJob(jobId, tgToken, maxToken) {
     }
     (0, database_1.getDb)().prepare('DELETE FROM channel_import_staged WHERE job_id = ?').run(jobId);
     (0, database_1.getDb)().prepare('DELETE FROM channel_import_jobs WHERE id = ?').run(jobId);
+    await cleanupImportTempDirectory(jobId);
 }
 let workerStarted = false;
 function startChannelImportWorker() {

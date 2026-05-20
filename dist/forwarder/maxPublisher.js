@@ -10,6 +10,7 @@ exports.sendDocumentFileToMax = sendDocumentFileToMax;
 exports.sendPhotoToMax = sendPhotoToMax;
 exports.sendVideoToMax = sendVideoToMax;
 exports.sendDocumentToMax = sendDocumentToMax;
+exports.sendMediaAlbumFilesToMax = sendMediaAlbumFilesToMax;
 const promises_1 = __importDefault(require("node:fs/promises"));
 const node_path_1 = __importDefault(require("node:path"));
 const axios_1 = __importDefault(require("axios"));
@@ -42,6 +43,19 @@ async function uploadBufferToMax(token, type, buffer, filename, contentType) {
         throw new Error('MAX upload: missing token in uploads response');
     }
     return uploadToken;
+}
+async function uploadFileToMaxAttachmentToken(token, item) {
+    const buffer = await promises_1.default.readFile(item.filePath);
+    const fallbackName = node_path_1.default.basename(item.filePath);
+    const filename = item.filename ?? fallbackName;
+    const contentType = item.contentType ??
+        (item.type === 'image'
+            ? 'image/jpeg'
+            : item.type === 'video'
+                ? 'video/mp4'
+                : 'application/octet-stream');
+    const uploadToken = await uploadBufferToMax(token, item.type, buffer, filename, contentType);
+    return { type: item.type, payload: { token: uploadToken } };
 }
 async function sendTextToMax(token, chatId, text) {
     await postMessage(token, chatId, { text: text.substring(0, 4096) });
@@ -107,6 +121,16 @@ async function sendDocumentToMax(token, chatId, documentUrl, caption, options) {
     await postMessage(token, chatId, {
         text: caption.substring(0, 1024) || '\u00a0',
         attachments: [{ type: 'file', payload: { token: uploadToken } }],
+    });
+}
+async function sendMediaAlbumFilesToMax(token, chatId, caption, media) {
+    if (media.length === 0) {
+        throw new Error('MAX album: empty media list');
+    }
+    const attachments = await Promise.all(media.map((item) => uploadFileToMaxAttachmentToken(token, item)));
+    await postMessage(token, chatId, {
+        text: caption.substring(0, 1024) || '\u00a0',
+        attachments,
     });
 }
 function guessFilenameFromUrl(url, fallback) {

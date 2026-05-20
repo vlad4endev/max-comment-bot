@@ -40,6 +40,21 @@ export type StagedPayload = {
     localPath?: string;
     fileName?: string;
     mimeType?: string;
+} | {
+    kind: 'album';
+    caption: string;
+    items: ({
+        kind: 'photo';
+        localPath: string;
+    } | {
+        kind: 'video';
+        localPath: string;
+    } | {
+        kind: 'document';
+        localPath: string;
+        fileName?: string;
+        mimeType?: string;
+    })[];
 };
 export declare function resolveImportTgToken(): string;
 export declare function readerTokenMeta(): {

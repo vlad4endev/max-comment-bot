@@ -1,3 +1,10 @@
+type MaxAttachmentType = 'image' | 'video' | 'file';
+interface MaxAttachmentFromFile {
+    type: MaxAttachmentType;
+    filePath: string;
+    filename?: string;
+    contentType?: string;
+}
 export declare function sendTextToMax(token: string, chatId: string, text: string): Promise<void>;
 export declare function sendPhotoFileToMax(token: string, chatId: string, filePath: string, caption: string): Promise<void>;
 export declare function sendVideoFileToMax(token: string, chatId: string, filePath: string, caption: string): Promise<void>;
@@ -11,3 +18,5 @@ export declare function sendDocumentToMax(token: string, chatId: string, documen
     filename?: string;
     contentType?: string;
 }): Promise<void>;
+export declare function sendMediaAlbumFilesToMax(token: string, chatId: string, caption: string, media: MaxAttachmentFromFile[]): Promise<void>;
+export {};

@@ -1,4 +1,7 @@
 import axios from 'axios'
+import fs from 'node:fs/promises'
+import os from 'node:os'
+import path from 'node:path'
 
 import { getTelegramToken } from '../config'
 import { getDb } from '../db/database'
@@ -10,6 +13,7 @@ import {
 import {
   sendDocumentFileToMax,
   sendDocumentToMax,
+  sendMediaAlbumFilesToMax,
   sendPhotoFileToMax,
   sendPhotoToMax,
   sendTextToMax,
@@ -66,6 +70,15 @@ export type StagedPayload =
       localPath?: string
       fileName?: string
       mimeType?: string
+    }
+  | {
+      kind: 'album'
+      caption: string
+      items: (
+        | { kind: 'photo'; localPath: string }
+        | { kind: 'video'; localPath: string }
+        | { kind: 'document'; localPath: string; fileName?: string; mimeType?: string }
+      )[]
     }
 
 export function resolveImportTgToken(): string {
@@ -436,7 +449,39 @@ async function publishStagedPayload(
       })
       return
     }
+    case 'album': {
+      if (!p.items.length) {
+        throw new Error('Альбом: пустой список медиа')
+      }
+      await sendMediaAlbumFilesToMax(
+        maxToken,
+        maxChannelId,
+        p.caption,
+        p.items.map((item) => ({
+          type: item.kind === 'photo' ? 'image' : item.kind === 'video' ? 'video' : 'file',
+          filePath: item.localPath,
+          filename: item.kind === 'document' ? item.fileName : undefined,
+          contentType: item.kind === 'document' ? item.mimeType : undefined,
+        })),
+      )
+      return
+    }
   }
+}
+
+function payloadLocalPaths(payload: StagedPayload): string[] {
+  if (payload.kind === 'album') {
+    return payload.items.map((item) => item.localPath).filter(Boolean)
+  }
+  if ('localPath' in payload && payload.localPath) {
+    return [payload.localPath]
+  }
+  return []
+}
+
+async function cleanupImportTempDirectory(jobId: number): Promise<void> {
+  const tmpDir = path.join(os.tmpdir(), 'maxcomment-import', String(jobId))
+  await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {})
 }
 
 export async function publishChannelImportJob(
@@ -467,8 +512,30 @@ export async function publishChannelImportJob(
   try {
     for (const row of rows) {
       const p = JSON.parse(row.payload) as StagedPayload
-      await publishStagedPayload(p, tgToken, maxToken, maxDest)
-      await sleep(1500 + Math.random() * 2000)
+      logger.info('[channelImport] Публикую пост в MAX', {
+        jobId,
+        stagedId: row.id,
+        tgMessageId: row.tg_message_id,
+        payloadKind: p.kind,
+      })
+      let published = false
+      try {
+        await publishStagedPayload(p, tgToken, maxToken, maxDest)
+        published = true
+      } finally {
+        if (published) {
+          const localPaths = payloadLocalPaths(p)
+          for (const localPath of localPaths) {
+            await fs.rm(localPath, { force: true }).catch(() => {})
+          }
+        }
+      }
+      logger.info('[channelImport] Пост опубликован, жду перед следующим', {
+        jobId,
+        stagedId: row.id,
+        delayMs: 1500,
+      })
+      await sleep(1500 + Math.random() * 500)
     }
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err)
@@ -482,6 +549,7 @@ export async function publishChannelImportJob(
 
   getDb().prepare('DELETE FROM channel_import_staged WHERE job_id = ?').run(jobId)
   getDb().prepare('DELETE FROM channel_import_jobs WHERE id = ?').run(jobId)
+  await cleanupImportTempDirectory(jobId)
 }
 
 let workerStarted = false
