@@ -25,10 +25,13 @@ export interface TgMessage {
         username?: string;
     };
 }
+export interface TgChannelUpdate {
+    update_id: number;
+    channel_post?: TgMessage;
+    edited_channel_post?: TgMessage;
+    edited_message?: TgMessage;
+}
 export declare function getTgUpdates(token: string, offset?: number): Promise<TgMessage[]>;
 export declare function getTgFileUrl(token: string, fileId: string): Promise<string | null>;
 /** Сырые апдейты с `update_id` — для корректного offset при опросе. */
-export declare function getTelegramUpdatesWithIds(token: string, offset: number, timeoutSec?: number): Promise<Array<{
-    update_id: number;
-    channel_post: TgMessage;
-}>>;
+export declare function getTelegramUpdatesWithIds(token: string, offset: number, timeoutSec?: number): Promise<TgChannelUpdate[]>;

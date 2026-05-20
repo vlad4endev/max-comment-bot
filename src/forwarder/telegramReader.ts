@@ -22,6 +22,13 @@ export interface TgMessage {
   chat: { id: number; username?: string }
 }
 
+export interface TgChannelUpdate {
+  update_id: number
+  channel_post?: TgMessage
+  edited_channel_post?: TgMessage
+  edited_message?: TgMessage
+}
+
 export async function getTgUpdates(token: string, offset: number = 0): Promise<TgMessage[]> {
   const url = `${TG_API}${token}/getUpdates?offset=${offset}&timeout=10&allowed_updates=["channel_post"]`
   for (let attempt = 0; attempt < 5; attempt++) {
@@ -64,22 +71,28 @@ export async function getTelegramUpdatesWithIds(
   token: string,
   offset: number,
   timeoutSec: number = 0,
-): Promise<Array<{ update_id: number; channel_post: TgMessage }>> {
+): Promise<TgChannelUpdate[]> {
   for (let attempt = 0; attempt < 5; attempt++) {
     try {
       const res = await axios.get(`${TG_API}${token}/getUpdates`, {
         params: {
           offset,
           timeout: timeoutSec,
-          allowed_updates: JSON.stringify(['channel_post']),
+          allowed_updates: JSON.stringify(['channel_post', 'edited_channel_post', 'edited_message']),
         },
       })
       const updates = res.data?.result || []
       return updates
-        .filter((u: any) => u.channel_post && typeof u.update_id === 'number')
+        .filter(
+          (u: any) =>
+            typeof u.update_id === 'number' &&
+            (u.channel_post || u.edited_channel_post || u.edited_message),
+        )
         .map((u: any) => ({
           update_id: u.update_id as number,
-          channel_post: u.channel_post as TgMessage,
+          channel_post: u.channel_post as TgMessage | undefined,
+          edited_channel_post: u.edited_channel_post as TgMessage | undefined,
+          edited_message: u.edited_message as TgMessage | undefined,
         }))
     } catch (err: unknown) {
       if (axios.isAxiosError(err) && err.response?.status === 409) {

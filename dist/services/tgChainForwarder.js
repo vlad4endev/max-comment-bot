@@ -15,6 +15,7 @@ const adminPanelState_1 = require("../api/adminPanelState");
 const channelImportService_1 = require("./channelImportService");
 const channelPostActions_1 = require("./channelPostActions");
 const commentButtonRetryQueue_1 = require("./commentButtonRetryQueue");
+const postStore_1 = require("./postStore");
 const resolveChannelChatId_1 = require("./resolveChannelChatId");
 const tgChannelMatch_1 = require("../utils/tgChannelMatch");
 const logger_1 = require("../utils/logger");
@@ -77,10 +78,35 @@ function isAlreadyForwarded(chainId, messageId) {
         .get(chainId, messageId);
     return !!row;
 }
-function markForwarded(chainId, messageId) {
+function getForwardedRecord(chainId, messageId) {
+    const row = (0, database_1.getDb)()
+        .prepare(`SELECT max_message_mid, tg_media_group_id, album_chunk_index, tg_payload
+       FROM tg_chain_forwarded
+       WHERE chain_id = ? AND tg_message_id = ?`)
+        .get(chainId, messageId);
+    return row ?? null;
+}
+function listForwardedAlbumChunk(chainId, mediaGroupId, chunkIndex) {
+    return (0, database_1.getDb)()
+        .prepare(`SELECT tg_message_id, tg_payload
+       FROM tg_chain_forwarded
+       WHERE chain_id = ? AND tg_media_group_id = ? AND album_chunk_index = ?
+       ORDER BY tg_message_id ASC`)
+        .all(chainId, mediaGroupId, chunkIndex);
+}
+function markForwarded(chainId, message, maxMid, chunkIndex) {
+    const mediaGroupId = message.media_group_id?.trim() || null;
+    const payload = JSON.stringify(message);
     (0, database_1.getDb)()
-        .prepare('INSERT OR IGNORE INTO tg_chain_forwarded (chain_id, tg_message_id) VALUES (?, ?)')
-        .run(chainId, messageId);
+        .prepare(`INSERT INTO tg_chain_forwarded
+       (chain_id, tg_message_id, max_message_mid, tg_media_group_id, album_chunk_index, tg_payload)
+       VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT(chain_id, tg_message_id) DO UPDATE SET
+         max_message_mid = excluded.max_message_mid,
+         tg_media_group_id = excluded.tg_media_group_id,
+         album_chunk_index = excluded.album_chunk_index,
+         tg_payload = excluded.tg_payload`)
+        .run(chainId, message.message_id, maxMid, mediaGroupId, chunkIndex, payload);
 }
 function resolveTgToken(chain) {
     const fromChain = chain.bot_token?.trim();
@@ -302,10 +328,7 @@ async function buildAlbumImageAttachments(bot, photoMessages, tgToken) {
     }
     return mergeAlbumImageAttachments(uploaded);
 }
-/** Альбом TG → один пост MAX (все фото в одном сообщении, как в Telegram). */
-async function forwardAlbumToMax(bot, messages, tgToken, maxChatId, caption) {
-    const chatId = (0, resolveChannelChatId_1.resolveCanonicalChannelChatId)(maxChatId) ?? maxChatId;
-    const messageText = caption.trim() || '\u00a0';
+async function buildAlbumAttachments(bot, messages, tgToken) {
     const photoMessages = messages.filter((m) => m.photo && m.photo.length > 0);
     const attachments = [];
     const imageAtts = await buildAlbumImageAttachments(bot, photoMessages, tgToken);
@@ -315,7 +338,7 @@ async function forwardAlbumToMax(bot, messages, tgToken, maxChatId, caption) {
             photoCount: photoMessages.length,
             messageIds: messages.map((m) => m.message_id),
         });
-        return null;
+        return [];
     }
     for (const msg of messages) {
         if (msg.photo?.length)
@@ -339,6 +362,40 @@ async function forwardAlbumToMax(bot, messages, tgToken, maxChatId, caption) {
             }
         }
     }
+    return attachments;
+}
+async function buildSingleMessageAttachments(bot, msg, tgToken) {
+    if (msg.photo && msg.photo.length > 0) {
+        const largest = msg.photo[msg.photo.length - 1];
+        const url = await (0, telegramReader_1.getTgFileUrl)(tgToken, largest.file_id);
+        if (!url)
+            return [];
+        const image = await maxApi(() => bot.api.uploadImage({ url }));
+        return [image.toJson()];
+    }
+    if (msg.video?.file_id) {
+        const url = await (0, telegramReader_1.getTgFileUrl)(tgToken, msg.video.file_id);
+        if (!url)
+            return [];
+        const res = await axios_1.default.get(url, { responseType: 'arraybuffer' });
+        const video = await maxApi(() => bot.api.uploadVideo({ source: Buffer.from(res.data) }));
+        return [video.toJson()];
+    }
+    if (msg.document?.file_id) {
+        const url = await (0, telegramReader_1.getTgFileUrl)(tgToken, msg.document.file_id);
+        if (!url)
+            return [];
+        const res = await axios_1.default.get(url, { responseType: 'arraybuffer' });
+        const file = await maxApi(() => bot.api.uploadFile({ source: Buffer.from(res.data) }));
+        return [file.toJson()];
+    }
+    return [];
+}
+/** Альбом TG → один пост MAX (все фото в одном сообщении, как в Telegram). */
+async function forwardAlbumToMax(bot, messages, tgToken, maxChatId, caption) {
+    const chatId = (0, resolveChannelChatId_1.resolveCanonicalChannelChatId)(maxChatId) ?? maxChatId;
+    const messageText = caption.trim() || '\u00a0';
+    const attachments = await buildAlbumAttachments(bot, messages, tgToken);
     if (attachments.length === 0) {
         return null;
     }
@@ -347,6 +404,143 @@ async function forwardAlbumToMax(bot, messages, tgToken, maxChatId, caption) {
         attachments: attachments.length > 0 ? attachments : undefined,
     }));
     return sent.body?.mid ?? null;
+}
+function parseBufferedTgPayload(payload) {
+    if (!payload)
+        return null;
+    try {
+        return JSON.parse(payload);
+    }
+    catch {
+        return null;
+    }
+}
+async function loadInlineKeyboardAttachment(bot, maxMid) {
+    try {
+        const message = await maxApi(() => bot.api.getMessage(maxMid));
+        const keyboard = message.body.attachments?.find((att) => att.type === 'inline_keyboard');
+        return keyboard ?? null;
+    }
+    catch {
+        return null;
+    }
+}
+function firstImageUrlFromAttachments(attachments) {
+    for (const att of attachments) {
+        if (att.type === 'image') {
+            const payload = att.payload;
+            if (payload?.url && payload.url.trim() !== '') {
+                return payload.url;
+            }
+        }
+    }
+    return undefined;
+}
+async function editMaxMessageFromTelegram(bot, maxMid, text, attachments) {
+    if (attachments.length === 0) {
+        await maxApi(() => bot.api.editMessage(maxMid, { text: text.trim() || '\u00a0' }));
+        return;
+    }
+    const keyboard = await loadInlineKeyboardAttachment(bot, maxMid);
+    const nextAttachments = keyboard ? [...attachments, keyboard] : attachments;
+    await maxApi(() => bot.api.editMessage(maxMid, {
+        text: text.trim() || '\u00a0',
+        attachments: nextAttachments,
+    }));
+}
+function syncStoredPostAfterEdit(maxChatId, maxMid, text, attachments) {
+    const chatId = (0, resolveChannelChatId_1.resolveCanonicalChannelChatId)(maxChatId) ?? maxChatId;
+    const post = postStore_1.postStore.findPostByChannelMessage(chatId, maxMid);
+    if (!post)
+        return;
+    postStore_1.postStore.savePost({
+        ...post,
+        text: text.trim(),
+        photo_url: attachments.length > 0 ? firstImageUrlFromAttachments(attachments) : post.photo_url,
+        media_attachments: attachments.length > 0 ? attachments : post.media_attachments,
+        timestamp: new Date().toISOString(),
+    });
+}
+async function processEditedChainMessage(chain, msg, tgToken) {
+    const sourceKey = chainSourceKey(chain);
+    if (!(0, tgChannelMatch_1.telegramChannelMatchesTarget)(msg.chat, sourceKey))
+        return;
+    const mapping = getForwardedRecord(chain.id, msg.message_id);
+    if (!mapping?.max_message_mid) {
+        logger_1.logger.info('[tgChain] skip edit: original post was not forwarded', {
+            chainId: chain.id,
+            tgMessageId: msg.message_id,
+        });
+        return;
+    }
+    const bot = botRef;
+    if (!bot) {
+        throw new Error('MAX bot not initialized (setTgChainForwarderBot)');
+    }
+    try {
+        const isAlbum = Boolean(msg.media_group_id?.trim() || mapping.tg_media_group_id?.trim());
+        const maxMid = mapping.max_message_mid;
+        if (isAlbum) {
+            const mediaGroupId = (msg.media_group_id?.trim() || mapping.tg_media_group_id?.trim()) ?? '';
+            const chunkIndex = mapping.album_chunk_index ?? 0;
+            markForwarded(chain.id, msg, maxMid, chunkIndex);
+            const rows = listForwardedAlbumChunk(chain.id, mediaGroupId, chunkIndex);
+            const rebuilt = rows
+                .map((row) => parseBufferedTgPayload(row.tg_payload))
+                .filter((item) => Boolean(item));
+            if (!rebuilt.some((item) => item.message_id === msg.message_id)) {
+                rebuilt.push(msg);
+            }
+            rebuilt.sort((a, b) => a.message_id - b.message_id);
+            const caption = pickAlbumCaption(rebuilt, chain.add_signature);
+            const attachments = await buildAlbumAttachments(bot, rebuilt, tgToken);
+            if (attachments.length === 0 && caption.trim() === '') {
+                return;
+            }
+            await editMaxMessageFromTelegram(bot, maxMid, caption, attachments);
+            syncStoredPostAfterEdit(chain.max_chat_id, maxMid, caption, attachments);
+            logger_1.logger.info('[tgChain] edited album synced', {
+                chainId: chain.id,
+                tgMessageId: msg.message_id,
+                maxMessageMid: maxMid,
+                mediaGroupId,
+                chunkIndex,
+            });
+            return;
+        }
+        const caption = (() => {
+            const raw = (msg.caption || msg.text || '').trim();
+            if (chain.add_signature && raw)
+                return `${raw}\n\n— TG`;
+            return raw;
+        })();
+        const attachments = await buildSingleMessageAttachments(bot, msg, tgToken);
+        if (attachments.length === 0 && caption.trim() === '') {
+            return;
+        }
+        markForwarded(chain.id, msg, maxMid, null);
+        await editMaxMessageFromTelegram(bot, maxMid, caption, attachments);
+        syncStoredPostAfterEdit(chain.max_chat_id, maxMid, caption, attachments);
+        logger_1.logger.info('[tgChain] edited post synced', {
+            chainId: chain.id,
+            tgMessageId: msg.message_id,
+            maxMessageMid: maxMid,
+        });
+    }
+    catch (err) {
+        const axiosDetail = axios_1.default.isAxiosError(err) && err.response
+            ? { status: err.response.status, data: err.response.data }
+            : undefined;
+        logger_1.logger.error('[tgChain] edit sync failed', {
+            chainId: chain.id,
+            tgMessageId: msg.message_id,
+            err,
+            axiosDetail,
+        });
+        const errorsToday = chain.errors_today + 1;
+        chain.errors_today = errorsToday;
+        await (0, adminPanelState_1.updateTgChain)(chain.id, { errors_today: errorsToday });
+    }
 }
 async function processChainMessageGroup(chain, messages, tgToken) {
     const sourceKey = chainSourceKey(chain);
@@ -370,10 +564,14 @@ async function processChainMessageGroup(chain, messages, tgToken) {
             const chunks = chunkAlbumMessages(ordered);
             const firstCaption = pickAlbumCaption(ordered, chain.add_signature);
             for (let i = 0; i < chunks.length; i += 1) {
+                const chunk = chunks[i];
                 const chunkCaption = i === 0 ? firstCaption : '';
-                resultMid = await forwardAlbumToMax(bot, chunks[i], tgToken, chain.max_chat_id, chunkCaption);
+                resultMid = await forwardAlbumToMax(bot, chunk, tgToken, chain.max_chat_id, chunkCaption);
                 if (resultMid) {
                     published += 1;
+                    for (const msg of chunk) {
+                        markForwarded(chain.id, msg, resultMid, i);
+                    }
                     if (attachComments) {
                         const chatId = (0, resolveChannelChatId_1.resolveCanonicalChannelChatId)(chain.max_chat_id) ?? chain.max_chat_id;
                         const mid = resultMid;
@@ -394,6 +592,7 @@ async function processChainMessageGroup(chain, messages, tgToken) {
             resultMid = await forwardOneTgMessageToMax(bot, msg, tgToken, chain.max_chat_id, caption);
             if (resultMid) {
                 published = 1;
+                markForwarded(chain.id, msg, resultMid, null);
                 if (attachComments) {
                     const chatId = (0, resolveChannelChatId_1.resolveCanonicalChannelChatId)(chain.max_chat_id) ?? chain.max_chat_id;
                     const mid = resultMid;
@@ -404,8 +603,13 @@ async function processChainMessageGroup(chain, messages, tgToken) {
                 }
             }
         }
+        // Если публикация не удалась, всё равно сохраняем payload по TG id:
+        // это позволит позже корректно обработать edited_channel_post.
         for (const msg of pending) {
-            markForwarded(chain.id, msg.message_id);
+            const existing = getForwardedRecord(chain.id, msg.message_id);
+            if (!existing) {
+                markForwarded(chain.id, msg, null, null);
+            }
         }
         if (published > 0) {
             const forwardedToday = chain.forwarded_today + published;
@@ -509,11 +713,19 @@ async function runTgChainsOnce() {
         }
         let nextOffset = offset;
         const channelPosts = [];
+        const editedChannelPosts = [];
+        const editedMessages = [];
         for (const u of batch) {
             receivedAny = true;
             nextOffset = Math.max(nextOffset, u.update_id + 1);
             if (u.channel_post) {
                 channelPosts.push(u.channel_post);
+            }
+            if (u.edited_channel_post) {
+                editedChannelPosts.push(u.edited_channel_post);
+            }
+            if (u.edited_message) {
+                editedMessages.push(u.edited_message);
             }
         }
         for (const chain of group) {
@@ -529,6 +741,14 @@ async function runTgChainsOnce() {
                     continue;
                 }
                 await processChainMessageGroup(chain, msgs, tgToken);
+            }
+            const editedForChain = editedChannelPosts.filter((m) => (0, tgChannelMatch_1.telegramChannelMatchesTarget)(m.chat, sourceKey));
+            for (const edited of editedForChain) {
+                await processEditedChainMessage(chain, edited, tgToken);
+            }
+            const editedMessagesForChain = editedMessages.filter((m) => (0, tgChannelMatch_1.telegramChannelMatchesTarget)(m.chat, sourceKey));
+            for (const edited of editedMessagesForChain) {
+                await processEditedChainMessage(chain, edited, tgToken);
             }
         }
         if (nextOffset > offset) {

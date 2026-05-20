@@ -7,6 +7,7 @@ import type { AttachmentRequest, ImageAttachmentRequest } from '@maxhub/max-bot-
 import { getTelegramToken } from '../config'
 import { getDb } from '../db/database'
 import {
+  type TgChannelUpdate,
   TelegramGetUpdatesConflictError,
   getTgFileUrl,
   getTelegramUpdatesWithIds,
@@ -16,6 +17,7 @@ import { listTgChains, updateTgChain, type TgChainRecord } from '../api/adminPan
 import { assertTelegramPollingReady } from './channelImportService'
 import { ensurePostFromChannelMessage } from './channelPostActions'
 import { scheduleCommentButtonRetry } from './commentButtonRetryQueue'
+import { postStore } from './postStore'
 import { resolveCanonicalChannelChatId } from './resolveChannelChatId'
 import { telegramChannelMatchesTarget } from '../utils/tgChannelMatch'
 import { logger } from '../utils/logger'
@@ -99,12 +101,59 @@ function isAlreadyForwarded(chainId: string, messageId: number): boolean {
   return !!row
 }
 
-function markForwarded(chainId: string, messageId: number): void {
+type ForwardedRecord = {
+  max_message_mid: string | null
+  tg_media_group_id: string | null
+  album_chunk_index: number | null
+  tg_payload: string | null
+}
+
+function getForwardedRecord(chainId: string, messageId: number): ForwardedRecord | null {
+  const row = getDb()
+    .prepare(
+      `SELECT max_message_mid, tg_media_group_id, album_chunk_index, tg_payload
+       FROM tg_chain_forwarded
+       WHERE chain_id = ? AND tg_message_id = ?`,
+    )
+    .get(chainId, messageId) as ForwardedRecord | undefined
+  return row ?? null
+}
+
+function listForwardedAlbumChunk(
+  chainId: string,
+  mediaGroupId: string,
+  chunkIndex: number,
+): Array<{ tg_message_id: number; tg_payload: string | null }> {
+  return getDb()
+    .prepare(
+      `SELECT tg_message_id, tg_payload
+       FROM tg_chain_forwarded
+       WHERE chain_id = ? AND tg_media_group_id = ? AND album_chunk_index = ?
+       ORDER BY tg_message_id ASC`,
+    )
+    .all(chainId, mediaGroupId, chunkIndex) as Array<{ tg_message_id: number; tg_payload: string | null }>
+}
+
+function markForwarded(
+  chainId: string,
+  message: TgMessage,
+  maxMid: string | null,
+  chunkIndex: number | null,
+): void {
+  const mediaGroupId = message.media_group_id?.trim() || null
+  const payload = JSON.stringify(message)
   getDb()
     .prepare(
-      'INSERT OR IGNORE INTO tg_chain_forwarded (chain_id, tg_message_id) VALUES (?, ?)',
+      `INSERT INTO tg_chain_forwarded
+       (chain_id, tg_message_id, max_message_mid, tg_media_group_id, album_chunk_index, tg_payload)
+       VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT(chain_id, tg_message_id) DO UPDATE SET
+         max_message_mid = excluded.max_message_mid,
+         tg_media_group_id = excluded.tg_media_group_id,
+         album_chunk_index = excluded.album_chunk_index,
+         tg_payload = excluded.tg_payload`,
     )
-    .run(chainId, messageId)
+    .run(chainId, message.message_id, maxMid, mediaGroupId, chunkIndex, payload)
 }
 
 function resolveTgToken(chain: TgChainRecord): string {
@@ -355,17 +404,11 @@ async function buildAlbumImageAttachments(
   return mergeAlbumImageAttachments(uploaded)
 }
 
-/** Альбом TG → один пост MAX (все фото в одном сообщении, как в Telegram). */
-async function forwardAlbumToMax(
+async function buildAlbumAttachments(
   bot: Bot,
   messages: TgMessage[],
   tgToken: string,
-  maxChatId: number,
-  caption: string,
-): Promise<string | null> {
-  const chatId = resolveCanonicalChannelChatId(maxChatId) ?? maxChatId
-  const messageText = caption.trim() || '\u00a0'
-
+): Promise<AttachmentRequest[]> {
   const photoMessages = messages.filter((m) => m.photo && m.photo.length > 0)
   const attachments: AttachmentRequest[] = []
 
@@ -377,7 +420,7 @@ async function forwardAlbumToMax(
       photoCount: photoMessages.length,
       messageIds: messages.map((m) => m.message_id),
     })
-    return null
+    return []
   }
 
   for (const msg of messages) {
@@ -401,6 +444,50 @@ async function forwardAlbumToMax(
     }
   }
 
+  return attachments
+}
+
+async function buildSingleMessageAttachments(
+  bot: Bot,
+  msg: TgMessage,
+  tgToken: string,
+): Promise<AttachmentRequest[]> {
+  if (msg.photo && msg.photo.length > 0) {
+    const largest = msg.photo[msg.photo.length - 1]
+    const url = await getTgFileUrl(tgToken, largest.file_id)
+    if (!url) return []
+    const image = await maxApi(() => bot.api.uploadImage({ url }))
+    return [image.toJson() as AttachmentRequest]
+  }
+  if (msg.video?.file_id) {
+    const url = await getTgFileUrl(tgToken, msg.video.file_id)
+    if (!url) return []
+    const res = await axios.get<ArrayBuffer>(url, { responseType: 'arraybuffer' })
+    const video = await maxApi(() => bot.api.uploadVideo({ source: Buffer.from(res.data) }))
+    return [video.toJson() as AttachmentRequest]
+  }
+  if (msg.document?.file_id) {
+    const url = await getTgFileUrl(tgToken, msg.document.file_id)
+    if (!url) return []
+    const res = await axios.get<ArrayBuffer>(url, { responseType: 'arraybuffer' })
+    const file = await maxApi(() => bot.api.uploadFile({ source: Buffer.from(res.data) }))
+    return [file.toJson() as AttachmentRequest]
+  }
+  return []
+}
+
+/** Альбом TG → один пост MAX (все фото в одном сообщении, как в Telegram). */
+async function forwardAlbumToMax(
+  bot: Bot,
+  messages: TgMessage[],
+  tgToken: string,
+  maxChatId: number,
+  caption: string,
+): Promise<string | null> {
+  const chatId = resolveCanonicalChannelChatId(maxChatId) ?? maxChatId
+  const messageText = caption.trim() || '\u00a0'
+  const attachments = await buildAlbumAttachments(bot, messages, tgToken)
+
   if (attachments.length === 0) {
     return null
   }
@@ -412,6 +499,164 @@ async function forwardAlbumToMax(
     }),
   )
   return sent.body?.mid ?? null
+}
+
+function parseBufferedTgPayload(payload: string | null): TgMessage | null {
+  if (!payload) return null
+  try {
+    return JSON.parse(payload) as TgMessage
+  } catch {
+    return null
+  }
+}
+
+async function loadInlineKeyboardAttachment(
+  bot: Bot,
+  maxMid: string,
+): Promise<AttachmentRequest | null> {
+  try {
+    const message = await maxApi(() => bot.api.getMessage(maxMid))
+    const keyboard = message.body.attachments?.find((att) => att.type === 'inline_keyboard')
+    return (keyboard as AttachmentRequest | undefined) ?? null
+  } catch {
+    return null
+  }
+}
+
+function firstImageUrlFromAttachments(attachments: AttachmentRequest[]): string | undefined {
+  for (const att of attachments) {
+    if (att.type === 'image') {
+      const payload = (att as { payload?: { url?: string } }).payload
+      if (payload?.url && payload.url.trim() !== '') {
+        return payload.url
+      }
+    }
+  }
+  return undefined
+}
+
+async function editMaxMessageFromTelegram(
+  bot: Bot,
+  maxMid: string,
+  text: string,
+  attachments: AttachmentRequest[],
+): Promise<void> {
+  if (attachments.length === 0) {
+    await maxApi(() => bot.api.editMessage(maxMid, { text: text.trim() || '\u00a0' }))
+    return
+  }
+  const keyboard = await loadInlineKeyboardAttachment(bot, maxMid)
+  const nextAttachments = keyboard ? [...attachments, keyboard] : attachments
+  await maxApi(() =>
+    bot.api.editMessage(maxMid, {
+      text: text.trim() || '\u00a0',
+      attachments: nextAttachments,
+    }),
+  )
+}
+
+function syncStoredPostAfterEdit(
+  maxChatId: number,
+  maxMid: string,
+  text: string,
+  attachments: AttachmentRequest[],
+): void {
+  const chatId = resolveCanonicalChannelChatId(maxChatId) ?? maxChatId
+  const post = postStore.findPostByChannelMessage(chatId, maxMid)
+  if (!post) return
+  postStore.savePost({
+    ...post,
+    text: text.trim(),
+    photo_url: attachments.length > 0 ? firstImageUrlFromAttachments(attachments) : post.photo_url,
+    media_attachments: attachments.length > 0 ? attachments : post.media_attachments,
+    timestamp: new Date().toISOString(),
+  })
+}
+
+async function processEditedChainMessage(
+  chain: TgChainRecord,
+  msg: TgMessage,
+  tgToken: string,
+): Promise<void> {
+  const sourceKey = chainSourceKey(chain)
+  if (!telegramChannelMatchesTarget(msg.chat, sourceKey)) return
+  const mapping = getForwardedRecord(chain.id, msg.message_id)
+  if (!mapping?.max_message_mid) {
+    logger.info('[tgChain] skip edit: original post was not forwarded', {
+      chainId: chain.id,
+      tgMessageId: msg.message_id,
+    })
+    return
+  }
+  const bot = botRef
+  if (!bot) {
+    throw new Error('MAX bot not initialized (setTgChainForwarderBot)')
+  }
+
+  try {
+    const isAlbum = Boolean(msg.media_group_id?.trim() || mapping.tg_media_group_id?.trim())
+    const maxMid = mapping.max_message_mid
+    if (isAlbum) {
+      const mediaGroupId = (msg.media_group_id?.trim() || mapping.tg_media_group_id?.trim()) ?? ''
+      const chunkIndex = mapping.album_chunk_index ?? 0
+      markForwarded(chain.id, msg, maxMid, chunkIndex)
+      const rows = listForwardedAlbumChunk(chain.id, mediaGroupId, chunkIndex)
+      const rebuilt = rows
+        .map((row) => parseBufferedTgPayload(row.tg_payload))
+        .filter((item): item is TgMessage => Boolean(item))
+      if (!rebuilt.some((item) => item.message_id === msg.message_id)) {
+        rebuilt.push(msg)
+      }
+      rebuilt.sort((a, b) => a.message_id - b.message_id)
+      const caption = pickAlbumCaption(rebuilt, chain.add_signature)
+      const attachments = await buildAlbumAttachments(bot, rebuilt, tgToken)
+      if (attachments.length === 0 && caption.trim() === '') {
+        return
+      }
+      await editMaxMessageFromTelegram(bot, maxMid, caption, attachments)
+      syncStoredPostAfterEdit(chain.max_chat_id, maxMid, caption, attachments)
+      logger.info('[tgChain] edited album synced', {
+        chainId: chain.id,
+        tgMessageId: msg.message_id,
+        maxMessageMid: maxMid,
+        mediaGroupId,
+        chunkIndex,
+      })
+      return
+    }
+
+    const caption = (() => {
+      const raw = (msg.caption || msg.text || '').trim()
+      if (chain.add_signature && raw) return `${raw}\n\n— TG`
+      return raw
+    })()
+    const attachments = await buildSingleMessageAttachments(bot, msg, tgToken)
+    if (attachments.length === 0 && caption.trim() === '') {
+      return
+    }
+    markForwarded(chain.id, msg, maxMid, null)
+    await editMaxMessageFromTelegram(bot, maxMid, caption, attachments)
+    syncStoredPostAfterEdit(chain.max_chat_id, maxMid, caption, attachments)
+    logger.info('[tgChain] edited post synced', {
+      chainId: chain.id,
+      tgMessageId: msg.message_id,
+      maxMessageMid: maxMid,
+    })
+  } catch (err: unknown) {
+    const axiosDetail =
+      axios.isAxiosError(err) && err.response
+        ? { status: err.response.status, data: err.response.data }
+        : undefined
+    logger.error('[tgChain] edit sync failed', {
+      chainId: chain.id,
+      tgMessageId: msg.message_id,
+      err,
+      axiosDetail,
+    })
+    const errorsToday = chain.errors_today + 1
+    chain.errors_today = errorsToday
+    await updateTgChain(chain.id, { errors_today: errorsToday })
+  }
 }
 
 async function processChainMessageGroup(
@@ -445,16 +690,20 @@ async function processChainMessageGroup(
       const chunks = chunkAlbumMessages(ordered)
       const firstCaption = pickAlbumCaption(ordered, chain.add_signature)
       for (let i = 0; i < chunks.length; i += 1) {
+        const chunk = chunks[i]!
         const chunkCaption = i === 0 ? firstCaption : ''
         resultMid = await forwardAlbumToMax(
           bot,
-          chunks[i]!,
+          chunk,
           tgToken,
           chain.max_chat_id,
           chunkCaption,
         )
         if (resultMid) {
           published += 1
+          for (const msg of chunk) {
+            markForwarded(chain.id, msg, resultMid, i)
+          }
           if (attachComments) {
             const chatId = resolveCanonicalChannelChatId(chain.max_chat_id) ?? chain.max_chat_id
             const mid: string = resultMid
@@ -480,6 +729,7 @@ async function processChainMessageGroup(
       )
       if (resultMid) {
         published = 1
+        markForwarded(chain.id, msg, resultMid, null)
         if (attachComments) {
           const chatId = resolveCanonicalChannelChatId(chain.max_chat_id) ?? chain.max_chat_id
           const mid: string = resultMid
@@ -491,8 +741,13 @@ async function processChainMessageGroup(
       }
     }
 
+    // Если публикация не удалась, всё равно сохраняем payload по TG id:
+    // это позволит позже корректно обработать edited_channel_post.
     for (const msg of pending) {
-      markForwarded(chain.id, msg.message_id)
+      const existing = getForwardedRecord(chain.id, msg.message_id)
+      if (!existing) {
+        markForwarded(chain.id, msg, null, null)
+      }
     }
 
     if (published > 0) {
@@ -582,7 +837,7 @@ export async function runTgChainsOnce(): Promise<boolean> {
     }
 
     const offset = getReaderOffset(tgToken)
-    let batch: Array<{ update_id: number; channel_post: TgMessage }>
+    let batch: TgChannelUpdate[]
     try {
       // При ожидающемся flush альбома не блокируемся длинным long-poll.
       const pendingAlbumDelayMs = getAlbumBufferDelayMs(Date.now(), tgToken)
@@ -606,11 +861,19 @@ export async function runTgChainsOnce(): Promise<boolean> {
     let nextOffset = offset
 
     const channelPosts: TgMessage[] = []
+    const editedChannelPosts: TgMessage[] = []
+    const editedMessages: TgMessage[] = []
     for (const u of batch) {
       receivedAny = true
       nextOffset = Math.max(nextOffset, u.update_id + 1)
       if (u.channel_post) {
         channelPosts.push(u.channel_post)
+      }
+      if (u.edited_channel_post) {
+        editedChannelPosts.push(u.edited_channel_post)
+      }
+      if (u.edited_message) {
+        editedMessages.push(u.edited_message)
       }
     }
 
@@ -627,6 +890,19 @@ export async function runTgChainsOnce(): Promise<boolean> {
           continue
         }
         await processChainMessageGroup(chain, msgs, tgToken)
+      }
+
+      const editedForChain = editedChannelPosts.filter((m) =>
+        telegramChannelMatchesTarget(m.chat, sourceKey),
+      )
+      for (const edited of editedForChain) {
+        await processEditedChainMessage(chain, edited, tgToken)
+      }
+      const editedMessagesForChain = editedMessages.filter((m) =>
+        telegramChannelMatchesTarget(m.chat, sourceKey),
+      )
+      for (const edited of editedMessagesForChain) {
+        await processEditedChainMessage(chain, edited, tgToken)
       }
     }
 

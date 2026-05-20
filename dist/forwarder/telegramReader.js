@@ -63,15 +63,18 @@ async function getTelegramUpdatesWithIds(token, offset, timeoutSec = 0) {
                 params: {
                     offset,
                     timeout: timeoutSec,
-                    allowed_updates: JSON.stringify(['channel_post']),
+                    allowed_updates: JSON.stringify(['channel_post', 'edited_channel_post', 'edited_message']),
                 },
             });
             const updates = res.data?.result || [];
             return updates
-                .filter((u) => u.channel_post && typeof u.update_id === 'number')
+                .filter((u) => typeof u.update_id === 'number' &&
+                (u.channel_post || u.edited_channel_post || u.edited_message))
                 .map((u) => ({
                 update_id: u.update_id,
                 channel_post: u.channel_post,
+                edited_channel_post: u.edited_channel_post,
+                edited_message: u.edited_message,
             }));
         }
         catch (err) {

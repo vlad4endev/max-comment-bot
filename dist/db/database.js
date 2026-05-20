@@ -140,12 +140,17 @@ function initSchema(targetDb) {
     CREATE TABLE IF NOT EXISTS tg_chain_forwarded (
       chain_id TEXT NOT NULL,
       tg_message_id INTEGER NOT NULL,
+      max_message_mid TEXT,
+      tg_media_group_id TEXT,
+      album_chunk_index INTEGER,
+      tg_payload TEXT,
       forwarded_at TEXT DEFAULT (datetime('now')),
       PRIMARY KEY (chain_id, tg_message_id)
     );
   `);
     migrateChannelImportSchema(targetDb);
     migratePostsSchema(targetDb);
+    migrateTgChainForwardedSchema(targetDb);
 }
 function migrateChannelImportSchema(database) {
     const cols = database.prepare('PRAGMA table_info(channel_import_jobs)').all();
@@ -179,6 +184,25 @@ function migratePostsSchema(database) {
     }
     database.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_posts_unique_chat_mid ON posts(chat_id, message_mid)');
     log.info('db.migrate: UNIQUE индекс создан', { posts: after });
+}
+function migrateTgChainForwardedSchema(database) {
+    const cols = database.prepare('PRAGMA table_info(tg_chain_forwarded)').all();
+    const hasMaxMid = cols.some((c) => c.name === 'max_message_mid');
+    const hasMediaGroup = cols.some((c) => c.name === 'tg_media_group_id');
+    const hasChunk = cols.some((c) => c.name === 'album_chunk_index');
+    const hasPayload = cols.some((c) => c.name === 'tg_payload');
+    if (!hasMaxMid) {
+        database.exec('ALTER TABLE tg_chain_forwarded ADD COLUMN max_message_mid TEXT');
+    }
+    if (!hasMediaGroup) {
+        database.exec('ALTER TABLE tg_chain_forwarded ADD COLUMN tg_media_group_id TEXT');
+    }
+    if (!hasChunk) {
+        database.exec('ALTER TABLE tg_chain_forwarded ADD COLUMN album_chunk_index INTEGER');
+    }
+    if (!hasPayload) {
+        database.exec('ALTER TABLE tg_chain_forwarded ADD COLUMN tg_payload TEXT');
+    }
 }
 function closeDb() {
     if (!db) {
