@@ -24,6 +24,7 @@ import {
 } from '../services/channelPoller'
 import { ensurePostFromChannelMessage } from '../services/channelPostActions'
 import { commentStore } from '../services/commentStore'
+import { getPostLinkAutoRecoveryStats } from '../services/postLinkAutoRecovery'
 import { diagnosePostLinks } from '../services/postLinkDiagnostics'
 import { postStore } from '../services/postStore'
 import { stateManager } from '../services/stateManager'
@@ -556,7 +557,16 @@ export function createAdminRouter(deps: AdminRouterDeps): express.Router {
       const comments = (db.prepare('SELECT COUNT(*) AS n FROM comments').get() as { n: number }).n
       const subscribers = (db.prepare('SELECT COUNT(*) AS n FROM subscribers').get() as { n: number }).n
       const retryQueueSize = (require('../services/commentButtonRetryQueue') as { getCommentButtonRetryQueueSize: () => number }).getCommentButtonRetryQueueSize()
-      res.json({ posts, pending_buttons: pendingButtons, channels, comments, subscribers, retry_queue: retryQueueSize })
+      const autoRecovery = getPostLinkAutoRecoveryStats()
+      res.json({
+        posts,
+        pending_buttons: pendingButtons,
+        channels,
+        comments,
+        subscribers,
+        retry_queue: retryQueueSize,
+        auto_recovery: autoRecovery,
+      })
     } catch (err: unknown) {
       logger.error('admin /db-stats failed', err)
       res.status(500).json({ error: 'internal error' })

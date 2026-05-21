@@ -15,6 +15,14 @@ const RUNTIME_LOG_PATH = join(process.cwd(), 'data', 'runtime.log')
 const MAX_LOG_SIZE = 50 * 1024 * 1024
 const ADMIN_LOG_BUFFER_MAX = 500
 const adminLogLines: string[] = []
+type LoggerLevel = 'INFO' | 'WARN' | 'ERROR' | 'DEBUG'
+type LoggerListener = (event: {
+  ts: string
+  level: LoggerLevel
+  message: string
+  extra?: unknown
+}) => void
+const loggerListeners = new Set<LoggerListener>()
 
 export function rotateRuntimeLogIfNeeded(): void {
   try {
@@ -59,6 +67,13 @@ function pushAdminLogLine(line: string): void {
     .catch(() => {
       /* ignore disk errors for log tail */
     })
+}
+
+export function subscribeLoggerEvents(listener: LoggerListener): () => void {
+  loggerListeners.add(listener)
+  return () => {
+    loggerListeners.delete(listener)
+  }
 }
 
 /** Последние строки консольного лога (и дубль в data/runtime.log при возможности). */
@@ -124,6 +139,19 @@ export class Logger {
       write(header, extra)
     } else {
       write(header)
+    }
+    const normalizedLevel = level as LoggerLevel
+    for (const listener of loggerListeners) {
+      try {
+        listener({
+          ts: timestamp,
+          level: normalizedLevel,
+          message,
+          ...(extra !== undefined ? { extra } : {}),
+        })
+      } catch {
+        /* never break logging due to listener errors */
+      }
     }
   }
 }

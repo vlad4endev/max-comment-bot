@@ -11,6 +11,7 @@ exports.logger = exports.Logger = void 0;
 exports.rotateRuntimeLogIfNeeded = rotateRuntimeLogIfNeeded;
 exports.startRuntimeLogRotationScheduler = startRuntimeLogRotationScheduler;
 exports.stopRuntimeLogRotationScheduler = stopRuntimeLogRotationScheduler;
+exports.subscribeLoggerEvents = subscribeLoggerEvents;
 exports.getAdminLogTail = getAdminLogTail;
 const node_fs_1 = require("node:fs");
 const promises_1 = require("node:fs/promises");
@@ -20,6 +21,7 @@ const RUNTIME_LOG_PATH = (0, node_path_1.join)(process.cwd(), 'data', 'runtime.l
 const MAX_LOG_SIZE = 50 * 1024 * 1024;
 const ADMIN_LOG_BUFFER_MAX = 500;
 const adminLogLines = [];
+const loggerListeners = new Set();
 function rotateRuntimeLogIfNeeded() {
     try {
         if (!(0, node_fs_1.existsSync)(RUNTIME_LOG_PATH)) {
@@ -60,6 +62,12 @@ function pushAdminLogLine(line) {
         .catch(() => {
         /* ignore disk errors for log tail */
     });
+}
+function subscribeLoggerEvents(listener) {
+    loggerListeners.add(listener);
+    return () => {
+        loggerListeners.delete(listener);
+    };
 }
 /** Последние строки консольного лога (и дубль в data/runtime.log при возможности). */
 function getAdminLogTail(maxLines) {
@@ -111,6 +119,20 @@ class Logger {
         }
         else {
             write(header);
+        }
+        const normalizedLevel = level;
+        for (const listener of loggerListeners) {
+            try {
+                listener({
+                    ts: timestamp,
+                    level: normalizedLevel,
+                    message,
+                    ...(extra !== undefined ? { extra } : {}),
+                });
+            }
+            catch {
+                /* never break logging due to listener errors */
+            }
         }
     }
 }

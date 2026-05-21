@@ -946,6 +946,7 @@
 
   function bindToggleRows(root, readState) {
     qsa('.toggle-row', root).forEach(function (row) {
+      if (row.getAttribute('data-toggle-bound') === '1') return;
       var sw = qs('.switch', row);
       if (!sw) return;
       var key = row.getAttribute('data-toggle-key');
@@ -968,6 +969,7 @@
           flip();
         }
       });
+      row.setAttribute('data-toggle-bound', '1');
     });
   }
 
@@ -1957,11 +1959,20 @@
     function onPickChange() {
       updateTgChainPairPreview(main);
     }
-    if (tgSel) tgSel.addEventListener('change', onPickChange);
-    if (maxSel) maxSel.addEventListener('change', onPickChange);
-    if (manual) manual.addEventListener('input', onPickChange);
+    if (tgSel && tgSel.getAttribute('data-bound-change') !== '1') {
+      tgSel.addEventListener('change', onPickChange);
+      tgSel.setAttribute('data-bound-change', '1');
+    }
+    if (maxSel && maxSel.getAttribute('data-bound-change') !== '1') {
+      maxSel.addEventListener('change', onPickChange);
+      maxSel.setAttribute('data-bound-change', '1');
+    }
+    if (manual && manual.getAttribute('data-bound-input') !== '1') {
+      manual.addEventListener('input', onPickChange);
+      manual.setAttribute('data-bound-input', '1');
+    }
     var refreshMax = qs('#tc_refresh_max', main);
-    if (refreshMax) {
+    if (refreshMax && refreshMax.getAttribute('data-bound-click') !== '1') {
       refreshMax.addEventListener('click', function () {
         refreshMax.disabled = true;
         fetchMaxLinkedChannels(true)
@@ -1979,9 +1990,10 @@
             refreshIcons();
           });
       });
+      refreshMax.setAttribute('data-bound-click', '1');
     }
     var refreshTg = qs('#tc_refresh_tg', main);
-    if (refreshTg) {
+    if (refreshTg && refreshTg.getAttribute('data-bound-click') !== '1') {
       refreshTg.addEventListener('click', function () {
         refreshTg.disabled = true;
         fetchTelegramLinkedChats(true)
@@ -2004,14 +2016,16 @@
             refreshIcons();
           });
       });
+      refreshTg.setAttribute('data-bound-click', '1');
     }
     var submit = qs('#tc_submit', main);
-    if (submit) {
+    if (submit && submit.getAttribute('data-bound-click') !== '1') {
       submit.addEventListener('click', function () {
         submitTgChainFromForm(main, function () {
           renderTgChains();
         });
       });
+      submit.setAttribute('data-bound-click', '1');
     }
     bindToggleRows(main, null);
     updateTgChainPairPreview(main);
@@ -4009,6 +4023,7 @@
       '<span id="dbs_channels" class="log-stat" title="Активных каналов">📡 каналы: <strong>…</strong></span>' +
       '<span id="dbs_comments" class="log-stat" title="Комментариев">💬 коммент: <strong>…</strong></span>' +
       '<span id="dbs_retry" class="log-stat" title="В очереди повторной привязки кнопки">🔄 ретрай: <strong>…</strong></span>' +
+      '<span id="dbs_auto_recovery" class="log-stat" title="Автовосстановление ссылок по лог-сигналам">🛠 авто-восст.: <strong>…</strong></span>' +
       '<button type="button" class="btn btn-ghost btn-sm" id="dbs_refresh" style="margin-left:auto">↻ Обновить</button>' +
       '</div>' +
       '<div class="search-bar log-toolbar">' +
@@ -4130,6 +4145,7 @@
           var channels = qs('#dbs_channels', main);
           var comments = qs('#dbs_comments', main);
           var retry = qs('#dbs_retry', main);
+          var autoRecovery = qs('#dbs_auto_recovery', main);
           if (posts) posts.querySelector('strong').textContent = String(d.posts ?? '?');
           if (pending) {
             var n = d.pending_buttons ?? 0;
@@ -4142,6 +4158,25 @@
             var nr = d.retry_queue ?? 0;
             retry.querySelector('strong').textContent = String(nr);
             retry.style.color = nr > 0 ? 'var(--warning,#e07b00)' : '';
+          }
+          if (autoRecovery) {
+            var ar = d.auto_recovery || {};
+            var todayRecovered = typeof ar.today_recovered === 'number' ? ar.today_recovered : 0;
+            var todayFailed = typeof ar.today_failed === 'number' ? ar.today_failed : 0;
+            var totalRecovered = typeof ar.total_recovered === 'number' ? ar.total_recovered : 0;
+            var totalFailed = typeof ar.total_failed === 'number' ? ar.total_failed : 0;
+            autoRecovery.querySelector('strong').textContent =
+              String(todayRecovered) + ' / ' + String(todayFailed);
+            autoRecovery.title =
+              'Сегодня: восстановлено ' +
+              todayRecovered +
+              ', не удалось ' +
+              todayFailed +
+              '. Всего: восстановлено ' +
+              totalRecovered +
+              ', не удалось ' +
+              totalFailed;
+            autoRecovery.style.color = todayFailed > 0 ? 'var(--warning,#e07b00)' : '';
           }
         })
         .catch(function () {});

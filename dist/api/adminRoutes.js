@@ -18,6 +18,7 @@ const disabledAdminStore_1 = require("../services/disabledAdminStore");
 const channelPoller_1 = require("../services/channelPoller");
 const channelPostActions_1 = require("../services/channelPostActions");
 const commentStore_1 = require("../services/commentStore");
+const postLinkAutoRecovery_1 = require("../services/postLinkAutoRecovery");
 const postLinkDiagnostics_1 = require("../services/postLinkDiagnostics");
 const postStore_1 = require("../services/postStore");
 const stateManager_1 = require("../services/stateManager");
@@ -462,7 +463,16 @@ function createAdminRouter(deps) {
             const comments = db.prepare('SELECT COUNT(*) AS n FROM comments').get().n;
             const subscribers = db.prepare('SELECT COUNT(*) AS n FROM subscribers').get().n;
             const retryQueueSize = require('../services/commentButtonRetryQueue').getCommentButtonRetryQueueSize();
-            res.json({ posts, pending_buttons: pendingButtons, channels, comments, subscribers, retry_queue: retryQueueSize });
+            const autoRecovery = (0, postLinkAutoRecovery_1.getPostLinkAutoRecoveryStats)();
+            res.json({
+                posts,
+                pending_buttons: pendingButtons,
+                channels,
+                comments,
+                subscribers,
+                retry_queue: retryQueueSize,
+                auto_recovery: autoRecovery,
+            });
         }
         catch (err) {
             logger_1.logger.error('admin /db-stats failed', err);

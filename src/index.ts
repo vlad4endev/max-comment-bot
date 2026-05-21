@@ -26,6 +26,7 @@ import {
   startChannelPostPoller,
 } from './services/channelPoller'
 import { startCommentButtonRetryLoop } from './services/commentButtonRetryQueue'
+import { startPostLinkAutoRecovery } from './services/postLinkAutoRecovery'
 import { postStore } from './services/postStore'
 import { userMiniappSettingsStore } from './services/userMiniappSettingsStore'
 import { logger, startRuntimeLogRotationScheduler } from './utils/logger'
@@ -74,6 +75,7 @@ async function main(): Promise<void> {
   setChannelRegistryChangeHandler(() => notifyChannelRegistryChanged())
   startChannelPostPoller(bot)
   startCommentButtonRetryLoop(bot)
+  startPostLinkAutoRecovery(bot)
   startAutopostScheduler()
   // До HTTP: иначе при EADDRINUSE channelPoller уже в логах, а flowProcessor — нет.
   await flowProcessor.start()

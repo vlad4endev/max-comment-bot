@@ -15,6 +15,7 @@ const disabledAdminStore_1 = require("./services/disabledAdminStore");
 const subscriberStore_1 = require("./services/subscriberStore");
 const channelPoller_1 = require("./services/channelPoller");
 const commentButtonRetryQueue_1 = require("./services/commentButtonRetryQueue");
+const postLinkAutoRecovery_1 = require("./services/postLinkAutoRecovery");
 const postStore_1 = require("./services/postStore");
 const userMiniappSettingsStore_1 = require("./services/userMiniappSettingsStore");
 const logger_1 = require("./utils/logger");
@@ -63,6 +64,7 @@ async function main() {
     (0, channelRegistry_1.setChannelRegistryChangeHandler)(() => (0, channelPoller_1.notifyChannelRegistryChanged)());
     (0, channelPoller_1.startChannelPostPoller)(bot);
     (0, commentButtonRetryQueue_1.startCommentButtonRetryLoop)(bot);
+    (0, postLinkAutoRecovery_1.startPostLinkAutoRecovery)(bot);
     (0, autopostScheduler_1.startAutopostScheduler)();
     // До HTTP: иначе при EADDRINUSE channelPoller уже в логах, а flowProcessor — нет.
     await flowProcessor_1.flowProcessor.start();

@@ -394,7 +394,15 @@ export class PostStore {
           photo_url               = excluded.photo_url,
           media_attachments       = excluded.media_attachments,
           comment_count           = excluded.comment_count,
-          data                    = excluded.data`,
+          data                    = json_set(
+            json_set(
+              json_set(excluded.data, '$.post_id', posts.post_id),
+              '$.chat_id',
+              posts.chat_id
+            ),
+            '$.message_mid',
+            posts.message_mid
+          )`,
       ),
       selectIdsByChatId: db.prepare('SELECT post_id FROM posts WHERE chat_id = ?'),
       deleteByChatId: db.prepare('DELETE FROM posts WHERE chat_id = ?'),
