@@ -1264,6 +1264,56 @@
       min-height: 1em;
       background: var(--tg-chat-bg);
     }
+    #view-comments .post-missing-card {
+      margin: 12px 4px;
+      padding: 18px 16px;
+      border-radius: 16px;
+      border: 1px solid var(--surface-border);
+      background: var(--surface);
+      text-align: center;
+      box-shadow: 0 10px 24px rgba(0, 0, 0, 0.12);
+    }
+    #view-comments .post-missing-emoji {
+      font-size: 34px;
+      line-height: 1;
+      margin-bottom: 10px;
+    }
+    #view-comments .post-missing-title {
+      font-size: 16px;
+      font-weight: 700;
+      color: var(--text-primary);
+      margin-bottom: 8px;
+    }
+    #view-comments .post-missing-text {
+      font-size: 13px;
+      color: var(--text-dim);
+      line-height: 1.45;
+      margin-bottom: 14px;
+    }
+    #view-comments .post-missing-refresh {
+      border: none;
+      border-radius: 12px;
+      padding: 11px 16px;
+      font-size: 14px;
+      font-weight: 700;
+      cursor: pointer;
+      background: var(--accent);
+      color: var(--text-on-accent);
+      min-width: 150px;
+    }
+    #view-comments .post-missing-refresh[disabled] {
+      opacity: 0.7;
+      cursor: default;
+    }
+    #view-comments .post-missing-status {
+      min-height: 1.1em;
+      margin-top: 10px;
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+    #view-comments .post-missing-status.is-error {
+      color: var(--danger);
+    }
     #view-comments #feed {
       flex: 1 1 auto;
       min-height: 0;
@@ -3706,6 +3756,7 @@
       var replyBannerCloseEl = document.getElementById('replyBannerClose');
       var feedEl = document.getElementById('feed');
       var errEl = document.getElementById('err');
+      var composerWrapEl = document.querySelector('#view-comments .composer-wrap');
       var inputEl = document.getElementById('input');
       var sendBtn = document.getElementById('sendBtn');
       var photoBtnEl = document.getElementById('photoBtn');
@@ -3719,6 +3770,8 @@
       var channelPostUrl = null;
       var replyContext = null; // { comment_id, username, post_id }
       var pendingPhotoFiles = [];
+      var postRecoveryUiVisible = false;
+      var postRecoveryInFlight = false;
 
       function setPostPreviewLink(url) {
         channelPostUrl = url && String(url).trim() ? String(url).trim() : null;
@@ -3845,6 +3898,116 @@
 
       function setErr(msg) {
         errEl.textContent = msg || '';
+      }
+
+      function setPostRecoveryStatus(text, isError) {
+        var statusEl = document.getElementById('postRecoveryStatus');
+        if (!statusEl) return;
+        statusEl.textContent = text || '';
+        statusEl.classList.toggle('is-error', !!isError);
+      }
+
+      function showPostRecoveryCard() {
+        if (!feedEl) return;
+        postRecoveryUiVisible = true;
+        setErr('');
+        if (composerWrapEl) composerWrapEl.style.display = 'none';
+        if (replyBannerEl) hideReplyBanner();
+        feedEl.innerHTML =
+          '<div class="post-missing-card">' +
+          '<div class="post-missing-emoji">🕵️‍♂️</div>' +
+          '<div class="post-missing-title">Упс, что я не найду данный пост, эх опять этот МАКС.</div>' +
+          '<div class="post-missing-text">Нажмите «Обновить», и я попробую вернуть кнопку именно для этого поста. Без общей паники и системных страшилок.</div>' +
+          '<button type="button" class="post-missing-refresh" id="postRecoveryRefreshBtn">Обновить</button>' +
+          '<div class="post-missing-status" id="postRecoveryStatus"></div>' +
+          '</div>';
+        var btn = document.getElementById('postRecoveryRefreshBtn');
+        if (btn && btn.dataset.bound !== '1') {
+          btn.dataset.bound = '1';
+          btn.addEventListener('click', refreshMissingPost);
+        }
+      }
+
+      function hidePostRecoveryCard() {
+        if (!postRecoveryUiVisible) return;
+        postRecoveryUiVisible = false;
+        if (composerWrapEl) composerWrapEl.style.display = '';
+      }
+
+      function refreshMissingPost() {
+        if (postRecoveryInFlight) return Promise.resolve(false);
+        var btn = document.getElementById('postRecoveryRefreshBtn');
+        var ids = resolveLookupIds();
+        if (!ids.postId || !ids.chatId || !ids.messageMid) {
+          setPostRecoveryStatus(
+            'Не хватает chat_id/message_mid — не могу понять, какой именно пост пинать.',
+            true,
+          );
+          return Promise.resolve(false);
+        }
+
+        postRecoveryInFlight = true;
+        if (btn) {
+          btn.disabled = true;
+          btn.textContent = 'Обновляю…';
+        }
+        setPostRecoveryStatus('Пинаю MAX аккуратно, чтобы вернуть именно этот пост…', false);
+
+        return fetch('/api/post/' + encodeURIComponent(ids.postId) + '/refresh' + postApiQuery(), {
+          method: 'POST',
+          headers: Object.assign({ 'Content-Type': 'application/json' }, miniappLookupHeaders()),
+        })
+          .then(function (r) {
+            return r
+              .json()
+              .catch(function () {
+                return {};
+              })
+              .then(function (j) {
+                if (!r.ok) {
+                  throw new Error(
+                    (j && j.error) ||
+                      (r.status === 404
+                        ? 'Пост пока прячется. Дайте MAX секунду и нажмите ещё раз.'
+                        : 'Не получилось обновить пост'),
+                  );
+                }
+                return j || {};
+              });
+          })
+          .then(function (data) {
+            if (data.post_id && data.post_id !== postId) {
+              postId = data.post_id;
+              currentPostId = data.post_id;
+            }
+            if (data.chat_id) {
+              chatId = String(data.chat_id);
+              params.set('chat_id', chatId);
+              mergedParams.set('chat_id', chatId);
+            }
+            if (data.message_mid) {
+              params.set('message_mid', String(data.message_mid));
+              mergedParams.set('message_mid', String(data.message_mid));
+            }
+            setPostRecoveryStatus('Нашёл следы поста, перезагружаю страницу комментариев…', false);
+            return loadPost().then(function (ok) {
+              if (!ok) {
+                throw new Error('Почти получилось, но пост ещё не прогрузился. Нажмите «Обновить» ещё раз.');
+              }
+              return loadComments(true);
+            });
+          })
+          .catch(function (e) {
+            setPostRecoveryStatus(e && e.message ? e.message : 'Не удалось восстановить пост', true);
+            return false;
+          })
+          .finally(function () {
+            postRecoveryInFlight = false;
+            if (btn) {
+              btn.disabled = false;
+              btn.textContent = 'Обновить';
+            }
+          });
       }
 
       function resizeComposerInput() {
@@ -5094,11 +5257,16 @@
           headers: miniappLookupHeaders(),
         })
           .then(function (r) {
-            if (r.status === 404) throw new Error('Пост не найден. Откройте комментарии с кнопки под постом или обновите кнопки в админке.');
+            if (r.status === 404) {
+              var notFoundErr = new Error('post_not_found');
+              notFoundErr.code = 'post_not_found';
+              throw notFoundErr;
+            }
             if (!r.ok) throw new Error('Не удалось загрузить пост');
             return r.json();
           })
           .then(function (p) {
+            hidePostRecoveryCard();
             if (p.post_id && p.post_id !== postId) {
               postId = p.post_id;
               currentPostId = p.post_id;
@@ -5132,7 +5300,11 @@
             return true;
           })
           .catch(function (e) {
-            setErr(e.message || String(e));
+            if (e && e.code === 'post_not_found') {
+              showPostRecoveryCard();
+              return false;
+            }
+            setErr(e && e.message ? e.message : String(e));
             postPreviewTextEl.textContent = '';
             currentPostSnapshot = null;
             setPostPreviewLink(null);
@@ -5166,13 +5338,18 @@
       }
 
       function loadComments(initial) {
+        if (postRecoveryUiVisible) return Promise.resolve();
         var ids = resolveLookupIds();
         if (!ids.postId) return Promise.resolve();
         return fetch('/api/comments/' + encodeURIComponent(ids.postId) + postApiQuery(), {
           headers: miniappLookupHeaders(),
         })
           .then(function (r) {
-            if (r.status === 404) throw new Error('Пост не найден. Откройте комментарии с кнопки под постом.');
+            if (r.status === 404) {
+              var notFoundErr = new Error('post_not_found');
+              notFoundErr.code = 'post_not_found';
+              throw notFoundErr;
+            }
             if (!r.ok) throw new Error('Не удалось загрузить комментарии');
             return r.json();
           })
@@ -5189,6 +5366,10 @@
             scrollToBottom();
           })
           .catch(function (e) {
+            if (e && e.code === 'post_not_found') {
+              showPostRecoveryCard();
+              return;
+            }
             setErr(e.message || String(e));
           });
       }
@@ -5516,6 +5697,7 @@
       });
 
       setInterval(function () {
+        if (postRecoveryUiVisible) return;
         loadComments(false);
       }, 15000);
     }

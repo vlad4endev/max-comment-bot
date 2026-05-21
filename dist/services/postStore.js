@@ -74,7 +74,7 @@ class PostStore {
     /**
      * Resolves a post by UUID, compact UUID, `message_mid`, or `chat_id` + `message_mid`.
      */
-    findPost(identifier, chatId) {
+    findPost(identifier, chatId, options) {
         const id = identifier.trim();
         if (!id) {
             return null;
@@ -108,7 +108,9 @@ class PostStore {
         if (post) {
             return post;
         }
-        logger_1.logger.warn('findPost: not found', { identifier: id, chatId });
+        if (options?.logNotFound !== false) {
+            logger_1.logger.warn('findPost: not found', { identifier: id, chatId });
+        }
         return null;
     }
     findByMessageMid(messageMid) {

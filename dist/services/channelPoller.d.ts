@@ -1,4 +1,5 @@
 import type { Bot } from '@maxhub/max-bot-api';
+import type { Message } from '@maxhub/max-bot-api/types';
 /** Admin «обновить кнопки»: окно сканирования ленты MAX (сообщения без строки в БД). */
 export declare const REFRESH_BUTTON_LOOKBACK_MS: number;
 /** Exported for startup diagnostics. */
@@ -23,9 +24,16 @@ export interface RefreshButtonsStats {
     skipped: number;
     failed: number;
 }
+/**
+ * Сообщения канала за окно lookback (пагинация GET /messages, newest-first).
+ */
+export declare function fetchChannelMessagesSince(bot: Bot, chatId: number, cutoffMs: number, options?: {
+    pageSize?: number;
+    maxPages?: number;
+}): Promise<Message[]>;
 export declare class RefreshButtonsError extends Error {
-    readonly code: 'miniapp_not_configured' | 'channel_not_found' | 'api_error' | 'chain_comments_disabled';
-    constructor(code: 'miniapp_not_configured' | 'channel_not_found' | 'api_error' | 'chain_comments_disabled', message: string);
+    readonly code: 'miniapp_not_configured' | 'channel_not_found' | 'api_error';
+    constructor(code: 'miniapp_not_configured' | 'channel_not_found' | 'api_error', message: string);
 }
 /**
  * One sweep for a single channel (admin «обновить кнопки»).

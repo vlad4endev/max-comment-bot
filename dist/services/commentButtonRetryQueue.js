@@ -11,7 +11,6 @@ exports.getCommentButtonRetryQueueSize = getCommentButtonRetryQueueSize;
 const p_limit_1 = __importDefault(require("p-limit"));
 const logger_1 = require("../utils/logger");
 const resolveChannelChatId_1 = require("./resolveChannelChatId");
-const channelCommentsButtonPolicy_1 = require("./channelCommentsButtonPolicy");
 const channelPostActions_1 = require("./channelPostActions");
 const postStore_1 = require("./postStore");
 const MAX_ATTEMPTS = 10;
@@ -36,9 +35,6 @@ function scheduleCommentButtonRetry(chatId, messageMid) {
         return;
     }
     const canonical = (0, resolveChannelChatId_1.resolveCanonicalChannelChatId)(chatId) ?? chatId;
-    if (!(0, channelCommentsButtonPolicy_1.isCommentsButtonEnabledForMaxChannel)(canonical)) {
-        return;
-    }
     const existing = postStore_1.postStore.findPostByChannelMessage(canonical, mid);
     if (existing && existing.button_attach_pending !== true) {
         return;

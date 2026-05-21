@@ -2,6 +2,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.RefreshButtonsError = exports.POLL_CONCURRENCY = exports.REFRESH_BUTTON_LOOKBACK_MS = void 0;
 exports.syncPerChannelPollers = syncPerChannelPollers;
+exports.fetchChannelMessagesSince = fetchChannelMessagesSince;
 exports.runChannelPollerForChat = runChannelPollerForChat;
 exports.runChannelPollerTick = runChannelPollerTick;
 exports.startChannelPostPoller = startChannelPostPoller;
@@ -12,7 +13,6 @@ exports.notifyChannelRegistryChanged = notifyChannelRegistryChanged;
 const adminRuntimeSettingsStore_1 = require("./adminRuntimeSettingsStore");
 const channelAdminJoinNotified_1 = require("./channelAdminJoinNotified");
 const channelRegistry_1 = require("./channelRegistry");
-const channelCommentsButtonPolicy_1 = require("./channelCommentsButtonPolicy");
 const commentButtonRetryQueue_1 = require("./commentButtonRetryQueue");
 const resolveChannelChatId_1 = require("./resolveChannelChatId");
 const logger_1 = require("../utils/logger");
@@ -40,9 +40,6 @@ function resolvePerChannelIntervalMs(globalMs) {
 }
 async function pollChannel(bot, channel, botUid) {
     const stats = { fetched: 0, candidates: 0, attached: 0, failed: 0 };
-    if (!(0, channelCommentsButtonPolicy_1.isCommentsButtonEnabledForMaxChannel)(channel.chat_id)) {
-        return stats;
-    }
     const { messages } = await (0, maxApiRetry_1.apiCallWithRetry)(() => bot.api.getMessages(channel.chat_id, { count: FETCH_COUNT }));
     stats.fetched = messages.length;
     for (const message of messages) {
@@ -153,7 +150,7 @@ function isWithinLookbackMs(atMs, cutoffMs) {
     return atMs >= cutoffMs;
 }
 /**
- * Сообщения канала за последние сутки (пагинация GET /messages, newest-first).
+ * Сообщения канала за окно lookback (пагинация GET /messages, newest-first).
  */
 async function fetchChannelMessagesSince(bot, chatId, cutoffMs, options) {
     const pageSize = options?.pageSize && Number.isFinite(options.pageSize)
@@ -214,8 +211,7 @@ function applyRefreshAttachResult(stats, r, wasInDb) {
     if (r.reason === 'skip_bot' ||
         r.reason === 'no_mid' ||
         r.reason === 'no_chat_id' ||
-        r.reason === 'not_admin' ||
-        r.reason === 'chain_comments_disabled') {
+        r.reason === 'not_admin') {
         stats.skipped += 1;
         return;
     }
@@ -241,9 +237,6 @@ async function runChannelPollerForChat(bot, chatId, options) {
     const reg = channelRegistry_1.channelRegistry.getChannel(canonicalChatId) ?? channelRegistry_1.channelRegistry.getChannel(chatId);
     if (!reg || reg.type !== 'channel') {
         throw new RefreshButtonsError('channel_not_found', 'Канал не найден в реестре бота');
-    }
-    if (!(0, channelCommentsButtonPolicy_1.isCommentsButtonEnabledForMaxChannel)(reg.chat_id)) {
-        throw new RefreshButtonsError('chain_comments_disabled', 'Кнопка «Комментарии» отключена в связке TG→MAX для этого канала');
     }
     const lookbackMs = options?.lookbackMs && Number.isFinite(options.lookbackMs)
         ? Math.max(5 * 60 * 1000, Math.floor(options.lookbackMs))

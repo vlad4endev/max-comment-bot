@@ -6,7 +6,7 @@ import { logger } from '../utils/logger'
 import { scheduleCommentButtonRetry } from './commentButtonRetryQueue'
 import { pushAdminActivity } from './adminActivityStore'
 import { channelRegistry } from './channelRegistry'
-import { isCommentsButtonEnabledForMaxChannel } from './channelCommentsButtonPolicy'
+import { isCommentsButtonEnabledForTgChainForward } from './channelCommentsButtonPolicy'
 import { resolveCanonicalChannelChatId } from './resolveChannelChatId'
 import { disabledAdminStore } from './disabledAdminStore'
 import {
@@ -290,7 +290,7 @@ export async function tryAttachCommentsToChannelPost(
   }
   const chatId = resolveCanonicalChannelChatId(rawChatId) ?? rawChatId
 
-  if (source !== 'manual' && !isCommentsButtonEnabledForMaxChannel(chatId)) {
+  if (source === 'tg_chain' && !isCommentsButtonEnabledForTgChainForward(chatId)) {
     const result = { ok: false as const, reason: 'chain_comments_disabled' as const }
     logCommentButtonSkip(source, result.reason, { chatId }, attachStartedAt)
     return result
@@ -336,8 +336,8 @@ export async function tryAttachCommentsToChannelPost(
       return result
     }
 
-    /** Админ «Обновить кнопки» — всегда полная перепривязка startapp (исправляет старые pid на кнопке). */
-    const forceReattach = source === 'refresh'
+    /** Полная перепривязка: админ «Обновить кнопки» и TG→MAX gate (черновик в БД не должен обходить attach). */
+    const forceReattach = source === 'refresh' || source === 'tg_chain'
 
     if (!forceReattach) {
       const captionStartedAt = performance.now()
@@ -581,9 +581,6 @@ export async function ensurePostFromChannelMessage(
   options: { inlineOnly?: boolean } = {},
 ): Promise<Post | null> {
   const canonicalChatId = resolveCanonicalChannelChatId(chatId) ?? chatId
-  if (!isCommentsButtonEnabledForMaxChannel(canonicalChatId)) {
-    return postStore.findPostByChannelMessage(canonicalChatId, messageMid)
-  }
   const existing = postStore.findPostByChannelMessage(canonicalChatId, messageMid)
   if (existing && existing.button_attach_pending !== true) {
     return existing

@@ -3,14 +3,13 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.verifyPostCommentButtonReady = verifyPostCommentButtonReady;
 exports.rollbackFailedChannelPost = rollbackFailedChannelPost;
 exports.attachAndVerifyCommentsForForwardedPost = attachAndVerifyCommentsForForwardedPost;
-const uuid_1 = require("uuid");
 const channelPostActions_1 = require("./channelPostActions");
-const commentButtonRetryQueue_1 = require("./commentButtonRetryQueue");
 const resolveChannelChatId_1 = require("./resolveChannelChatId");
 const logger_1 = require("../utils/logger");
 const maxApiRetry_1 = require("../utils/maxApiRetry");
 const postStore_1 = require("./postStore");
-const GATE_LOOKUP_RETRY_MS = 400;
+const GATE_VERIFY_ATTEMPTS = 5;
+const GATE_VERIFY_DELAY_MS = 250;
 function sleepMs(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -69,23 +68,45 @@ async function tryDeleteMaxMessage(bot, messageMid) {
         logger_1.logger.warn('channelPostPublishGate: deleteMessage failed', { messageMid, err });
     }
 }
-/** Removes MAX message(s) and DB row after a failed comment gate. */
-async function rollbackFailedChannelPost(bot, chatId, messageMid, postId, post) {
-    const row = post ?? postStore_1.postStore.getPost(postId);
+/** Removes DB row(s) for this channel message and deletes MAX message(s) after a failed comment gate. */
+async function rollbackFailedChannelPost(bot, chatId, messageMid, postIdHint, post) {
+    const mid = messageMid.trim();
+    const row = post ??
+        postStore_1.postStore.findPostByChannelMessage(chatId, mid) ??
+        (postIdHint?.trim() ? postStore_1.postStore.getPost(postIdHint.trim()) : null);
+    if (row) {
+        postStore_1.postStore.deletePostById(row.post_id);
+    }
+    else if (postIdHint?.trim()) {
+        postStore_1.postStore.deletePostById(postIdHint.trim());
+    }
     const mids = new Set();
-    mids.add(messageMid.trim());
+    if (mid !== '') {
+        mids.add(mid);
+    }
     if (row?.comments_ui_message_mid?.trim()) {
         mids.add(row.comments_ui_message_mid.trim());
     }
-    for (const mid of mids) {
-        if (mid !== '') {
-            await tryDeleteMaxMessage(bot, mid);
+    for (const m of mids) {
+        await tryDeleteMaxMessage(bot, m);
+    }
+}
+async function waitForVerifiedPost(chatId, messageMid, attachResult) {
+    for (let attempt = 0; attempt < GATE_VERIFY_ATTEMPTS; attempt += 1) {
+        if (attempt > 0) {
+            await sleepMs(GATE_VERIFY_DELAY_MS * attempt);
+        }
+        const registered = postStore_1.postStore.findPostByChannelMessage(chatId, messageMid);
+        if (registered !== null &&
+            verifyPostCommentButtonReady(registered) &&
+            attachOutcomeOk(attachResult)) {
+            return registered;
         }
     }
-    postStore_1.postStore.deletePostById(postId);
+    return postStore_1.postStore.findPostByChannelMessage(chatId, messageMid);
 }
 /**
- * After TG→MAX forward: save post with fixed `post_id`, attach button, verify Mini App lookup.
+ * After TG→MAX forward: attach button, verify Mini App lookup.
  * On failure deletes the MAX post and DB row so the TG message can be forwarded again.
  */
 async function attachAndVerifyCommentsForForwardedPost(bot, maxChatId, maxMessageMid, context) {
@@ -99,20 +120,13 @@ async function attachAndVerifyCommentsForForwardedPost(bot, maxChatId, maxMessag
         await tryDeleteMaxMessage(bot, mid);
         return false;
     }
-    const postId = (0, uuid_1.v4)();
-    const draft = {
-        ...(0, channelPostActions_1.buildPostFromChannelMessage)(message, chatId, postId, undefined),
-        button_attach_pending: true,
-    };
-    postStore_1.postStore.savePost(draft);
     const attachResult = await (0, channelPostActions_1.tryAttachCommentsToChannelPost)(bot, message, {
         channelChatIdOverride: chatId,
         skipAuthorAdminCheck: true,
         source: 'tg_chain',
         inlineOnly: true,
     });
-    await sleepMs(GATE_LOOKUP_RETRY_MS);
-    const registered = postStore_1.postStore.findPostByChannelMessage(chatId, mid);
+    const registered = await waitForVerifiedPost(chatId, mid, attachResult);
     const ready = registered !== null && verifyPostCommentButtonReady(registered) && attachOutcomeOk(attachResult);
     if (ready) {
         logger_1.logger.info('[tgChain] comment gate ok', {
@@ -128,14 +142,12 @@ async function attachAndVerifyCommentsForForwardedPost(bot, maxChatId, maxMessag
         chainId: context?.chainId,
         chatId,
         messageMid: mid,
-        postId,
         attachReason: attachResult.ok ? 'attached' : attachResult.reason,
         hasRow: Boolean(registered),
         rowPostId: registered?.post_id,
         pending: registered?.button_attach_pending ?? null,
     });
-    await rollbackFailedChannelPost(bot, chatId, mid, postId, registered ?? draft);
-    (0, commentButtonRetryQueue_1.scheduleCommentButtonRetry)(chatId, mid);
+    await rollbackFailedChannelPost(bot, chatId, mid, registered?.post_id, registered);
     return false;
 }
 //# sourceMappingURL=channelPostPublishGate.js.map

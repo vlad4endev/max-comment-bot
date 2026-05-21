@@ -137,7 +137,7 @@ export class PostStore {
   /**
    * Resolves a post by UUID, compact UUID, `message_mid`, or `chat_id` + `message_mid`.
    */
-  findPost(identifier: string, chatId?: number): Post | null {
+  findPost(identifier: string, chatId?: number, options?: { logNotFound?: boolean }): Post | null {
     const id = identifier.trim()
     if (!id) {
       return null
@@ -177,7 +177,9 @@ export class PostStore {
       return post
     }
 
-    logger.warn('findPost: not found', { identifier: id, chatId })
+    if (options?.logNotFound !== false) {
+      logger.warn('findPost: not found', { identifier: id, chatId })
+    }
     return null
   }
 

@@ -1,19 +1,14 @@
 import type { Bot } from '@maxhub/max-bot-api'
 import type { Message } from '@maxhub/max-bot-api/types'
-import { v4 as uuidv4 } from 'uuid'
 
-import {
-  buildPostFromChannelMessage,
-  tryAttachCommentsToChannelPost,
-  type AttachChannelCommentsResult,
-} from './channelPostActions'
-import { scheduleCommentButtonRetry } from './commentButtonRetryQueue'
+import { tryAttachCommentsToChannelPost, type AttachChannelCommentsResult } from './channelPostActions'
 import { resolveCanonicalChannelChatId } from './resolveChannelChatId'
 import { logger } from '../utils/logger'
 import { apiCallWithRetry } from '../utils/maxApiRetry'
 import { buildMiniAppUrl, postStore, type Post } from './postStore'
 
-const GATE_LOOKUP_RETRY_MS = 400
+const GATE_VERIFY_ATTEMPTS = 5
+const GATE_VERIFY_DELAY_MS = 250
 
 function sleepMs(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
@@ -76,30 +71,61 @@ async function tryDeleteMaxMessage(bot: Bot, messageMid: string): Promise<void> 
   }
 }
 
-/** Removes MAX message(s) and DB row after a failed comment gate. */
+/** Removes DB row(s) for this channel message and deletes MAX message(s) after a failed comment gate. */
 export async function rollbackFailedChannelPost(
   bot: Bot,
   chatId: number,
   messageMid: string,
-  postId: string,
+  postIdHint?: string,
   post?: Post | null,
 ): Promise<void> {
-  const row = post ?? postStore.getPost(postId)
+  const mid = messageMid.trim()
+  const row =
+    post ??
+    postStore.findPostByChannelMessage(chatId, mid) ??
+    (postIdHint?.trim() ? postStore.getPost(postIdHint.trim()) : null)
+
+  if (row) {
+    postStore.deletePostById(row.post_id)
+  } else if (postIdHint?.trim()) {
+    postStore.deletePostById(postIdHint.trim())
+  }
+
   const mids = new Set<string>()
-  mids.add(messageMid.trim())
+  if (mid !== '') {
+    mids.add(mid)
+  }
   if (row?.comments_ui_message_mid?.trim()) {
     mids.add(row.comments_ui_message_mid.trim())
   }
-  for (const mid of mids) {
-    if (mid !== '') {
-      await tryDeleteMaxMessage(bot, mid)
+  for (const m of mids) {
+    await tryDeleteMaxMessage(bot, m)
+  }
+}
+
+async function waitForVerifiedPost(
+  chatId: number,
+  messageMid: string,
+  attachResult: AttachChannelCommentsResult,
+): Promise<Post | null> {
+  for (let attempt = 0; attempt < GATE_VERIFY_ATTEMPTS; attempt += 1) {
+    if (attempt > 0) {
+      await sleepMs(GATE_VERIFY_DELAY_MS * attempt)
+    }
+    const registered = postStore.findPostByChannelMessage(chatId, messageMid)
+    if (
+      registered !== null &&
+      verifyPostCommentButtonReady(registered) &&
+      attachOutcomeOk(attachResult)
+    ) {
+      return registered
     }
   }
-  postStore.deletePostById(postId)
+  return postStore.findPostByChannelMessage(chatId, messageMid)
 }
 
 /**
- * After TG→MAX forward: save post with fixed `post_id`, attach button, verify Mini App lookup.
+ * After TG→MAX forward: attach button, verify Mini App lookup.
  * On failure deletes the MAX post and DB row so the TG message can be forwarded again.
  */
 export async function attachAndVerifyCommentsForForwardedPost(
@@ -120,13 +146,6 @@ export async function attachAndVerifyCommentsForForwardedPost(
     return false
   }
 
-  const postId = uuidv4()
-  const draft: Post = {
-    ...buildPostFromChannelMessage(message, chatId, postId, undefined),
-    button_attach_pending: true,
-  }
-  postStore.savePost(draft)
-
   const attachResult = await tryAttachCommentsToChannelPost(bot, message, {
     channelChatIdOverride: chatId,
     skipAuthorAdminCheck: true,
@@ -134,10 +153,9 @@ export async function attachAndVerifyCommentsForForwardedPost(
     inlineOnly: true,
   })
 
-  await sleepMs(GATE_LOOKUP_RETRY_MS)
-
-  const registered = postStore.findPostByChannelMessage(chatId, mid)
-  const ready = registered !== null && verifyPostCommentButtonReady(registered) && attachOutcomeOk(attachResult)
+  const registered = await waitForVerifiedPost(chatId, mid, attachResult)
+  const ready =
+    registered !== null && verifyPostCommentButtonReady(registered) && attachOutcomeOk(attachResult)
 
   if (ready) {
     logger.info('[tgChain] comment gate ok', {
@@ -154,14 +172,12 @@ export async function attachAndVerifyCommentsForForwardedPost(
     chainId: context?.chainId,
     chatId,
     messageMid: mid,
-    postId,
     attachReason: attachResult.ok ? 'attached' : attachResult.reason,
     hasRow: Boolean(registered),
     rowPostId: registered?.post_id,
     pending: registered?.button_attach_pending ?? null,
   })
 
-  await rollbackFailedChannelPost(bot, chatId, mid, postId, registered ?? draft)
-  scheduleCommentButtonRetry(chatId, mid)
+  await rollbackFailedChannelPost(bot, chatId, mid, registered?.post_id, registered)
   return false
 }

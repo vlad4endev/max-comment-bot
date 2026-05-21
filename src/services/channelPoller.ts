@@ -5,7 +5,6 @@ import { adminRuntimeSettingsStore } from './adminRuntimeSettingsStore'
 import { clearAdminJoinNotifiedForChannel } from './channelAdminJoinNotified'
 import type { ChannelRecord } from './channelRegistry'
 import { channelRegistry } from './channelRegistry'
-import { isCommentsButtonEnabledForMaxChannel } from './channelCommentsButtonPolicy'
 import { scheduleCommentButtonRetry } from './commentButtonRetryQueue'
 import { resolveCanonicalChannelChatId } from './resolveChannelChatId'
 import { logger } from '../utils/logger'
@@ -45,9 +44,6 @@ async function pollChannel(
   botUid: number | undefined,
 ): Promise<{ fetched: number; candidates: number; attached: number; failed: number }> {
   const stats = { fetched: 0, candidates: 0, attached: 0, failed: 0 }
-  if (!isCommentsButtonEnabledForMaxChannel(channel.chat_id)) {
-    return stats
-  }
   const { messages } = await apiCallWithRetry(() =>
     bot.api.getMessages(channel.chat_id, { count: FETCH_COUNT }),
   )
@@ -191,9 +187,9 @@ function isWithinLookbackMs(atMs: number, cutoffMs: number): boolean {
 }
 
 /**
- * Сообщения канала за последние сутки (пагинация GET /messages, newest-first).
+ * Сообщения канала за окно lookback (пагинация GET /messages, newest-first).
  */
-async function fetchChannelMessagesSince(
+export async function fetchChannelMessagesSince(
   bot: Bot,
   chatId: number,
   cutoffMs: number,
@@ -269,8 +265,7 @@ function applyRefreshAttachResult(
     r.reason === 'skip_bot' ||
     r.reason === 'no_mid' ||
     r.reason === 'no_chat_id' ||
-    r.reason === 'not_admin' ||
-    r.reason === 'chain_comments_disabled'
+    r.reason === 'not_admin'
   ) {
     stats.skipped += 1
     return
@@ -280,11 +275,7 @@ function applyRefreshAttachResult(
 
 export class RefreshButtonsError extends Error {
   constructor(
-    readonly code:
-      | 'miniapp_not_configured'
-      | 'channel_not_found'
-      | 'api_error'
-      | 'chain_comments_disabled',
+    readonly code: 'miniapp_not_configured' | 'channel_not_found' | 'api_error',
     message: string,
   ) {
     super(message)
@@ -311,13 +302,6 @@ export async function runChannelPollerForChat(
   const reg = channelRegistry.getChannel(canonicalChatId) ?? channelRegistry.getChannel(chatId)
   if (!reg || reg.type !== 'channel') {
     throw new RefreshButtonsError('channel_not_found', 'Канал не найден в реестре бота')
-  }
-
-  if (!isCommentsButtonEnabledForMaxChannel(reg.chat_id)) {
-    throw new RefreshButtonsError(
-      'chain_comments_disabled',
-      'Кнопка «Комментарии» отключена в связке TG→MAX для этого канала',
-    )
   }
 
   const lookbackMs =

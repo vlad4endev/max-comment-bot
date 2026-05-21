@@ -3,7 +3,6 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.startPostLinkAutoRecovery = startPostLinkAutoRecovery;
 exports.stopPostLinkAutoRecovery = stopPostLinkAutoRecovery;
 exports.getPostLinkAutoRecoveryStats = getPostLinkAutoRecoveryStats;
-const channelCommentsButtonPolicy_1 = require("./channelCommentsButtonPolicy");
 const channelPostActions_1 = require("./channelPostActions");
 const resolveChannelChatId_1 = require("./resolveChannelChatId");
 const postStore_1 = require("./postStore");
@@ -90,14 +89,6 @@ async function runRecoveryTask(task) {
         return;
     }
     const canonicalChatId = (0, resolveChannelChatId_1.resolveCanonicalChannelChatId)(task.chatId) ?? task.chatId;
-    if (!(0, channelCommentsButtonPolicy_1.isCommentsButtonEnabledForMaxChannel)(canonicalChatId)) {
-        logger_1.logger.info('postLinkAutoRecovery: пропуск — кнопка отключена в связке TG→MAX', {
-            chatId: canonicalChatId,
-            messageMid: task.messageMid,
-            reason: task.reason,
-        });
-        return;
-    }
     const restored = await (0, channelPostActions_1.ensurePostFromChannelMessage)(bot, canonicalChatId, task.messageMid);
     if (restored) {
         markRecovered();

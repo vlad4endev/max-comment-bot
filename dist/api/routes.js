@@ -797,7 +797,7 @@ function createCommentApiRouter(deps) {
         if (!id) {
             return null;
         }
-        return postStore_1.postStore.findPost(id, chatIdRaw ?? undefined);
+        return postStore_1.postStore.findPost(id, chatIdRaw ?? undefined, { logNotFound: false });
     }
     async function resolvePostForMiniAppOpen(pathPostId, chatIdRaw, messageMid, startParamRaw = null) {
         const lookup = buildMiniappPostLookup(pathPostId, chatIdRaw, messageMid, startParamRaw);
@@ -824,14 +824,24 @@ function createCommentApiRouter(deps) {
             });
             return post;
         }
-        if (lookup.chatIdRaw !== null && lookup.messageMid) {
-            const canonicalChatId = (0, resolveChannelChatId_1.resolveCanonicalChannelChatId)(lookup.chatIdRaw) ?? lookup.chatIdRaw;
-            post = await (0, channelPostActions_1.ensurePostFromChannelMessage)(deps.bot, canonicalChatId, lookup.messageMid);
-            if (post && post.post_id !== lookup.postId) {
+        if (lookup.messageMid) {
+            const canonicalChatId = lookup.chatIdRaw !== null
+                ? ((0, resolveChannelChatId_1.resolveCanonicalChannelChatId)(lookup.chatIdRaw) ?? lookup.chatIdRaw)
+                : null;
+            if (canonicalChatId !== null) {
+                post = await (0, channelPostActions_1.ensurePostFromChannelMessage)(deps.bot, canonicalChatId, lookup.messageMid);
+            }
+            else {
+                const byMid = postStore_1.postStore.findByMessageMid(lookup.messageMid);
+                if (byMid) {
+                    post = byMid;
+                }
+            }
+            if (post && lookup.postId && post.post_id !== lookup.postId) {
                 logger_1.logger.info('resolvePostForMiniAppOpen: backfilled from message_mid', {
                     requestedPostId: lookup.postId,
                     postId: post.post_id,
-                    chatId: canonicalChatId,
+                    chatId: post.chat_id,
                     messageMid: lookup.messageMid,
                 });
             }
@@ -887,6 +897,35 @@ function createCommentApiRouter(deps) {
             comment_count: post.comment_count,
             channel_title: channelRegistry_1.channelRegistry.getChannel(post.chat_id)?.title ?? channelBranding.title,
             channel_avatar_url,
+        });
+    });
+    router.post('/post/:postId/refresh', async (req, res) => {
+        const chatIdRaw = parseNonZeroInt(req.query.chat_id);
+        const messageMid = parseNonEmptyString(req.query.message_mid);
+        const startParamHeader = parseNonEmptyString(req.headers['x-miniapp-start-param']);
+        const lookup = buildMiniappPostLookup(req.params.postId, chatIdRaw, messageMid, startParamHeader);
+        const fallbackById = lookup.postId ? postStore_1.postStore.getPost(lookup.postId) : null;
+        const targetMessageMid = lookup.messageMid ?? fallbackById?.message_mid ?? null;
+        const targetChatIdRaw = lookup.chatIdRaw ?? fallbackById?.chat_id ?? null;
+        if (!targetMessageMid || targetChatIdRaw === null) {
+            res.status(400).json({
+                error: 'message_mid и chat_id обязательны для точечного обновления',
+            });
+            return;
+        }
+        const canonicalChatId = (0, resolveChannelChatId_1.resolveCanonicalChannelChatId)(targetChatIdRaw) ?? targetChatIdRaw;
+        const before = postStore_1.postStore.findPostByChannelMessage(canonicalChatId, targetMessageMid);
+        const restored = await (0, channelPostActions_1.ensurePostFromChannelMessage)(deps.bot, canonicalChatId, targetMessageMid);
+        if (!restored) {
+            res.status(404).json({ error: 'post not found' });
+            return;
+        }
+        res.json({
+            ok: true,
+            restored: !before,
+            post_id: restored.post_id,
+            chat_id: restored.chat_id,
+            message_mid: restored.message_mid,
         });
     });
     router.get('/post/:postId/channel-url', async (req, res) => {

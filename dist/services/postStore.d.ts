@@ -41,7 +41,9 @@ export declare class PostStore {
     /**
      * Resolves a post by UUID, compact UUID, `message_mid`, or `chat_id` + `message_mid`.
      */
-    findPost(identifier: string, chatId?: number): Post | null;
+    findPost(identifier: string, chatId?: number, options?: {
+        logNotFound?: boolean;
+    }): Post | null;
     findByMessageMid(messageMid: string): Post | null;
     findByCommentsUiMessageMid(commentsUiMid: string): Post | null;
     getPostsByChatId(chatId: number): Post[];

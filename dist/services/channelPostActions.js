@@ -209,7 +209,7 @@ async function tryAttachCommentsToChannelPost(bot, message, options = {}) {
         return result;
     }
     const chatId = (0, resolveChannelChatId_1.resolveCanonicalChannelChatId)(rawChatId) ?? rawChatId;
-    if (source !== 'manual' && !(0, channelCommentsButtonPolicy_1.isCommentsButtonEnabledForMaxChannel)(chatId)) {
+    if (source === 'tg_chain' && !(0, channelCommentsButtonPolicy_1.isCommentsButtonEnabledForTgChainForward)(chatId)) {
         const result = { ok: false, reason: 'chain_comments_disabled' };
         logCommentButtonSkip(source, result.reason, { chatId }, attachStartedAt);
         return result;
@@ -245,8 +245,8 @@ async function tryAttachCommentsToChannelPost(bot, message, options = {}) {
             }, attachStartedAt);
             return result;
         }
-        /** Админ «Обновить кнопки» — всегда полная перепривязка startapp (исправляет старые pid на кнопке). */
-        const forceReattach = source === 'refresh';
+        /** Полная перепривязка: админ «Обновить кнопки» и TG→MAX gate (черновик в БД не должен обходить attach). */
+        const forceReattach = source === 'refresh' || source === 'tg_chain';
         if (!forceReattach) {
             const captionStartedAt = performance.now();
             const captionOk = await postStore_1.postStore.updateButtonCaption(bot, existingPost);
@@ -444,9 +444,6 @@ async function loadChannelPostMessage(bot, post) {
  */
 async function ensurePostFromChannelMessage(bot, chatId, messageMid, options = {}) {
     const canonicalChatId = (0, resolveChannelChatId_1.resolveCanonicalChannelChatId)(chatId) ?? chatId;
-    if (!(0, channelCommentsButtonPolicy_1.isCommentsButtonEnabledForMaxChannel)(canonicalChatId)) {
-        return postStore_1.postStore.findPostByChannelMessage(canonicalChatId, messageMid);
-    }
     const existing = postStore_1.postStore.findPostByChannelMessage(canonicalChatId, messageMid);
     if (existing && existing.button_attach_pending !== true) {
         return existing;
