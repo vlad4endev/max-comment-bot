@@ -30,8 +30,14 @@ export interface TgChannelUpdate {
     channel_post?: TgMessage;
     edited_channel_post?: TgMessage;
     edited_message?: TgMessage;
+    message?: Record<string, unknown>;
+    my_chat_member?: Record<string, unknown>;
+    callback_query?: Record<string, unknown>;
+    raw?: Record<string, unknown>;
 }
 export declare function getTgUpdates(token: string, offset?: number): Promise<TgMessage[]>;
 export declare function getTgFileUrl(token: string, fileId: string): Promise<string | null>;
 /** Сырые апдейты с `update_id` — для корректного offset при опросе. */
-export declare function getTelegramUpdatesWithIds(token: string, offset: number, timeoutSec?: number): Promise<TgChannelUpdate[]>;
+export declare function getTelegramUpdatesWithIds(token: string, offset: number, timeoutSec?: number, options?: {
+    includeMiniappBotUpdates?: boolean;
+}): Promise<TgChannelUpdate[]>;

@@ -27,6 +27,10 @@ export interface TgChannelUpdate {
   channel_post?: TgMessage
   edited_channel_post?: TgMessage
   edited_message?: TgMessage
+  message?: Record<string, unknown>
+  my_chat_member?: Record<string, unknown>
+  callback_query?: Record<string, unknown>
+  raw?: Record<string, unknown>
 }
 
 export async function getTgUpdates(token: string, offset: number = 0): Promise<TgMessage[]> {
@@ -71,28 +75,33 @@ export async function getTelegramUpdatesWithIds(
   token: string,
   offset: number,
   timeoutSec: number = 0,
+  options?: { includeMiniappBotUpdates?: boolean },
 ): Promise<TgChannelUpdate[]> {
+  const allowed = ['channel_post', 'edited_channel_post', 'edited_message']
+  if (options?.includeMiniappBotUpdates) {
+    allowed.push('message', 'my_chat_member', 'callback_query')
+  }
   for (let attempt = 0; attempt < 5; attempt++) {
     try {
       const res = await axios.get(`${TG_API}${token}/getUpdates`, {
         params: {
           offset,
           timeout: timeoutSec,
-          allowed_updates: JSON.stringify(['channel_post', 'edited_channel_post', 'edited_message']),
+          allowed_updates: JSON.stringify(allowed),
         },
       })
       const updates = res.data?.result || []
       return updates
-        .filter(
-          (u: any) =>
-            typeof u.update_id === 'number' &&
-            (u.channel_post || u.edited_channel_post || u.edited_message),
-        )
+        .filter((u: any) => typeof u.update_id === 'number')
         .map((u: any) => ({
           update_id: u.update_id as number,
           channel_post: u.channel_post as TgMessage | undefined,
           edited_channel_post: u.edited_channel_post as TgMessage | undefined,
           edited_message: u.edited_message as TgMessage | undefined,
+          message: u.message as Record<string, unknown> | undefined,
+          my_chat_member: u.my_chat_member as Record<string, unknown> | undefined,
+          callback_query: u.callback_query as Record<string, unknown> | undefined,
+          raw: u as Record<string, unknown>,
         }))
     } catch (err: unknown) {
       if (axios.isAxiosError(err) && err.response?.status === 409) {

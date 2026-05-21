@@ -21,6 +21,7 @@ import { resolveCanonicalChannelChatId } from './resolveChannelChatId'
 import { telegramChannelMatchesTarget } from '../utils/tgChannelMatch'
 import { logger } from '../utils/logger'
 import { apiCallWithRetry } from '../utils/maxApiRetry'
+import { processTelegramMiniappBotUpdates } from './telegramMiniappService'
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
@@ -848,6 +849,7 @@ export async function runTgChainsOnce(): Promise<boolean> {
     }
 
     const offset = getReaderOffset(tgToken)
+    const includeMiniappBotUpdates = tgToken.trim() === getTelegramToken().trim()
     let batch: TgChannelUpdate[]
     try {
       // При ожидающемся flush альбома не блокируемся длинным long-poll.
@@ -856,7 +858,9 @@ export async function runTgChainsOnce(): Promise<boolean> {
         pendingAlbumDelayMs === null
           ? TG_CHAIN_LONG_POLL_SEC
           : Math.max(0, Math.min(TG_CHAIN_LONG_POLL_SEC, Math.ceil(pendingAlbumDelayMs / 1000)))
-      batch = await getTelegramUpdatesWithIds(tgToken, offset, timeoutSec)
+      batch = await getTelegramUpdatesWithIds(tgToken, offset, timeoutSec, {
+        includeMiniappBotUpdates,
+      })
     } catch (err: unknown) {
       if (err instanceof TelegramGetUpdatesConflictError) {
         await sleep(10_000)
@@ -870,6 +874,15 @@ export async function runTgChainsOnce(): Promise<boolean> {
       throw err
     }
     let nextOffset = offset
+
+    if (includeMiniappBotUpdates) {
+      const rawUpdates = batch
+        .map((u) => u.raw)
+        .filter((u): u is Record<string, unknown> => !!u)
+      if (rawUpdates.length > 0) {
+        void processTelegramMiniappBotUpdates(tgToken, rawUpdates)
+      }
+    }
 
     const channelPosts: TgMessage[] = []
     const editedChannelPosts: TgMessage[] = []

@@ -10,6 +10,7 @@ const node_crypto_1 = require("node:crypto");
 const express_1 = __importDefault(require("express"));
 const multer_1 = __importDefault(require("multer"));
 const config_1 = require("../config");
+const integrationPlatformClient_1 = require("../services/integrationPlatformClient");
 const deeplink_1 = require("../utils/deeplink");
 const channelNotifyLinkStore_1 = require("../services/channelNotifyLinkStore");
 const channelRegistry_1 = require("../services/channelRegistry");
@@ -22,6 +23,9 @@ const subscriberStore_1 = require("../services/subscriberStore");
 const notificationService_1 = require("../services/notificationService");
 const telegramAdminNotificationService_1 = require("../services/telegramAdminNotificationService");
 const telegramMiniappAuth_1 = require("../services/telegramMiniappAuth");
+const telegramMiniappService_1 = require("../services/telegramMiniappService");
+const telegramChannelRegistry_1 = require("../services/telegramChannelRegistry");
+const telegramChannelNotifyLinkStore_1 = require("../services/telegramChannelNotifyLinkStore");
 const postStore_1 = require("../services/postStore");
 const postIdAliasStore_1 = require("../services/postIdAliasStore");
 const miniappPostRecovery_1 = require("../services/miniappPostRecovery");
@@ -30,6 +34,9 @@ const stateManager_1 = require("../services/stateManager");
 const userMiniappSettingsStore_1 = require("../services/userMiniappSettingsStore");
 const userAccessCleanup_1 = require("../services/userAccessCleanup");
 const memberAvatar_1 = require("../utils/memberAvatar");
+const channelLinkService_1 = require("../services/channelLinkService");
+const integrationsStore_1 = require("../services/integrationsStore");
+const ownerProfileStore_1 = require("../services/ownerProfileStore");
 const logger_1 = require("../utils/logger");
 function isRecord(value) {
     return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -103,6 +110,19 @@ function parsePhotoUrls(value) {
         }
     }
     return [...new Set(out)].slice(0, 10);
+}
+function isTelegramMiniappPlatform(req) {
+    const fromHeader = parseHeaderString(req.headers['x-miniapp-platform']);
+    const fromQuery = parseNonEmptyString(req.query.platform);
+    const raw = (fromHeader ?? fromQuery ?? '').toLowerCase();
+    return raw === 'telegram' || raw === 'tg';
+}
+function parseTelegramChatIdQuery(value) {
+    const raw = parseNonEmptyString(value);
+    if (!raw || !/^-?\d+$/.test(raw)) {
+        return null;
+    }
+    return raw;
 }
 function parseHeaderString(value) {
     if (typeof value === 'string') {
@@ -343,6 +363,16 @@ function createCommentApiRouter(deps) {
         });
     });
     router.get('/channel-info', async (req, res) => {
+        if (isTelegramMiniappPlatform(req)) {
+            const chatId = parseTelegramChatIdQuery(req.query.chat_id);
+            if (!chatId) {
+                res.status(400).json({ error: 'missing or invalid chat_id' });
+                return;
+            }
+            const cached = telegramChannelRegistry_1.telegramChannelRegistry.getChannel(chatId);
+            res.json({ title: cached?.title ?? null });
+            return;
+        }
         const chatId = parseNonZeroInt(req.query.chat_id);
         if (chatId === null) {
             res.status(400).json({ error: 'missing or invalid chat_id' });
@@ -409,6 +439,17 @@ function createCommentApiRouter(deps) {
             res.status(400).json({ error: 'missing or invalid user_id' });
             return;
         }
+        if (isTelegramMiniappPlatform(req)) {
+            try {
+                const stats = await (0, telegramMiniappService_1.getTelegramMiniappStats)(userId);
+                res.json(stats);
+            }
+            catch (err) {
+                logger_1.logger.error('GET /api/stats (telegram) failed', { err });
+                res.status(500).json({ error: 'internal error' });
+            }
+            return;
+        }
         try {
             const adminChannelIds = await listChannelChatIdsWhereUserIsAdmin(deps.bot, userId);
             let posts = 0;
@@ -437,6 +478,20 @@ function createCommentApiRouter(deps) {
         const userId = parsePositiveInt(req.query.user_id);
         if (!userId) {
             res.status(400).json({ error: 'missing or invalid user_id' });
+            return;
+        }
+        if (isTelegramMiniappPlatform(req)) {
+            try {
+                const payload = await (0, telegramMiniappService_1.listTelegramMiniappChannelsForUser)(userId);
+                res.json({
+                    channels: payload.channels,
+                    bot_nickname: payload.bot_username.replace(/^@/, ''),
+                });
+            }
+            catch (err) {
+                logger_1.logger.error('GET /api/channels (telegram) failed', { err });
+                res.status(500).json({ error: 'internal error' });
+            }
             return;
         }
         try {
@@ -481,8 +536,37 @@ function createCommentApiRouter(deps) {
     });
     router.get('/channel-admins', async (req, res) => {
         const userId = parsePositiveInt(req.query.user_id);
+        if (!userId) {
+            res.status(400).json({ error: 'missing or invalid user_id or chat_id' });
+            return;
+        }
+        if (isTelegramMiniappPlatform(req)) {
+            const chatId = parseTelegramChatIdQuery(req.query.chat_id);
+            if (!chatId) {
+                res.status(400).json({ error: 'missing or invalid user_id or chat_id' });
+                return;
+            }
+            try {
+                const payload = await (0, telegramMiniappService_1.getTelegramChannelAdminsForMiniapp)(userId, chatId);
+                res.json(payload);
+            }
+            catch (err) {
+                const msg = err instanceof Error ? err.message : String(err);
+                if (msg === 'channel not connected') {
+                    res.status(404).json({ error: 'channel not connected' });
+                    return;
+                }
+                if (msg === 'forbidden') {
+                    res.status(403).json({ error: 'Доступ запрещён' });
+                    return;
+                }
+                logger_1.logger.error('GET /api/channel-admins (telegram) failed', { err });
+                res.status(500).json({ error: 'internal error' });
+            }
+            return;
+        }
         const chatIdRaw = parseNonZeroInt(req.query.chat_id);
-        if (!userId || !chatIdRaw) {
+        if (!chatIdRaw) {
             res.status(400).json({ error: 'missing or invalid user_id or chat_id' });
             return;
         }
@@ -555,6 +639,45 @@ function createCommentApiRouter(deps) {
         const input = parseDisableChannelAdminBody(req.body);
         if (!input) {
             res.status(400).json({ error: 'missing or invalid fields' });
+            return;
+        }
+        if (isTelegramMiniappPlatform(req)) {
+            const body = req.body;
+            if (!isRecord(body)) {
+                res.status(400).json({ error: 'missing or invalid fields' });
+                return;
+            }
+            const actorUserId = parsePositiveInt(body.user_id);
+            const targetUserId = parsePositiveInt(body.target_user_id);
+            const chatId = parseTelegramChatIdQuery(body.chat_id);
+            if (!actorUserId || !targetUserId || !chatId) {
+                res.status(400).json({ error: 'missing or invalid fields' });
+                return;
+            }
+            if (!telegramChannelRegistry_1.telegramChannelRegistry.getChannel(chatId)) {
+                res.status(404).json({ error: 'channel not connected' });
+                return;
+            }
+            try {
+                const token = (0, config_1.getTelegramToken)();
+                const admins = await (0, integrationPlatformClient_1.listTelegramChatAdministrators)(token, chatId);
+                const isActorAdmin = admins.some((a) => a.userId === actorUserId);
+                if (!isActorAdmin) {
+                    res.status(403).json({ error: 'Доступ запрещён' });
+                    return;
+                }
+                telegramChannelNotifyLinkStore_1.telegramChannelNotifyLinkStore.removeUserFromChannel(targetUserId, chatId);
+                res.json({ ok: true });
+            }
+            catch (err) {
+                logger_1.logger.error('POST /api/channel-admins/disable (telegram) failed', {
+                    err,
+                    actorUserId,
+                    targetUserId,
+                    chatId,
+                });
+                res.status(500).json({ error: 'internal error' });
+            }
             return;
         }
         const chatId = (0, resolveChannelChatId_1.resolveCanonicalChannelChatId)(input.chatId);
@@ -698,6 +821,25 @@ function createCommentApiRouter(deps) {
             res.status(400).json({ error: 'missing user_id or join_channel_id' });
             return;
         }
+        if (isTelegramMiniappPlatform(req)) {
+            try {
+                const access = await (0, telegramMiniappService_1.resolveTelegramChannelInviteAccess)(userId, joinChannelIdRaw);
+                if (!access.ok) {
+                    res.status(access.status).json({ error: access.error });
+                    return;
+                }
+                res.json({
+                    ok: true,
+                    channel_title: access.title,
+                    already_linked: telegramChannelNotifyLinkStore_1.telegramChannelNotifyLinkStore.isLinked(userId, access.channelChatId),
+                });
+            }
+            catch (err) {
+                logger_1.logger.error('GET /api/channel-invite (telegram) failed', { err });
+                res.status(500).json({ error: 'internal error' });
+            }
+            return;
+        }
         try {
             const access = await resolveChannelInviteAccess(userId, joinChannelIdRaw);
             if (!access.ok) {
@@ -727,6 +869,26 @@ function createCommentApiRouter(deps) {
             res.status(400).json({ error: 'missing user_id or join_channel_id' });
             return;
         }
+        if (isTelegramMiniappPlatform(req)) {
+            try {
+                const result = await (0, telegramMiniappService_1.registerTelegramChannelNotifyLink)(userId, joinChannelIdRaw);
+                res.json({
+                    ok: true,
+                    channel_title: result.channel_title,
+                    already_linked: result.already_linked,
+                });
+            }
+            catch (err) {
+                const msg = err instanceof Error ? err.message : String(err);
+                if (msg.includes('not connected')) {
+                    res.status(404).json({ error: 'channel is not connected to this bot' });
+                    return;
+                }
+                logger_1.logger.error('POST /api/channel-invite (telegram) failed', { err });
+                res.status(500).json({ error: 'internal error' });
+            }
+            return;
+        }
         try {
             const access = await resolveChannelInviteAccess(userId, joinChannelIdRaw);
             if (!access.ok) {
@@ -746,6 +908,190 @@ function createCommentApiRouter(deps) {
         catch (err) {
             logger_1.logger.error('POST /api/channel-invite failed', { err });
             res.status(500).json({ error: 'internal error' });
+        }
+    });
+    function parseOwnerAccountFromBody(body, platform, userId) {
+        return {
+            platform,
+            platformUserId: userId,
+            username: parseOptionalString(body.username) || null,
+            firstName: parseOptionalString(body.first_name) || null,
+            lastName: parseOptionalString(body.last_name) || null,
+            photoUrl: normalizePhotoUrl(body.photo_url),
+        };
+    }
+    function mapChannelLinkError(err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (msg === 'forbidden') {
+            return { status: 403, error: 'Доступ запрещён' };
+        }
+        if (msg === 'invalid code' || msg === 'code not available' || msg === 'code expired') {
+            return { status: 404, error: 'Код не найден или истёк' };
+        }
+        if (msg === 'max channel already linked' || msg === 'pair already linked') {
+            return { status: 409, error: 'Эта связка уже существует' };
+        }
+        if (msg === 'max channel not connected' || msg === 'telegram channel not connected') {
+            return { status: 404, error: 'Канал не подключён к боту' };
+        }
+        if (msg === 'max channel pending admin rights' || msg === 'telegram bot is not admin') {
+            return { status: 400, error: 'Боту нужны права администратора в канале' };
+        }
+        if (msg === 'invalid tg channel') {
+            return { status: 400, error: 'Некорректный Telegram-канал' };
+        }
+        return { status: 500, error: 'internal error' };
+    }
+    router.post('/owner-profile/sync', async (req, res) => {
+        const body = req.body;
+        if (!isRecord(body)) {
+            res.status(400).json({ error: 'invalid body' });
+            return;
+        }
+        const userId = parsePositiveInt(body.user_id);
+        if (!userId) {
+            res.status(400).json({ error: 'missing or invalid user_id' });
+            return;
+        }
+        const platform = isTelegramMiniappPlatform(req) ? 'telegram' : 'max';
+        try {
+            const result = await (0, channelLinkService_1.syncOwnerProfileFromMiniapp)(platform, parseOwnerAccountFromBody(body, platform, userId));
+            res.json({ ok: true, ...result, accounts: (0, channelLinkService_1.getOwnerProfileBundle)(result.profile_id).accounts });
+        }
+        catch (err) {
+            logger_1.logger.error('POST /api/owner-profile/sync failed', { err });
+            res.status(500).json({ error: 'internal error' });
+        }
+    });
+    router.get('/owner-profile', async (req, res) => {
+        const userId = parsePositiveInt(req.query.user_id);
+        if (!userId) {
+            res.status(400).json({ error: 'missing or invalid user_id' });
+            return;
+        }
+        const platform = isTelegramMiniappPlatform(req) ? 'telegram' : 'max';
+        const profileId = ownerProfileStore_1.ownerProfileStore.getProfileId(platform, userId);
+        if (!profileId) {
+            res.json({ profile_id: null, accounts: [] });
+            return;
+        }
+        res.json((0, channelLinkService_1.getOwnerProfileBundle)(profileId));
+    });
+    router.get('/channel-links', async (req, res) => {
+        const userId = parsePositiveInt(req.query.user_id);
+        if (!userId) {
+            res.status(400).json({ error: 'missing or invalid user_id' });
+            return;
+        }
+        try {
+            if (isTelegramMiniappPlatform(req)) {
+                await integrationsStore_1.integrationsStore.load();
+                const integ = integrationsStore_1.integrationsStore.getTelegramIntegration();
+                const token = (integ?.token?.trim() || (0, config_1.getTelegramToken)()).trim();
+                if (!token) {
+                    res.json({ links: [] });
+                    return;
+                }
+                const links = await (0, channelLinkService_1.listChannelLinksForTelegramUser)(token, userId);
+                res.json({ links });
+                return;
+            }
+            const links = await (0, channelLinkService_1.listChannelLinksForMaxUser)(deps.bot, userId);
+            res.json({ links });
+        }
+        catch (err) {
+            logger_1.logger.error('GET /api/channel-links failed', { err });
+            res.status(500).json({ error: 'internal error' });
+        }
+    });
+    router.post('/channel-link-drafts', async (req, res) => {
+        if (isTelegramMiniappPlatform(req)) {
+            res.status(400).json({ error: 'create draft from MAX miniapp only' });
+            return;
+        }
+        const body = req.body;
+        if (!isRecord(body)) {
+            res.status(400).json({ error: 'invalid body' });
+            return;
+        }
+        const userId = parsePositiveInt(body.user_id);
+        const maxChatId = parseNonZeroInt(body.max_chat_id);
+        if (!userId || maxChatId === null) {
+            res.status(400).json({ error: 'missing user_id or max_chat_id' });
+            return;
+        }
+        try {
+            const payload = await (0, channelLinkService_1.createChannelLinkDraft)(deps.bot, {
+                maxUserId: userId,
+                maxChatId,
+                account: parseOwnerAccountFromBody(body, 'max', userId),
+            });
+            res.json({ ok: true, ...payload });
+        }
+        catch (err) {
+            const mapped = mapChannelLinkError(err);
+            if (mapped.status >= 500) {
+                logger_1.logger.error('POST /api/channel-link-drafts failed', { err });
+            }
+            res.status(mapped.status).json({ error: mapped.error });
+        }
+    });
+    router.get('/channel-link-drafts/:code', async (req, res) => {
+        const code = parseNonEmptyString(req.params.code);
+        if (!code) {
+            res.status(400).json({ error: 'invalid code' });
+            return;
+        }
+        const preview = (0, channelLinkService_1.getChannelLinkDraftPreview)(code);
+        if (!preview) {
+            res.status(404).json({ error: 'Код не найден' });
+            return;
+        }
+        res.json(preview);
+    });
+    router.post('/channel-link-drafts/:code/confirm', async (req, res) => {
+        if (!isTelegramMiniappPlatform(req)) {
+            res.status(400).json({ error: 'confirm from Telegram miniapp only' });
+            return;
+        }
+        const code = parseNonEmptyString(req.params.code);
+        const body = req.body;
+        if (!code || !isRecord(body)) {
+            res.status(400).json({ error: 'invalid code or body' });
+            return;
+        }
+        const userId = parsePositiveInt(body.user_id);
+        const tgChannelId = parseTelegramChatIdQuery(body.tg_channel_id);
+        if (!userId || !tgChannelId) {
+            res.status(400).json({ error: 'missing user_id or tg_channel_id' });
+            return;
+        }
+        await integrationsStore_1.integrationsStore.load();
+        const integ = integrationsStore_1.integrationsStore.getTelegramIntegration();
+        const token = (integ?.token?.trim() || (0, config_1.getTelegramToken)()).trim();
+        if (!token) {
+            res.status(503).json({ error: 'telegram bot not configured' });
+            return;
+        }
+        try {
+            const forwardPosts = parseBoolean(body.forward_posts);
+            const addCommentsButton = parseBoolean(body.add_comments_button);
+            const result = await (0, channelLinkService_1.confirmChannelLinkDraft)(token, {
+                code,
+                tgUserId: userId,
+                tgChannelId,
+                account: parseOwnerAccountFromBody(body, 'telegram', userId),
+                forwardPosts: forwardPosts === null ? true : forwardPosts,
+                addCommentsButton: addCommentsButton === null ? true : addCommentsButton,
+            });
+            res.json({ ok: true, chain: result.chain, profile_id: result.profile_id });
+        }
+        catch (err) {
+            const mapped = mapChannelLinkError(err);
+            if (mapped.status >= 500) {
+                logger_1.logger.error('POST /api/channel-link-drafts/confirm failed', { err });
+            }
+            res.status(mapped.status).json({ error: mapped.error });
         }
     });
     function buildMiniappPostLookup(pathPostId, chatIdRaw, messageMid, startParamRaw) {

@@ -56,25 +56,32 @@ async function getTgFileUrl(token, fileId) {
     }
 }
 /** Сырые апдейты с `update_id` — для корректного offset при опросе. */
-async function getTelegramUpdatesWithIds(token, offset, timeoutSec = 0) {
+async function getTelegramUpdatesWithIds(token, offset, timeoutSec = 0, options) {
+    const allowed = ['channel_post', 'edited_channel_post', 'edited_message'];
+    if (options?.includeMiniappBotUpdates) {
+        allowed.push('message', 'my_chat_member', 'callback_query');
+    }
     for (let attempt = 0; attempt < 5; attempt++) {
         try {
             const res = await axios_1.default.get(`${TG_API}${token}/getUpdates`, {
                 params: {
                     offset,
                     timeout: timeoutSec,
-                    allowed_updates: JSON.stringify(['channel_post', 'edited_channel_post', 'edited_message']),
+                    allowed_updates: JSON.stringify(allowed),
                 },
             });
             const updates = res.data?.result || [];
             return updates
-                .filter((u) => typeof u.update_id === 'number' &&
-                (u.channel_post || u.edited_channel_post || u.edited_message))
+                .filter((u) => typeof u.update_id === 'number')
                 .map((u) => ({
                 update_id: u.update_id,
                 channel_post: u.channel_post,
                 edited_channel_post: u.edited_channel_post,
                 edited_message: u.edited_message,
+                message: u.message,
+                my_chat_member: u.my_chat_member,
+                callback_query: u.callback_query,
+                raw: u,
             }));
         }
         catch (err) {

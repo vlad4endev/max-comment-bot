@@ -19,6 +19,7 @@ const resolveChannelChatId_1 = require("./resolveChannelChatId");
 const tgChannelMatch_1 = require("../utils/tgChannelMatch");
 const logger_1 = require("../utils/logger");
 const maxApiRetry_1 = require("../utils/maxApiRetry");
+const telegramMiniappService_1 = require("./telegramMiniappService");
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 /** Long-poll Telegram for new channel_post (сек). */
 const TG_CHAIN_LONG_POLL_SEC = 25;
@@ -704,6 +705,7 @@ async function runTgChainsOnce() {
             continue;
         }
         const offset = getReaderOffset(tgToken);
+        const includeMiniappBotUpdates = tgToken.trim() === (0, config_1.getTelegramToken)().trim();
         let batch;
         try {
             // При ожидающемся flush альбома не блокируемся длинным long-poll.
@@ -711,7 +713,9 @@ async function runTgChainsOnce() {
             const timeoutSec = pendingAlbumDelayMs === null
                 ? TG_CHAIN_LONG_POLL_SEC
                 : Math.max(0, Math.min(TG_CHAIN_LONG_POLL_SEC, Math.ceil(pendingAlbumDelayMs / 1000)));
-            batch = await (0, telegramReader_1.getTelegramUpdatesWithIds)(tgToken, offset, timeoutSec);
+            batch = await (0, telegramReader_1.getTelegramUpdatesWithIds)(tgToken, offset, timeoutSec, {
+                includeMiniappBotUpdates,
+            });
         }
         catch (err) {
             if (err instanceof telegramReader_1.TelegramGetUpdatesConflictError) {
@@ -726,6 +730,14 @@ async function runTgChainsOnce() {
             throw err;
         }
         let nextOffset = offset;
+        if (includeMiniappBotUpdates) {
+            const rawUpdates = batch
+                .map((u) => u.raw)
+                .filter((u) => !!u);
+            if (rawUpdates.length > 0) {
+                void (0, telegramMiniappService_1.processTelegramMiniappBotUpdates)(tgToken, rawUpdates);
+            }
+        }
         const channelPosts = [];
         const editedChannelPosts = [];
         const editedMessages = [];

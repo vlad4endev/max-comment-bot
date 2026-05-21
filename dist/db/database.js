@@ -181,6 +181,23 @@ function initSchema(targetDb) {
     );
     CREATE INDEX IF NOT EXISTS idx_tg_bot_users_started ON tg_bot_users(started);
 
+    CREATE TABLE IF NOT EXISTS tg_channels (
+      chat_id       TEXT PRIMARY KEY,
+      title         TEXT,
+      username      TEXT,
+      type          TEXT NOT NULL DEFAULT 'channel',
+      bot_is_admin  INTEGER NOT NULL DEFAULT 0,
+      updated_at    TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS tg_channel_notify_links (
+      user_id           INTEGER NOT NULL,
+      channel_chat_id   TEXT NOT NULL,
+      joined_at         TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (user_id, channel_chat_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_tg_notify_channel ON tg_channel_notify_links(channel_chat_id);
+
     CREATE TABLE IF NOT EXISTS channel_subscribers (
       channel_chat_id      INTEGER NOT NULL,
       user_id              INTEGER NOT NULL,
@@ -202,6 +219,45 @@ function initSchema(targetDb) {
       last_synced_at       TEXT NOT NULL,
       members_total        INTEGER NOT NULL DEFAULT 0
     );
+
+    CREATE TABLE IF NOT EXISTS owner_profiles (
+      id          TEXT PRIMARY KEY,
+      created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS owner_profile_accounts (
+      profile_id        TEXT NOT NULL,
+      platform          TEXT NOT NULL CHECK (platform IN ('max', 'telegram')),
+      platform_user_id  TEXT NOT NULL,
+      username          TEXT,
+      first_name        TEXT,
+      last_name         TEXT,
+      photo_url         TEXT,
+      updated_at        TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (platform, platform_user_id),
+      FOREIGN KEY (profile_id) REFERENCES owner_profiles(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_owner_profile_accounts_profile
+      ON owner_profile_accounts(profile_id);
+
+    CREATE TABLE IF NOT EXISTS channel_link_drafts (
+      code            TEXT PRIMARY KEY,
+      profile_id      TEXT NOT NULL,
+      max_chat_id     INTEGER NOT NULL,
+      max_user_id     INTEGER NOT NULL,
+      max_title       TEXT,
+      status          TEXT NOT NULL DEFAULT 'pending',
+      tg_channel_id   TEXT,
+      tg_username     TEXT,
+      tg_user_id      INTEGER,
+      chain_id        TEXT,
+      created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+      expires_at      TEXT NOT NULL,
+      FOREIGN KEY (profile_id) REFERENCES owner_profiles(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_channel_link_drafts_max_chat
+      ON channel_link_drafts(max_chat_id, status);
   `);
     migrateChannelImportSchema(targetDb);
     migratePostsSchema(targetDb);

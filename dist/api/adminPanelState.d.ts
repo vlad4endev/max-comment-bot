@@ -32,6 +32,11 @@ export interface TgChainRecord {
     created_at: string;
     forwarded_today: number;
     errors_today: number;
+    /** Профиль владельца (MAX + Telegram) в SQLite */
+    owner_profile_id?: string;
+    created_via?: 'admin' | 'miniapp_link';
+    max_user_id?: number;
+    tg_user_id?: number;
 }
 export interface AutopostRecord {
     id: string;

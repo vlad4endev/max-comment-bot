@@ -711,6 +711,58 @@
       flex-shrink: 0;
       padding: 0;
     }
+    .channel-link-list { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+    .channel-link-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 12px;
+      border-radius: 12px;
+      background: var(--bg-surface);
+      border: 1px solid var(--surface-border);
+    }
+    .channel-link-flow { flex: 1; min-width: 0; font-size: 13px; font-weight: 600; line-height: 1.35; }
+    .channel-link-sub { font-size: 11px; color: var(--muted); font-weight: 400; margin-top: 2px; }
+    .channel-link-arrow { color: var(--teal); flex-shrink: 0; font-size: 16px; }
+    .link-code-box {
+      margin: 12px 0;
+      padding: 16px;
+      border-radius: 14px;
+      background: var(--teal-strong-bg);
+      border: 1px solid var(--teal-border-strong);
+      text-align: center;
+    }
+    .link-code-value {
+      font-size: 28px;
+      font-weight: 800;
+      letter-spacing: 0.2em;
+      color: var(--teal);
+      font-family: ui-monospace, monospace;
+    }
+    .link-step-label { font-size: 12px; color: var(--muted); margin-bottom: 8px; }
+    .link-channel-select {
+      width: 100%;
+      padding: 10px 12px;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      background: var(--bg-surface);
+      color: var(--text);
+      font-size: 14px;
+      margin-bottom: 10px;
+    }
+    .link-code-input {
+      width: 100%;
+      padding: 12px;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      background: var(--bg-surface);
+      color: var(--text);
+      font-size: 18px;
+      letter-spacing: 0.15em;
+      text-align: center;
+      text-transform: uppercase;
+      margin-bottom: 10px;
+    }
     .btn-dashed {
       width: 100%;
       margin-top: 4px;
@@ -2060,6 +2112,13 @@
         <div class="connect-hint" id="connectHint"></div>
       </div>
       <div>
+        <div class="section-title">Связки TG ↔ MAX</div>
+        <div class="channel-link-list" id="homeChannelLinksList"></div>
+        <button type="button" class="btn-dashed" id="btnCreateChannelLink" style="margin-top:8px">
+          Создать связку
+        </button>
+      </div>
+      <div>
         <div class="section-label">Администраторы каналов</div>
         <div id="adminsList"></div>
       </div>
@@ -2445,6 +2504,38 @@
     "
   ></div>
 
+  <div id="channelLinkOverlay" class="overlay hidden" aria-hidden="true">
+    <div class="overlay-card" id="channelLinkOverlayCard">
+      <h2 id="channelLinkOverlayTitle">Связка каналов</h2>
+      <p class="muted text-sm" id="channelLinkOverlayDesc"></p>
+      <div id="channelLinkStepMax" class="hidden">
+        <div class="link-step-label">Канал MAX — куда приходят посты из Telegram</div>
+        <select class="link-channel-select" id="linkMaxChannelSelect"></select>
+        <button type="button" class="btn-primary" id="linkMaxGenerateBtn">Получить код</button>
+      </div>
+      <div id="channelLinkStepCode" class="hidden">
+        <div class="link-code-box">
+          <div class="link-step-label">Код для Telegram</div>
+          <div class="link-code-value" id="linkCodeValue">------</div>
+          <div class="link-step-label" id="linkCodeHint" style="margin-top:8px"></div>
+        </div>
+        <button type="button" class="btn-secondary" id="linkCodeCopyBtn">Скопировать код</button>
+        <p class="muted text-sm" style="margin-top:10px">
+          Откройте мини-приложение в Telegram → «Создать связку» → выберите канал и введите код.
+        </p>
+      </div>
+      <div id="channelLinkStepTg" class="hidden">
+        <div class="link-step-label">Канал Telegram — откуда пересылать посты</div>
+        <select class="link-channel-select" id="linkTgChannelSelect"></select>
+        <div class="link-step-label">Код из MAX</div>
+        <input type="text" class="link-code-input" id="linkCodeInput" maxlength="6" placeholder="AB12CD" autocomplete="off" />
+        <button type="button" class="btn-primary" id="linkTgConfirmBtn">Связать каналы</button>
+        <p class="muted text-sm" id="linkTgPreview" style="margin-top:8px"></p>
+      </div>
+      <button type="button" class="overlay-close" id="channelLinkOverlayClose" style="margin-top:12px">Закрыть</button>
+    </div>
+  </div>
+
   <div id="instructionOverlay" class="overlay hidden" aria-hidden="true">
     <div class="overlay-card">
       <h2>Как подключить CommentBot</h2>
@@ -2555,9 +2646,16 @@
     function decodeStartParam(raw) {
       if (!raw || raw === 'start') return null
       var trimmed = String(raw).trim()
+      if (/^linkmax$/i.test(trimmed)) {
+        return { open_channel_link: true }
+      }
+      var joinTgMatch = /^jointg(\d+)$/i.exec(trimmed)
+      if (joinTgMatch) {
+        return { join_channel_id: '-' + joinTgMatch[1], join_platform: 'telegram' }
+      }
       var joinMatch = /^join(\d+)$/i.exec(trimmed)
       if (joinMatch) {
-        return { join_channel_id: '-' + joinMatch[1] }
+        return { join_channel_id: '-' + joinMatch[1], join_platform: 'max' }
       }
       var m = trimmed.match(/^pid_([a-f0-9]+|\d+)_cid_(\d+)(?:_mid_([A-Za-z0-9_-]+))?(_admin)?$/i)
       if (!m) return null
@@ -3026,7 +3124,11 @@
       var channelNameEl = document.getElementById('joinChannelName');
       if (channelNameEl) channelNameEl.textContent = 'Канал';
 
-      fetch('/api/channel-info?chat_id=' + encodeURIComponent(cid))
+      fetch(
+        '/api/channel-info?chat_id=' +
+          encodeURIComponent(cid) +
+          (inTelegram ? '&platform=telegram' : '')
+      )
         .then(function (r) {
           return r.json();
         })
@@ -3042,12 +3144,21 @@
           return r.json();
         })
         .then(function (cfg) {
-          var nick = String((cfg && cfg.bot_nickname) || '').replace(/^@/, '');
           var launchBtn = document.getElementById('joinLaunchBtn');
-          if (!nick || !launchBtn) return;
-          var absId = Math.abs(parseInt(cid, 10));
-          if (!Number.isFinite(absId) || absId <= 0) return;
-          var url = 'https://max.ru/' + nick + '?start=' + encodeURIComponent('join' + absId);
+          if (!launchBtn) return;
+          var url = '';
+          if (inTelegram) {
+            var tgDigits = String(cid).trim().replace(/^-/, '');
+            if (!/^\d+$/.test(tgDigits)) return;
+            url =
+              'https://t.me/commentvmax_bot?start=' + encodeURIComponent('jointg' + tgDigits);
+          } else {
+            var nick = String((cfg && cfg.bot_nickname) || '').replace(/^@/, '');
+            if (!nick) return;
+            var absId = Math.abs(parseInt(cid, 10));
+            if (!Number.isFinite(absId) || absId <= 0) return;
+            url = 'https://max.ru/' + nick + '?start=' + encodeURIComponent('join' + absId);
+          }
           launchBtn.href = url;
           launchBtn.onclick = function (e) {
             e.preventDefault();
@@ -3088,6 +3199,12 @@
 
       var homeErr = document.getElementById('homeErr');
       var botNick = '@bot';
+      var platformQs = inTelegram ? '&platform=telegram' : '';
+      function homeApiHeaders(withJson) {
+        var h = withJson ? { 'Content-Type': 'application/json' } : {};
+        if (inTelegram) h['X-Miniapp-Platform'] = 'telegram';
+        return h;
+      }
 
       function setHomeErr(t) {
         homeErr.textContent = t || '';
@@ -3204,7 +3321,9 @@
           '/api/channel-admins?chat_id=' +
             encodeURIComponent(String(channelChatId)) +
             '&user_id=' +
-            encodeURIComponent(String(apiUid))
+            encodeURIComponent(String(apiUid)) +
+            platformQs,
+          { headers: homeApiHeaders(false) }
         )
           .then(function (r) {
             return r.ok ? r.json() : null
@@ -3274,15 +3393,19 @@
           if (!feature || !sw) return;
           sw.addEventListener('click', function () {
             if (disabled || apiUid == null) {
-              setHomeErr(apiUid == null ? 'Нужен user_id из MAX для сохранения настроек' : 'Скоро');
+              setHomeErr(
+                apiUid == null
+                  ? 'Нужен user_id из MAX/Telegram для сохранения настроек'
+                  : 'Скоро'
+              );
               return;
             }
             var next = !sw.classList.contains('on');
             sw.classList.toggle('on', next);
             sw.setAttribute('aria-checked', next ? 'true' : 'false');
-            fetch('/api/settings', {
+            fetch('/api/settings' + (inTelegram ? '?platform=telegram' : ''), {
               method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
+              headers: homeApiHeaders(true),
               body: JSON.stringify({ user_id: apiUid, feature: feature, enabled: next }),
             })
               .then(function (r) {
@@ -3395,13 +3518,13 @@
           disableBtn.disabled = true
           var prevText = disableBtn.textContent
           disableBtn.textContent = 'Отключение...'
-          fetch('/api/channel-admins/disable', {
+          fetch('/api/channel-admins/disable' + (inTelegram ? '?platform=telegram' : ''), {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: homeApiHeaders(true),
             body: JSON.stringify({
               user_id: actorUserId,
               target_user_id: targetUserId,
-              chat_id: channelChatId,
+              chat_id: inTelegram ? String(channelChatId) : channelChatId,
             }),
           })
             .then(function (r) {
@@ -3426,7 +3549,9 @@
         })
       })()
 
-      fetch('/api/settings?user_id=' + encodeURIComponent(String(uid)))
+      fetch('/api/settings?user_id=' + encodeURIComponent(String(uid)) + platformQs, {
+        headers: homeApiHeaders(false),
+      })
         .then(function (r) {
           if (!r.ok) throw new Error('settings');
           return r.json();
@@ -3439,7 +3564,9 @@
         })
         .catch(function () {});
 
-      fetch('/api/stats?user_id=' + encodeURIComponent(String(uid)))
+      fetch('/api/stats?user_id=' + encodeURIComponent(String(uid)) + platformQs, {
+        headers: homeApiHeaders(false),
+      })
         .then(function (r) {
           if (!r.ok) throw new Error('stats');
           return r.json();
@@ -3454,7 +3581,9 @@
           setHomeErr('Не удалось загрузить статистику');
         });
 
-      fetch('/api/channels?user_id=' + encodeURIComponent(String(uid)))
+      fetch('/api/channels?user_id=' + encodeURIComponent(String(uid)) + platformQs, {
+        headers: homeApiHeaders(false),
+      })
         .then(function (r) {
           if (!r.ok) throw new Error('ch');
           return r.json();
@@ -3469,7 +3598,12 @@
           if (data.bot_nickname) botNick = '@' + String(data.bot_nickname).replace(/^@/, '');
           var arr = data.channels || [];
           if (!arr.length) {
-            list.innerHTML = '<div style="color:var(--muted);font-size:13px;padding:8px 4px;">Каналов пока нет. Подключите бота в свой канал.</div>';
+            list.innerHTML =
+              '<div style="color:var(--muted);font-size:13px;padding:8px 4px;">' +
+              (inTelegram
+                ? 'Каналов пока нет. Добавьте @commentvmax_bot администратором в Telegram-канал, затем обновите мини-приложение.'
+                : 'Каналов пока нет. Подключите бота в свой канал.') +
+              '</div>';
             if (adminsHost) {
               adminsHost.innerHTML =
                 '<div style="color:var(--muted);font-size:13px;padding:8px 4px;">Подключите канал, чтобы увидеть администраторов.</div>';
@@ -3494,12 +3628,13 @@
                 esc(avUrl) +
                 '" alt="" /></div>'
               : '<div class="ch-icon">' + esc(initials(title)) + '</div>';
-            var gearBtn =
-              '<button type="button" class="ch-gear-btn" ' +
-              'onclick="openChannelSettings(' +
-              JSON.stringify(ch.chat_id) +
-              ')" ' +
-              'aria-label="Настройки канала">⚙️</button>';
+            var gearBtn = inTelegram
+              ? ''
+              : '<button type="button" class="ch-gear-btn" ' +
+                'onclick="openChannelSettings(' +
+                JSON.stringify(ch.chat_id) +
+                ')" ' +
+                'aria-label="Настройки канала">⚙️</button>';
             var row =
               '<div class="channel-item">' +
               iconHtml +
@@ -3524,7 +3659,9 @@
                 '/api/channel-admins?chat_id=' +
                   encodeURIComponent(String(ch.chat_id)) +
                   '&user_id=' +
-                  encodeURIComponent(String(uid))
+                  encodeURIComponent(String(uid)) +
+                  platformQs,
+                { headers: homeApiHeaders(false) }
               ).then(function (r) {
                 return r.ok ? r.json() : null;
               });
@@ -3534,12 +3671,22 @@
               renderChannelAdmins(arr[i], admData);
             });
           });
+          if (pendingOpenChannelLink && inTelegram) {
+            showChannelLinkOverlay('tg');
+            fillLinkChannelSelect(
+              document.getElementById('linkTgChannelSelect'),
+              channelsCache,
+              'TG'
+            );
+          }
         })
         .catch(function () {});
 
       var hint = document.getElementById('connectHint');
       document.getElementById('btnConnect').addEventListener('click', function () {
-        hint.textContent = 'Добавь бота ' + botNick + ' в канал как администратора.';
+        hint.textContent = inTelegram
+          ? 'Добавьте @commentvmax_bot в Telegram-канал как администратора, затем перезайдите в мини-приложение.'
+          : 'Добавь бота ' + botNick + ' в канал как администратора.';
         hint.classList.toggle('show', !hint.classList.contains('show'));
       });
 
@@ -3548,14 +3695,18 @@
         var open = !panel.classList.contains('open');
         panel.classList.toggle('open', open);
         if (!open) return;
-        fetch('/api/channels?user_id=' + encodeURIComponent(String(uid)))
+        fetch('/api/channels?user_id=' + encodeURIComponent(String(uid)) + platformQs, {
+          headers: homeApiHeaders(false),
+        })
           .then(function (r) {
             return r.json();
           })
           .then(function (data) {
             var arr = data.channels || [];
             if (!arr.length) {
-              panel.textContent = 'Сначала подключите бота к каналу. Затем здесь появятся настройки для каждого канала.';
+              panel.textContent = inTelegram
+                ? 'Сначала добавьте @commentvmax_bot администратором в Telegram-канал.'
+                : 'Сначала подключите бота к каналу. Затем здесь появятся настройки для каждого канала.';
               return;
             }
             panel.innerHTML =
@@ -3572,6 +3723,318 @@
             panel.textContent = 'Не удалось загрузить список каналов.';
           });
       });
+
+      var pendingOpenChannelLink = false
+      var linkDecode = decodeStartParam(startParam)
+      if (linkDecode && linkDecode.open_channel_link) {
+        pendingOpenChannelLink = true
+      }
+
+      function ownerProfilePayload(apiUid) {
+        return {
+          user_id: apiUid,
+          username: user.username || null,
+          first_name: user.first_name || null,
+          last_name: user.last_name || null,
+          photo_url: getBridgeUserPhotoUrl(user),
+        }
+      }
+
+      function loadChannelLinks(apiUid) {
+        var host = document.getElementById('homeChannelLinksList')
+        if (!host || apiUid == null) return
+        fetch('/api/channel-links?user_id=' + encodeURIComponent(String(apiUid)) + platformQs, {
+          headers: homeApiHeaders(false),
+        })
+          .then(function (r) {
+            return r.ok ? r.json() : { links: [] }
+          })
+          .then(function (data) {
+            var links = data.links || []
+            host.innerHTML = ''
+            if (!links.length) {
+              host.innerHTML =
+                '<div style="color:var(--muted);font-size:13px;padding:8px 4px;">' +
+                (inTelegram
+                  ? 'Связок пока нет. Получите код в MAX и завершите привязку здесь.'
+                  : 'Связок пока нет. Создайте код, затем завершите в Telegram.') +
+                '</div>'
+              return
+            }
+            links.forEach(function (lnk) {
+              var tgT = esc(String(lnk.tg_title || lnk.tg_username || 'Telegram'))
+              var mxT = esc(String(lnk.max_title || 'MAX ' + lnk.max_chat_id))
+              var st = lnk.active ? 'active' : 'pending'
+              var meta =
+                (lnk.forward_posts ? 'посты' : '') +
+                (lnk.add_comments_button !== false ? ' · 💬' : '') +
+                ' · сегодня ' +
+                String(lnk.forwarded_today || 0)
+              host.insertAdjacentHTML(
+                'beforeend',
+                '<div class="channel-link-item">' +
+                  '<div class="channel-link-flow">' +
+                  tgT +
+                  '<div class="channel-link-sub">→ ' +
+                  mxT +
+                  '</div><div class="channel-link-sub">' +
+                  esc(meta) +
+                  '</div></div>' +
+                  '<span class="status-dot ' +
+                  st +
+                  '" title="' +
+                  (lnk.active ? 'Активна' : 'Пауза') +
+                  '"></span></div>'
+              )
+            })
+          })
+          .catch(function () {})
+      }
+
+      function showChannelLinkOverlay(mode) {
+        var ov = document.getElementById('channelLinkOverlay')
+        var stepMax = document.getElementById('channelLinkStepMax')
+        var stepCode = document.getElementById('channelLinkStepCode')
+        var stepTg = document.getElementById('channelLinkStepTg')
+        var title = document.getElementById('channelLinkOverlayTitle')
+        var desc = document.getElementById('channelLinkOverlayDesc')
+        if (!ov || !stepMax || !stepCode || !stepTg) return
+        stepMax.classList.add('hidden')
+        stepCode.classList.add('hidden')
+        stepTg.classList.add('hidden')
+        if (mode === 'max') {
+          title.textContent = 'Связка с Telegram'
+          desc.textContent = 'Выберите MAX-канал — в него будут приходить посты из Telegram.'
+          stepMax.classList.remove('hidden')
+        } else {
+          title.textContent = 'Связка с MAX'
+          desc.textContent = 'Выберите Telegram-канал и введите код из MAX.'
+          stepTg.classList.remove('hidden')
+        }
+        ov.classList.remove('hidden')
+        ov.setAttribute('aria-hidden', 'false')
+      }
+
+      function hideChannelLinkOverlay() {
+        var ov = document.getElementById('channelLinkOverlay')
+        if (!ov) return
+        ov.classList.add('hidden')
+        ov.setAttribute('aria-hidden', 'true')
+      }
+
+      function fillLinkChannelSelect(selectEl, arr, platformLabel) {
+        if (!selectEl) return
+        selectEl.innerHTML = ''
+        if (!arr.length) {
+          var opt = document.createElement('option')
+          opt.value = ''
+          opt.textContent = 'Нет доступных каналов'
+          selectEl.appendChild(opt)
+          return
+        }
+        arr.forEach(function (ch) {
+          var opt = document.createElement('option')
+          opt.value = String(ch.chat_id)
+          var t = (ch.title && String(ch.title).trim()) || platformLabel + ' ' + ch.chat_id
+          opt.textContent = t + (ch.status === 'pending' ? ' (ожидает прав)' : '')
+          selectEl.appendChild(opt)
+        })
+      }
+
+      if (uid != null) {
+        fetch('/api/owner-profile/sync', {
+          method: 'POST',
+          headers: homeApiHeaders(true),
+          body: JSON.stringify(ownerProfilePayload(uid)),
+        }).catch(function () {})
+        loadChannelLinks(uid)
+      }
+
+      var btnCreateLink = document.getElementById('btnCreateChannelLink')
+      if (btnCreateLink && btnCreateLink.dataset.bound !== '1') {
+        btnCreateLink.dataset.bound = '1'
+        btnCreateLink.addEventListener('click', function () {
+          if (uid == null) {
+            showToast('Не удалось определить user_id')
+            return
+          }
+          if (inTelegram) {
+            showChannelLinkOverlay('tg')
+            fillLinkChannelSelect(
+              document.getElementById('linkTgChannelSelect'),
+              channelsCache,
+              'TG'
+            )
+            var codeIn = document.getElementById('linkCodeInput')
+            if (codeIn) codeIn.value = ''
+            return
+          }
+          showChannelLinkOverlay('max')
+          fillLinkChannelSelect(
+            document.getElementById('linkMaxChannelSelect'),
+            channelsCache,
+            'MAX'
+          )
+        })
+      }
+
+      var linkMaxBtn = document.getElementById('linkMaxGenerateBtn')
+      if (linkMaxBtn && linkMaxBtn.dataset.bound !== '1') {
+        linkMaxBtn.dataset.bound = '1'
+        linkMaxBtn.addEventListener('click', function () {
+          if (uid == null) return
+          var sel = document.getElementById('linkMaxChannelSelect')
+          var maxId = sel ? parseInt(sel.value, 10) : NaN
+          if (!Number.isFinite(maxId) || maxId === 0) {
+            showToast('Выберите канал MAX')
+            return
+          }
+          linkMaxBtn.disabled = true
+          fetch('/api/channel-link-drafts', {
+            method: 'POST',
+            headers: homeApiHeaders(true),
+            body: JSON.stringify(
+              Object.assign({ max_chat_id: maxId }, ownerProfilePayload(uid))
+            ),
+          })
+            .then(function (r) {
+              return r.json().then(function (j) {
+                return { ok: r.ok, body: j }
+              })
+            })
+            .then(function (x) {
+              if (!x.ok) throw new Error((x.body && x.body.error) || 'Ошибка')
+              document.getElementById('channelLinkStepMax').classList.add('hidden')
+              document.getElementById('channelLinkStepCode').classList.remove('hidden')
+              var codeEl = document.getElementById('linkCodeValue')
+              if (codeEl) codeEl.textContent = String(x.body.code || '')
+              var hint = document.getElementById('linkCodeHint')
+              if (hint) {
+                hint.textContent =
+                  'Для «' +
+                  (x.body.max_title || 'MAX') +
+                  '». Действует 15 минут.'
+              }
+              window.__linkDraftCode = String(x.body.code || '')
+            })
+            .catch(function (e) {
+              showToast(e.message || 'Не удалось создать код')
+            })
+            .finally(function () {
+              linkMaxBtn.disabled = false
+            })
+        })
+      }
+
+      var linkCopyBtn = document.getElementById('linkCodeCopyBtn')
+      if (linkCopyBtn && linkCopyBtn.dataset.bound !== '1') {
+        linkCopyBtn.dataset.bound = '1'
+        linkCopyBtn.addEventListener('click', function () {
+          var code = window.__linkDraftCode || ''
+          if (!code) return
+          try {
+            navigator.clipboard.writeText(code)
+            showToast('Код скопирован')
+          } catch (e) {
+            showToast(code)
+          }
+        })
+      }
+
+      var linkTgBtn = document.getElementById('linkTgConfirmBtn')
+      if (linkTgBtn && linkTgBtn.dataset.bound !== '1') {
+        linkTgBtn.dataset.bound = '1'
+        linkTgBtn.addEventListener('click', function () {
+          if (uid == null) return
+          var sel = document.getElementById('linkTgChannelSelect')
+          var tgId = sel ? String(sel.value).trim() : ''
+          var code = document.getElementById('linkCodeInput')
+          var codeVal = code ? String(code.value || '').trim().toUpperCase() : ''
+          if (!tgId || !/^[A-Z0-9]{6}$/.test(codeVal)) {
+            showToast('Выберите канал и введите код из MAX')
+            return
+          }
+          linkTgBtn.disabled = true
+          fetch(
+            '/api/channel-link-drafts/' + encodeURIComponent(codeVal) + '/confirm',
+            {
+              method: 'POST',
+              headers: homeApiHeaders(true),
+              body: JSON.stringify(
+                Object.assign(
+                  { tg_channel_id: tgId },
+                  ownerProfilePayload(uid)
+                )
+              ),
+            }
+          )
+            .then(function (r) {
+              return r.json().then(function (j) {
+                return { ok: r.ok, body: j }
+              })
+            })
+            .then(function (x) {
+              if (!x.ok) throw new Error((x.body && x.body.error) || 'Ошибка')
+              showToast('Связка создана')
+              hideChannelLinkOverlay()
+              loadChannelLinks(uid)
+            })
+            .catch(function (e) {
+              showToast(e.message || 'Не удалось связать')
+            })
+            .finally(function () {
+              linkTgBtn.disabled = false
+            })
+        })
+      }
+
+      var linkCodeInput = document.getElementById('linkCodeInput')
+      if (linkCodeInput && linkCodeInput.dataset.bound !== '1') {
+        linkCodeInput.dataset.bound = '1'
+        linkCodeInput.addEventListener('input', function () {
+          var v = String(linkCodeInput.value || '')
+            .toUpperCase()
+            .replace(/[^A-Z0-9]/g, '')
+            .slice(0, 6)
+          linkCodeInput.value = v
+          var preview = document.getElementById('linkTgPreview')
+          if (!preview || v.length !== 6) {
+            if (preview) preview.textContent = ''
+            return
+          }
+          fetch('/api/channel-link-drafts/' + encodeURIComponent(v), {
+            headers: homeApiHeaders(false),
+          })
+            .then(function (r) {
+              return r.ok ? r.json() : null
+            })
+            .then(function (data) {
+              if (!preview || !data) {
+                if (preview) preview.textContent = ''
+                return
+              }
+              if (data.status === 'pending') {
+                preview.textContent = 'MAX: «' + (data.max_title || 'канал') + '»'
+              } else {
+                preview.textContent = 'Код недоступен (' + (data.status || '?') + ')'
+              }
+            })
+            .catch(function () {})
+        })
+      }
+
+      var linkOvClose = document.getElementById('channelLinkOverlayClose')
+      var linkOv = document.getElementById('channelLinkOverlay')
+      if (linkOvClose && linkOvClose.dataset.bound !== '1') {
+        linkOvClose.dataset.bound = '1'
+        linkOvClose.addEventListener('click', hideChannelLinkOverlay)
+      }
+      if (linkOv && linkOv.dataset.bound !== '1') {
+        linkOv.dataset.bound = '1'
+        linkOv.addEventListener('click', function (e) {
+          if (e.target === linkOv) hideChannelLinkOverlay()
+        })
+      }
 
       var overlay = document.getElementById('instructionOverlay');
       document.getElementById('btnInstruction').addEventListener('click', function () {
