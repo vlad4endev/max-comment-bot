@@ -329,26 +329,23 @@ export class PostStore {
           ? '\u00a0'
           : post.text
     const usesReplyUi = post.comments_ui_message_mid !== undefined
-    const { media } = usesReplyUi ? { media: [] as AttachmentRequest[] } : await resolveChannelPostMediaForEdit(bot, post)
+    const { media, warnMissingSnapshot } = usesReplyUi
+      ? { media: [] as AttachmentRequest[], warnMissingSnapshot: false }
+      : await resolveChannelPostMediaForEdit(bot, post)
+    if (!usesReplyUi && warnMissingSnapshot) {
+      logger.warn('postStore.updateButtonCaption: нет снимка медиа — пропускаем inline edit', {
+        postId: post.post_id,
+        targetMid,
+      })
+      return false
+    }
     if (!usesReplyUi && media.length > 0 && !canMergeKeyboardWithMedia(media.length)) {
-      logger.info('postStore.updateButtonCaption: много медиа — обновляем только клавиатуру', {
+      logger.info('postStore.updateButtonCaption: много медиа — пропускаем inline edit', {
         postId: post.post_id,
         targetMid,
         mediaCount: media.length,
       })
-      try {
-        await apiCallWithRetry(() =>
-          bot.api.editMessage(targetMid, { text, attachments: [kb] }),
-        )
-        return true
-      } catch (err: unknown) {
-        logger.warn('postStore.updateButtonCaption: keyboard-only edit failed', {
-          postId: post.post_id,
-          targetMid,
-          err,
-        })
-        return false
-      }
+      return false
     }
     const attachments: AttachmentRequest[] =
       usesReplyUi || media.length === 0 ? [kb] : [...media, kb]
@@ -580,7 +577,17 @@ export async function attachCommentButtonToChannelPost(
     }
   }
 
-  if (mergeMediaInEdit) {
+  if (!existingUiMid && warnMissingSnapshot) {
+    logger.warn('commentButton: пропускаем inline edit без снимка медиа, используем reply fallback', {
+      ...logBase,
+    })
+    if (logCtx?.inlineOnly) {
+      logger.info('commentButton: inline-only mode, skip reply fallback without media snapshot', {
+        ...logBase,
+      })
+      return false
+    }
+  } else if (mergeMediaInEdit) {
     const attachments: AttachmentRequest[] =
       media.length > 0 ? [...media, keyboard] : [keyboard]
     logger.info('commentButton: пробуем editMessage на посте канала', {
@@ -612,36 +619,6 @@ export async function attachCommentButtonToChannelPost(
         logger.info('commentButton: inline-only mode, skip reply fallback after edit failure', {
           ...logBase,
         })
-        return false
-      }
-    }
-  } else if (media.length > 0) {
-    logger.info('commentButton: много медиа — пробуем edit только с клавиатурой', {
-      ...logBase,
-      mediaCount: media.length,
-    })
-    try {
-      const editStartedAt = performance.now()
-      await apiCallWithRetry(() =>
-        bot.api.editMessage(post.message_mid, { text: editText, attachments: [keyboard] }),
-      )
-      const editMs = Math.round(performance.now() - editStartedAt)
-      const timing = apiDuration()
-      logger.info(`commentButton: кнопка добавлена через edit (только клавиатура) (${timing.apiDuration})`, {
-        ...logBase,
-        method: 'edit_keyboard_only',
-        editMs,
-        ...timing,
-      })
-      return true
-    } catch (err: unknown) {
-      logger.warn('commentButton: edit только с клавиатурой не удался — пробуем reply', {
-        ...logBase,
-        mediaCount: media.length,
-        ...apiDuration(),
-        err,
-      })
-      if (logCtx?.inlineOnly) {
         return false
       }
     }

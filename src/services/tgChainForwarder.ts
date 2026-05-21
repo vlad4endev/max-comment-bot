@@ -329,7 +329,19 @@ async function uploadTgPhotoAttachment(
 ): Promise<ImageAttachmentRequest | null> {
   const url = await getTgFileUrl(tgToken, fileId)
   if (!url) return null
-  const uploaded = await maxApi(() => bot.api.uploadImage({ url }))
+  let uploaded: { toJson(): unknown } | null = null
+  try {
+    // Prefer binary upload so MAX returns token-based image payloads.
+    // Those can be safely merged into one album attachment (`payload.photos`).
+    const res = await axios.get<ArrayBuffer>(url, { responseType: 'arraybuffer' })
+    uploaded = await maxApi(() => bot.api.uploadImage({ source: Buffer.from(res.data) }))
+  } catch (err: unknown) {
+    logger.warn('[tgChain] album: binary image upload failed, fallback to url upload', {
+      fileId,
+      err,
+    })
+    uploaded = await maxApi(() => bot.api.uploadImage({ url }))
+  }
   const json = uploaded.toJson() as ImageAttachmentRequest
   if (json.type !== 'image' || !json.payload) {
     return null
