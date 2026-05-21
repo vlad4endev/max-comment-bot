@@ -2448,11 +2448,17 @@
       if (joinMatch) {
         return { join_channel_id: '-' + joinMatch[1] }
       }
-      var m = trimmed.match(/^pid_([a-f0-9]+)_cid_(\d+)(?:_mid_([A-Za-z0-9_-]+))?(_admin)?$/i)
+      var m = trimmed.match(/^pid_([a-f0-9]+|\d+)_cid_(\d+)(?:_mid_([A-Za-z0-9_-]+))?(_admin)?$/i)
       if (!m) return null
       var id = m[1]
-      var uuid = [id.slice(0,8), id.slice(8,12), id.slice(12,16), id.slice(16,20), id.slice(20)].join('-')
-      var out = { post_id: uuid, chat_id: '-' + m[2], admin: !!m[4] }
+      var postId = null
+      if (/^\d+$/.test(id)) {
+        postId = id
+      } else {
+        if (id.length !== 32) return null
+        postId = [id.slice(0,8), id.slice(8,12), id.slice(12,16), id.slice(16,20), id.slice(20)].join('-')
+      }
+      var out = { post_id: postId, chat_id: '-' + m[2], admin: !!m[4] }
       if (m[3]) {
         try {
           var padded = m[3] + '='.repeat((4 - (m[3].length % 4)) % 4)
@@ -2497,6 +2503,12 @@
       if (typeof raw !== 'string') return null
       var trimmed = raw.trim()
       return trimmed || null
+    }
+
+    function isAdminParamValue(value) {
+      if (value == null) return false
+      var normalized = String(value).trim().toLowerCase()
+      return normalized === '1' || normalized === 'true' || normalized === 'yes'
     }
 
     function buildMergedSearchParams(user, startParam) {
@@ -2845,7 +2857,7 @@
       var chatId = mergedParams.get('chat_id');
       var joinChannelId = mergedParams.get('join_channel_id');
       var hasPostContext = !!(postId && chatId);
-      var adminParam = mergedParams.get('admin') === '1';
+      var adminParam = isAdminParamValue(mergedParams.get('admin'));
 
       var viewHome = document.getElementById('view-home');
       var viewComments = document.getElementById('view-comments');
@@ -3602,6 +3614,9 @@
           return r.json();
         })
         .then(function (data) {
+          if (data && data.is_admin) {
+            mergedParams.set('admin', '1');
+          }
           if (!data.started && !data.is_admin) {
             showGate(uid);
           } else {
@@ -3662,7 +3677,14 @@
         (user.username && String(user.username).trim()) ||
         (username && String(username).trim()) ||
         'Админ';
-      var isAdmin = params.get('admin') === '1';
+      var isAdmin = isAdminParamValue(params.get('admin'));
+      function promoteAdminMode() {
+        if (isAdmin) return false;
+        isAdmin = true;
+        params.set('admin', '1');
+        mergedParams.set('admin', '1');
+        return true;
+      }
 
       var chAvatarEl = document.getElementById('chAvatar');
       var chNameEl = document.getElementById('chName');
@@ -5081,6 +5103,11 @@
               postId = p.post_id;
               currentPostId = p.post_id;
             }
+            if (!chatId && p.chat_id) {
+              chatId = String(p.chat_id);
+              params.set('chat_id', chatId);
+              mergedParams.set('chat_id', chatId);
+            }
             setChannelHeader(p.channel_title, p.channel_avatar_url);
             currentPostSnapshot = {
               text: p.text || '',
@@ -5110,6 +5137,30 @@
             currentPostSnapshot = null;
             setPostPreviewLink(null);
             setPostPreviewReady(false);
+            return false;
+          });
+      }
+
+      function refreshAdminStateFromServer() {
+        if (isAdmin) return Promise.resolve(false);
+        if (!userId || !String(userId).trim() || !chatId) return Promise.resolve(false);
+        var url =
+          '/api/user-status?user_id=' +
+          encodeURIComponent(String(userId)) +
+          '&chat_id=' +
+          encodeURIComponent(String(chatId));
+        return fetch(url)
+          .then(function (r) {
+            if (!r.ok) return null;
+            return r.json();
+          })
+          .then(function (data) {
+            if (data && data.is_admin) {
+              return promoteAdminMode();
+            }
+            return false;
+          })
+          .catch(function () {
             return false;
           });
       }
@@ -5442,24 +5493,26 @@
 
       loadPost().then(function (ok) {
         if (!ok) return;
-        fetch(
-          '/api/channel-settings?chat_id=' +
-            encodeURIComponent(chatId) +
-            '&user_id=' +
-            encodeURIComponent(userId || '0')
-        )
-          .then(function (r) {
-            return r.json();
-          })
-          .then(function (data) {
-            if (data.manager_url) {
-              var btn = document.getElementById('managerBtn');
-              btn.href = data.manager_url;
-              btn.style.display = 'inline-flex';
-            }
-          })
-          .catch(function () {});
-        return loadComments(true);
+        return refreshAdminStateFromServer().then(function () {
+          fetch(
+            '/api/channel-settings?chat_id=' +
+              encodeURIComponent(chatId) +
+              '&user_id=' +
+              encodeURIComponent(userId || '0')
+          )
+            .then(function (r) {
+              return r.json();
+            })
+            .then(function (data) {
+              if (data.manager_url) {
+                var btn = document.getElementById('managerBtn');
+                btn.href = data.manager_url;
+                btn.style.display = 'inline-flex';
+              }
+            })
+            .catch(function () {});
+          return loadComments(true);
+        });
       });
 
       setInterval(function () {
