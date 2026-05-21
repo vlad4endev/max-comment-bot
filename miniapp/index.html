@@ -3949,9 +3949,9 @@
         if (postRecoveryInFlight) return Promise.resolve(false);
         var btn = document.getElementById('postRecoveryRefreshBtn');
         var ids = resolveLookupIds();
-        if (!ids.postId || !ids.chatId || !ids.messageMid) {
+        if (!ids.postId) {
           setPostRecoveryStatus(
-            'Не хватает chat_id/message_mid — не могу понять, какой именно пост пинать.',
+            'Не вижу post_id в ссылке. Откройте комментарии ещё раз из кнопки под постом.',
             true,
           );
           return Promise.resolve(false);
