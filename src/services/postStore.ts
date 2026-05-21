@@ -512,6 +512,38 @@ export async function attachCommentButtonToChannelPost(
 
   await throttleChannelAttach(post.chat_id)
 
+  const existingUiMid = post.comments_ui_message_mid?.trim()
+  if (existingUiMid) {
+    logger.info('commentButton: обновляем существующее reply-сообщение с кнопкой', {
+      ...logBase,
+      commentsUiMessageMid: existingUiMid,
+    })
+    try {
+      const editStartedAt = performance.now()
+      await apiCallWithRetry(() =>
+        bot.api.editMessage(existingUiMid, { text: '\u00a0', attachments: [keyboard] }),
+      )
+      const editMs = Math.round(performance.now() - editStartedAt)
+      const timing = apiDuration()
+      logger.info(`commentButton: кнопка обновлена в reply UI (${timing.apiDuration})`, {
+        ...logBase,
+        method: 'edit_ui',
+        commentsUiMessageMid: existingUiMid,
+        editMs,
+        ...timing,
+      })
+      return true
+    } catch (err: unknown) {
+      logger.warn('commentButton: edit reply UI не удался — не создаём дубликат reply', {
+        ...logBase,
+        commentsUiMessageMid: existingUiMid,
+        ...apiDuration(),
+        err,
+      })
+      return false
+    }
+  }
+
   if (mergeMediaInEdit) {
     const attachments: AttachmentRequest[] =
       media.length > 0 ? [...media, keyboard] : [keyboard]
