@@ -1,14 +1,22 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.postIdsMatch = postIdsMatch;
+exports.extractStartappFromMessage = extractStartappFromMessage;
+exports.resolveChannelMessageMid = resolveChannelMessageMid;
 exports.recoverPostByPostIdInChannelFeed = recoverPostByPostIdInChannelFeed;
+exports.resolveMiniappPostOpen = resolveMiniappPostOpen;
 const channelPostActions_1 = require("./channelPostActions");
 const channelPoller_1 = require("./channelPoller");
 const resolveChannelChatId_1 = require("./resolveChannelChatId");
 const logger_1 = require("../utils/logger");
 const startappPayload_1 = require("../utils/startappPayload");
 const postStore_1 = require("./postStore");
-const RECOVERY_LOOKBACK_MS = 7 * 24 * 60 * 60 * 1000;
-const RECOVERY_MAX_PAGES = 12;
+const RECOVERY_LOOKBACK_MS = 30 * 24 * 60 * 60 * 1000;
+const RECOVERY_MAX_PAGES = 25;
+const MINIAPP_LOOKUP_RETRY_MS = 2000;
+function sleepMs(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+}
 function postIdsMatch(requested, fromPayload) {
     const a = requested.trim().toLowerCase();
     const b = fromPayload.trim().toLowerCase();
@@ -61,11 +69,19 @@ function extractStartappFromMessage(message) {
     }
     return null;
 }
-function messageMidMatchesPostId(message, postId) {
-    const mid = message.body?.mid?.trim();
-    if (!mid) {
-        return false;
+/** Channel post `message_mid` (for reply UI stubs — the linked parent post). */
+function resolveChannelMessageMid(message) {
+    const bodyMid = message.body?.mid?.trim();
+    if (!bodyMid) {
+        return null;
     }
+    const link = message.link;
+    if (link?.type === 'reply' && typeof link.mid === 'string' && link.mid.trim() !== '') {
+        return link.mid.trim();
+    }
+    return bodyMid;
+}
+function messageMidMatchesPostId(message, postId) {
     const startapp = extractStartappFromMessage(message);
     if (!startapp) {
         return false;
@@ -77,7 +93,7 @@ function messageMidMatchesPostId(message, postId) {
     return postIdsMatch(postId, parsed.post_id);
 }
 /**
- * Orphan Mini App link: `post_id` on the button, no row in SQLite — scan recent channel feed for matching keyboard.
+ * Orphan Mini App link: `post_id` on the button, no row in SQLite — scan channel feed, register row, fix button.
  */
 async function recoverPostByPostIdInChannelFeed(bot, chatId, postId) {
     const id = postId.trim();
@@ -104,27 +120,36 @@ async function recoverPostByPostIdInChannelFeed(bot, chatId, postId) {
         if (!messageMidMatchesPostId(message, id)) {
             continue;
         }
-        const messageMid = message.body?.mid?.trim();
-        if (!messageMid) {
+        const channelMid = resolveChannelMessageMid(message);
+        if (!channelMid) {
             continue;
         }
-        const row = postStore_1.postStore.findPostByChannelMessage(canonical, messageMid);
+        const row = postStore_1.postStore.findPostByChannelMessage(canonical, channelMid);
         if (row) {
-            logger_1.logger.info('miniappPostRecovery: post row already exists for scanned message_mid', {
+            logger_1.logger.info('miniappPostRecovery: matched button on channel feed (row exists)', {
                 requestedPostId: id,
                 postId: row.post_id,
                 chatId: canonical,
-                messageMid,
+                messageMid: channelMid,
             });
+            if (!postIdsMatch(id, row.post_id)) {
+                const fixed = await (0, channelPostActions_1.ensurePostFromChannelMessage)(bot, canonical, channelMid, {
+                    reattachButton: true,
+                });
+                return fixed ?? row;
+            }
             return row;
         }
-        const restored = await (0, channelPostActions_1.ensurePostFromChannelMessage)(bot, canonical, messageMid);
+        const restored = await (0, channelPostActions_1.ensurePostFromChannelMessage)(bot, canonical, channelMid, {
+            preferredPostId: id,
+            reattachButton: true,
+        });
         if (restored) {
             logger_1.logger.info('miniappPostRecovery: restored post from channel feed scan', {
                 requestedPostId: id,
                 postId: restored.post_id,
                 chatId: canonical,
-                messageMid,
+                messageMid: channelMid,
             });
             return restored;
         }
@@ -133,7 +158,57 @@ async function recoverPostByPostIdInChannelFeed(bot, chatId, postId) {
         chatId: canonical,
         postId: id,
         messagesScanned: messages.length,
+        lookbackDays: Math.round(RECOVERY_LOOKBACK_MS / (24 * 60 * 60 * 1000)),
     });
     return null;
+}
+/**
+ * Resolves a post for Mini App open: DB → retry → ensure by mid → scan channel feed by orphan `post_id`.
+ */
+async function resolveMiniappPostOpen(bot, lookup, resolveFromDb) {
+    let post = resolveFromDb(lookup.postId, lookup.chatIdRaw, lookup.messageMid);
+    if (post) {
+        return post;
+    }
+    await sleepMs(MINIAPP_LOOKUP_RETRY_MS);
+    post = resolveFromDb(lookup.postId, lookup.chatIdRaw, lookup.messageMid);
+    if (post) {
+        logger_1.logger.info('resolveMiniappPostOpen: post found after retry', {
+            postId: lookup.postId,
+            chatId: lookup.chatIdRaw,
+            messageMid: lookup.messageMid,
+        });
+        return post;
+    }
+    const mid = lookup.messageMid?.trim() ?? '';
+    const postId = lookup.postId.trim();
+    if (mid !== '') {
+        const canonicalChatId = lookup.chatIdRaw !== null
+            ? ((0, resolveChannelChatId_1.resolveCanonicalChannelChatId)(lookup.chatIdRaw) ?? lookup.chatIdRaw)
+            : null;
+        if (canonicalChatId !== null) {
+            post = await (0, channelPostActions_1.ensurePostFromChannelMessage)(bot, canonicalChatId, mid, {
+                preferredPostId: postId || undefined,
+                reattachButton: true,
+            });
+        }
+        else {
+            post = postStore_1.postStore.findByMessageMid(mid);
+        }
+        if (post) {
+            if (postId && post.post_id !== postId) {
+                logger_1.logger.info('resolveMiniappPostOpen: resolved by message_mid (post_id differs from link)', {
+                    requestedPostId: postId,
+                    postId: post.post_id,
+                    messageMid: mid,
+                });
+            }
+            return post;
+        }
+    }
+    if (postId !== '' && lookup.chatIdRaw !== null) {
+        post = await recoverPostByPostIdInChannelFeed(bot, lookup.chatIdRaw, postId);
+    }
+    return post;
 }
 //# sourceMappingURL=miniappPostRecovery.js.map

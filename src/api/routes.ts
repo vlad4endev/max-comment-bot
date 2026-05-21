@@ -31,6 +31,7 @@ import {
 } from '../services/notificationService'
 import type { Post } from '../services/postStore'
 import { postStore, resolveChannelPostUrl } from '../services/postStore'
+import { resolveMiniappPostOpen } from '../services/miniappPostRecovery'
 import { parseStartappPayload } from '../utils/startappPayload'
 import { stateManager } from '../services/stateManager'
 import {
@@ -381,12 +382,6 @@ async function resolveAdminCommentAccess(
 
 const MINIAPP_UPLOADS_PUBLIC_PREFIX = '/miniapp/uploads'
 const MINIAPP_UPLOADS_DIR = path.join(process.cwd(), 'miniapp', 'uploads')
-/** Brief wait when Mini App opens right as a new channel post is being registered. */
-const MINIAPP_POST_LOOKUP_RETRY_MS = 2000
-
-function sleepMs(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms))
-}
 const MAX_UPLOAD_FILES = 10
 const MAX_UPLOAD_SIZE_BYTES = 8 * 1024 * 1024
 
@@ -928,7 +923,7 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
     if (!id) {
       return null
     }
-    return postStore.findPost(id, chatIdRaw ?? undefined)
+    return postStore.findPost(id, chatIdRaw ?? undefined, { logNotFound: false })
   }
 
   async function resolvePostForMiniAppOpen(
@@ -947,43 +942,7 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
         messageMid: lookup.messageMid,
       })
     }
-    let post = resolvePostForMiniApp(lookup.postId, lookup.chatIdRaw, lookup.messageMid)
-    if (post) {
-      return post
-    }
-    await sleepMs(MINIAPP_POST_LOOKUP_RETRY_MS)
-    post = resolvePostForMiniApp(lookup.postId, lookup.chatIdRaw, lookup.messageMid)
-    if (post) {
-      logger.info('resolvePostForMiniAppOpen: post found after retry', {
-        postId: lookup.postId,
-        chatId: lookup.chatIdRaw,
-        messageMid: lookup.messageMid,
-      })
-      return post
-    }
-    if (lookup.messageMid) {
-      const canonicalChatId =
-        lookup.chatIdRaw !== null
-          ? (resolveCanonicalChannelChatId(lookup.chatIdRaw) ?? lookup.chatIdRaw)
-          : null
-      if (canonicalChatId !== null) {
-        post = await ensurePostFromChannelMessage(deps.bot, canonicalChatId, lookup.messageMid)
-      } else {
-        const byMid = postStore.findByMessageMid(lookup.messageMid)
-        if (byMid) {
-          post = byMid
-        }
-      }
-      if (post && lookup.postId && post.post_id !== lookup.postId) {
-        logger.info('resolvePostForMiniAppOpen: backfilled from message_mid', {
-          requestedPostId: lookup.postId,
-          postId: post.post_id,
-          chatId: post.chat_id,
-          messageMid: lookup.messageMid,
-        })
-      }
-    }
-    return post
+    return resolveMiniappPostOpen(deps.bot, lookup, resolvePostForMiniApp)
   }
 
   router.get('/post/:postId', async (req, res) => {
@@ -1048,30 +1007,31 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
     const messageMid = parseNonEmptyString(req.query.message_mid)
     const startParamHeader = parseNonEmptyString(req.headers['x-miniapp-start-param'])
     const lookup = buildMiniappPostLookup(req.params.postId, chatIdRaw, messageMid, startParamHeader)
+    const hadRowBefore =
+      (lookup.messageMid &&
+        lookup.chatIdRaw !== null &&
+        postStore.findPostByChannelMessage(
+          resolveCanonicalChannelChatId(lookup.chatIdRaw) ?? lookup.chatIdRaw,
+          lookup.messageMid,
+        )) ||
+      (lookup.postId ? postStore.getPost(lookup.postId) : null)
 
-    const fallbackById = lookup.postId ? postStore.getPost(lookup.postId) : null
-    const targetMessageMid = lookup.messageMid ?? fallbackById?.message_mid ?? null
-    const targetChatIdRaw = lookup.chatIdRaw ?? fallbackById?.chat_id ?? null
-    if (!targetMessageMid || targetChatIdRaw === null) {
-      res.status(400).json({
-        error: 'message_mid и chat_id обязательны для точечного обновления',
-      })
-      return
-    }
-
-    const canonicalChatId = resolveCanonicalChannelChatId(targetChatIdRaw) ?? targetChatIdRaw
-    const before = postStore.findPostByChannelMessage(canonicalChatId, targetMessageMid)
-    const restored = await ensurePostFromChannelMessage(deps.bot, canonicalChatId, targetMessageMid)
-    if (!restored) {
+    const post = await resolvePostForMiniAppOpen(
+      req.params.postId,
+      chatIdRaw,
+      messageMid,
+      startParamHeader,
+    )
+    if (!post) {
       res.status(404).json({ error: 'post not found' })
       return
     }
     res.json({
       ok: true,
-      restored: !before,
-      post_id: restored.post_id,
-      chat_id: restored.chat_id,
-      message_mid: restored.message_mid,
+      restored: !hadRowBefore,
+      post_id: post.post_id,
+      chat_id: post.chat_id,
+      message_mid: post.message_mid,
     })
   })
 
@@ -1170,6 +1130,8 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
     }
     const postId = parseNonEmptyString(body.post_id)
     const chatId = parseNonZeroInt(body.chat_id)
+    const messageMid = parseNonEmptyString(body.message_mid)
+    const startParamHeader = parseNonEmptyString(req.headers['x-miniapp-start-param'])
     const userId = parsePositiveInt(body.user_id)
     const username = parseNonEmptyString(body.username)
     const text = normalizeUserFacingText(parseOptionalString(body.text))
@@ -1181,7 +1143,7 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
       return
     }
 
-    const post = postStore.findPost(postId, chatId)
+    const post = await resolvePostForMiniAppOpen(postId, chatId, messageMid, startParamHeader)
     if (!post) {
       res.status(404).json({ error: 'post not found' })
       return

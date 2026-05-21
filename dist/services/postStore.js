@@ -6,6 +6,8 @@ exports.mediaAttachmentRequestsFromMessageBody = mediaAttachmentRequestsFromMess
 exports.attachCommentButtonToChannelPost = attachCommentButtonToChannelPost;
 exports.isMiniAppOpenUrlConfigured = isMiniAppOpenUrlConfigured;
 exports.resolveChannelPostUrl = resolveChannelPostUrl;
+exports.buildCommentMiniAppUrl = buildCommentMiniAppUrl;
+exports.commentButtonStartappHasMid = commentButtonStartappHasMid;
 exports.buildMiniAppUrl = buildMiniAppUrl;
 const max_bot_api_1 = require("@maxhub/max-bot-api");
 const config_1 = require("../config");
@@ -210,7 +212,7 @@ class PostStore {
             logger_1.logger.warn('postStore.updateButtonCaption: BOT_NICKNAME / MINI_APP_URL not usable for links');
             return false;
         }
-        const url = buildMiniAppUrl(post.post_id, post.chat_id, undefined, post.message_mid);
+        const url = buildCommentMiniAppUrl(post.post_id, post.chat_id, post.message_mid);
         const startParam = (() => {
             try {
                 return new URL(url).searchParams.get('startapp');
@@ -573,6 +575,24 @@ async function resolveChannelPostUrl(bot, post) {
     }
     exports.postStore.savePost({ ...post, channel_post_url: url });
     return url;
+}
+/** Comment button deep link — always includes `_mid_` in startapp (required for reliable Mini App lookup). */
+function buildCommentMiniAppUrl(postId, chatId, messageMid) {
+    const mid = messageMid.trim();
+    if (mid === '') {
+        throw new Error('buildCommentMiniAppUrl: message_mid is required');
+    }
+    return buildMiniAppUrl(postId, chatId, undefined, mid);
+}
+function commentButtonStartappHasMid(postId, chatId, messageMid) {
+    try {
+        const url = buildCommentMiniAppUrl(postId, chatId, messageMid);
+        const startParam = new URL(url).searchParams.get('startapp') ?? '';
+        return startParam.includes('_mid_');
+    }
+    catch {
+        return false;
+    }
 }
 function buildMiniAppUrl(postId, chatId, extra, messageMid) {
     if ((!extra || extra.admin !== '1') && (!messageMid || messageMid.trim() === '')) {

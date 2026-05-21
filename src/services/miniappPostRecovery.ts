@@ -8,10 +8,22 @@ import { logger } from '../utils/logger'
 import { parseStartappPayload } from '../utils/startappPayload'
 import { postStore, type Post } from './postStore'
 
-const RECOVERY_LOOKBACK_MS = 7 * 24 * 60 * 60 * 1000
-const RECOVERY_MAX_PAGES = 12
+/** Mini App lookup inputs after parsing query + startapp header. */
+export interface MiniappPostLookup {
+  postId: string
+  chatIdRaw: number | null
+  messageMid: string | null
+}
 
-function postIdsMatch(requested: string, fromPayload: string): boolean {
+const RECOVERY_LOOKBACK_MS = 30 * 24 * 60 * 60 * 1000
+const RECOVERY_MAX_PAGES = 25
+const MINIAPP_LOOKUP_RETRY_MS = 2000
+
+function sleepMs(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+export function postIdsMatch(requested: string, fromPayload: string): boolean {
   const a = requested.trim().toLowerCase()
   const b = fromPayload.trim().toLowerCase()
   if (a === b) {
@@ -40,7 +52,7 @@ function collectUrlStrings(value: unknown, out: string[]): void {
   }
 }
 
-function extractStartappFromMessage(message: Message): string | null {
+export function extractStartappFromMessage(message: Message): string | null {
   const urls: string[] = []
   for (const att of message.body.attachments ?? []) {
     collectUrlStrings(att, urls)
@@ -65,11 +77,20 @@ function extractStartappFromMessage(message: Message): string | null {
   return null
 }
 
-function messageMidMatchesPostId(message: Message, postId: string): boolean {
-  const mid = message.body?.mid?.trim()
-  if (!mid) {
-    return false
+/** Channel post `message_mid` (for reply UI stubs — the linked parent post). */
+export function resolveChannelMessageMid(message: Message): string | null {
+  const bodyMid = message.body?.mid?.trim()
+  if (!bodyMid) {
+    return null
   }
+  const link = message.link as { type?: string; mid?: string } | undefined
+  if (link?.type === 'reply' && typeof link.mid === 'string' && link.mid.trim() !== '') {
+    return link.mid.trim()
+  }
+  return bodyMid
+}
+
+function messageMidMatchesPostId(message: Message, postId: string): boolean {
   const startapp = extractStartappFromMessage(message)
   if (!startapp) {
     return false
@@ -82,7 +103,7 @@ function messageMidMatchesPostId(message: Message, postId: string): boolean {
 }
 
 /**
- * Orphan Mini App link: `post_id` on the button, no row in SQLite — scan recent channel feed for matching keyboard.
+ * Orphan Mini App link: `post_id` on the button, no row in SQLite — scan channel feed, register row, fix button.
  */
 export async function recoverPostByPostIdInChannelFeed(
   bot: Bot,
@@ -114,27 +135,36 @@ export async function recoverPostByPostIdInChannelFeed(
     if (!messageMidMatchesPostId(message, id)) {
       continue
     }
-    const messageMid = message.body?.mid?.trim()
-    if (!messageMid) {
+    const channelMid = resolveChannelMessageMid(message)
+    if (!channelMid) {
       continue
     }
-    const row = postStore.findPostByChannelMessage(canonical, messageMid)
+    const row = postStore.findPostByChannelMessage(canonical, channelMid)
     if (row) {
-      logger.info('miniappPostRecovery: post row already exists for scanned message_mid', {
+      logger.info('miniappPostRecovery: matched button on channel feed (row exists)', {
         requestedPostId: id,
         postId: row.post_id,
         chatId: canonical,
-        messageMid,
+        messageMid: channelMid,
       })
+      if (!postIdsMatch(id, row.post_id)) {
+        const fixed = await ensurePostFromChannelMessage(bot, canonical, channelMid, {
+          reattachButton: true,
+        })
+        return fixed ?? row
+      }
       return row
     }
-    const restored = await ensurePostFromChannelMessage(bot, canonical, messageMid)
+    const restored = await ensurePostFromChannelMessage(bot, canonical, channelMid, {
+      preferredPostId: id,
+      reattachButton: true,
+    })
     if (restored) {
       logger.info('miniappPostRecovery: restored post from channel feed scan', {
         requestedPostId: id,
         postId: restored.post_id,
         chatId: canonical,
-        messageMid,
+        messageMid: channelMid,
       })
       return restored
     }
@@ -144,6 +174,65 @@ export async function recoverPostByPostIdInChannelFeed(
     chatId: canonical,
     postId: id,
     messagesScanned: messages.length,
+    lookbackDays: Math.round(RECOVERY_LOOKBACK_MS / (24 * 60 * 60 * 1000)),
   })
   return null
+}
+
+/**
+ * Resolves a post for Mini App open: DB → retry → ensure by mid → scan channel feed by orphan `post_id`.
+ */
+export async function resolveMiniappPostOpen(
+  bot: Bot,
+  lookup: MiniappPostLookup,
+  resolveFromDb: (postId: string, chatIdRaw: number | null, messageMid: string | null) => Post | null,
+): Promise<Post | null> {
+  let post = resolveFromDb(lookup.postId, lookup.chatIdRaw, lookup.messageMid)
+  if (post) {
+    return post
+  }
+  await sleepMs(MINIAPP_LOOKUP_RETRY_MS)
+  post = resolveFromDb(lookup.postId, lookup.chatIdRaw, lookup.messageMid)
+  if (post) {
+    logger.info('resolveMiniappPostOpen: post found after retry', {
+      postId: lookup.postId,
+      chatId: lookup.chatIdRaw,
+      messageMid: lookup.messageMid,
+    })
+    return post
+  }
+
+  const mid = lookup.messageMid?.trim() ?? ''
+  const postId = lookup.postId.trim()
+
+  if (mid !== '') {
+    const canonicalChatId =
+      lookup.chatIdRaw !== null
+        ? (resolveCanonicalChannelChatId(lookup.chatIdRaw) ?? lookup.chatIdRaw)
+        : null
+    if (canonicalChatId !== null) {
+      post = await ensurePostFromChannelMessage(bot, canonicalChatId, mid, {
+        preferredPostId: postId || undefined,
+        reattachButton: true,
+      })
+    } else {
+      post = postStore.findByMessageMid(mid)
+    }
+    if (post) {
+      if (postId && post.post_id !== postId) {
+        logger.info('resolveMiniappPostOpen: resolved by message_mid (post_id differs from link)', {
+          requestedPostId: postId,
+          postId: post.post_id,
+          messageMid: mid,
+        })
+      }
+      return post
+    }
+  }
+
+  if (postId !== '' && lookup.chatIdRaw !== null) {
+    post = await recoverPostByPostIdInChannelFeed(bot, lookup.chatIdRaw, postId)
+  }
+
+  return post
 }

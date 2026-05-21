@@ -299,7 +299,7 @@ export class PostStore {
       logger.warn('postStore.updateButtonCaption: BOT_NICKNAME / MINI_APP_URL not usable for links')
       return false
     }
-    const url = buildMiniAppUrl(post.post_id, post.chat_id, undefined, post.message_mid)
+    const url = buildCommentMiniAppUrl(post.post_id, post.chat_id, post.message_mid)
     const startParam = (() => {
       try {
         return new URL(url).searchParams.get('startapp')
@@ -710,6 +710,25 @@ export async function resolveChannelPostUrl(bot: Bot, post: Post): Promise<strin
   }
   postStore.savePost({ ...post, channel_post_url: url })
   return url
+}
+
+/** Comment button deep link — always includes `_mid_` in startapp (required for reliable Mini App lookup). */
+export function buildCommentMiniAppUrl(postId: string, chatId: number, messageMid: string): string {
+  const mid = messageMid.trim()
+  if (mid === '') {
+    throw new Error('buildCommentMiniAppUrl: message_mid is required')
+  }
+  return buildMiniAppUrl(postId, chatId, undefined, mid)
+}
+
+export function commentButtonStartappHasMid(postId: string, chatId: number, messageMid: string): boolean {
+  try {
+    const url = buildCommentMiniAppUrl(postId, chatId, messageMid)
+    const startParam = new URL(url).searchParams.get('startapp') ?? ''
+    return startParam.includes('_mid_')
+  } catch {
+    return false
+  }
 }
 
 export function buildMiniAppUrl(

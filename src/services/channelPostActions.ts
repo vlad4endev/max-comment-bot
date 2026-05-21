@@ -1,7 +1,5 @@
 import { Bot, Keyboard } from '@maxhub/max-bot-api'
 import type { Message, User } from '@maxhub/max-bot-api/types'
-import { v4 as uuidv4 } from 'uuid'
-
 import { logger } from '../utils/logger'
 import { scheduleCommentButtonRetry } from './commentButtonRetryQueue'
 import { pushAdminActivity } from './adminActivityStore'
@@ -9,9 +7,11 @@ import { channelRegistry } from './channelRegistry'
 import { isCommentsButtonEnabledForTgChainForward } from './channelCommentsButtonPolicy'
 import { resolveCanonicalChannelChatId } from './resolveChannelChatId'
 import { disabledAdminStore } from './disabledAdminStore'
+import { allocatePostIdForChannelMessage } from './postIdAllocation'
 import {
   attachCommentButtonToChannelPost,
-  buildMiniAppUrl,
+  buildCommentMiniAppUrl,
+  commentButtonStartappHasMid,
   isMiniAppOpenUrlConfigured,
   mediaAttachmentRequestsFromMessageBody,
   postStore,
@@ -272,6 +272,8 @@ export async function tryAttachCommentsToChannelPost(
     skipAuthorAdminCheck?: boolean
     source?: CommentButtonAttachSource
     inlineOnly?: boolean
+    /** When recovering an orphan button link, reuse this `post_id` if the row is new. */
+    preferredPostId?: string
   } = {},
 ): Promise<AttachChannelCommentsResult> {
   const attachStartedAt = performance.now()
@@ -383,7 +385,12 @@ export async function tryAttachCommentsToChannelPost(
         hasCommentsUi: Boolean(existingPost.comments_ui_message_mid),
       },
     )
-    const openUrl = buildMiniAppUrl(existingPost.post_id, chatId, undefined, mid)
+    if (!commentButtonStartappHasMid(existingPost.post_id, chatId, mid)) {
+      const result = { ok: false as const, reason: 'attach_failed' as const }
+      logCommentButtonSkip(source, result.reason, { chatId, messageMid: mid, invalidStartapp: true }, attachStartedAt)
+      return result
+    }
+    const openUrl = buildCommentMiniAppUrl(existingPost.post_id, chatId, mid)
     const reattachStartParam = (() => {
       try {
         return new URL(openUrl).searchParams.get('startapp')
@@ -489,16 +496,19 @@ export async function tryAttachCommentsToChannelPost(
     senderId: user?.user_id,
   })
 
-  const existingForId =
-    postStore.findPost(mid, chatId) ?? postStore.findPostByChannelMessage(chatId, mid)
-  const postId = existingForId?.post_id ?? uuidv4()
+  const postId = allocatePostIdForChannelMessage(chatId, mid, options.preferredPostId)
   const post: Post = {
     ...buildPostFromChannelMessage(message, chatId, postId, user),
     button_attach_pending: true,
   }
   postStore.savePost(post)
 
-  const openUrl = buildMiniAppUrl(postId, chatId, undefined, mid)
+  if (!commentButtonStartappHasMid(postId, chatId, mid)) {
+    const result = { ok: false as const, reason: 'attach_failed' as const }
+    logCommentButtonSkip(source, result.reason, { chatId, messageMid: mid, invalidStartapp: true }, attachStartedAt)
+    return result
+  }
+  const openUrl = buildCommentMiniAppUrl(postId, chatId, mid)
   const startParam = (() => {
     try {
       return new URL(openUrl).searchParams.get('startapp')
@@ -578,7 +588,7 @@ export async function ensurePostFromChannelMessage(
   bot: Bot,
   chatId: number,
   messageMid: string,
-  options: { inlineOnly?: boolean } = {},
+  options: { inlineOnly?: boolean; preferredPostId?: string; reattachButton?: boolean } = {},
 ): Promise<Post | null> {
   const canonicalChatId = resolveCanonicalChannelChatId(chatId) ?? chatId
   const existing = postStore.findPostByChannelMessage(canonicalChatId, messageMid)
@@ -609,8 +619,9 @@ export async function ensurePostFromChannelMessage(
   const r = await tryAttachCommentsToChannelPost(bot, message, {
     channelChatIdOverride: canonicalChatId,
     skipAuthorAdminCheck: true,
-    source: 'ensure',
+    source: options.reattachButton ? 'refresh' : 'ensure',
     inlineOnly: options.inlineOnly,
+    preferredPostId: options.preferredPostId,
   })
   const registered = postStore.findPostByChannelMessage(canonicalChatId, messageMid)
   if (registered) {

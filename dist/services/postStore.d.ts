@@ -90,5 +90,8 @@ export declare function isMiniAppOpenUrlConfigured(): boolean;
  */
 /** Returns shareable channel post URL; fetches from MAX API and persists when missing in DB. */
 export declare function resolveChannelPostUrl(bot: Bot, post: Post): Promise<string | null>;
+/** Comment button deep link — always includes `_mid_` in startapp (required for reliable Mini App lookup). */
+export declare function buildCommentMiniAppUrl(postId: string, chatId: number, messageMid: string): string;
+export declare function commentButtonStartappHasMid(postId: string, chatId: number, messageMid: string): boolean;
 export declare function buildMiniAppUrl(postId: string, chatId: number, extra?: Record<string, string>, messageMid?: string): string;
 export declare const postStore: PostStore;

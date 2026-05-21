@@ -39,6 +39,8 @@ export declare function tryAttachCommentsToChannelPost(bot: Bot, message: Messag
     skipAuthorAdminCheck?: boolean;
     source?: CommentButtonAttachSource;
     inlineOnly?: boolean;
+    /** When recovering an orphan button link, reuse this `post_id` if the row is new. */
+    preferredPostId?: string;
 }): Promise<AttachChannelCommentsResult>;
 /** Loads the original channel post message for a stored {@link Post}. */
 export declare function loadChannelPostMessage(bot: Bot, post: Post): Promise<Message | null>;
@@ -48,4 +50,6 @@ export declare function loadChannelPostMessage(bot: Bot, post: Post): Promise<Me
  */
 export declare function ensurePostFromChannelMessage(bot: Bot, chatId: number, messageMid: string, options?: {
     inlineOnly?: boolean;
+    preferredPostId?: string;
+    reattachButton?: boolean;
 }): Promise<Post | null>;

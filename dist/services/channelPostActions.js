@@ -9,7 +9,6 @@ exports.tryAttachCommentsToChannelPost = tryAttachCommentsToChannelPost;
 exports.loadChannelPostMessage = loadChannelPostMessage;
 exports.ensurePostFromChannelMessage = ensurePostFromChannelMessage;
 const max_bot_api_1 = require("@maxhub/max-bot-api");
-const uuid_1 = require("uuid");
 const logger_1 = require("../utils/logger");
 const commentButtonRetryQueue_1 = require("./commentButtonRetryQueue");
 const adminActivityStore_1 = require("./adminActivityStore");
@@ -17,6 +16,7 @@ const channelRegistry_1 = require("./channelRegistry");
 const channelCommentsButtonPolicy_1 = require("./channelCommentsButtonPolicy");
 const resolveChannelChatId_1 = require("./resolveChannelChatId");
 const disabledAdminStore_1 = require("./disabledAdminStore");
+const postIdAllocation_1 = require("./postIdAllocation");
 const postStore_1 = require("./postStore");
 /**
  * Resolves chat id for a message (channel/group/dialog). Falls back to sender id for 1:1.
@@ -281,7 +281,12 @@ async function tryAttachCommentsToChannelPost(bot, message, options = {}) {
             forceReattach,
             hasCommentsUi: Boolean(existingPost.comments_ui_message_mid),
         });
-        const openUrl = (0, postStore_1.buildMiniAppUrl)(existingPost.post_id, chatId, undefined, mid);
+        if (!(0, postStore_1.commentButtonStartappHasMid)(existingPost.post_id, chatId, mid)) {
+            const result = { ok: false, reason: 'attach_failed' };
+            logCommentButtonSkip(source, result.reason, { chatId, messageMid: mid, invalidStartapp: true }, attachStartedAt);
+            return result;
+        }
+        const openUrl = (0, postStore_1.buildCommentMiniAppUrl)(existingPost.post_id, chatId, mid);
         const reattachStartParam = (() => {
             try {
                 return new URL(openUrl).searchParams.get('startapp');
@@ -365,14 +370,18 @@ async function tryAttachCommentsToChannelPost(bot, message, options = {}) {
         messageMid: mid,
         senderId: user?.user_id,
     });
-    const existingForId = postStore_1.postStore.findPost(mid, chatId) ?? postStore_1.postStore.findPostByChannelMessage(chatId, mid);
-    const postId = existingForId?.post_id ?? (0, uuid_1.v4)();
+    const postId = (0, postIdAllocation_1.allocatePostIdForChannelMessage)(chatId, mid, options.preferredPostId);
     const post = {
         ...buildPostFromChannelMessage(message, chatId, postId, user),
         button_attach_pending: true,
     };
     postStore_1.postStore.savePost(post);
-    const openUrl = (0, postStore_1.buildMiniAppUrl)(postId, chatId, undefined, mid);
+    if (!(0, postStore_1.commentButtonStartappHasMid)(postId, chatId, mid)) {
+        const result = { ok: false, reason: 'attach_failed' };
+        logCommentButtonSkip(source, result.reason, { chatId, messageMid: mid, invalidStartapp: true }, attachStartedAt);
+        return result;
+    }
+    const openUrl = (0, postStore_1.buildCommentMiniAppUrl)(postId, chatId, mid);
     const startParam = (() => {
         try {
             return new URL(openUrl).searchParams.get('startapp');
@@ -474,8 +483,9 @@ async function ensurePostFromChannelMessage(bot, chatId, messageMid, options = {
     const r = await tryAttachCommentsToChannelPost(bot, message, {
         channelChatIdOverride: canonicalChatId,
         skipAuthorAdminCheck: true,
-        source: 'ensure',
+        source: options.reattachButton ? 'refresh' : 'ensure',
         inlineOnly: options.inlineOnly,
+        preferredPostId: options.preferredPostId,
     });
     const registered = postStore_1.postStore.findPostByChannelMessage(canonicalChatId, messageMid);
     if (registered) {

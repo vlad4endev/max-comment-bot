@@ -5,7 +5,7 @@ import { tryAttachCommentsToChannelPost, type AttachChannelCommentsResult } from
 import { resolveCanonicalChannelChatId } from './resolveChannelChatId'
 import { logger } from '../utils/logger'
 import { apiCallWithRetry } from '../utils/maxApiRetry'
-import { buildMiniAppUrl, postStore, type Post } from './postStore'
+import { commentButtonStartappHasMid, postStore, type Post } from './postStore'
 
 const GATE_VERIFY_ATTEMPTS = 5
 const GATE_VERIFY_DELAY_MS = 250
@@ -47,13 +47,7 @@ export function verifyPostCommentButtonReady(post: Post): boolean {
   if (byMid.button_attach_pending === true) {
     return false
   }
-  try {
-    const url = buildMiniAppUrl(post.post_id, post.chat_id, undefined, post.message_mid)
-    const startParam = new URL(url).searchParams.get('startapp') ?? ''
-    if (!startParam.includes('_mid_')) {
-      return false
-    }
-  } catch {
+  if (!commentButtonStartappHasMid(post.post_id, post.chat_id, post.message_mid)) {
     return false
   }
   return postStore.findPost(post.post_id, post.chat_id) !== null
@@ -166,6 +160,38 @@ export async function attachAndVerifyCommentsForForwardedPost(
       attachReason: attachResult.ok ? 'attached' : attachResult.reason,
     })
     return true
+  }
+
+  if (attachResult.ok && registered) {
+    logger.warn('[tgChain] comment gate verify failed after attach — retry reattach', {
+      chainId: context?.chainId,
+      chatId,
+      messageMid: mid,
+      postId: registered.post_id,
+    })
+    const messageRetry = await loadChannelMessage(bot, chatId, mid)
+    if (messageRetry?.body?.mid) {
+      const retryAttach = await tryAttachCommentsToChannelPost(bot, messageRetry, {
+        channelChatIdOverride: chatId,
+        skipAuthorAdminCheck: true,
+        source: 'tg_chain',
+        inlineOnly: true,
+      })
+      const registeredRetry = await waitForVerifiedPost(chatId, mid, retryAttach)
+      if (
+        registeredRetry !== null &&
+        verifyPostCommentButtonReady(registeredRetry) &&
+        attachOutcomeOk(retryAttach)
+      ) {
+        logger.info('[tgChain] comment gate ok after reattach retry', {
+          chainId: context?.chainId,
+          chatId,
+          messageMid: mid,
+          postId: registeredRetry.post_id,
+        })
+        return true
+      }
+    }
   }
 
   logger.warn('[tgChain] comment gate failed — rollback MAX post', {
