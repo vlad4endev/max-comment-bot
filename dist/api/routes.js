@@ -797,7 +797,7 @@ function createCommentApiRouter(deps) {
         if (!id) {
             return null;
         }
-        return postStore_1.postStore.findPost(id, chatIdRaw ?? undefined, { logNotFound: false });
+        return postStore_1.postStore.findPost(id, chatIdRaw ?? undefined);
     }
     async function resolvePostForMiniAppOpen(pathPostId, chatIdRaw, messageMid, startParamRaw = null) {
         const lookup = buildMiniappPostLookup(pathPostId, chatIdRaw, messageMid, startParamRaw);
