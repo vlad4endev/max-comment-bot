@@ -29,6 +29,8 @@ import {
   notifyUserAboutMiniappReply,
   syncAdminCommentNotification,
 } from '../services/notificationService'
+import { notifyTelegramAdminsNewMiniappComment } from '../services/telegramAdminNotificationService'
+import { verifyTelegramMiniappAuth } from '../services/telegramMiniappAuth'
 import type { Post } from '../services/postStore'
 import { postStore, resolveChannelPostUrl } from '../services/postStore'
 import { rememberPostIdAlias } from '../services/postIdAliasStore'
@@ -125,6 +127,18 @@ function parsePhotoUrls(value: unknown): string[] {
     }
   }
   return [...new Set(out)].slice(0, 10)
+}
+
+function parseHeaderString(value: unknown): string | null {
+  if (typeof value === 'string') {
+    const t = value.trim()
+    return t === '' ? null : t
+  }
+  if (Array.isArray(value) && typeof value[0] === 'string') {
+    const t = value[0].trim()
+    return t === '' ? null : t
+  }
+  return null
 }
 
 function parseBoolean(value: unknown): boolean | null {
@@ -1207,6 +1221,21 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
     } catch (err: unknown) {
       logger.warn('POST /api/comment: notify admins failed', { err })
     }
+    try {
+      await notifyTelegramAdminsNewMiniappComment({
+        commentId: saved.comment_id,
+        maxChannelChatId: chatId,
+        postText: post.text,
+        channelTitle,
+        username: saveUsername,
+        commentText: text,
+        commentPhotoUrls: photoUrls,
+        postId,
+        messageMid: post.message_mid,
+      })
+    } catch (err: unknown) {
+      logger.warn('POST /api/comment: TG notify admins failed', { err })
+    }
 
     res.json({
       comment_id: saved.comment_id,
@@ -1244,7 +1273,30 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
     }
     const channelReplyName = (await resolveChannelBranding(deps.bot, chatId)).title
 
-    if (!(await isUserChannelAdmin(deps.bot, post.chat_id, replierUserId))) {
+    const isMaxAdmin = await isUserChannelAdmin(deps.bot, post.chat_id, replierUserId)
+    let isTelegramAuthorizedAdmin = false
+    if (!isMaxAdmin) {
+      const tgUidRaw =
+        parseHeaderString(req.headers['x-miniapp-tg-uid']) ??
+        parseHeaderString(req.query.tg_uid) ??
+        parseNonEmptyString(body.tg_uid)
+      const tgExpRaw =
+        parseHeaderString(req.headers['x-miniapp-tg-exp']) ??
+        parseHeaderString(req.query.tg_exp) ??
+        parseNonEmptyString(body.tg_exp)
+      const tgSigRaw =
+        parseHeaderString(req.headers['x-miniapp-tg-sig']) ??
+        parseHeaderString(req.query.tg_sig) ??
+        parseNonEmptyString(body.tg_sig)
+      isTelegramAuthorizedAdmin = verifyTelegramMiniappAuth({
+        telegramUserId: replierUserId,
+        maxChatId: post.chat_id,
+        tgUidRaw,
+        tgExpRaw,
+        tgSigRaw,
+      })
+    }
+    if (!isMaxAdmin && !isTelegramAuthorizedAdmin) {
       res.status(403).json({ error: 'Только администраторы могут отвечать' })
       return
     }

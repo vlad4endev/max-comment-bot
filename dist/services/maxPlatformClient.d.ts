@@ -7,6 +7,11 @@ export interface MaxLinkedChannelInfo {
     botIsAdmin: boolean;
     access: RegisteredChannelAccess;
     dateAdded: string;
+    admins?: Array<{
+        user_id: number;
+        name: string;
+        is_owner: boolean;
+    }>;
 }
 declare function accessLabel(access: RegisteredChannelAccess): string;
 /**

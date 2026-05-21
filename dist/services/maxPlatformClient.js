@@ -46,6 +46,26 @@ async function listMaxBotLinkedChannels(bot, options) {
         const access = options?.liveCheck === false
             ? 'ok'
             : await (0, channelFullDisconnect_1.resolveRegisteredChannelAccess)(bot, c.chat_id);
+        let admins = [];
+        try {
+            const { members } = await bot.api.getChatAdmins(c.chat_id);
+            admins = members
+                .filter((m) => !m.is_bot && (m.is_admin || m.is_owner))
+                .map((m) => ({
+                user_id: m.user_id,
+                name: m.name,
+                is_owner: m.is_owner === true,
+            }))
+                .sort((a, b) => {
+                const ownerDiff = Number(b.is_owner) - Number(a.is_owner);
+                if (ownerDiff !== 0)
+                    return ownerDiff;
+                return a.name.localeCompare(b.name, 'ru');
+            });
+        }
+        catch {
+            admins = [];
+        }
         out.push({
             id: String(c.chat_id),
             title,
@@ -53,6 +73,7 @@ async function listMaxBotLinkedChannels(bot, options) {
             botIsAdmin: access === 'ok',
             access,
             dateAdded: c.date_added,
+            admins,
         });
     }
     return out.sort((a, b) => {

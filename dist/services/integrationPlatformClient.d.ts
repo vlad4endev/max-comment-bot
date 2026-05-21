@@ -13,6 +13,13 @@ export interface PlatformChannelInfo {
     /** Бот — администратор (для каналов/групп). */
     botIsAdmin?: boolean;
 }
+export interface TelegramChatAdminInfo {
+    userId: number;
+    name: string;
+    username?: string;
+    isCreator: boolean;
+    startedBot: boolean;
+}
 /** @deprecated используйте {@link listTelegramBotChats} */
 export type TelegramLinkedChat = PlatformChannelInfo & {
     type: TelegramChatType;
@@ -29,6 +36,7 @@ export declare function testIntegration(platform: IntegrationPlatform, token: st
 /** Чаты/каналы, с которыми бот взаимодействовал (из getUpdates + my_chat_member). */
 export declare function listTelegramBotChats(token: string, integrationId?: string): Promise<PlatformChannelInfo[]>;
 export declare function listTelegramAdminChannels(token: string): Promise<PlatformChannelInfo[]>;
+export declare function listTelegramChatAdministrators(token: string, chatId: string): Promise<TelegramChatAdminInfo[]>;
 export declare function listVkGroups(token: string, groupId?: string): Promise<PlatformChannelInfo[]>;
 export interface ExternalPost {
     externalId: string;

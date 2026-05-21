@@ -11,12 +11,14 @@ exports.validateVkToken = validateVkToken;
 exports.testIntegration = testIntegration;
 exports.listTelegramBotChats = listTelegramBotChats;
 exports.listTelegramAdminChannels = listTelegramAdminChannels;
+exports.listTelegramChatAdministrators = listTelegramChatAdministrators;
 exports.listVkGroups = listVkGroups;
 exports.fetchTelegramChannelPosts = fetchTelegramChannelPosts;
 exports.fetchVkWallPosts = fetchVkWallPosts;
 exports.publishVkWallPost = publishVkWallPost;
 const axios_1 = __importDefault(require("axios"));
 const logger_1 = require("../utils/logger");
+const telegramBotUserStore_1 = require("./telegramBotUserStore");
 const flowStateStore_1 = require("./flowStateStore");
 const TG_API = 'https://api.telegram.org';
 const TELEGRAM_DISCOVERY_UPDATES = [
@@ -266,6 +268,40 @@ function ingestTelegramUpdate(seen, upd) {
         }
     }
 }
+function parseTelegramUserFromUnknown(raw) {
+    if (typeof raw !== 'object' || raw === null) {
+        return null;
+    }
+    const o = raw;
+    const id = typeof o.id === 'number' ? o.id : Number.NaN;
+    if (!Number.isInteger(id) || id <= 0) {
+        return null;
+    }
+    return {
+        id,
+        username: typeof o.username === 'string' ? o.username : undefined,
+        first_name: typeof o.first_name === 'string' ? o.first_name : undefined,
+        last_name: typeof o.last_name === 'string' ? o.last_name : undefined,
+    };
+}
+function rememberTelegramStartedUserFromUpdate(upd) {
+    const message = upd.message;
+    if (message) {
+        const chat = message.chat;
+        const chatType = typeof chat?.type === 'string' ? chat.type : '';
+        const fromUser = parseTelegramUserFromUnknown(message.from);
+        if (chatType === 'private' && fromUser) {
+            telegramBotUserStore_1.telegramBotUserStore.markStarted(fromUser);
+        }
+    }
+    const callback = upd.callback_query;
+    if (callback) {
+        const fromUser = parseTelegramUserFromUnknown(callback.from);
+        if (fromUser) {
+            telegramBotUserStore_1.telegramBotUserStore.markStarted(fromUser);
+        }
+    }
+}
 /** Чаты/каналы, с которыми бот взаимодействовал (из getUpdates + my_chat_member). */
 async function listTelegramBotChats(token, integrationId) {
     const trimmed = token.trim();
@@ -297,6 +333,7 @@ async function listTelegramBotChats(token, integrationId) {
                 if (updateId >= (offset ?? 0)) {
                     offset = updateId + 1;
                 }
+                rememberTelegramStartedUserFromUpdate(upd);
                 ingestTelegramUpdate(seen, upd);
             }
             if (data.result.length < 100) {
@@ -318,6 +355,57 @@ async function listTelegramBotChats(token, integrationId) {
 }
 async function listTelegramAdminChannels(token) {
     return listTelegramBotChats(token);
+}
+async function listTelegramChatAdministrators(token, chatId) {
+    const trimmed = token.trim();
+    if (trimmed === '') {
+        return [];
+    }
+    try {
+        const { data } = await axios_1.default.get(`${TG_API}/bot${trimmed}/getChatAdministrators`, {
+            params: { chat_id: chatId },
+            timeout: 15_000,
+        });
+        if (!data.ok || !Array.isArray(data.result)) {
+            return [];
+        }
+        const rows = [];
+        for (const row of data.result) {
+            const user = row.user;
+            const userId = typeof user?.id === 'number' ? user.id : null;
+            if (userId === null || !Number.isInteger(userId) || userId <= 0) {
+                continue;
+            }
+            const first = typeof user?.first_name === 'string' ? user.first_name.trim() : '';
+            const last = typeof user?.last_name === 'string' ? user.last_name.trim() : '';
+            const fullName = `${first} ${last}`.trim();
+            const username = typeof user?.username === 'string' ? user.username.trim() : '';
+            rows.push({
+                userId,
+                name: fullName || username || String(userId),
+                username: username ? `@${username.replace(/^@/, '')}` : undefined,
+                isCreator: row.status === 'creator',
+            });
+        }
+        const started = telegramBotUserStore_1.telegramBotUserStore.getStartedIds(rows.map((r) => r.userId));
+        return rows
+            .map((row) => ({
+            ...row,
+            startedBot: started.has(row.userId),
+        }))
+            .sort((a, b) => {
+            const creatorDiff = Number(b.isCreator) - Number(a.isCreator);
+            if (creatorDiff !== 0)
+                return creatorDiff;
+            const startedDiff = Number(b.startedBot) - Number(a.startedBot);
+            if (startedDiff !== 0)
+                return startedDiff;
+            return a.name.localeCompare(b.name, 'ru');
+        });
+    }
+    catch {
+        return [];
+    }
 }
 async function listVkGroups(token, groupId) {
     if (!groupId || groupId.trim() === '') {
@@ -479,6 +567,7 @@ async function fetchTelegramChannelPosts(token, integrationId, channelId, afterM
                 if (updateId >= maxUpdateId) {
                     maxUpdateId = updateId + 1;
                 }
+                rememberTelegramStartedUserFromUpdate(upd);
                 // Capture bot becoming admin in a channel/group so the caller can update linkedChats
                 // immediately — without this, the event would be consumed by this loop and lost
                 // before listTelegramBotChats ever gets a chance to see it.

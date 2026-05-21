@@ -5243,6 +5243,14 @@
         }
         // X-Miniapp-User-Id is a numeric string — always ASCII.
         if (userId && String(userId).trim()) hdr['X-Miniapp-User-Id'] = String(userId).trim();
+        var tgUid = params.get('tg_uid');
+        var tgExp = params.get('tg_exp');
+        var tgSig = params.get('tg_sig');
+        if (tgUid && /^\d+$/.test(String(tgUid))) hdr['X-Miniapp-Tg-Uid'] = String(tgUid);
+        if (tgExp && /^\d+$/.test(String(tgExp))) hdr['X-Miniapp-Tg-Exp'] = String(tgExp);
+        if (tgSig && /^[a-f0-9]{64}$/i.test(String(tgSig))) {
+          hdr['X-Miniapp-Tg-Sig'] = String(tgSig).toLowerCase();
+        }
         return hdr;
       }
 

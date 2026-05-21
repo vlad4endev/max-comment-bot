@@ -1,6 +1,7 @@
 import axios from 'axios'
 
 import { logger } from '../utils/logger'
+import { telegramBotUserStore } from './telegramBotUserStore'
 import type { IntegrationPlatform } from './integrationsStore'
 import { flowStateStore } from './flowStateStore'
 
@@ -19,6 +20,14 @@ export interface PlatformChannelInfo {
   type?: TelegramChatType
   /** Бот — администратор (для каналов/групп). */
   botIsAdmin?: boolean
+}
+
+export interface TelegramChatAdminInfo {
+  userId: number
+  name: string
+  username?: string
+  isCreator: boolean
+  startedBot: boolean
 }
 
 /** @deprecated используйте {@link listTelegramBotChats} */
@@ -327,6 +336,48 @@ function ingestTelegramUpdate(seen: Map<string, PlatformChannelInfo>, upd: Recor
   }
 }
 
+function parseTelegramUserFromUnknown(raw: unknown): {
+  id: number
+  username?: string
+  first_name?: string
+  last_name?: string
+} | null {
+  if (typeof raw !== 'object' || raw === null) {
+    return null
+  }
+  const o = raw as Record<string, unknown>
+  const id = typeof o.id === 'number' ? o.id : Number.NaN
+  if (!Number.isInteger(id) || id <= 0) {
+    return null
+  }
+  return {
+    id,
+    username: typeof o.username === 'string' ? o.username : undefined,
+    first_name: typeof o.first_name === 'string' ? o.first_name : undefined,
+    last_name: typeof o.last_name === 'string' ? o.last_name : undefined,
+  }
+}
+
+function rememberTelegramStartedUserFromUpdate(upd: Record<string, unknown>): void {
+  const message = upd.message as Record<string, unknown> | undefined
+  if (message) {
+    const chat = message.chat as Record<string, unknown> | undefined
+    const chatType = typeof chat?.type === 'string' ? chat.type : ''
+    const fromUser = parseTelegramUserFromUnknown(message.from)
+    if (chatType === 'private' && fromUser) {
+      telegramBotUserStore.markStarted(fromUser)
+    }
+  }
+
+  const callback = upd.callback_query as Record<string, unknown> | undefined
+  if (callback) {
+    const fromUser = parseTelegramUserFromUnknown(callback.from)
+    if (fromUser) {
+      telegramBotUserStore.markStarted(fromUser)
+    }
+  }
+}
+
 /** Чаты/каналы, с которыми бот взаимодействовал (из getUpdates + my_chat_member). */
 export async function listTelegramBotChats(
   token: string,
@@ -370,6 +421,7 @@ export async function listTelegramBotChats(
         if (updateId >= (offset ?? 0)) {
           offset = updateId + 1
         }
+        rememberTelegramStartedUserFromUpdate(upd)
         ingestTelegramUpdate(seen, upd)
       }
 
@@ -393,6 +445,74 @@ export async function listTelegramBotChats(
 
 export async function listTelegramAdminChannels(token: string): Promise<PlatformChannelInfo[]> {
   return listTelegramBotChats(token)
+}
+
+export async function listTelegramChatAdministrators(
+  token: string,
+  chatId: string,
+): Promise<TelegramChatAdminInfo[]> {
+  const trimmed = token.trim()
+  if (trimmed === '') {
+    return []
+  }
+  try {
+    const { data } = await axios.get<{
+      ok: boolean
+      result?: Array<{
+        status?: string
+        user?: {
+          id?: number
+          username?: string
+          first_name?: string
+          last_name?: string
+        }
+      }>
+    }>(`${TG_API}/bot${trimmed}/getChatAdministrators`, {
+      params: { chat_id: chatId },
+      timeout: 15_000,
+    })
+    if (!data.ok || !Array.isArray(data.result)) {
+      return []
+    }
+    const rows: Array<{
+      userId: number
+      name: string
+      username?: string
+      isCreator: boolean
+    }> = []
+    for (const row of data.result) {
+      const user = row.user
+      const userId = typeof user?.id === 'number' ? user.id : null
+      if (userId === null || !Number.isInteger(userId) || userId <= 0) {
+        continue
+      }
+      const first = typeof user?.first_name === 'string' ? user.first_name.trim() : ''
+      const last = typeof user?.last_name === 'string' ? user.last_name.trim() : ''
+      const fullName = `${first} ${last}`.trim()
+      const username = typeof user?.username === 'string' ? user.username.trim() : ''
+      rows.push({
+        userId,
+        name: fullName || username || String(userId),
+        username: username ? `@${username.replace(/^@/, '')}` : undefined,
+        isCreator: row.status === 'creator',
+      })
+    }
+    const started = telegramBotUserStore.getStartedIds(rows.map((r) => r.userId))
+    return rows
+      .map((row) => ({
+        ...row,
+        startedBot: started.has(row.userId),
+      }))
+      .sort((a, b) => {
+        const creatorDiff = Number(b.isCreator) - Number(a.isCreator)
+        if (creatorDiff !== 0) return creatorDiff
+        const startedDiff = Number(b.startedBot) - Number(a.startedBot)
+        if (startedDiff !== 0) return startedDiff
+        return a.name.localeCompare(b.name, 'ru')
+      })
+  } catch {
+    return []
+  }
 }
 
 export async function listVkGroups(token: string, groupId?: string): Promise<PlatformChannelInfo[]> {
@@ -604,6 +724,7 @@ export async function fetchTelegramChannelPosts(
         if (updateId >= maxUpdateId) {
           maxUpdateId = updateId + 1
         }
+        rememberTelegramStartedUserFromUpdate(upd)
 
         // Capture bot becoming admin in a channel/group so the caller can update linkedChats
         // immediately — without this, the event would be consumed by this loop and lost

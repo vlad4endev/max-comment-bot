@@ -1519,6 +1519,7 @@
           html += '<p class="muted">Событий пока нет</p>';
         }
         html += '</div>';
+        html += renderCrossBotFooter('max');
         main.innerHTML = html;
         refreshIcons();
       })
@@ -1633,6 +1634,7 @@
           html += '<p class="muted">Пока нет событий Telegram пересылок</p>';
         }
         html += '</div>';
+        html += renderCrossBotFooter('telegram');
         main.innerHTML = html;
         refreshIcons();
       })
@@ -1644,6 +1646,52 @@
           esc(err.message || String(err)) +
           '</p>';
       });
+  }
+
+  function renderCrossBotFooter(currentPlatform) {
+    var tgUrl = 'https://t.me/commentvmax_bot';
+    var maxUrl = 'https://max.ru/id683003981770_bot';
+    var isTelegram = currentPlatform === 'telegram';
+    var title = isTelegram ? 'Переход в MAX-бот' : 'Переход в Telegram-бот';
+    var hint = isTelegram
+      ? 'Открой MAX-бот для управления MAX каналами и комментариями.'
+      : 'Открой Telegram-бот для управления Telegram каналами и комментариями.';
+    var primaryUrl = isTelegram ? maxUrl : tgUrl;
+    var primaryLabel = isTelegram ? 'Открыть MAX-бот' : 'Открыть Telegram-бот';
+    var secondaryUrl = isTelegram ? tgUrl : maxUrl;
+    var secondaryLabel = isTelegram ? 'Открыть Telegram-бот' : 'Открыть MAX-бот';
+    var targetBadge = isTelegram
+      ? '<span class="cross-bot-platform max">MAX</span>'
+      : '<span class="cross-bot-platform tg">TG</span>';
+    var sourceBadge = isTelegram
+      ? '<span class="cross-bot-platform tg">TG</span>'
+      : '<span class="cross-bot-platform max">MAX</span>';
+    return (
+      '<div class="cross-bot-footer panel">' +
+      '<div class="cross-bot-title-row">' +
+      '<div class="cross-bot-title">🔄 ' +
+      esc(title) +
+      '</div>' +
+      '<div class="cross-bot-route">' +
+      sourceBadge +
+      '<span class="cross-bot-arrow">→</span>' +
+      targetBadge +
+      '</div></div>' +
+      '<div class="cross-bot-hint muted">' + esc(hint) + '</div>' +
+      '<div class="cross-bot-actions">' +
+      '<a class="btn btn-primary cross-bot-primary" target="_blank" rel="noopener noreferrer" href="' +
+      esc(primaryUrl) +
+      '">🚀 ' +
+      esc(primaryLabel) +
+      '</a>' +
+      '<a class="btn btn-ghost" target="_blank" rel="noopener noreferrer" href="' +
+      esc(secondaryUrl) +
+      '">↔ ' +
+      esc(secondaryLabel) +
+      '</a></div>' +
+      '<div class="cross-bot-open-note muted">Откроется в новой вкладке</div>' +
+      '</div></div>'
+    );
   }
 
   function renderChannels() {

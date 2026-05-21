@@ -14,6 +14,11 @@ export interface MaxLinkedChannelInfo {
   botIsAdmin: boolean
   access: RegisteredChannelAccess
   dateAdded: string
+  admins?: Array<{
+    user_id: number
+    name: string
+    is_owner: boolean
+  }>
 }
 
 function accessLabel(access: RegisteredChannelAccess): string {
@@ -63,6 +68,25 @@ export async function listMaxBotLinkedChannels(
       ? ('ok' as RegisteredChannelAccess)
       : await resolveRegisteredChannelAccess(bot, c.chat_id)
 
+    let admins: MaxLinkedChannelInfo['admins'] = []
+    try {
+      const { members } = await bot.api.getChatAdmins(c.chat_id)
+      admins = members
+        .filter((m) => !m.is_bot && (m.is_admin || m.is_owner))
+        .map((m) => ({
+          user_id: m.user_id,
+          name: m.name,
+          is_owner: m.is_owner === true,
+        }))
+        .sort((a, b) => {
+          const ownerDiff = Number(b.is_owner) - Number(a.is_owner)
+          if (ownerDiff !== 0) return ownerDiff
+          return a.name.localeCompare(b.name, 'ru')
+        })
+    } catch {
+      admins = []
+    }
+
     out.push({
       id: String(c.chat_id),
       title,
@@ -70,6 +94,7 @@ export async function listMaxBotLinkedChannels(
       botIsAdmin: access === 'ok',
       access,
       dateAdded: c.date_added,
+      admins,
     })
   }
 

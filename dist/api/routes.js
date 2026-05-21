@@ -20,6 +20,8 @@ const channelPostActions_1 = require("../services/channelPostActions");
 const commentStore_1 = require("../services/commentStore");
 const subscriberStore_1 = require("../services/subscriberStore");
 const notificationService_1 = require("../services/notificationService");
+const telegramAdminNotificationService_1 = require("../services/telegramAdminNotificationService");
+const telegramMiniappAuth_1 = require("../services/telegramMiniappAuth");
 const postStore_1 = require("../services/postStore");
 const postIdAliasStore_1 = require("../services/postIdAliasStore");
 const miniappPostRecovery_1 = require("../services/miniappPostRecovery");
@@ -101,6 +103,17 @@ function parsePhotoUrls(value) {
         }
     }
     return [...new Set(out)].slice(0, 10);
+}
+function parseHeaderString(value) {
+    if (typeof value === 'string') {
+        const t = value.trim();
+        return t === '' ? null : t;
+    }
+    if (Array.isArray(value) && typeof value[0] === 'string') {
+        const t = value[0].trim();
+        return t === '' ? null : t;
+    }
+    return null;
 }
 function parseBoolean(value) {
     if (typeof value === 'boolean') {
@@ -1042,6 +1055,22 @@ function createCommentApiRouter(deps) {
         catch (err) {
             logger_1.logger.warn('POST /api/comment: notify admins failed', { err });
         }
+        try {
+            await (0, telegramAdminNotificationService_1.notifyTelegramAdminsNewMiniappComment)({
+                commentId: saved.comment_id,
+                maxChannelChatId: chatId,
+                postText: post.text,
+                channelTitle,
+                username: saveUsername,
+                commentText: text,
+                commentPhotoUrls: photoUrls,
+                postId,
+                messageMid: post.message_mid,
+            });
+        }
+        catch (err) {
+            logger_1.logger.warn('POST /api/comment: TG notify admins failed', { err });
+        }
         res.json({
             comment_id: saved.comment_id,
             timestamp: saved.timestamp,
@@ -1076,7 +1105,27 @@ function createCommentApiRouter(deps) {
             return;
         }
         const channelReplyName = (await resolveChannelBranding(deps.bot, chatId)).title;
-        if (!(await (0, channelPostActions_1.isUserChannelAdmin)(deps.bot, post.chat_id, replierUserId))) {
+        const isMaxAdmin = await (0, channelPostActions_1.isUserChannelAdmin)(deps.bot, post.chat_id, replierUserId);
+        let isTelegramAuthorizedAdmin = false;
+        if (!isMaxAdmin) {
+            const tgUidRaw = parseHeaderString(req.headers['x-miniapp-tg-uid']) ??
+                parseHeaderString(req.query.tg_uid) ??
+                parseNonEmptyString(body.tg_uid);
+            const tgExpRaw = parseHeaderString(req.headers['x-miniapp-tg-exp']) ??
+                parseHeaderString(req.query.tg_exp) ??
+                parseNonEmptyString(body.tg_exp);
+            const tgSigRaw = parseHeaderString(req.headers['x-miniapp-tg-sig']) ??
+                parseHeaderString(req.query.tg_sig) ??
+                parseNonEmptyString(body.tg_sig);
+            isTelegramAuthorizedAdmin = (0, telegramMiniappAuth_1.verifyTelegramMiniappAuth)({
+                telegramUserId: replierUserId,
+                maxChatId: post.chat_id,
+                tgUidRaw,
+                tgExpRaw,
+                tgSigRaw,
+            });
+        }
+        if (!isMaxAdmin && !isTelegramAuthorizedAdmin) {
             res.status(403).json({ error: 'Только администраторы могут отвечать' });
             return;
         }

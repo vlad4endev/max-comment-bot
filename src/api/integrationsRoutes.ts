@@ -16,6 +16,7 @@ import { flowStateStore } from '../services/flowStateStore'
 import { buildIntegrationsAnalytics, flowProcessor } from '../services/flowProcessor'
 import {
   enrichTelegramChatsWithBotAdmin,
+  listTelegramChatAdministrators,
   listTelegramBotChats,
   listVkGroups,
   mergePlatformChannels,
@@ -77,6 +78,18 @@ function wantsRefresh(query: express.Request['query']): boolean {
   return false
 }
 
+function parseQueryString(value: unknown): string | null {
+  if (typeof value === 'string') {
+    const t = value.trim()
+    return t === '' ? null : t
+  }
+  if (Array.isArray(value) && typeof value[0] === 'string') {
+    const t = value[0].trim()
+    return t === '' ? null : t
+  }
+  return null
+}
+
 /** Токен из integrations.json важнее устаревшего TG_TOKEN в .env. */
 function telegramIntegrationToken(integ: IntegrationRecord): string {
   return (integ.token || getTelegramToken()).trim()
@@ -116,6 +129,54 @@ async function resolveTelegramLinkedChats(
   }
 }
 
+async function attachTelegramChatAdmins(
+  token: string,
+  channels: Awaited<ReturnType<typeof listTelegramBotChats>>,
+): Promise<
+  Array<
+    (typeof channels)[number] & {
+      admins: Array<{
+        user_id: number
+        name: string
+        username?: string
+        is_creator: boolean
+        started_bot: boolean
+      }>
+      startedAdminCount: number
+    }
+  >
+> {
+  const out: Array<
+    (typeof channels)[number] & {
+      admins: Array<{
+        user_id: number
+        name: string
+        username?: string
+        is_creator: boolean
+        started_bot: boolean
+      }>
+      startedAdminCount: number
+    }
+  > = []
+  for (const ch of channels) {
+    const tgAdmins = await listTelegramChatAdministrators(token, ch.id)
+    const admins = tgAdmins.map((a) => ({
+      user_id: a.userId,
+      name: a.name,
+      username: a.username,
+      is_creator: a.isCreator,
+      started_bot: a.startedBot,
+    }))
+    const startedAdminCount = admins.filter((a) => a.started_bot).length
+    out.push({
+      ...ch,
+      admins,
+      startedAdminCount,
+    })
+  }
+  return out
+}
+
 export function createIntegrationsRouter(deps: IntegrationsRouterDeps): express.Router {
   const router = express.Router()
   router.use(express.json({ limit: '256kb' }))
@@ -133,11 +194,17 @@ export function createIntegrationsRouter(deps: IntegrationsRouterDeps): express.
       const { integrationId, channels, linkedChatsUpdatedAt } = await resolveTelegramLinkedChats(
         wantsRefresh(req.query),
       )
-      const adminCount = channels.filter((c) => c.botIsAdmin === true).length
+      const integ = integrationId ? integrationsStore.getIntegration(integrationId) : null
+      const token = integ ? telegramIntegrationToken(integ) : ''
+      const channelsWithAdmins =
+        integ && token
+          ? await attachTelegramChatAdmins(token, channels)
+          : channels.map((ch) => ({ ...ch, admins: [], startedAdminCount: 0 }))
+      const adminCount = channelsWithAdmins.filter((c) => c.botIsAdmin === true).length
       res.json({
         connected: integrationId !== null,
         integrationId,
-        channels,
+        channels: channelsWithAdmins,
         linkedChatsUpdatedAt,
         adminCount,
         hint:
@@ -150,6 +217,40 @@ export function createIntegrationsRouter(deps: IntegrationsRouterDeps): express.
     } catch (err: unknown) {
       logger.error('GET /telegram/linked-chats failed', err)
       res.status(500).json({ error: 'Не удалось получить список чатов Telegram' })
+    }
+  })
+
+  router.get('/telegram/channel-admins', async (req, res) => {
+    try {
+      await integrationsStore.load()
+      const integ = integrationsStore.getTelegramIntegration()
+      if (!integ) {
+        res.status(404).json({ error: 'Telegram интеграция не подключена' })
+        return
+      }
+      const chatId = parseQueryString(req.query.chatId ?? req.query.chat_id)
+      if (!chatId) {
+        res.status(400).json({ error: 'chatId обязателен' })
+        return
+      }
+      const token = telegramIntegrationToken(integ)
+      const admins = await listTelegramChatAdministrators(token, chatId)
+      res.json({
+        connected: true,
+        integrationId: integ.id,
+        chatId,
+        admins: admins.map((a) => ({
+          user_id: a.userId,
+          name: a.name,
+          username: a.username,
+          is_creator: a.isCreator,
+          started_bot: a.startedBot,
+        })),
+        startedAdminCount: admins.filter((a) => a.startedBot).length,
+      })
+    } catch (err: unknown) {
+      logger.error('GET /telegram/channel-admins failed', err)
+      res.status(500).json({ error: 'Не удалось получить список администраторов Telegram-канала' })
     }
   })
 
@@ -319,10 +420,12 @@ export function createIntegrationsRouter(deps: IntegrationsRouterDeps): express.
         keepExistingIfEmpty: refresh && channels.length === 0,
       })
       const updated = integrationsStore.getIntegration(integ.id)
+      const channelsForResponse = updated?.linkedChats ?? channels
+      const channelsWithAdmins = await attachTelegramChatAdmins(token, channelsForResponse)
       res.json({
-        channels: updated?.linkedChats ?? channels,
+        channels: channelsWithAdmins,
         linkedChatsUpdatedAt: updated?.linkedChatsUpdatedAt ?? null,
-        adminCount: (updated?.linkedChats ?? channels).filter((c) => c.botIsAdmin === true).length,
+        adminCount: channelsWithAdmins.filter((c) => c.botIsAdmin === true).length,
       })
       return
     }

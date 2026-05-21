@@ -168,6 +168,17 @@ function initSchema(targetDb: Database.Database): void {
     );
     CREATE INDEX IF NOT EXISTS idx_autoposts_due
       ON autoposts(status, scheduled_at);
+
+    CREATE TABLE IF NOT EXISTS tg_bot_users (
+      user_id      INTEGER PRIMARY KEY,
+      username     TEXT,
+      first_name   TEXT,
+      last_name    TEXT,
+      started      INTEGER NOT NULL DEFAULT 0,
+      started_at   TEXT,
+      last_seen_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_tg_bot_users_started ON tg_bot_users(started);
   `)
   migrateChannelImportSchema(targetDb)
   migratePostsSchema(targetDb)

@@ -1993,6 +1993,81 @@ tbody tr:hover td {
   text-align: center;
 }
 
+.cross-bot-footer {
+  margin-top: 16px;
+  border: 1px solid var(--accent-border);
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--accent-muted) 55%, var(--bg-surface)),
+    var(--bg-surface)
+  );
+}
+
+.cross-bot-title {
+  font-size: 15px;
+  font-weight: 700;
+  margin-bottom: 4px;
+}
+
+.cross-bot-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.cross-bot-route {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.cross-bot-arrow {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.cross-bot-platform {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.cross-bot-platform.tg {
+  background: #2aabee22;
+  color: #2aabee;
+}
+
+.cross-bot-platform.max {
+  background: var(--accent-muted);
+  color: var(--accent);
+}
+
+.cross-bot-hint {
+  font-size: 12px;
+  margin-bottom: 10px;
+}
+
+.cross-bot-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.cross-bot-primary {
+  box-shadow: 0 0 0 1px var(--accent-border), 0 6px 18px rgba(0, 0, 0, 0.22);
+}
+
+.cross-bot-open-note {
+  margin-top: 8px;
+  font-size: 11px;
+}
+
 .two-col {
   display: grid;
   grid-template-columns: 1fr 1fr;

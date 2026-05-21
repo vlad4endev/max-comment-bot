@@ -57,6 +57,17 @@ function wantsRefresh(query) {
         return true;
     return false;
 }
+function parseQueryString(value) {
+    if (typeof value === 'string') {
+        const t = value.trim();
+        return t === '' ? null : t;
+    }
+    if (Array.isArray(value) && typeof value[0] === 'string') {
+        const t = value[0].trim();
+        return t === '' ? null : t;
+    }
+    return null;
+}
 /** Токен из integrations.json важнее устаревшего TG_TOKEN в .env. */
 function telegramIntegrationToken(integ) {
     return (integ.token || (0, config_1.getTelegramToken)()).trim();
@@ -88,6 +99,26 @@ async function resolveTelegramLinkedChats(refresh) {
         linkedChatsUpdatedAt: updated?.linkedChatsUpdatedAt ?? null,
     };
 }
+async function attachTelegramChatAdmins(token, channels) {
+    const out = [];
+    for (const ch of channels) {
+        const tgAdmins = await (0, integrationPlatformClient_1.listTelegramChatAdministrators)(token, ch.id);
+        const admins = tgAdmins.map((a) => ({
+            user_id: a.userId,
+            name: a.name,
+            username: a.username,
+            is_creator: a.isCreator,
+            started_bot: a.startedBot,
+        }));
+        const startedAdminCount = admins.filter((a) => a.started_bot).length;
+        out.push({
+            ...ch,
+            admins,
+            startedAdminCount,
+        });
+    }
+    return out;
+}
 function createIntegrationsRouter(deps) {
     const router = express_1.default.Router();
     router.use(express_1.default.json({ limit: '256kb' }));
@@ -101,11 +132,16 @@ function createIntegrationsRouter(deps) {
     router.get('/telegram/linked-chats', async (req, res) => {
         try {
             const { integrationId, channels, linkedChatsUpdatedAt } = await resolveTelegramLinkedChats(wantsRefresh(req.query));
-            const adminCount = channels.filter((c) => c.botIsAdmin === true).length;
+            const integ = integrationId ? integrationsStore_1.integrationsStore.getIntegration(integrationId) : null;
+            const token = integ ? telegramIntegrationToken(integ) : '';
+            const channelsWithAdmins = integ && token
+                ? await attachTelegramChatAdmins(token, channels)
+                : channels.map((ch) => ({ ...ch, admins: [], startedAdminCount: 0 }));
+            const adminCount = channelsWithAdmins.filter((c) => c.botIsAdmin === true).length;
             res.json({
                 connected: integrationId !== null,
                 integrationId,
-                channels,
+                channels: channelsWithAdmins,
                 linkedChatsUpdatedAt,
                 adminCount,
                 hint: channels.length === 0
@@ -118,6 +154,40 @@ function createIntegrationsRouter(deps) {
         catch (err) {
             logger_1.logger.error('GET /telegram/linked-chats failed', err);
             res.status(500).json({ error: 'Не удалось получить список чатов Telegram' });
+        }
+    });
+    router.get('/telegram/channel-admins', async (req, res) => {
+        try {
+            await integrationsStore_1.integrationsStore.load();
+            const integ = integrationsStore_1.integrationsStore.getTelegramIntegration();
+            if (!integ) {
+                res.status(404).json({ error: 'Telegram интеграция не подключена' });
+                return;
+            }
+            const chatId = parseQueryString(req.query.chatId ?? req.query.chat_id);
+            if (!chatId) {
+                res.status(400).json({ error: 'chatId обязателен' });
+                return;
+            }
+            const token = telegramIntegrationToken(integ);
+            const admins = await (0, integrationPlatformClient_1.listTelegramChatAdministrators)(token, chatId);
+            res.json({
+                connected: true,
+                integrationId: integ.id,
+                chatId,
+                admins: admins.map((a) => ({
+                    user_id: a.userId,
+                    name: a.name,
+                    username: a.username,
+                    is_creator: a.isCreator,
+                    started_bot: a.startedBot,
+                })),
+                startedAdminCount: admins.filter((a) => a.startedBot).length,
+            });
+        }
+        catch (err) {
+            logger_1.logger.error('GET /telegram/channel-admins failed', err);
+            res.status(500).json({ error: 'Не удалось получить список администраторов Telegram-канала' });
         }
     });
     router.get('/meta/max', (_req, res) => {
@@ -275,10 +345,12 @@ function createIntegrationsRouter(deps) {
                 keepExistingIfEmpty: refresh && channels.length === 0,
             });
             const updated = integrationsStore_1.integrationsStore.getIntegration(integ.id);
+            const channelsForResponse = updated?.linkedChats ?? channels;
+            const channelsWithAdmins = await attachTelegramChatAdmins(token, channelsForResponse);
             res.json({
-                channels: updated?.linkedChats ?? channels,
+                channels: channelsWithAdmins,
                 linkedChatsUpdatedAt: updated?.linkedChatsUpdatedAt ?? null,
-                adminCount: (updated?.linkedChats ?? channels).filter((c) => c.botIsAdmin === true).length,
+                adminCount: channelsWithAdmins.filter((c) => c.botIsAdmin === true).length,
             });
             return;
         }
