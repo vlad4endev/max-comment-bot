@@ -371,6 +371,7 @@ export class PostStore {
           photo_url, media_attachments, comment_count, timestamp, data
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(chat_id, message_mid) DO UPDATE SET
+          post_id                 = excluded.post_id,
           comments_ui_message_mid = excluded.comments_ui_message_mid,
           sender_name             = excluded.sender_name,
           text                    = excluded.text,

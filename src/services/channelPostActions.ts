@@ -478,7 +478,9 @@ export async function tryAttachCommentsToChannelPost(
     senderId: user?.user_id,
   })
 
-  const postId = uuidv4()
+  const existingForId =
+    postStore.findPost(mid, chatId) ?? postStore.findPostByChannelMessage(chatId, mid)
+  const postId = existingForId?.post_id ?? uuidv4()
   const post: Post = {
     ...buildPostFromChannelMessage(message, chatId, postId, user),
     button_attach_pending: true,
