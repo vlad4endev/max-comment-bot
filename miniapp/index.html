@@ -48,8 +48,10 @@
       }
     })()
   </script>
-  <!-- Official URL from https://dev.max.ru/docs/webapps/bridge (page embeds st.max.ru/js/max-web-app.js) -->
+  <!-- MAX WebApp bridge -->
   <script src="https://st.max.ru/js/max-web-app.js"></script>
+  <!-- Telegram Mini App (same page, second platform) -->
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <style>
     :root {
       --bg-primary: #0d0d18;
@@ -2028,7 +2030,7 @@
             fetchpriority="high"
           />
         </div>
-        <p class="bot-desc">Комментарии к постам канала прямо в MAX: собирайте обратную связь и отвечайте читателям из одного окна.</p>
+        <p class="bot-desc" id="homeBotDesc">Комментарии к постам канала: собирайте обратную связь и отвечайте читателям из одного окна.</p>
       </div>
       <div class="card user-row">
         <div class="user-av-home" id="homeUserAv">?</div>
@@ -2040,7 +2042,7 @@
       </div>
       <div class="home-err" id="homeErr"></div>
       <div id="testUserFallback" class="test-user-fallback" aria-live="polite">
-        <div class="hint">Открыто вне MAX (или нет user в Bridge). Для теста API укажите <code style="color:var(--teal)">user_id</code> в URL (<code style="color:var(--teal)">?user_id=122099994</code>) или введите ниже и нажмите «Применить».</div>
+        <div class="hint" id="testUserFallbackHint">Открыто вне MAX/Telegram (или нет пользователя в Bridge). Для теста укажите <code style="color:var(--teal)">user_id</code> в URL (<code style="color:var(--teal)">?user_id=122099994</code>) или введите ниже.</div>
         <div class="test-user-row">
           <input type="text" id="testUserIdInput" inputmode="numeric" placeholder="например 122099994" autocomplete="off" />
           <button type="button" id="testUserIdApply">Применить</button>
@@ -2469,6 +2471,55 @@
   </div>
 
   <script>
+    /** MAX `window.WebApp` or Telegram `Telegram.WebApp` when opened from TG bot. */
+    function getWebAppBridge() {
+      var tgApi = window.Telegram && window.Telegram.WebApp
+      var maxApi = window.WebApp
+      if (tgApi) {
+        var tgUnsafe = tgApi.initDataUnsafe || {}
+        var tgUser = tgUnsafe.user
+        var hasTgUser = !!(tgUser && getBridgeNumericUserId(tgUser) != null)
+        var hasTgInit = typeof tgApi.initData === 'string' && tgApi.initData.trim() !== ''
+        if (hasTgUser || hasTgInit) return tgApi
+      }
+      if (maxApi) return maxApi
+      return tgApi || maxApi || null
+    }
+
+    function isTelegramMiniappBridge(bridge) {
+      if (!bridge || !window.Telegram || !window.Telegram.WebApp) return false
+      return bridge === window.Telegram.WebApp
+    }
+
+    function normalizeBridgeUser(rawUser) {
+      if (!rawUser || typeof rawUser !== 'object') return {}
+      if (rawUser.user_id == null && rawUser.id != null) {
+        return Object.assign({}, rawUser, { user_id: rawUser.id })
+      }
+      return rawUser
+    }
+
+    function openBridgeExternalLink(url) {
+      var bridge = getWebAppBridge()
+      if (!bridge) {
+        window.location.href = url
+        return
+      }
+      try {
+        if (typeof bridge.openMaxLink === 'function') {
+          bridge.openMaxLink(url)
+          return
+        }
+      } catch (e1) {}
+      try {
+        if (typeof bridge.openLink === 'function') {
+          bridge.openLink(url)
+          return
+        }
+      } catch (e2) {}
+      window.location.href = url
+    }
+
     function collectStartParam(unsafe, webApp) {
       var candidates = []
       if (unsafe && typeof unsafe === 'object') {
@@ -2892,9 +2943,15 @@
     }
 
     function initApp() {
-      var tg = window.WebApp || {};
-      if (tg.colorScheme && window.ThemeManager && typeof window.ThemeManager.get === 'function' && window.ThemeManager.get() === 'auto') {
-        var bridgeTheme = String(tg.colorScheme).toLowerCase();
+      var bridge = getWebAppBridge() || {};
+      var inTelegram = isTelegramMiniappBridge(bridge);
+      try {
+        if (inTelegram && typeof bridge.ready === 'function') {
+          bridge.ready();
+        }
+      } catch (eReady) {}
+      if (bridge.colorScheme && window.ThemeManager && typeof window.ThemeManager.get === 'function' && window.ThemeManager.get() === 'auto') {
+        var bridgeTheme = String(bridge.colorScheme).toLowerCase();
         if (bridgeTheme === 'light' || bridgeTheme === 'dark') {
           document.documentElement.setAttribute('data-theme', bridgeTheme);
         }
@@ -2906,14 +2963,20 @@
         themeToggleEl.addEventListener('click', cycleTheme);
       }
       try {
-        if (window.WebApp && typeof window.WebApp.expand === 'function') {
-          window.WebApp.expand();
+        if (typeof bridge.expand === 'function') {
+          bridge.expand();
         }
       } catch (e) {}
 
-      var unsafe = tg.initDataUnsafe || {};
-      var user = unsafe.user || {};
-      var startParam = collectStartParam(unsafe, tg);
+      var unsafe = bridge.initDataUnsafe || {};
+      var user = normalizeBridgeUser(unsafe.user || {});
+      var startParam = collectStartParam(unsafe, bridge);
+      var homeDescEl = document.getElementById('homeBotDesc');
+      if (homeDescEl) {
+        homeDescEl.textContent = inTelegram
+          ? 'Комментарии к постам канала в Telegram: уведомления админам и ответы из одного окна.'
+          : 'Комментарии к постам канала в MAX: собирайте обратную связь и отвечайте читателям из одного окна.';
+      }
 
       var mergedParams = buildMergedSearchParams(user, startParam);
       console.info('miniapp: opened', {
@@ -2988,13 +3051,7 @@
           launchBtn.href = url;
           launchBtn.onclick = function (e) {
             e.preventDefault();
-            try {
-              if (window.WebApp && typeof window.WebApp.openMaxLink === 'function') {
-                window.WebApp.openMaxLink(url);
-                return;
-              }
-            } catch (err) {}
-            window.location.href = url;
+            openBridgeExternalLink(url);
           };
         })
         .catch(function () {});
@@ -3170,7 +3227,9 @@
         if (Number.isFinite(parsed) && parsed > 0) uid = parsed;
       }
       document.getElementById('homeUserId').textContent =
-        uid != null ? 'user_id: ' + uid : 'user_id: — (откройте из MAX или задайте в URL)';
+        uid != null
+          ? 'user_id: ' + uid + (inTelegram ? ' (Telegram)' : '')
+          : 'user_id: — (откройте из MAX/Telegram или задайте в URL)';
 
       var avEl = document.getElementById('homeUserAv');
       var homePhotoUrl = getBridgeUserPhotoUrl(user);
@@ -3818,13 +3877,14 @@
       function openExternalUrl(url) {
         if (!url) return false;
         try {
-          if (window.WebApp) {
-            if (typeof window.WebApp.openMaxLink === 'function') {
-              window.WebApp.openMaxLink(url);
+          var bridge = getWebAppBridge();
+          if (bridge) {
+            if (typeof bridge.openMaxLink === 'function') {
+              bridge.openMaxLink(url);
               return true;
             }
-            if (typeof window.WebApp.openLink === 'function') {
-              window.WebApp.openLink(url);
+            if (typeof bridge.openLink === 'function') {
+              bridge.openLink(url);
               return true;
             }
           }
@@ -5787,16 +5847,26 @@
     });
 
     function startAppWhenReady() {
+      var attempts = 0;
+      var maxAttempts = 12;
       function run() {
-        var unsafe = (window.WebApp && window.WebApp.initDataUnsafe) || {};
-        var sp = collectStartParam(unsafe, window.WebApp || null);
-        if (!sp && window.WebApp) {
-          window.setTimeout(initApp, 250);
+        attempts += 1;
+        var bridge = getWebAppBridge();
+        var unsafe = (bridge && bridge.initDataUnsafe) || {};
+        var user = normalizeBridgeUser(unsafe.user || {});
+        var sp = collectStartParam(unsafe, bridge);
+        var urlSp = new URLSearchParams(location.search);
+        var hasUrlUser =
+          /^\d+$/.test(String(urlSp.get('user_id') || '').trim()) ||
+          /^\d+$/.test(String(urlSp.get('tg_uid') || '').trim());
+        var hasBridgeUser = getBridgeNumericUserId(user) != null;
+        if (!sp && !hasUrlUser && !hasBridgeUser && bridge && attempts < maxAttempts) {
+          window.setTimeout(run, 200);
           return;
         }
         initApp();
       }
-      if (window.WebApp) {
+      if (getWebAppBridge()) {
         run();
         return;
       }
