@@ -110,6 +110,15 @@ export function createHttpApp(options: HttpAppOptions): express.Express {
 
   app.use('/api', createCommentApiRouter({ bot: options.bot }))
 
+  /** Unmatched /api/* → JSON (not nginx HTML) when the request reaches the bot. */
+  app.use('/api', (req, res) => {
+    res.status(404).json({
+      error: 'API route not found',
+      method: req.method,
+      path: req.originalUrl,
+    })
+  })
+
   const miniappRoot = join(process.cwd(), 'miniapp')
   app.use(
     '/miniapp',

@@ -3969,22 +3969,17 @@
           headers: Object.assign({ 'Content-Type': 'application/json' }, miniappLookupHeaders()),
         })
           .then(function (r) {
-            return r
-              .json()
-              .catch(function () {
-                return {};
-              })
-              .then(function (j) {
-                if (!r.ok) {
-                  throw new Error(
-                    (j && j.error) ||
-                      (r.status === 404
-                        ? 'Пост пока прячется. Дайте MAX секунду и нажмите ещё раз.'
-                        : 'Не получилось обновить пост'),
-                  );
-                }
-                return j || {};
-              });
+            return parseApiJsonResponse(r).then(function (j) {
+              if (!r.ok) {
+                throw new Error(
+                  (j && j.error) ||
+                    (r.status === 404
+                      ? 'Пост пока прячется. Дайте MAX секунду и нажмите ещё раз.'
+                      : 'Не получилось обновить пост'),
+                );
+              }
+              return j || {};
+            });
           })
           .then(function (data) {
             if (data.post_id && data.post_id !== postId) {
@@ -5251,6 +5246,38 @@
         return hdr;
       }
 
+      /** Parses API body; nginx/HTML 404/502 pages become a clear Russian error. */
+      function parseApiJsonResponse(r) {
+        var ct = (r.headers.get('content-type') || '').toLowerCase();
+        return r.text().then(function (text) {
+          var trimmed = (text || '').trim();
+          if (trimmed.charAt(0) === '<' || ct.indexOf('text/html') !== -1) {
+            var err = new Error(
+              r.status === 404
+                ? 'Сервер вернул HTML вместо JSON — часто старая версия бота или неверный прокси. На сервере: cd ~/max-comment-bot && git pull && docker compose up -d --build'
+                : 'Сервер вернул страницу ошибки вместо JSON (HTTP ' +
+                  r.status +
+                  '). Проверьте, что контейнер bot запущен и nginx проксирует /api на бота.',
+            );
+            err.code = 'api_html_response';
+            err.httpStatus = r.status;
+            throw err;
+          }
+          if (!trimmed) {
+            return {};
+          }
+          try {
+            return JSON.parse(trimmed);
+          } catch (parseErr) {
+            var err2 = new Error(
+              'Ответ API не JSON (HTTP ' + r.status + '). Обновите бота или проверьте прокси.',
+            );
+            err2.code = 'api_invalid_json';
+            throw err2;
+          }
+        });
+      }
+
       function loadPost() {
         var ids = resolveLookupIds();
         if (!ids.postId) {
@@ -5268,13 +5295,17 @@
           headers: miniappLookupHeaders(),
         })
           .then(function (r) {
-            if (r.status === 404) {
-              var notFoundErr = new Error('post_not_found');
-              notFoundErr.code = 'post_not_found';
-              throw notFoundErr;
-            }
-            if (!r.ok) throw new Error('Не удалось загрузить пост');
-            return r.json();
+            return parseApiJsonResponse(r).then(function (p) {
+              if (r.status === 404) {
+                var notFoundErr = new Error('post_not_found');
+                notFoundErr.code = 'post_not_found';
+                throw notFoundErr;
+              }
+              if (!r.ok) {
+                throw new Error((p && p.error) || 'Не удалось загрузить пост');
+              }
+              return p;
+            });
           })
           .then(function (p) {
             hidePostRecoveryCard();
@@ -5356,13 +5387,19 @@
           headers: miniappLookupHeaders(),
         })
           .then(function (r) {
-            if (r.status === 404) {
-              var notFoundErr = new Error('post_not_found');
-              notFoundErr.code = 'post_not_found';
-              throw notFoundErr;
-            }
-            if (!r.ok) throw new Error('Не удалось загрузить комментарии');
-            return r.json();
+            return parseApiJsonResponse(r).then(function (list) {
+              if (r.status === 404) {
+                var notFoundErr = new Error('post_not_found');
+                notFoundErr.code = 'post_not_found';
+                throw notFoundErr;
+              }
+              if (!r.ok) {
+                throw new Error(
+                  (list && list.error) || 'Не удалось загрузить комментарии',
+                );
+              }
+              return list;
+            });
           })
           .then(function (list) {
             var arr = Array.isArray(list) ? list : [];
@@ -5511,12 +5548,17 @@
             bumpCommentCount(1);
             scrollToBottom();
 
+            var commentIds = resolveLookupIds();
             return fetch('/api/comment', {
               method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
+              headers: Object.assign(
+                { 'Content-Type': 'application/json' },
+                miniappLookupHeaders(),
+              ),
               body: JSON.stringify({
-                post_id: postId,
-                chat_id: Number(chatId),
+                post_id: commentIds.postId || postId,
+                chat_id: Number(commentIds.chatId || chatId),
+                message_mid: commentIds.messageMid || undefined,
                 user_id: Number(userId),
                 username: isAdmin ? channelDisplayName() : username,
                 text: text,
@@ -5524,12 +5566,12 @@
               }),
             })
               .then(function (r) {
-                if (!r.ok) {
-                  return r.json().then(function (j) {
-                    throw new Error(j.error || String(r.status));
-                  });
-                }
-                return r.json();
+                return parseApiJsonResponse(r).then(function (j) {
+                  if (!r.ok) {
+                    throw new Error((j && j.error) || String(r.status));
+                  }
+                  return j;
+                });
               })
               .then(function (res) {
                 knownIds.delete(tempId);

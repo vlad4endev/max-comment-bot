@@ -75,6 +75,14 @@ function createHttpApp(options) {
     app.use('/api/flows', (0, integrationsRoutes_1.createFlowsRouter)(integrationsDeps));
     app.use('/api/integrations-analytics', (0, integrationsRoutes_1.createIntegrationsAnalyticsRouter)());
     app.use('/api', (0, routes_1.createCommentApiRouter)({ bot: options.bot }));
+    /** Unmatched /api/* → JSON (not nginx HTML) when the request reaches the bot. */
+    app.use('/api', (req, res) => {
+        res.status(404).json({
+            error: 'API route not found',
+            method: req.method,
+            path: req.originalUrl,
+        });
+    });
     const miniappRoot = (0, node_path_1.join)(process.cwd(), 'miniapp');
     app.use('/miniapp', express_1.default.static(miniappRoot, {
         etag: true,

@@ -378,10 +378,32 @@
     return fetch(url, opts).then(handleAuth);
   }
 
+  function parseApiJsonResponse(r) {
+    var ct = (r.headers.get('content-type') || '').toLowerCase();
+    return r.text().then(function (text) {
+      var trimmed = (text || '').trim();
+      if (trimmed.charAt(0) === '<' || ct.indexOf('text/html') !== -1) {
+        throw new Error(
+          'Сервер вернул HTML вместо JSON (HTTP ' +
+            r.status +
+            '). Проверьте nginx и выполните: git pull && docker compose up -d --build',
+        );
+      }
+      if (!trimmed) return {};
+      try {
+        return JSON.parse(trimmed);
+      } catch (e) {
+        throw new Error('Ответ API не JSON (HTTP ' + r.status + ')');
+      }
+    });
+  }
+
   function getJson(path) {
     return authFetch(apiPath(path)).then(function (r) {
-      if (!r.ok) throw new Error('HTTP ' + r.status);
-      return r.json();
+      return parseApiJsonResponse(r).then(function (j) {
+        if (!r.ok) throw new Error((j && j.error) || 'HTTP ' + r.status);
+        return j;
+      });
     });
   }
 
@@ -391,12 +413,12 @@
       body: body || {},
       timeoutMs: path === '/refresh-buttons' ? 60000 : 20000,
     }).then(function (r) {
-      if (!r.ok) {
-        return r.json().then(function (j) {
-          throw new Error(j.error || j.message || 'Ошибка');
-        });
-      }
-      return r.json();
+      return parseApiJsonResponse(r).then(function (j) {
+        if (!r.ok) {
+          throw new Error((j && j.error) || (j && j.message) || 'Ошибка');
+        }
+        return j;
+      });
     });
   }
 
