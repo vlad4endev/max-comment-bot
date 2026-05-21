@@ -284,43 +284,29 @@ async function uploadTgPhotoAttachment(bot, tgToken, fileId) {
     }
     return null;
 }
-/**
- * Собирает вложения альбома: при нескольких token — один image с `photos`,
- * при url (типично для uploadImage({ url })) — отдельные image-вложения.
- */
 function mergeAlbumImageAttachments(images) {
-    if (images.length === 0)
-        return [];
-    if (images.length === 1)
-        return [images[0]];
-    const photosMap = {};
-    let tokenCount = 0;
-    let hasUrlOnly = false;
+    const out = [];
     for (const img of images) {
-        const p = img.payload;
-        if (p?.token) {
-            photosMap[String(tokenCount)] = { token: p.token };
-            tokenCount++;
+        const payload = img.payload;
+        if (!payload)
+            continue;
+        if (payload.token) {
+            out.push({ type: 'image', payload: { token: payload.token } });
+            continue;
         }
-        else if (p?.url) {
-            hasUrlOnly = true;
+        if (payload.url) {
+            out.push({ type: 'image', payload: { url: payload.url } });
+            continue;
         }
-        else if (p?.photos) {
-            for (const entry of Object.values(p.photos)) {
-                if (entry?.token) {
-                    photosMap[String(tokenCount)] = { token: entry.token };
-                    tokenCount++;
+        if (payload.photos) {
+            for (const photo of Object.values(payload.photos)) {
+                if (photo?.token) {
+                    out.push({ type: 'image', payload: { token: photo.token } });
                 }
             }
         }
     }
-    if (tokenCount > 1 && !hasUrlOnly) {
-        return [{ type: 'image', payload: { photos: photosMap } }];
-    }
-    if (tokenCount === 1 && !hasUrlOnly) {
-        return [{ type: 'image', payload: { token: photosMap['0'].token } }];
-    }
-    return images;
+    return out;
 }
 /** Загружает все фото альбома для одного поста MAX. */
 async function buildAlbumImageAttachments(bot, photoMessages, tgToken) {
