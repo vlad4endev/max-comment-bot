@@ -6,6 +6,10 @@ exports.isTelegramJoinStartPayload = isTelegramJoinStartPayload;
 exports.buildTelegramConfirmChannelPayload = buildTelegramConfirmChannelPayload;
 exports.parseTelegramConfirmChannelPayload = parseTelegramConfirmChannelPayload;
 exports.chatIdToConnectArg = chatIdToConnectArg;
+exports.buildTelegramAccountPairStartPayload = buildTelegramAccountPairStartPayload;
+exports.parseTelegramAccountPairToken = parseTelegramAccountPairToken;
+exports.isTelegramAccountPairStartPayload = isTelegramAccountPairStartPayload;
+exports.buildTelegramBotPairUrl = buildTelegramBotPairUrl;
 exports.parseTelegramConnectCommand = parseTelegramConnectCommand;
 /** Telegram bot deep link: `?start=jointg{chatId without minus}`. */
 function buildTelegramBotJoinUrl(telegramChatId, botUsername = 'commentvmax_bot') {
@@ -45,6 +49,27 @@ function parseTelegramConfirmChannelPayload(raw) {
 }
 function chatIdToConnectArg(telegramChatId) {
     return String(telegramChatId).trim().replace(/^-/, '');
+}
+/** Deep link: привязка аккаунта Telegram к профилю MAX `?start=pair_<token>`. */
+function buildTelegramAccountPairStartPayload(token) {
+    const t = String(token).trim();
+    if (!/^[A-Za-z0-9_-]{8,24}$/.test(t)) {
+        throw new Error('buildTelegramAccountPairStartPayload: invalid token');
+    }
+    return `pair_${t}`;
+}
+function parseTelegramAccountPairToken(raw) {
+    const trimmed = String(raw || '').trim();
+    const m = /^pair_([A-Za-z0-9_-]{8,24})$/i.exec(trimmed);
+    return m?.[1] ?? null;
+}
+function isTelegramAccountPairStartPayload(raw) {
+    return parseTelegramAccountPairToken(raw) !== null;
+}
+function buildTelegramBotPairUrl(startPayload, botUsername = 'commentvmax_bot') {
+    const nick = botUsername.replace(/^@/, '').trim();
+    const payload = encodeURIComponent(startPayload.trim());
+    return `https://t.me/${nick}?start=${payload}`;
 }
 function parseTelegramConnectCommand(text) {
     const t = text.trim();

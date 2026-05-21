@@ -14,12 +14,14 @@ import { telegramChannelRegistry } from './telegramChannelRegistry'
 import { commentStore } from './commentStore'
 import { postStore } from './postStore'
 import { ensureAdminPanelStateLoaded, listTgChainsSync } from '../api/adminPanelState'
-import { buildTelegramBotJoinUrl } from '../utils/telegramDeeplink'
+import { completeAccountPairingFromTelegram } from './accountPairingService'
+import { buildTelegramBotJoinUrl, isTelegramAccountPairStartPayload } from '../utils/telegramDeeplink'
 import {
   handleTelegramCallbackQuery,
   handleTelegramMyChatMemberUpdate,
   handleTelegramPrivateMessage,
 } from './telegramChannelActivation'
+import { profilePairingForPlatformUser } from './channelLinkAdminTeamSync'
 import { logger } from '../utils/logger'
 
 const TG_API = 'https://api.telegram.org/bot'
@@ -307,6 +309,10 @@ export async function getTelegramChannelAdminsForMiniapp(
     name: string
     initials: string
     linked: boolean
+    paired: boolean
+    max_user_id: number | null
+    tg_user_id: number | null
+    peer_platform: 'max' | 'telegram' | null
   }>
   invite_url: string
 }> {
@@ -334,11 +340,18 @@ export async function getTelegramChannelAdminsForMiniapp(
             .slice(0, 2)
             .toUpperCase()
         : name.slice(0, 2).toUpperCase()
+    const pairing = profilePairingForPlatformUser('telegram', a.userId)
+    const peerPlatform =
+      pairing.max_user_id != null ? ('max' as const) : pairing.paired ? ('max' as const) : null
     return {
       user_id: a.userId,
       name,
       initials,
       linked: linkedIds.has(a.userId),
+      paired: pairing.paired,
+      max_user_id: pairing.max_user_id,
+      tg_user_id: pairing.tg_user_id,
+      peer_platform: peerPlatform,
     }
   })
 
@@ -442,6 +455,46 @@ export async function notifyChannelLinkSucceededPrivate(params: {
   }
 }
 
+export async function handleTelegramBotAccountPair(
+  telegramUserId: number,
+  from: Record<string, unknown>,
+  startPayload: string,
+): Promise<void> {
+  const token = resolveTelegramBotToken()
+  const firstName = typeof from.first_name === 'string' ? from.first_name : null
+  const lastName = typeof from.last_name === 'string' ? from.last_name : null
+  const username = typeof from.username === 'string' ? from.username : null
+  try {
+    await completeAccountPairingFromTelegram(startPayload, {
+      platform: 'telegram',
+      platformUserId: telegramUserId,
+      username,
+      firstName,
+      lastName,
+      photoUrl: null,
+    })
+    const homeUrl = buildTelegramMiniAppHomeUrl()
+    await sendTelegramBotMessage(
+      token,
+      telegramUserId,
+      '✅ Telegram привязан к вашему MAX-аккаунту!\n\n' +
+        'Теперь команда канала видит связку в списке админов. Откройте мини-приложение — статус обновится автоматически.',
+      { reply_markup: buildTelegramStartInlineKeyboard(homeUrl, { includeHowItWorks: false }) },
+    )
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err)
+    let text = 'Не удалось привязать Telegram. Ссылка могла устареть — создайте новую в MAX.'
+    if (msg === 'pairing token expired') {
+      text = 'Ссылка устарела. В MAX нажмите «Связать Telegram» ещё раз.'
+    } else if (msg === 'pairing token already used') {
+      text = 'Эта ссылка уже использована. Если нужно — создайте новую в MAX.'
+    } else if (msg === 'telegram already linked') {
+      text = 'Telegram уже привязан к профилю.'
+    }
+    await sendTelegramBotMessage(token, telegramUserId, text)
+  }
+}
+
 export async function handleTelegramBotStartJoin(
   telegramUserId: number,
   startPayload: string,
@@ -519,6 +572,10 @@ export async function processTelegramMiniappBotUpdates(
 
     if (text.startsWith('/start')) {
       const payload = text.replace(/^\/start\s*/i, '').trim()
+      if (isTelegramAccountPairStartPayload(payload)) {
+        await handleTelegramBotAccountPair(from.id, from, payload)
+        continue
+      }
       if (/^jointg\d+$/i.test(payload)) {
         await handleTelegramBotStartJoin(from.id, payload)
         continue

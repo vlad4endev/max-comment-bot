@@ -723,6 +723,76 @@
     }
     .channel-link-flow { flex: 1; min-width: 0; font-size: 13px; font-weight: 600; line-height: 1.35; }
     .channel-link-sub { font-size: 11px; color: var(--muted); font-weight: 400; margin-top: 2px; }
+    .account-pair-row {
+      margin: -4px 0 14px;
+      padding: 0 2px;
+    }
+    .btn-pair-peer {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 12px;
+      border-radius: 999px;
+      border: none;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: opacity 0.15s ease;
+    }
+    .btn-pair-peer:disabled { opacity: 0.55; cursor: default; }
+    .btn-pair-peer--tg {
+      background: #2aabee;
+      color: #fff;
+      box-shadow: 0 1px 0 rgba(0, 0, 0, 0.12);
+    }
+    .btn-pair-peer--max {
+      background: linear-gradient(135deg, #5b6cff, #3d4ed8);
+      color: #fff;
+    }
+    .account-pair-status {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      color: var(--teal);
+      font-weight: 600;
+    }
+    .admin-peer-badge {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      font-size: 10px;
+      font-weight: 800;
+      flex-shrink: 0;
+      margin-left: 6px;
+    }
+    .admin-peer-badge--tg {
+      background: #2aabee;
+      color: #fff;
+    }
+    .admin-peer-badge--max {
+      background: linear-gradient(135deg, #5b6cff, #3d4ed8);
+      color: #fff;
+    }
+    .team-sync-card {
+      display: none;
+      margin-top: 10px;
+      padding: 14px;
+      border-radius: 14px;
+      background: linear-gradient(
+        145deg,
+        color-mix(in srgb, var(--teal) 12%, var(--bg-surface)),
+        var(--bg-surface)
+      );
+      border: 1px solid var(--teal-border-strong);
+    }
+    .team-sync-card.show { display: block; }
+    .team-sync-title { font-size: 14px; font-weight: 700; margin: 0 0 6px; }
+    .team-sync-desc { font-size: 12px; color: var(--muted); margin: 0 0 12px; line-height: 1.45; }
+    #btnSyncAdminTeam { width: 100%; }
     .channel-link-arrow { color: var(--teal); flex-shrink: 0; font-size: 16px; }
     .link-code-box {
       margin: 12px 0;
@@ -2092,6 +2162,7 @@
         </div>
         <span class="badge-active">Активен</span>
       </div>
+      <div class="account-pair-row" id="accountPairRow" aria-live="polite"></div>
       <div class="home-err" id="homeErr"></div>
       <div id="testUserFallback" class="test-user-fallback" aria-live="polite">
         <div class="hint" id="testUserFallbackHint">Открыто вне MAX/Telegram (или нет пользователя в Bridge). Для теста укажите <code style="color:var(--teal)">user_id</code> в URL (<code style="color:var(--teal)">?user_id=122099994</code>) или введите ниже.</div>
@@ -2114,6 +2185,14 @@
       <div>
         <div class="section-title">Связки TG ↔ MAX</div>
         <div class="channel-link-list" id="homeChannelLinksList"></div>
+        <div id="homeTeamSyncCard" class="team-sync-card" aria-live="polite">
+          <div class="team-sync-title">Связать команду админов</div>
+          <p class="team-sync-desc">
+            Два шага: нажмите кнопку и подтвердите — бот сопоставит админов MAX и Telegram по
+            @username и сохранит оба аккаунта в одном профиле.
+          </p>
+          <button type="button" class="btn-primary" id="btnSyncAdminTeam">Связать автоматически</button>
+        </div>
         <button type="button" class="btn-dashed" id="btnCreateChannelLink" style="margin-top:8px">
           Создать связку
         </button>
@@ -3251,11 +3330,26 @@
         var rows = (data.admins || [])
           .map(function (a) {
             var nm = esc(String(a.name || '—'))
+            var peerBadge =
+              a.peer_platform === 'telegram'
+                ? '<span class="admin-peer-badge admin-peer-badge--tg" title="Telegram привязан" aria-label="Telegram">✈</span>'
+                : a.peer_platform === 'max'
+                  ? '<span class="admin-peer-badge admin-peer-badge--max" title="MAX привязан" aria-label="MAX">M</span>'
+                  : ''
             var ini = esc(String(a.initials || initials(a.name)))
             var connected = !!a.linked
-            var statusCls = connected ? 'admin-status-connected' : 'admin-status-pending'
-            var dotCls = connected ? 'admin-status-dot teal' : 'admin-status-dot yellow'
-            var label = connected ? 'подключён' : 'не подключён'
+            var cross = !!(a.paired || (a.max_user_id && a.tg_user_id))
+            var statusCls = cross
+              ? 'admin-status-connected'
+              : connected
+                ? 'admin-status-connected'
+                : 'admin-status-pending'
+            var dotCls = cross || connected ? 'admin-status-dot teal' : 'admin-status-dot yellow'
+            var label = cross
+              ? 'MAX + Telegram'
+              : connected
+                ? 'подключён'
+                : 'не подключён'
             var removeBtn =
               '<button type="button" class="btn-admin-disable" data-channel-id="' +
               esc(String(ch.chat_id)) +
@@ -3271,6 +3365,7 @@
               '</div>' +
               '<div class="admin-name">' +
               nm +
+              peerBadge +
               '</div>' +
               '<div class="admin-row-controls"><div class="' +
               statusCls +
@@ -3740,8 +3835,33 @@
         }
       }
 
+      function reloadHomeAdmins(apiUid) {
+        var adminsHost = document.getElementById('adminsList')
+        if (!adminsHost || apiUid == null || !channelsCache.length) return
+        adminsHost.innerHTML = ''
+        Promise.all(
+          channelsCache.map(function (ch) {
+            return fetch(
+              '/api/channel-admins?chat_id=' +
+                encodeURIComponent(String(ch.chat_id)) +
+                '&user_id=' +
+                encodeURIComponent(String(apiUid)) +
+                platformQs,
+              { headers: homeApiHeaders(false) }
+            ).then(function (r) {
+              return r.ok ? r.json() : null
+            })
+          })
+        ).then(function (results) {
+          results.forEach(function (admData, i) {
+            renderChannelAdmins(channelsCache[i], admData)
+          })
+        })
+      }
+
       function loadChannelLinks(apiUid) {
         var host = document.getElementById('homeChannelLinksList')
+        var teamCard = document.getElementById('homeTeamSyncCard')
         if (!host || apiUid == null) return
         fetch('/api/channel-links?user_id=' + encodeURIComponent(String(apiUid)) + platformQs, {
           headers: homeApiHeaders(false),
@@ -3751,7 +3871,15 @@
           })
           .then(function (data) {
             var links = data.links || []
+            window.__channelLinksCache = links
             host.innerHTML = ''
+            if (teamCard) {
+              if (links.length) {
+                teamCard.classList.add('show')
+              } else {
+                teamCard.classList.remove('show')
+              }
+            }
             if (!links.length) {
               host.innerHTML =
                 '<div style="color:var(--muted);font-size:13px;padding:8px 4px;">' +
@@ -3841,13 +3969,205 @@
         })
       }
 
+      function renderAccountPairingRow(status) {
+        var row = document.getElementById('accountPairRow')
+        if (!row) return
+        row.innerHTML = ''
+        if (!status) return
+        if (inTelegram) {
+          if (status.max_linked) {
+            var mxName = status.max_account && status.max_account.name ? status.max_account.name : 'MAX'
+            row.innerHTML =
+              '<span class="account-pair-status"><span aria-hidden="true">✓</span> MAX привязан · ' +
+              esc(mxName) +
+              '</span>'
+            return
+          }
+          var btnMax = document.createElement('button')
+          btnMax.type = 'button'
+          btnMax.className = 'btn-pair-peer btn-pair-peer--max'
+          btnMax.id = 'btnPairMaxAccount'
+          btnMax.textContent = 'Связать MAX'
+          row.appendChild(btnMax)
+          return
+        }
+        if (status.telegram_linked) {
+          var tgName =
+            status.telegram_account && status.telegram_account.name
+              ? status.telegram_account.name
+              : 'Telegram'
+          row.innerHTML =
+            '<span class="account-pair-status"><span aria-hidden="true">✓</span> Telegram привязан · ' +
+            esc(tgName) +
+            '</span>'
+          return
+        }
+        var btnTg = document.createElement('button')
+        btnTg.type = 'button'
+        btnTg.className = 'btn-pair-peer btn-pair-peer--tg'
+        btnTg.id = 'btnPairTelegramAccount'
+        btnTg.innerHTML = '<span aria-hidden="true">✈</span> Связать Telegram'
+        row.appendChild(btnTg)
+      }
+
+      function loadAccountPairingStatus(apiUid) {
+        if (apiUid == null) return
+        fetch(
+          '/api/account-pairing/status?user_id=' + encodeURIComponent(String(apiUid)) + platformQs,
+          { headers: homeApiHeaders(false) }
+        )
+          .then(function (r) {
+            return r.ok ? r.json() : null
+          })
+          .then(function (st) {
+            renderAccountPairingRow(st)
+            wireAccountPairingButtons(apiUid, st)
+          })
+          .catch(function () {})
+      }
+
+      function openExternalInviteUrl(url) {
+        if (!url) return
+        try {
+          if (inTelegram && bridge.openLink) {
+            bridge.openLink(url)
+            return
+          }
+          if (!inTelegram && bridge.openMaxLink) {
+            bridge.openMaxLink(url)
+            return
+          }
+        } catch (e) {}
+        window.open(url, '_blank', 'noopener,noreferrer')
+      }
+
+      function wireAccountPairingButtons(apiUid, status) {
+        if (apiUid == null || !status) return
+        var btnTg = document.getElementById('btnPairTelegramAccount')
+        var btnMax = document.getElementById('btnPairMaxAccount')
+        if (btnTg && btnTg.dataset.bound !== '1') {
+          btnTg.dataset.bound = '1'
+          btnTg.addEventListener('click', function () {
+            btnTg.disabled = true
+            fetch('/api/account-pairing/invite-telegram', {
+              method: 'POST',
+              headers: homeApiHeaders(true),
+              body: JSON.stringify(ownerProfilePayload(apiUid)),
+            })
+              .then(function (r) {
+                return r.json().then(function (j) {
+                  return { ok: r.ok, body: j }
+                })
+              })
+              .then(function (x) {
+                if (!x.ok) throw new Error((x.body && x.body.error) || 'Ошибка')
+                openExternalInviteUrl(x.body.invite_url)
+                showToast('Откройте Telegram и нажмите Start в боте')
+              })
+              .catch(function (e) {
+                showToast(e.message || 'Не удалось создать ссылку')
+              })
+              .finally(function () {
+                btnTg.disabled = false
+              })
+          })
+        }
+        if (btnMax && btnMax.dataset.bound !== '1') {
+          btnMax.dataset.bound = '1'
+          btnMax.addEventListener('click', function () {
+            btnMax.disabled = true
+            fetch('/api/account-pairing/invite-max', {
+              method: 'POST',
+              headers: homeApiHeaders(true),
+              body: JSON.stringify(ownerProfilePayload(apiUid)),
+            })
+              .then(function (r) {
+                return r.json().then(function (j) {
+                  return { ok: r.ok, body: j }
+                })
+              })
+              .then(function (x) {
+                if (!x.ok) throw new Error((x.body && x.body.error) || 'Ошибка')
+                openExternalInviteUrl(x.body.invite_url)
+                showToast('Откройте MAX и запустите бота по ссылке')
+              })
+              .catch(function (e) {
+                showToast(e.message || 'Не удалось создать ссылку')
+              })
+              .finally(function () {
+                btnMax.disabled = false
+              })
+          })
+        }
+      }
+
       if (uid != null) {
         fetch('/api/owner-profile/sync', {
           method: 'POST',
           headers: homeApiHeaders(true),
           body: JSON.stringify(ownerProfilePayload(uid)),
         }).catch(function () {})
+        loadAccountPairingStatus(uid)
         loadChannelLinks(uid)
+      }
+
+      var btnSyncTeam = document.getElementById('btnSyncAdminTeam')
+      if (btnSyncTeam && btnSyncTeam.dataset.bound !== '1') {
+        btnSyncTeam.dataset.bound = '1'
+        btnSyncTeam.addEventListener('click', function () {
+          if (uid == null) {
+            showToast('Не удалось определить user_id')
+            return
+          }
+          if (!(window.__channelLinksCache && window.__channelLinksCache.length)) {
+            showToast('Сначала создайте связку TG ↔ MAX')
+            return
+          }
+          var ok = confirm(
+            'Связать админов MAX и Telegram по @username?\n\n' +
+              'Бот сохранит оба аккаунта в базе и включит уведомления там, где это возможно.'
+          )
+          if (!ok) return
+          btnSyncTeam.disabled = true
+          fetch('/api/channel-links/sync-admin-team', {
+            method: 'POST',
+            headers: homeApiHeaders(true),
+            body: JSON.stringify({ user_id: uid }),
+          })
+            .then(function (r) {
+              return r.json().then(function (j) {
+                return { ok: r.ok, body: j }
+              })
+            })
+            .then(function (x) {
+              if (!x.ok) throw new Error((x.body && x.body.error) || 'Ошибка синхронизации')
+              var results = x.body.results || []
+              var paired = 0
+              var maxOnly = 0
+              var tgOnly = 0
+              results.forEach(function (row) {
+                paired += row.paired_count || 0
+                maxOnly += row.max_only_count || 0
+                tgOnly += row.tg_only_count || 0
+              })
+              showToast(
+                'Готово: ' +
+                  paired +
+                  ' связано, MAX: ' +
+                  maxOnly +
+                  ', TG: ' +
+                  tgOnly +
+                  ' (без пары)'
+              )
+              reloadHomeAdmins(uid)
+            })
+            .catch(function (e) {
+              showToast(e.message || 'Не удалось связать команду')
+            })
+            .finally(function () {
+              btnSyncTeam.disabled = false
+            })
+        })
       }
 
       var btnCreateLink = document.getElementById('btnCreateChannelLink')

@@ -18,6 +18,10 @@ import {
   parseTelegramConfirmChannelPayload,
   parseTelegramConnectCommand,
 } from '../utils/telegramDeeplink'
+import {
+  pauseTgChainsForTelegramChannelLostAdmin,
+  restoreTgChainsForTelegramChannelAdminRestored,
+} from './telegramTgChainLifecycle'
 import { logger } from '../utils/logger'
 
 const TG_API = 'https://api.telegram.org/bot'
@@ -293,6 +297,13 @@ export async function tryActivateTelegramChannelRegistration(
   telegramChannelActivationState.clearChannelPendingAdminRights(channelChatId)
   linkInviterAsAdmin(inviterUserId, channelChatId)
 
+  const updatedReg = telegramChannelRegistry.getChannel(channelChatId)
+  await restoreTgChainsForTelegramChannelAdminRestored({
+    tgChannelChatId: channelChatId,
+    tgTitle: updatedReg?.title ?? reg?.title ?? null,
+    tgUsername: updatedReg?.username ?? reg?.username ?? null,
+  })
+
   const wasConnectedBefore = hasTelegramAdminJoinNotified(channelChatId)
   if (!wasConnectedBefore) {
     await notifyTelegramChannelJoined(channelChatId)
@@ -353,12 +364,14 @@ export async function handleTelegramMyChatMemberUpdate(
   const isAdminNow = newStatus === 'administrator' || newStatus === 'creator'
   const isMemberNow = isAdminNow || newStatus === 'member'
   const isRemoved = newStatus === 'left' || newStatus === 'kicked' || newStatus === 'restricted'
+  const lostAdminRights = wasAdmin && !isAdminNow
 
   logger.info('telegram my_chat_member', {
     chatId,
     oldStatus,
     newStatus,
     inviterUserId,
+    lostAdminRights,
   })
 
   if (isRemoved) {
@@ -371,7 +384,12 @@ export async function handleTelegramMyChatMemberUpdate(
     })
     clearTelegramAdminJoinNotified(chatId)
     telegramChannelActivationState.markChannelPendingAdminRights(chatId)
-    if (wasAdmin) {
+    if (lostAdminRights) {
+      await pauseTgChainsForTelegramChannelLostAdmin({
+        tgChannelChatId: chatId,
+        tgTitle: title,
+        tgUsername: username,
+      })
       await notifyTelegramAdminsBotLostAdminRights(chatId)
     }
     return
@@ -388,6 +406,18 @@ export async function handleTelegramMyChatMemberUpdate(
     type: chatType,
     botIsAdmin: isAdminNow,
   })
+
+  if (lostAdminRights) {
+    clearTelegramAdminJoinNotified(chatId)
+    telegramChannelActivationState.markChannelPendingAdminRights(chatId)
+    await pauseTgChainsForTelegramChannelLostAdmin({
+      tgChannelChatId: chatId,
+      tgTitle: title,
+      tgUsername: username,
+    })
+    await notifyTelegramAdminsBotLostAdminRights(chatId)
+    return
+  }
 
   if (inviterUserId != null) {
     telegramBotUserStore.markStarted({ id: inviterUserId })

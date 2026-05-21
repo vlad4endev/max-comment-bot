@@ -7,6 +7,11 @@ export declare function isTelegramJoinStartPayload(raw: string): boolean;
 export declare function buildTelegramConfirmChannelPayload(telegramChatId: string): string;
 export declare function parseTelegramConfirmChannelPayload(raw: string): string | null;
 export declare function chatIdToConnectArg(telegramChatId: string): string;
+/** Deep link: привязка аккаунта Telegram к профилю MAX `?start=pair_<token>`. */
+export declare function buildTelegramAccountPairStartPayload(token: string): string;
+export declare function parseTelegramAccountPairToken(raw: string): string | null;
+export declare function isTelegramAccountPairStartPayload(raw: string): boolean;
+export declare function buildTelegramBotPairUrl(startPayload: string, botUsername?: string): string;
 export declare function parseTelegramConnectCommand(text: string): false | {
     mode: 'all';
 } | {

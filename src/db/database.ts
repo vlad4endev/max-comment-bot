@@ -263,6 +263,25 @@ function initSchema(targetDb: Database.Database): void {
   migratePostIdAliasesSchema(targetDb)
   migrateTgChainForwardedSchema(targetDb)
   migrateChannelLinkDraftsSchema(targetDb)
+  migrateAccountPairingTokensSchema(targetDb)
+}
+
+function migrateAccountPairingTokensSchema(database: Database.Database): void {
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS account_pairing_tokens (
+      token             TEXT PRIMARY KEY,
+      profile_id        TEXT NOT NULL,
+      initiator_platform TEXT NOT NULL CHECK (initiator_platform IN ('max', 'telegram')),
+      initiator_user_id TEXT NOT NULL,
+      status            TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'completed', 'expired')),
+      created_at        TEXT NOT NULL DEFAULT (datetime('now')),
+      expires_at        TEXT NOT NULL,
+      completed_at      TEXT,
+      FOREIGN KEY (profile_id) REFERENCES owner_profiles(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_account_pairing_tokens_profile
+      ON account_pairing_tokens(profile_id, status);
+  `)
 }
 
 function migrateChannelLinkDraftsSchema(database: Database.Database): void {

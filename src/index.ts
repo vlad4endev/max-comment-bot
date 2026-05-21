@@ -39,6 +39,7 @@ import { startAutopostScheduler } from './services/autopostScheduler'
 import { startChannelImportWorker } from './services/channelImportService'
 import { ensureAdminPanelStateLoaded } from './api/adminPanelState'
 import { setTgChainForwarderBot, startTgChainForwarder } from './services/tgChainForwarder'
+import { setTelegramTgChainLifecycleBot } from './services/telegramTgChainLifecycle'
 import { createHttpApp, createWebhookApp } from './webhook/createWebhookApp'
 
 async function main(): Promise<void> {
@@ -73,6 +74,7 @@ async function main(): Promise<void> {
   }
   flowProcessor.setBot(bot)
   setTgChainForwarderBot(bot)
+  setTelegramTgChainLifecycleBot(bot)
   startRuntimeLogRotationScheduler()
   setChannelRegistryChangeHandler(() => notifyChannelRegistryChanged())
   startChannelPostPoller(bot)

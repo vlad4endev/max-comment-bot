@@ -28,6 +28,7 @@ const autopostScheduler_1 = require("./services/autopostScheduler");
 const channelImportService_1 = require("./services/channelImportService");
 const adminPanelState_1 = require("./api/adminPanelState");
 const tgChainForwarder_1 = require("./services/tgChainForwarder");
+const telegramTgChainLifecycle_1 = require("./services/telegramTgChainLifecycle");
 const createWebhookApp_1 = require("./webhook/createWebhookApp");
 async function main() {
     (0, migrate_1.migrateFromJson)();
@@ -62,6 +63,7 @@ async function main() {
     }
     flowProcessor_1.flowProcessor.setBot(bot);
     (0, tgChainForwarder_1.setTgChainForwarderBot)(bot);
+    (0, telegramTgChainLifecycle_1.setTelegramTgChainLifecycleBot)(bot);
     (0, logger_1.startRuntimeLogRotationScheduler)();
     (0, channelRegistry_1.setChannelRegistryChangeHandler)(() => (0, channelPoller_1.notifyChannelRegistryChanged)());
     (0, channelPoller_1.startChannelPostPoller)(bot);

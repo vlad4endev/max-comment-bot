@@ -11,6 +11,7 @@ exports.getTelegramChannelAdminsForMiniapp = getTelegramChannelAdminsForMiniapp;
 exports.resolveTelegramChannelInviteAccess = resolveTelegramChannelInviteAccess;
 exports.registerTelegramChannelNotifyLink = registerTelegramChannelNotifyLink;
 exports.notifyChannelLinkSucceededPrivate = notifyChannelLinkSucceededPrivate;
+exports.handleTelegramBotAccountPair = handleTelegramBotAccountPair;
 exports.handleTelegramBotStartJoin = handleTelegramBotStartJoin;
 exports.processTelegramMiniappBotUpdates = processTelegramMiniappBotUpdates;
 const axios_1 = __importDefault(require("axios"));
@@ -24,8 +25,10 @@ const telegramChannelRegistry_1 = require("./telegramChannelRegistry");
 const commentStore_1 = require("./commentStore");
 const postStore_1 = require("./postStore");
 const adminPanelState_1 = require("../api/adminPanelState");
+const accountPairingService_1 = require("./accountPairingService");
 const telegramDeeplink_1 = require("../utils/telegramDeeplink");
 const telegramChannelActivation_1 = require("./telegramChannelActivation");
+const channelLinkAdminTeamSync_1 = require("./channelLinkAdminTeamSync");
 const logger_1 = require("../utils/logger");
 const TG_API = 'https://api.telegram.org/bot';
 function resolveTelegramBotToken() {
@@ -247,11 +250,17 @@ async function getTelegramChannelAdminsForMiniapp(telegramUserId, channelChatId)
                 .slice(0, 2)
                 .toUpperCase()
             : name.slice(0, 2).toUpperCase();
+        const pairing = (0, channelLinkAdminTeamSync_1.profilePairingForPlatformUser)('telegram', a.userId);
+        const peerPlatform = pairing.max_user_id != null ? 'max' : pairing.paired ? 'max' : null;
         return {
             user_id: a.userId,
             name,
             initials,
             linked: linkedIds.has(a.userId),
+            paired: pairing.paired,
+            max_user_id: pairing.max_user_id,
+            tg_user_id: pairing.tg_user_id,
+            peer_platform: peerPlatform,
         };
     });
     return {
@@ -328,6 +337,39 @@ async function notifyChannelLinkSucceededPrivate(params) {
         }
     }
 }
+async function handleTelegramBotAccountPair(telegramUserId, from, startPayload) {
+    const token = resolveTelegramBotToken();
+    const firstName = typeof from.first_name === 'string' ? from.first_name : null;
+    const lastName = typeof from.last_name === 'string' ? from.last_name : null;
+    const username = typeof from.username === 'string' ? from.username : null;
+    try {
+        await (0, accountPairingService_1.completeAccountPairingFromTelegram)(startPayload, {
+            platform: 'telegram',
+            platformUserId: telegramUserId,
+            username,
+            firstName,
+            lastName,
+            photoUrl: null,
+        });
+        const homeUrl = buildTelegramMiniAppHomeUrl();
+        await sendTelegramBotMessage(token, telegramUserId, '✅ Telegram привязан к вашему MAX-аккаунту!\n\n' +
+            'Теперь команда канала видит связку в списке админов. Откройте мини-приложение — статус обновится автоматически.', { reply_markup: buildTelegramStartInlineKeyboard(homeUrl, { includeHowItWorks: false }) });
+    }
+    catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        let text = 'Не удалось привязать Telegram. Ссылка могла устареть — создайте новую в MAX.';
+        if (msg === 'pairing token expired') {
+            text = 'Ссылка устарела. В MAX нажмите «Связать Telegram» ещё раз.';
+        }
+        else if (msg === 'pairing token already used') {
+            text = 'Эта ссылка уже использована. Если нужно — создайте новую в MAX.';
+        }
+        else if (msg === 'telegram already linked') {
+            text = 'Telegram уже привязан к профилю.';
+        }
+        await sendTelegramBotMessage(token, telegramUserId, text);
+    }
+}
 async function handleTelegramBotStartJoin(telegramUserId, startPayload) {
     const token = resolveTelegramBotToken();
     const m = /^jointg(\d+)$/i.exec(String(startPayload).trim());
@@ -392,6 +434,10 @@ async function processTelegramMiniappBotUpdates(token, updates) {
         });
         if (text.startsWith('/start')) {
             const payload = text.replace(/^\/start\s*/i, '').trim();
+            if ((0, telegramDeeplink_1.isTelegramAccountPairStartPayload)(payload)) {
+                await handleTelegramBotAccountPair(from.id, from, payload);
+                continue;
+            }
             if (/^jointg\d+$/i.test(payload)) {
                 await handleTelegramBotStartJoin(from.id, payload);
                 continue;

@@ -18,6 +18,7 @@ const telegramChannelAdminJoinNotified_1 = require("./telegramChannelAdminJoinNo
 const telegramChannelActivationState_1 = require("./telegramChannelActivationState");
 const config_1 = require("../config");
 const telegramDeeplink_1 = require("../utils/telegramDeeplink");
+const telegramTgChainLifecycle_1 = require("./telegramTgChainLifecycle");
 const logger_1 = require("../utils/logger");
 const TG_API = 'https://api.telegram.org/bot';
 let cachedBotUserId = null;
@@ -233,6 +234,12 @@ async function tryActivateTelegramChannelRegistration(channelChatId, inviterUser
     }
     telegramChannelActivationState_1.telegramChannelActivationState.clearChannelPendingAdminRights(channelChatId);
     linkInviterAsAdmin(inviterUserId, channelChatId);
+    const updatedReg = telegramChannelRegistry_1.telegramChannelRegistry.getChannel(channelChatId);
+    await (0, telegramTgChainLifecycle_1.restoreTgChainsForTelegramChannelAdminRestored)({
+        tgChannelChatId: channelChatId,
+        tgTitle: updatedReg?.title ?? reg?.title ?? null,
+        tgUsername: updatedReg?.username ?? reg?.username ?? null,
+    });
     const wasConnectedBefore = (0, telegramChannelAdminJoinNotified_1.hasTelegramAdminJoinNotified)(channelChatId);
     if (!wasConnectedBefore) {
         await notifyTelegramChannelJoined(channelChatId);
@@ -284,11 +291,13 @@ async function handleTelegramMyChatMemberUpdate(update) {
     const isAdminNow = newStatus === 'administrator' || newStatus === 'creator';
     const isMemberNow = isAdminNow || newStatus === 'member';
     const isRemoved = newStatus === 'left' || newStatus === 'kicked' || newStatus === 'restricted';
+    const lostAdminRights = wasAdmin && !isAdminNow;
     logger_1.logger.info('telegram my_chat_member', {
         chatId,
         oldStatus,
         newStatus,
         inviterUserId,
+        lostAdminRights,
     });
     if (isRemoved) {
         telegramChannelRegistry_1.telegramChannelRegistry.saveChannel({
@@ -300,7 +309,12 @@ async function handleTelegramMyChatMemberUpdate(update) {
         });
         (0, telegramChannelAdminJoinNotified_1.clearTelegramAdminJoinNotified)(chatId);
         telegramChannelActivationState_1.telegramChannelActivationState.markChannelPendingAdminRights(chatId);
-        if (wasAdmin) {
+        if (lostAdminRights) {
+            await (0, telegramTgChainLifecycle_1.pauseTgChainsForTelegramChannelLostAdmin)({
+                tgChannelChatId: chatId,
+                tgTitle: title,
+                tgUsername: username,
+            });
             await notifyTelegramAdminsBotLostAdminRights(chatId);
         }
         return;
@@ -315,6 +329,17 @@ async function handleTelegramMyChatMemberUpdate(update) {
         type: chatType,
         botIsAdmin: isAdminNow,
     });
+    if (lostAdminRights) {
+        (0, telegramChannelAdminJoinNotified_1.clearTelegramAdminJoinNotified)(chatId);
+        telegramChannelActivationState_1.telegramChannelActivationState.markChannelPendingAdminRights(chatId);
+        await (0, telegramTgChainLifecycle_1.pauseTgChainsForTelegramChannelLostAdmin)({
+            tgChannelChatId: chatId,
+            tgTitle: title,
+            tgUsername: username,
+        });
+        await notifyTelegramAdminsBotLostAdminRights(chatId);
+        return;
+    }
     if (inviterUserId != null) {
         telegramBotUserStore_1.telegramBotUserStore.markStarted({ id: inviterUserId });
     }

@@ -43,6 +43,34 @@ export function chatIdToConnectArg(telegramChatId: string): string {
   return String(telegramChatId).trim().replace(/^-/, '')
 }
 
+/** Deep link: привязка аккаунта Telegram к профилю MAX `?start=pair_<token>`. */
+export function buildTelegramAccountPairStartPayload(token: string): string {
+  const t = String(token).trim()
+  if (!/^[A-Za-z0-9_-]{8,24}$/.test(t)) {
+    throw new Error('buildTelegramAccountPairStartPayload: invalid token')
+  }
+  return `pair_${t}`
+}
+
+export function parseTelegramAccountPairToken(raw: string): string | null {
+  const trimmed = String(raw || '').trim()
+  const m = /^pair_([A-Za-z0-9_-]{8,24})$/i.exec(trimmed)
+  return m?.[1] ?? null
+}
+
+export function isTelegramAccountPairStartPayload(raw: string): boolean {
+  return parseTelegramAccountPairToken(raw) !== null
+}
+
+export function buildTelegramBotPairUrl(
+  startPayload: string,
+  botUsername = 'commentvmax_bot',
+): string {
+  const nick = botUsername.replace(/^@/, '').trim()
+  const payload = encodeURIComponent(startPayload.trim())
+  return `https://t.me/${nick}?start=${payload}`
+}
+
 export function parseTelegramConnectCommand(
   text: string,
 ): false | { mode: 'all' } | { mode: 'one'; channelChatId: string } | undefined {

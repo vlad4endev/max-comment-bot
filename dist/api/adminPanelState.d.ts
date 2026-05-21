@@ -29,6 +29,8 @@ export interface TgChainRecord {
     add_comments_button: boolean;
     add_signature: boolean;
     active: boolean;
+    /** ISO-время автопаузы (бот потерял админ-права в TG); снимается при восстановлении. */
+    auto_paused_at?: string | null;
     created_at: string;
     forwarded_today: number;
     errors_today: number;

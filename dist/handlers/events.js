@@ -15,6 +15,7 @@ const channelRegistry_1 = require("../services/channelRegistry");
 const channelFullDisconnect_1 = require("../services/channelFullDisconnect");
 const resolveChannelChatId_1 = require("../services/resolveChannelChatId");
 const commentStore_1 = require("../services/commentStore");
+const accountPairingService_1 = require("../services/accountPairingService");
 const notificationService_1 = require("../services/notificationService");
 const postStore_1 = require("../services/postStore");
 const settingsStore_1 = require("../services/settingsStore");
@@ -529,6 +530,47 @@ function registerEventHandlers(bot) {
                 }
                 else if (!alreadyRegistered) {
                     await trySendDmToUser(bot, userId, BOT_ACTIVATION_WELCOME_TEXT);
+                }
+                return;
+            }
+            if ((0, accountPairingService_1.isAccountPairStartPayload)(startPayload)) {
+                try {
+                    await (0, accountPairingService_1.completeAccountPairingFromMax)(startPayload, {
+                        platform: 'max',
+                        platformUserId: userId,
+                        username: ctx.user?.username ?? null,
+                        firstName: ctx.user?.name ?? null,
+                        lastName: null,
+                        photoUrl: null,
+                    });
+                    const homeUrl = buildMiniAppHomeUrl();
+                    const text = '✅ MAX привязан к вашему Telegram-аккаунту!\n\n' +
+                        'Команда канала увидит связку в списке админов. Откройте мини-приложение в MAX.';
+                    const kb = max_bot_api_1.Keyboard.inlineKeyboard([
+                        [max_bot_api_1.Keyboard.button.link('💬 Открыть панель', homeUrl)],
+                    ]);
+                    if (chatId !== undefined) {
+                        await bot.api.sendMessageToChat(chatId, text, { attachments: [kb] });
+                    }
+                    else {
+                        await bot.api.sendMessageToUser(userId, text, { attachments: [kb] });
+                    }
+                }
+                catch (err) {
+                    const msg = err instanceof Error ? err.message : String(err);
+                    let text = 'Не удалось привязать MAX. Создайте новую ссылку в Telegram.';
+                    if (msg === 'pairing token expired') {
+                        text = 'Ссылка устарела. В Telegram нажмите «Связать MAX» ещё раз.';
+                    }
+                    else if (msg === 'pairing token already used') {
+                        text = 'Ссылка уже использована.';
+                    }
+                    if (chatId !== undefined) {
+                        await bot.api.sendMessageToChat(chatId, text);
+                    }
+                    else {
+                        await trySendDmToUser(bot, userId, text);
+                    }
                 }
                 return;
             }

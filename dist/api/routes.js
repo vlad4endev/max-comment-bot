@@ -35,7 +35,10 @@ const userMiniappSettingsStore_1 = require("../services/userMiniappSettingsStore
 const userAccessCleanup_1 = require("../services/userAccessCleanup");
 const memberAvatar_1 = require("../utils/memberAvatar");
 const channelLinkService_1 = require("../services/channelLinkService");
+const channelLinkAdminTeamSync_1 = require("../services/channelLinkAdminTeamSync");
+const adminPanelState_1 = require("../api/adminPanelState");
 const integrationsStore_1 = require("../services/integrationsStore");
+const accountPairingService_1 = require("../services/accountPairingService");
 const ownerProfileStore_1 = require("../services/ownerProfileStore");
 const logger_1 = require("../utils/logger");
 function isRecord(value) {
@@ -582,12 +585,25 @@ function createCommentApiRouter(deps) {
             }
             const members = await listChannelAdminsForMiniApp(deps.bot, chatId);
             const linkedIds = new Set(channelNotifyLinkStore_1.channelNotifyLinkStore.getUserIdsForChannel(chatId));
-            const admins = members.map((m) => ({
-                user_id: m.user_id,
-                name: m.name,
-                initials: adminDisplayInitials(m.name),
-                linked: linkedIds.has(m.user_id),
-            })).filter((a) => !disabledAdminStore_1.disabledAdminStore.isDisabled(a.user_id));
+            const admins = members
+                .map((m) => {
+                const pairing = (0, channelLinkAdminTeamSync_1.profilePairingForPlatformUser)('max', m.user_id);
+                return {
+                    user_id: m.user_id,
+                    name: m.name,
+                    initials: adminDisplayInitials(m.name),
+                    linked: linkedIds.has(m.user_id),
+                    paired: pairing.paired,
+                    max_user_id: pairing.max_user_id,
+                    tg_user_id: pairing.tg_user_id,
+                    peer_platform: pairing.tg_user_id != null
+                        ? 'telegram'
+                        : pairing.paired
+                            ? 'telegram'
+                            : null,
+                };
+            })
+                .filter((a) => !disabledAdminStore_1.disabledAdminStore.isDisabled(a.user_id));
             const listedIds = new Set(admins.map((a) => a.user_id));
             for (const linkedUserId of linkedIds) {
                 if (listedIds.has(linkedUserId)) {
@@ -602,11 +618,20 @@ function createCommentApiRouter(deps) {
                         if (disabledAdminStore_1.disabledAdminStore.isDisabled(m.user_id)) {
                             continue;
                         }
+                        const pairing = (0, channelLinkAdminTeamSync_1.profilePairingForPlatformUser)('max', m.user_id);
                         admins.push({
                             user_id: m.user_id,
                             name: m.name,
                             initials: adminDisplayInitials(m.name),
                             linked: true,
+                            paired: pairing.paired,
+                            max_user_id: pairing.max_user_id,
+                            tg_user_id: pairing.tg_user_id,
+                            peer_platform: pairing.tg_user_id != null
+                                ? 'telegram'
+                                : pairing.paired
+                                    ? 'telegram'
+                                    : null,
                         });
                         listedIds.add(m.user_id);
                     }
@@ -943,6 +968,9 @@ function createCommentApiRouter(deps) {
         if (msg === 'invalid tg channel') {
             return { status: 400, error: 'Некорректный Telegram-канал' };
         }
+        if (msg === 'chain not found' || msg === 'chain has no telegram channel id') {
+            return { status: 404, error: 'Связка не найдена' };
+        }
         return { status: 500, error: 'internal error' };
     }
     router.post('/owner-profile/sync', async (req, res) => {
@@ -966,6 +994,79 @@ function createCommentApiRouter(deps) {
             res.status(500).json({ error: 'internal error' });
         }
     });
+    function mapAccountPairingError(err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (msg === 'telegram already linked' || msg === 'max already linked') {
+            return { status: 409, error: 'Аккаунт уже привязан' };
+        }
+        if (msg === 'invalid initiator platform') {
+            return { status: 400, error: 'Неверная платформа' };
+        }
+        return { status: 500, error: 'internal error' };
+    }
+    router.get('/account-pairing/status', async (req, res) => {
+        const userId = parsePositiveInt(req.query.user_id);
+        if (!userId) {
+            res.status(400).json({ error: 'missing or invalid user_id' });
+            return;
+        }
+        const platform = isTelegramMiniappPlatform(req) ? 'telegram' : 'max';
+        res.json((0, accountPairingService_1.getAccountPairingStatus)(platform, userId));
+    });
+    router.post('/account-pairing/invite-telegram', async (req, res) => {
+        if (isTelegramMiniappPlatform(req)) {
+            res.status(400).json({ error: 'only from MAX miniapp' });
+            return;
+        }
+        const body = req.body;
+        if (!isRecord(body)) {
+            res.status(400).json({ error: 'invalid body' });
+            return;
+        }
+        const userId = parsePositiveInt(body.user_id);
+        if (!userId) {
+            res.status(400).json({ error: 'missing or invalid user_id' });
+            return;
+        }
+        try {
+            const invite = (0, accountPairingService_1.createTelegramPairingInvite)(parseOwnerAccountFromBody(body, 'max', userId));
+            res.json({ ok: true, ...invite });
+        }
+        catch (err) {
+            const mapped = mapAccountPairingError(err);
+            if (mapped.status >= 500) {
+                logger_1.logger.error('POST /api/account-pairing/invite-telegram failed', { err });
+            }
+            res.status(mapped.status).json({ error: mapped.error });
+        }
+    });
+    router.post('/account-pairing/invite-max', async (req, res) => {
+        if (!isTelegramMiniappPlatform(req)) {
+            res.status(400).json({ error: 'only from Telegram miniapp' });
+            return;
+        }
+        const body = req.body;
+        if (!isRecord(body)) {
+            res.status(400).json({ error: 'invalid body' });
+            return;
+        }
+        const userId = parsePositiveInt(body.user_id);
+        if (!userId) {
+            res.status(400).json({ error: 'missing or invalid user_id' });
+            return;
+        }
+        try {
+            const invite = (0, accountPairingService_1.createMaxPairingInvite)(parseOwnerAccountFromBody(body, 'telegram', userId));
+            res.json({ ok: true, ...invite });
+        }
+        catch (err) {
+            const mapped = mapAccountPairingError(err);
+            if (mapped.status >= 500) {
+                logger_1.logger.error('POST /api/account-pairing/invite-max failed', { err });
+            }
+            res.status(mapped.status).json({ error: mapped.error });
+        }
+    });
     router.get('/owner-profile', async (req, res) => {
         const userId = parsePositiveInt(req.query.user_id);
         if (!userId) {
@@ -979,6 +1080,69 @@ function createCommentApiRouter(deps) {
             return;
         }
         res.json((0, channelLinkService_1.getOwnerProfileBundle)(profileId));
+    });
+    router.post('/channel-links/sync-admin-team', async (req, res) => {
+        const body = req.body;
+        if (!isRecord(body)) {
+            res.status(400).json({ error: 'invalid body' });
+            return;
+        }
+        const userId = parsePositiveInt(body.user_id);
+        if (!userId) {
+            res.status(400).json({ error: 'missing or invalid user_id' });
+            return;
+        }
+        const linkId = parseNonEmptyString(body.link_id);
+        try {
+            await integrationsStore_1.integrationsStore.load();
+            const integ = integrationsStore_1.integrationsStore.getTelegramIntegration();
+            const tgToken = (integ?.token?.trim() || (0, config_1.getTelegramToken)()).trim();
+            if (!tgToken) {
+                res.status(400).json({ error: 'telegram not connected' });
+                return;
+            }
+            await (0, adminPanelState_1.ensureAdminPanelStateLoaded)();
+            const isTg = isTelegramMiniappPlatform(req);
+            let linkIds = [];
+            if (linkId) {
+                linkIds = [linkId];
+            }
+            else if (isTg) {
+                const links = await (0, channelLinkService_1.listChannelLinksForTelegramUser)(tgToken, userId);
+                linkIds = links.map((l) => l.id);
+            }
+            else {
+                const links = await (0, channelLinkService_1.listChannelLinksForMaxUser)(deps.bot, userId);
+                linkIds = links.map((l) => l.id);
+            }
+            const chains = (await (0, adminPanelState_1.listTgChains)()).filter((c) => linkIds.includes(c.id));
+            if (chains.length === 0) {
+                res.status(404).json({ error: 'Нет связок для синхронизации' });
+                return;
+            }
+            const results = await (0, channelLinkAdminTeamSync_1.syncAllChannelLinkAdminTeamsForUser)(deps.bot, tgToken, {
+                chains,
+                actorMaxUserId: isTg ? undefined : userId,
+                actorTgUserId: isTg ? userId : undefined,
+            });
+            if (results.length === 0 && linkId) {
+                const single = await (0, channelLinkAdminTeamSync_1.syncChannelLinkAdminTeam)(deps.bot, tgToken, {
+                    chainId: linkId,
+                    actorMaxUserId: isTg ? undefined : userId,
+                    actorTgUserId: isTg ? userId : undefined,
+                });
+                res.json({ ok: true, results: [single] });
+                return;
+            }
+            res.json({ ok: true, results });
+        }
+        catch (err) {
+            const mapped = mapChannelLinkError(err);
+            if (mapped.status >= 500) {
+                logger_1.logger.error('POST /api/channel-links/sync-admin-team failed', { err });
+            }
+            res.status(mapped.status).json({ error: mapped.error });
+        }
     });
     router.get('/channel-links', async (req, res) => {
         const userId = parsePositiveInt(req.query.user_id);

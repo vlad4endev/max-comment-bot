@@ -24,6 +24,10 @@ export declare function getTelegramChannelAdminsForMiniapp(telegramUserId: numbe
         name: string;
         initials: string;
         linked: boolean;
+        paired: boolean;
+        max_user_id: number | null;
+        tg_user_id: number | null;
+        peer_platform: 'max' | 'telegram' | null;
     }>;
     invite_url: string;
 }>;
@@ -48,5 +52,6 @@ export declare function notifyChannelLinkSucceededPrivate(params: {
     tgTitle: string;
     confirmedByTgUserId: number;
 }): Promise<void>;
+export declare function handleTelegramBotAccountPair(telegramUserId: number, from: Record<string, unknown>, startPayload: string): Promise<void>;
 export declare function handleTelegramBotStartJoin(telegramUserId: number, startPayload: string): Promise<void>;
 export declare function processTelegramMiniappBotUpdates(token: string, updates: Array<Record<string, unknown>>): Promise<void>;

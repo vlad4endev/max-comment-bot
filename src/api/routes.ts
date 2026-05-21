@@ -63,11 +63,17 @@ import {
   syncOwnerProfileFromMiniapp,
 } from '../services/channelLinkService'
 import {
+  profilePairingForPlatformUser,
   syncAllChannelLinkAdminTeamsForUser,
   syncChannelLinkAdminTeam,
 } from '../services/channelLinkAdminTeamSync'
 import { ensureAdminPanelStateLoaded, listTgChains } from '../api/adminPanelState'
 import { integrationsStore } from '../services/integrationsStore'
+import {
+  createMaxPairingInvite,
+  createTelegramPairingInvite,
+  getAccountPairingStatus,
+} from '../services/accountPairingService'
 import { ownerProfileStore } from '../services/ownerProfileStore'
 import { logger } from '../utils/logger'
 
@@ -704,12 +710,26 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
       }
       const members = await listChannelAdminsForMiniApp(deps.bot, chatId)
       const linkedIds = new Set(channelNotifyLinkStore.getUserIdsForChannel(chatId))
-      const admins = members.map((m) => ({
-        user_id: m.user_id,
-        name: m.name,
-        initials: adminDisplayInitials(m.name),
-        linked: linkedIds.has(m.user_id),
-      })).filter((a) => !disabledAdminStore.isDisabled(a.user_id))
+      const admins = members
+        .map((m) => {
+          const pairing = profilePairingForPlatformUser('max', m.user_id)
+          return {
+            user_id: m.user_id,
+            name: m.name,
+            initials: adminDisplayInitials(m.name),
+            linked: linkedIds.has(m.user_id),
+            paired: pairing.paired,
+            max_user_id: pairing.max_user_id,
+            tg_user_id: pairing.tg_user_id,
+            peer_platform:
+              pairing.tg_user_id != null
+                ? ('telegram' as const)
+                : pairing.paired
+                  ? ('telegram' as const)
+                  : null,
+          }
+        })
+        .filter((a) => !disabledAdminStore.isDisabled(a.user_id))
       const listedIds = new Set(admins.map((a) => a.user_id))
       for (const linkedUserId of linkedIds) {
         if (listedIds.has(linkedUserId)) {
@@ -724,11 +744,21 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
             if (disabledAdminStore.isDisabled(m.user_id)) {
               continue
             }
+            const pairing = profilePairingForPlatformUser('max', m.user_id)
             admins.push({
               user_id: m.user_id,
               name: m.name,
               initials: adminDisplayInitials(m.name),
               linked: true,
+              paired: pairing.paired,
+              max_user_id: pairing.max_user_id,
+              tg_user_id: pairing.tg_user_id,
+              peer_platform:
+                pairing.tg_user_id != null
+                  ? ('telegram' as const)
+                  : pairing.paired
+                    ? ('telegram' as const)
+                    : null,
             })
             listedIds.add(m.user_id)
           }
@@ -1105,6 +1135,81 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
     } catch (err: unknown) {
       logger.error('POST /api/owner-profile/sync failed', { err })
       res.status(500).json({ error: 'internal error' })
+    }
+  })
+
+  function mapAccountPairingError(err: unknown): { status: number; error: string } {
+    const msg = err instanceof Error ? err.message : String(err)
+    if (msg === 'telegram already linked' || msg === 'max already linked') {
+      return { status: 409, error: 'Аккаунт уже привязан' }
+    }
+    if (msg === 'invalid initiator platform') {
+      return { status: 400, error: 'Неверная платформа' }
+    }
+    return { status: 500, error: 'internal error' }
+  }
+
+  router.get('/account-pairing/status', async (req, res) => {
+    const userId = parsePositiveInt(req.query.user_id)
+    if (!userId) {
+      res.status(400).json({ error: 'missing or invalid user_id' })
+      return
+    }
+    const platform = isTelegramMiniappPlatform(req) ? 'telegram' : 'max'
+    res.json(getAccountPairingStatus(platform, userId))
+  })
+
+  router.post('/account-pairing/invite-telegram', async (req, res) => {
+    if (isTelegramMiniappPlatform(req)) {
+      res.status(400).json({ error: 'only from MAX miniapp' })
+      return
+    }
+    const body = req.body
+    if (!isRecord(body)) {
+      res.status(400).json({ error: 'invalid body' })
+      return
+    }
+    const userId = parsePositiveInt(body.user_id)
+    if (!userId) {
+      res.status(400).json({ error: 'missing or invalid user_id' })
+      return
+    }
+    try {
+      const invite = createTelegramPairingInvite(parseOwnerAccountFromBody(body, 'max', userId))
+      res.json({ ok: true, ...invite })
+    } catch (err: unknown) {
+      const mapped = mapAccountPairingError(err)
+      if (mapped.status >= 500) {
+        logger.error('POST /api/account-pairing/invite-telegram failed', { err })
+      }
+      res.status(mapped.status).json({ error: mapped.error })
+    }
+  })
+
+  router.post('/account-pairing/invite-max', async (req, res) => {
+    if (!isTelegramMiniappPlatform(req)) {
+      res.status(400).json({ error: 'only from Telegram miniapp' })
+      return
+    }
+    const body = req.body
+    if (!isRecord(body)) {
+      res.status(400).json({ error: 'invalid body' })
+      return
+    }
+    const userId = parsePositiveInt(body.user_id)
+    if (!userId) {
+      res.status(400).json({ error: 'missing or invalid user_id' })
+      return
+    }
+    try {
+      const invite = createMaxPairingInvite(parseOwnerAccountFromBody(body, 'telegram', userId))
+      res.json({ ok: true, ...invite })
+    } catch (err: unknown) {
+      const mapped = mapAccountPairingError(err)
+      if (mapped.status >= 500) {
+        logger.error('POST /api/account-pairing/invite-max failed', { err })
+      }
+      res.status(mapped.status).json({ error: mapped.error })
     }
   })
 
