@@ -171,7 +171,21 @@ function initSchema(targetDb: Database.Database): void {
   `)
   migrateChannelImportSchema(targetDb)
   migratePostsSchema(targetDb)
+  migratePostIdAliasesSchema(targetDb)
   migrateTgChainForwardedSchema(targetDb)
+}
+
+function migratePostIdAliasesSchema(database: Database.Database): void {
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS post_id_aliases (
+      alias_post_id TEXT PRIMARY KEY,
+      post_id       TEXT NOT NULL,
+      chat_id       INTEGER NOT NULL,
+      message_mid   TEXT NOT NULL,
+      created_at    TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_post_id_aliases_post_id ON post_id_aliases(post_id);
+  `)
 }
 
 function migrateChannelImportSchema(database: Database.Database): void {

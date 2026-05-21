@@ -3,6 +3,7 @@ import type { Message } from '@maxhub/max-bot-api/types'
 
 import { ensurePostFromChannelMessage } from './channelPostActions'
 import { fetchChannelMessagesSince } from './channelPoller'
+import { findPostByAlias, rememberPostIdAlias } from './postIdAliasStore'
 import { resolveCanonicalChannelChatId } from './resolveChannelChatId'
 import { logger } from '../utils/logger'
 import { parseStartappPayload } from '../utils/startappPayload'
@@ -15,9 +16,10 @@ export interface MiniappPostLookup {
   messageMid: string | null
 }
 
-const RECOVERY_LOOKBACK_MS = 30 * 24 * 60 * 60 * 1000
-const RECOVERY_MAX_PAGES = 25
-const MINIAPP_LOOKUP_RETRY_MS = 2000
+/** Only when a new post row may still be committing (has message_mid in link). */
+const RACE_RETRY_MS = 400
+const FEED_SCAN_LOOKBACK_MS = 7 * 24 * 60 * 60 * 1000
+const FEED_SCAN_MAX_PAGES = 10
 
 function sleepMs(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
@@ -102,8 +104,15 @@ function messageMidMatchesPostId(message: Message, postId: string): boolean {
   return postIdsMatch(postId, parsed.post_id)
 }
 
+function rememberAliasIfNeeded(requestedPostId: string, post: Post): Post {
+  if (requestedPostId.trim() !== '' && !postIdsMatch(requestedPostId, post.post_id)) {
+    rememberPostIdAlias(requestedPostId, post)
+  }
+  return post
+}
+
 /**
- * Orphan Mini App link: `post_id` on the button, no row in SQLite — scan channel feed, register row, fix button.
+ * Orphan Mini App link: `post_id` on the button, no row in SQLite — scan channel feed (slow, once).
  */
 export async function recoverPostByPostIdInChannelFeed(
   bot: Bot,
@@ -114,17 +123,23 @@ export async function recoverPostByPostIdInChannelFeed(
   if (!id) {
     return null
   }
+
+  const fromAlias = findPostByAlias(id)
+  if (fromAlias) {
+    return fromAlias
+  }
+
   const canonical = resolveCanonicalChannelChatId(chatId) ?? chatId
   const existing = postStore.getPost(id)
   if (existing) {
     return existing
   }
 
-  const cutoffMs = Date.now() - RECOVERY_LOOKBACK_MS
+  const cutoffMs = Date.now() - FEED_SCAN_LOOKBACK_MS
   let messages: Message[] = []
   try {
     messages = await fetchChannelMessagesSince(bot, canonical, cutoffMs, {
-      maxPages: RECOVERY_MAX_PAGES,
+      maxPages: FEED_SCAN_MAX_PAGES,
     })
   } catch (err: unknown) {
     logger.warn('miniappPostRecovery: getMessages failed', { chatId: canonical, postId: id, err })
@@ -147,13 +162,7 @@ export async function recoverPostByPostIdInChannelFeed(
         chatId: canonical,
         messageMid: channelMid,
       })
-      if (!postIdsMatch(id, row.post_id)) {
-        const fixed = await ensurePostFromChannelMessage(bot, canonical, channelMid, {
-          reattachButton: true,
-        })
-        return fixed ?? row
-      }
-      return row
+      return rememberAliasIfNeeded(id, row)
     }
     const restored = await ensurePostFromChannelMessage(bot, canonical, channelMid, {
       preferredPostId: id,
@@ -166,7 +175,7 @@ export async function recoverPostByPostIdInChannelFeed(
         chatId: canonical,
         messageMid: channelMid,
       })
-      return restored
+      return rememberAliasIfNeeded(id, restored)
     }
   }
 
@@ -174,36 +183,42 @@ export async function recoverPostByPostIdInChannelFeed(
     chatId: canonical,
     postId: id,
     messagesScanned: messages.length,
-    lookbackDays: Math.round(RECOVERY_LOOKBACK_MS / (24 * 60 * 60 * 1000)),
+    lookbackDays: Math.round(FEED_SCAN_LOOKBACK_MS / (24 * 60 * 60 * 1000)),
   })
   return null
 }
 
 /**
- * Resolves a post for Mini App open: DB → retry → ensure by mid → scan channel feed by orphan `post_id`.
+ * Resolves a post for Mini App open: alias/DB (fast) → short race retry → ensure by mid → feed scan (slow, once).
  */
 export async function resolveMiniappPostOpen(
   bot: Bot,
   lookup: MiniappPostLookup,
   resolveFromDb: (postId: string, chatIdRaw: number | null, messageMid: string | null) => Post | null,
 ): Promise<Post | null> {
-  let post = resolveFromDb(lookup.postId, lookup.chatIdRaw, lookup.messageMid)
-  if (post) {
-    return post
-  }
-  await sleepMs(MINIAPP_LOOKUP_RETRY_MS)
-  post = resolveFromDb(lookup.postId, lookup.chatIdRaw, lookup.messageMid)
-  if (post) {
-    logger.info('resolveMiniappPostOpen: post found after retry', {
-      postId: lookup.postId,
-      chatId: lookup.chatIdRaw,
-      messageMid: lookup.messageMid,
-    })
-    return post
+  const postId = lookup.postId.trim()
+  const mid = lookup.messageMid?.trim() ?? ''
+
+  if (postId !== '') {
+    const fromAlias = findPostByAlias(postId)
+    if (fromAlias) {
+      return fromAlias
+    }
   }
 
-  const mid = lookup.messageMid?.trim() ?? ''
-  const postId = lookup.postId.trim()
+  let post = resolveFromDb(lookup.postId, lookup.chatIdRaw, lookup.messageMid)
+  if (post) {
+    return rememberAliasIfNeeded(postId, post)
+  }
+
+  /** Brief retry only when `message_mid` is present — new publish race, not orphan UUID. */
+  if (mid !== '') {
+    await sleepMs(RACE_RETRY_MS)
+    post = resolveFromDb(lookup.postId, lookup.chatIdRaw, lookup.messageMid)
+    if (post) {
+      return rememberAliasIfNeeded(postId, post)
+    }
+  }
 
   if (mid !== '') {
     const canonicalChatId =
@@ -213,20 +228,13 @@ export async function resolveMiniappPostOpen(
     if (canonicalChatId !== null) {
       post = await ensurePostFromChannelMessage(bot, canonicalChatId, mid, {
         preferredPostId: postId || undefined,
-        reattachButton: true,
+        reattachButton: false,
       })
     } else {
       post = postStore.findByMessageMid(mid)
     }
     if (post) {
-      if (postId && post.post_id !== postId) {
-        logger.info('resolveMiniappPostOpen: resolved by message_mid (post_id differs from link)', {
-          requestedPostId: postId,
-          postId: post.post_id,
-          messageMid: mid,
-        })
-      }
-      return post
+      return rememberAliasIfNeeded(postId, post)
     }
   }
 

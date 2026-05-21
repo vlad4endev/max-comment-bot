@@ -5285,6 +5285,9 @@
           postPreviewTextEl.textContent = '';
           return Promise.resolve(false);
         }
+        hidePostRecoveryCard();
+        setPostPreviewReady(false);
+        postPreviewTextEl.textContent = 'Загрузка…';
         console.info('miniapp: post lookup request', {
           postId: ids.postId,
           chatId: ids.chatId,

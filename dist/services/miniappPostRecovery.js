@@ -7,13 +7,15 @@ exports.recoverPostByPostIdInChannelFeed = recoverPostByPostIdInChannelFeed;
 exports.resolveMiniappPostOpen = resolveMiniappPostOpen;
 const channelPostActions_1 = require("./channelPostActions");
 const channelPoller_1 = require("./channelPoller");
+const postIdAliasStore_1 = require("./postIdAliasStore");
 const resolveChannelChatId_1 = require("./resolveChannelChatId");
 const logger_1 = require("../utils/logger");
 const startappPayload_1 = require("../utils/startappPayload");
 const postStore_1 = require("./postStore");
-const RECOVERY_LOOKBACK_MS = 30 * 24 * 60 * 60 * 1000;
-const RECOVERY_MAX_PAGES = 25;
-const MINIAPP_LOOKUP_RETRY_MS = 2000;
+/** Only when a new post row may still be committing (has message_mid in link). */
+const RACE_RETRY_MS = 400;
+const FEED_SCAN_LOOKBACK_MS = 7 * 24 * 60 * 60 * 1000;
+const FEED_SCAN_MAX_PAGES = 10;
 function sleepMs(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -92,24 +94,34 @@ function messageMidMatchesPostId(message, postId) {
     }
     return postIdsMatch(postId, parsed.post_id);
 }
+function rememberAliasIfNeeded(requestedPostId, post) {
+    if (requestedPostId.trim() !== '' && !postIdsMatch(requestedPostId, post.post_id)) {
+        (0, postIdAliasStore_1.rememberPostIdAlias)(requestedPostId, post);
+    }
+    return post;
+}
 /**
- * Orphan Mini App link: `post_id` on the button, no row in SQLite — scan channel feed, register row, fix button.
+ * Orphan Mini App link: `post_id` on the button, no row in SQLite — scan channel feed (slow, once).
  */
 async function recoverPostByPostIdInChannelFeed(bot, chatId, postId) {
     const id = postId.trim();
     if (!id) {
         return null;
     }
+    const fromAlias = (0, postIdAliasStore_1.findPostByAlias)(id);
+    if (fromAlias) {
+        return fromAlias;
+    }
     const canonical = (0, resolveChannelChatId_1.resolveCanonicalChannelChatId)(chatId) ?? chatId;
     const existing = postStore_1.postStore.getPost(id);
     if (existing) {
         return existing;
     }
-    const cutoffMs = Date.now() - RECOVERY_LOOKBACK_MS;
+    const cutoffMs = Date.now() - FEED_SCAN_LOOKBACK_MS;
     let messages = [];
     try {
         messages = await (0, channelPoller_1.fetchChannelMessagesSince)(bot, canonical, cutoffMs, {
-            maxPages: RECOVERY_MAX_PAGES,
+            maxPages: FEED_SCAN_MAX_PAGES,
         });
     }
     catch (err) {
@@ -132,13 +144,7 @@ async function recoverPostByPostIdInChannelFeed(bot, chatId, postId) {
                 chatId: canonical,
                 messageMid: channelMid,
             });
-            if (!postIdsMatch(id, row.post_id)) {
-                const fixed = await (0, channelPostActions_1.ensurePostFromChannelMessage)(bot, canonical, channelMid, {
-                    reattachButton: true,
-                });
-                return fixed ?? row;
-            }
-            return row;
+            return rememberAliasIfNeeded(id, row);
         }
         const restored = await (0, channelPostActions_1.ensurePostFromChannelMessage)(bot, canonical, channelMid, {
             preferredPostId: id,
@@ -151,37 +157,41 @@ async function recoverPostByPostIdInChannelFeed(bot, chatId, postId) {
                 chatId: canonical,
                 messageMid: channelMid,
             });
-            return restored;
+            return rememberAliasIfNeeded(id, restored);
         }
     }
     logger_1.logger.warn('miniappPostRecovery: no channel message with matching button post_id', {
         chatId: canonical,
         postId: id,
         messagesScanned: messages.length,
-        lookbackDays: Math.round(RECOVERY_LOOKBACK_MS / (24 * 60 * 60 * 1000)),
+        lookbackDays: Math.round(FEED_SCAN_LOOKBACK_MS / (24 * 60 * 60 * 1000)),
     });
     return null;
 }
 /**
- * Resolves a post for Mini App open: DB → retry → ensure by mid → scan channel feed by orphan `post_id`.
+ * Resolves a post for Mini App open: alias/DB (fast) → short race retry → ensure by mid → feed scan (slow, once).
  */
 async function resolveMiniappPostOpen(bot, lookup, resolveFromDb) {
+    const postId = lookup.postId.trim();
+    const mid = lookup.messageMid?.trim() ?? '';
+    if (postId !== '') {
+        const fromAlias = (0, postIdAliasStore_1.findPostByAlias)(postId);
+        if (fromAlias) {
+            return fromAlias;
+        }
+    }
     let post = resolveFromDb(lookup.postId, lookup.chatIdRaw, lookup.messageMid);
     if (post) {
-        return post;
+        return rememberAliasIfNeeded(postId, post);
     }
-    await sleepMs(MINIAPP_LOOKUP_RETRY_MS);
-    post = resolveFromDb(lookup.postId, lookup.chatIdRaw, lookup.messageMid);
-    if (post) {
-        logger_1.logger.info('resolveMiniappPostOpen: post found after retry', {
-            postId: lookup.postId,
-            chatId: lookup.chatIdRaw,
-            messageMid: lookup.messageMid,
-        });
-        return post;
+    /** Brief retry only when `message_mid` is present — new publish race, not orphan UUID. */
+    if (mid !== '') {
+        await sleepMs(RACE_RETRY_MS);
+        post = resolveFromDb(lookup.postId, lookup.chatIdRaw, lookup.messageMid);
+        if (post) {
+            return rememberAliasIfNeeded(postId, post);
+        }
     }
-    const mid = lookup.messageMid?.trim() ?? '';
-    const postId = lookup.postId.trim();
     if (mid !== '') {
         const canonicalChatId = lookup.chatIdRaw !== null
             ? ((0, resolveChannelChatId_1.resolveCanonicalChannelChatId)(lookup.chatIdRaw) ?? lookup.chatIdRaw)
@@ -189,21 +199,14 @@ async function resolveMiniappPostOpen(bot, lookup, resolveFromDb) {
         if (canonicalChatId !== null) {
             post = await (0, channelPostActions_1.ensurePostFromChannelMessage)(bot, canonicalChatId, mid, {
                 preferredPostId: postId || undefined,
-                reattachButton: true,
+                reattachButton: false,
             });
         }
         else {
             post = postStore_1.postStore.findByMessageMid(mid);
         }
         if (post) {
-            if (postId && post.post_id !== postId) {
-                logger_1.logger.info('resolveMiniappPostOpen: resolved by message_mid (post_id differs from link)', {
-                    requestedPostId: postId,
-                    postId: post.post_id,
-                    messageMid: mid,
-                });
-            }
-            return post;
+            return rememberAliasIfNeeded(postId, post);
         }
     }
     if (postId !== '' && lookup.chatIdRaw !== null) {

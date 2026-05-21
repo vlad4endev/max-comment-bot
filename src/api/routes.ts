@@ -31,6 +31,7 @@ import {
 } from '../services/notificationService'
 import type { Post } from '../services/postStore'
 import { postStore, resolveChannelPostUrl } from '../services/postStore'
+import { rememberPostIdAlias } from '../services/postIdAliasStore'
 import { resolveMiniappPostOpen } from '../services/miniappPostRecovery'
 import { parseStartappPayload } from '../utils/startappPayload'
 import { stateManager } from '../services/stateManager'
@@ -902,6 +903,7 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
             chatId: chatIdRaw,
             messageMid: mid,
           })
+          rememberPostIdAlias(id, byChannelMessage)
         }
         return byChannelMessage
       }
@@ -916,6 +918,7 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
             chatId: chatIdRaw,
             messageMid: mid,
           })
+          rememberPostIdAlias(id, byMessageMid)
         }
         return byMessageMid
       }

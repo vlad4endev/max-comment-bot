@@ -12,10 +12,10 @@ export declare function extractStartappFromMessage(message: Message): string | n
 /** Channel post `message_mid` (for reply UI stubs — the linked parent post). */
 export declare function resolveChannelMessageMid(message: Message): string | null;
 /**
- * Orphan Mini App link: `post_id` on the button, no row in SQLite — scan channel feed, register row, fix button.
+ * Orphan Mini App link: `post_id` on the button, no row in SQLite — scan channel feed (slow, once).
  */
 export declare function recoverPostByPostIdInChannelFeed(bot: Bot, chatId: number, postId: string): Promise<Post | null>;
 /**
- * Resolves a post for Mini App open: DB → retry → ensure by mid → scan channel feed by orphan `post_id`.
+ * Resolves a post for Mini App open: alias/DB (fast) → short race retry → ensure by mid → feed scan (slow, once).
  */
 export declare function resolveMiniappPostOpen(bot: Bot, lookup: MiniappPostLookup, resolveFromDb: (postId: string, chatIdRaw: number | null, messageMid: string | null) => Post | null): Promise<Post | null>;

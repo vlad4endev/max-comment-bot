@@ -21,6 +21,7 @@ const commentStore_1 = require("../services/commentStore");
 const subscriberStore_1 = require("../services/subscriberStore");
 const notificationService_1 = require("../services/notificationService");
 const postStore_1 = require("../services/postStore");
+const postIdAliasStore_1 = require("../services/postIdAliasStore");
 const miniappPostRecovery_1 = require("../services/miniappPostRecovery");
 const startappPayload_1 = require("../utils/startappPayload");
 const stateManager_1 = require("../services/stateManager");
@@ -772,6 +773,7 @@ function createCommentApiRouter(deps) {
                         chatId: chatIdRaw,
                         messageMid: mid,
                     });
+                    (0, postIdAliasStore_1.rememberPostIdAlias)(id, byChannelMessage);
                 }
                 return byChannelMessage;
             }
@@ -786,6 +788,7 @@ function createCommentApiRouter(deps) {
                         chatId: chatIdRaw,
                         messageMid: mid,
                     });
+                    (0, postIdAliasStore_1.rememberPostIdAlias)(id, byMessageMid);
                 }
                 return byMessageMid;
             }
