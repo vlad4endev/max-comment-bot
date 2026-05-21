@@ -1273,6 +1273,16 @@
       text-align: center;
       box-shadow: 0 10px 24px rgba(0, 0, 0, 0.12);
     }
+    #view-comments .post-missing-illustration {
+      width: min(220px, 72vw);
+      max-width: 100%;
+      height: auto;
+      display: block;
+      margin: 0 auto 10px;
+      border-radius: 18px;
+      border: 1px solid var(--surface-border);
+      background: rgba(255, 255, 255, 0.05);
+    }
     #view-comments .post-missing-emoji {
       font-size: 34px;
       line-height: 1;
@@ -3915,6 +3925,7 @@
         if (replyBannerEl) hideReplyBanner();
         feedEl.innerHTML =
           '<div class="post-missing-card">' +
+          '<img class="post-missing-illustration" src="/miniapp/assets/post-missing-max.png" alt="Грустный MAX ищет пост" />' +
           '<div class="post-missing-emoji">🕵️‍♂️</div>' +
           '<div class="post-missing-title">Упс, что я не найду данный пост, эх опять этот МАКС.</div>' +
           '<div class="post-missing-text">Нажмите «Обновить», и я попробую вернуть кнопку именно для этого поста. Без общей паники и системных страшилок.</div>' +
