@@ -190,7 +190,7 @@ async function notifyAdminsNewMiniappComment(bot, input) {
         logger_1.logger.warn('notifyAdminsNewMiniappComment: BOT_NICKNAME / MINI_APP_URL not set for Mini App links');
         return;
     }
-    const openUrl = (0, postStore_1.buildMiniAppUrl)(input.postId, input.channelChatId, { admin: '1' });
+    const openUrl = (0, postStore_1.buildMiniAppUrl)(input.postId, input.channelChatId, { admin: '1' }, resolveMessageMidForPostId(input.postId));
     const keyboard = max_bot_api_1.Keyboard.inlineKeyboard([
         [max_bot_api_1.Keyboard.button.link('💬 Открыть комментарии', openUrl)],
     ]);
@@ -225,8 +225,11 @@ function countChannelReplies(comment) {
 function isCommentAnsweredByChannel(comment) {
     return countChannelReplies(comment) > 0;
 }
+function resolveMessageMidForPostId(postId) {
+    return postStore_1.postStore.getPost(postId)?.message_mid;
+}
 function buildAdminCommentNotificationKeyboard(postId, channelChatId, answered) {
-    const openUrl = (0, postStore_1.buildMiniAppUrl)(postId, channelChatId, { admin: '1' });
+    const openUrl = (0, postStore_1.buildMiniAppUrl)(postId, channelChatId, { admin: '1' }, resolveMessageMidForPostId(postId));
     const label = answered ? '✅ Отвечено' : '💬 Открыть комментарии';
     return max_bot_api_1.Keyboard.inlineKeyboard([[max_bot_api_1.Keyboard.button.link(label, openUrl)]]);
 }
@@ -304,7 +307,7 @@ async function notifyUserAboutMiniappReply(bot, input) {
         logger_1.logger.warn('notifyUserAboutMiniappReply: BOT_NICKNAME / MINI_APP_URL not set for Mini App links');
         return;
     }
-    const openUrl = (0, postStore_1.buildMiniAppUrl)(input.postId, input.channelChatId);
+    const openUrl = (0, postStore_1.buildMiniAppUrl)(input.postId, input.channelChatId, undefined, resolveMessageMidForPostId(input.postId));
     const keyboard = max_bot_api_1.Keyboard.inlineKeyboard([[max_bot_api_1.Keyboard.button.link('Открыть', openUrl)]]);
     const postPreview = input.postText.slice(0, 60);
     const commentPreview = input.userCommentText.slice(0, 60);

@@ -780,6 +780,20 @@ function createCommentApiRouter(deps) {
                 return byChannelMessage;
             }
         }
+        if (mid !== '') {
+            const byMessageMid = postStore_1.postStore.findByMessageMid(mid);
+            if (byMessageMid) {
+                if (id !== '' && byMessageMid.post_id !== id) {
+                    logger_1.logger.warn('GET /post: post_id в ссылке не совпадает с глобальным поиском по message_mid', {
+                        requestedPostId: id,
+                        postId: byMessageMid.post_id,
+                        chatId: chatIdRaw,
+                        messageMid: mid,
+                    });
+                }
+                return byMessageMid;
+            }
+        }
         if (!id) {
             return null;
         }

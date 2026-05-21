@@ -911,6 +911,20 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
         return byChannelMessage
       }
     }
+    if (mid !== '') {
+      const byMessageMid = postStore.findByMessageMid(mid)
+      if (byMessageMid) {
+        if (id !== '' && byMessageMid.post_id !== id) {
+          logger.warn('GET /post: post_id в ссылке не совпадает с глобальным поиском по message_mid', {
+            requestedPostId: id,
+            postId: byMessageMid.post_id,
+            chatId: chatIdRaw,
+            messageMid: mid,
+          })
+        }
+        return byMessageMid
+      }
+    }
     if (!id) {
       return null
     }

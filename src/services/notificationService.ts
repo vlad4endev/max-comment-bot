@@ -7,7 +7,7 @@ import { channelNotifyLinkStore } from './channelNotifyLinkStore'
 import type { Comment } from './commentStore'
 import { commentStore } from './commentStore'
 import { subscriberStore } from './subscriberStore'
-import { buildMiniAppUrl, isMiniAppOpenUrlConfigured } from './postStore'
+import { buildMiniAppUrl, isMiniAppOpenUrlConfigured, postStore } from './postStore'
 import { stateManager } from './stateManager'
 import { logger } from '../utils/logger'
 
@@ -236,7 +236,12 @@ export async function notifyAdminsNewMiniappComment(
     logger.warn('notifyAdminsNewMiniappComment: BOT_NICKNAME / MINI_APP_URL not set for Mini App links')
     return
   }
-  const openUrl = buildMiniAppUrl(input.postId, input.channelChatId, { admin: '1' })
+  const openUrl = buildMiniAppUrl(
+    input.postId,
+    input.channelChatId,
+    { admin: '1' },
+    resolveMessageMidForPostId(input.postId),
+  )
   const keyboard = Keyboard.inlineKeyboard([
     [Keyboard.button.link('💬 Открыть комментарии', openUrl)],
   ])
@@ -277,8 +282,12 @@ function isCommentAnsweredByChannel(comment: Comment): boolean {
   return countChannelReplies(comment) > 0
 }
 
+function resolveMessageMidForPostId(postId: string): string | undefined {
+  return postStore.getPost(postId)?.message_mid
+}
+
 function buildAdminCommentNotificationKeyboard(postId: string, channelChatId: number, answered: boolean) {
-  const openUrl = buildMiniAppUrl(postId, channelChatId, { admin: '1' })
+  const openUrl = buildMiniAppUrl(postId, channelChatId, { admin: '1' }, resolveMessageMidForPostId(postId))
   const label = answered ? '✅ Отвечено' : '💬 Открыть комментарии'
   return Keyboard.inlineKeyboard([[Keyboard.button.link(label, openUrl)]])
 }
@@ -377,7 +386,12 @@ export async function notifyUserAboutMiniappReply(
     logger.warn('notifyUserAboutMiniappReply: BOT_NICKNAME / MINI_APP_URL not set for Mini App links')
     return
   }
-  const openUrl = buildMiniAppUrl(input.postId, input.channelChatId)
+  const openUrl = buildMiniAppUrl(
+    input.postId,
+    input.channelChatId,
+    undefined,
+    resolveMessageMidForPostId(input.postId),
+  )
   const keyboard = Keyboard.inlineKeyboard([[Keyboard.button.link('Открыть', openUrl)]])
   const postPreview = input.postText.slice(0, 60)
   const commentPreview = input.userCommentText.slice(0, 60)

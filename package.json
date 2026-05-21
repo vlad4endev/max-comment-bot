@@ -7,7 +7,8 @@
     "dev": "ts-node src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js",
-    "tg:user-login": "ts-node scripts/tg-user-login.ts"
+    "tg:user-login": "ts-node scripts/tg-user-login.ts",
+    "diagnose:post-links": "ts-node scripts/diagnose-post-links.ts"
   },
   "engines": {
     "node": ">=18"

@@ -22,7 +22,9 @@ import {
   restartChannelPostPoller,
   runChannelPollerForChat,
 } from '../services/channelPoller'
+import { ensurePostFromChannelMessage } from '../services/channelPostActions'
 import { commentStore } from '../services/commentStore'
+import { diagnosePostLinks } from '../services/postLinkDiagnostics'
 import { postStore } from '../services/postStore'
 import { stateManager } from '../services/stateManager'
 import { subscriberStore } from '../services/subscriberStore'
@@ -880,8 +882,49 @@ export function createAdminRouter(deps: AdminRouterDeps): express.Router {
       return
     }
     try {
-      const stats = await runChannelPollerForChat(deps.bot, chatId)
-      res.json({ ok: true, ...stats })
+      const firstPass = await runChannelPollerForChat(deps.bot, chatId)
+      const diagnosis = await diagnosePostLinks(chatId)
+
+      const mids = [...new Set(
+        diagnosis.candidates
+          .map((c) => c.message_mid?.trim())
+          .filter((v): v is string => Boolean(v)),
+      )].slice(0, 20)
+
+      let restoredFromLogs = 0
+      for (const mid of mids) {
+        const recovered = await ensurePostFromChannelMessage(deps.bot, chatId, mid)
+        if (recovered) {
+          restoredFromLogs += 1
+        }
+      }
+
+      const secondPass = restoredFromLogs > 0 ? await runChannelPollerForChat(deps.bot, chatId) : null
+
+      const resultStats =
+        secondPass !== null
+          ? {
+              chat_id: firstPass.chat_id,
+              messages_fetched: Math.max(firstPass.messages_fetched, secondPass.messages_fetched),
+              posts_in_db: Math.max(firstPass.posts_in_db, secondPass.posts_in_db),
+              created: firstPass.created + secondPass.created,
+              refreshed: firstPass.refreshed + secondPass.refreshed,
+              skipped: firstPass.skipped + secondPass.skipped,
+              failed: firstPass.failed + secondPass.failed,
+            }
+          : firstPass
+
+      res.json({
+        ok: true,
+        ...resultStats,
+        restored_from_logs: restoredFromLogs,
+        diagnostics: {
+          signals_total: diagnosis.signals_total,
+          id_mismatch: diagnosis.id_mismatch,
+          post_lookup_not_found: diagnosis.post_lookup_not_found,
+          candidates: diagnosis.candidates.slice(0, 20),
+        },
+      })
     } catch (err: unknown) {
       if (err instanceof RefreshButtonsError) {
         const status =

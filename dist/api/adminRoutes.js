@@ -16,7 +16,9 @@ const channelNotifyLinkStore_1 = require("../services/channelNotifyLinkStore");
 const channelRegistry_1 = require("../services/channelRegistry");
 const disabledAdminStore_1 = require("../services/disabledAdminStore");
 const channelPoller_1 = require("../services/channelPoller");
+const channelPostActions_1 = require("../services/channelPostActions");
 const commentStore_1 = require("../services/commentStore");
+const postLinkDiagnostics_1 = require("../services/postLinkDiagnostics");
 const postStore_1 = require("../services/postStore");
 const stateManager_1 = require("../services/stateManager");
 const subscriberStore_1 = require("../services/subscriberStore");
@@ -774,8 +776,41 @@ function createAdminRouter(deps) {
             return;
         }
         try {
-            const stats = await (0, channelPoller_1.runChannelPollerForChat)(deps.bot, chatId);
-            res.json({ ok: true, ...stats });
+            const firstPass = await (0, channelPoller_1.runChannelPollerForChat)(deps.bot, chatId);
+            const diagnosis = await (0, postLinkDiagnostics_1.diagnosePostLinks)(chatId);
+            const mids = [...new Set(diagnosis.candidates
+                    .map((c) => c.message_mid?.trim())
+                    .filter((v) => Boolean(v)))].slice(0, 20);
+            let restoredFromLogs = 0;
+            for (const mid of mids) {
+                const recovered = await (0, channelPostActions_1.ensurePostFromChannelMessage)(deps.bot, chatId, mid);
+                if (recovered) {
+                    restoredFromLogs += 1;
+                }
+            }
+            const secondPass = restoredFromLogs > 0 ? await (0, channelPoller_1.runChannelPollerForChat)(deps.bot, chatId) : null;
+            const resultStats = secondPass !== null
+                ? {
+                    chat_id: firstPass.chat_id,
+                    messages_fetched: Math.max(firstPass.messages_fetched, secondPass.messages_fetched),
+                    posts_in_db: Math.max(firstPass.posts_in_db, secondPass.posts_in_db),
+                    created: firstPass.created + secondPass.created,
+                    refreshed: firstPass.refreshed + secondPass.refreshed,
+                    skipped: firstPass.skipped + secondPass.skipped,
+                    failed: firstPass.failed + secondPass.failed,
+                }
+                : firstPass;
+            res.json({
+                ok: true,
+                ...resultStats,
+                restored_from_logs: restoredFromLogs,
+                diagnostics: {
+                    signals_total: diagnosis.signals_total,
+                    id_mismatch: diagnosis.id_mismatch,
+                    post_lookup_not_found: diagnosis.post_lookup_not_found,
+                    candidates: diagnosis.candidates.slice(0, 20),
+                },
+            });
         }
         catch (err) {
             if (err instanceof channelPoller_1.RefreshButtonsError) {

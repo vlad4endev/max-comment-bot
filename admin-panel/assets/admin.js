@@ -1475,6 +1475,7 @@
         html += '<div class="flex gap-sm">';
         html +=
           '<button type="button" class="btn btn-ghost btn-sm" id="btnRefreshBtns">Обновить кнопки</button>';
+        html += '<span id="refreshButtonsStatus" class="muted text-sm" style="align-self:center"></span>';
         html +=
           '<button type="button" class="btn btn-danger btn-sm" id="btnRemoveChannel">Отключить</button>';
         html += '</div></div>';
@@ -1531,8 +1532,18 @@
           });
         });
         var btnRef = qs('#btnRefreshBtns', slot);
+        var refreshStatusEl = qs('#refreshButtonsStatus', slot);
+        function setRefreshStatus(text, isError) {
+          if (!refreshStatusEl) return;
+          refreshStatusEl.textContent = text || '';
+          refreshStatusEl.style.color = isError ? '#ef4444' : '';
+        }
         if (btnRef) {
           btnRef.addEventListener('click', function () {
+            btnRef.disabled = true;
+            var prevText = btnRef.textContent;
+            btnRef.textContent = 'Обновляем...';
+            setRefreshStatus('Проверяем посты и восстанавливаем ссылки…', false);
             postJson('/refresh-buttons', { chat_id: chatId })
               .then(function (r) {
                 var created = r && typeof r.created === 'number' ? r.created : 0;
@@ -1540,7 +1551,14 @@
                 var failed = r && typeof r.failed === 'number' ? r.failed : 0;
                 var fetched = r && typeof r.messages_fetched === 'number' ? r.messages_fetched : 0;
                 var postsInDb = r && typeof r.posts_in_db === 'number' ? r.posts_in_db : 0;
+                var restoredFromLogs =
+                  r && typeof r.restored_from_logs === 'number' ? r.restored_from_logs : 0;
+                var diagSignals =
+                  r && r.diagnostics && typeof r.diagnostics.signals_total === 'number'
+                    ? r.diagnostics.signals_total
+                    : 0;
                 if (fetched === 0 && postsInDb === 0) {
+                  setRefreshStatus('Не удалось получить сообщения канала', true);
                   showToast('Сообщения канала не получены — проверьте права бота', 'error');
                   return;
                 }
@@ -1559,6 +1577,7 @@
                       ' сообщ.',
                     'error',
                   );
+                  setRefreshStatus('Кнопки не обновлены: ' + errHint, true);
                   return;
                 }
                 showToast(
@@ -1570,13 +1589,26 @@
                     postsInDb +
                     ' постов, просмотрено ' +
                     fetched +
-                    ' сообщ.)',
+                    ' сообщ., восстановлено по диагностике ' +
+                    restoredFromLogs +
+                    ', сигналов в логах ' +
+                    diagSignals +
+                    ')',
                   'success',
+                );
+                setRefreshStatus(
+                  'Готово: обновлено ' + refreshed + ', новых ' + created + ', восстановлено ' + restoredFromLogs,
+                  false,
                 );
                 loadChannelDetail(chatId);
               })
               .catch(function (e) {
+                setRefreshStatus('Ошибка: ' + (e && e.message ? e.message : 'неизвестно'), true);
                 showToast(e.message || 'Ошибка', 'error');
+              })
+              .finally(function () {
+                btnRef.disabled = false;
+                btnRef.textContent = prevText || 'Обновить кнопки';
               });
           });
         }

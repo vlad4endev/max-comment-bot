@@ -388,7 +388,6 @@ export class PostStore {
           photo_url, media_attachments, comment_count, timestamp, data
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(chat_id, message_mid) DO UPDATE SET
-          post_id                 = excluded.post_id,
           comments_ui_message_mid = excluded.comments_ui_message_mid,
           sender_name             = excluded.sender_name,
           text                    = excluded.text,
@@ -720,6 +719,13 @@ export function buildMiniAppUrl(
   extra?: Record<string, string>,
   messageMid?: string,
 ): string {
+  if ((!extra || extra.admin !== '1') && (!messageMid || messageMid.trim() === '')) {
+    logger.warn('buildMiniAppUrl: message_mid missing for post link', {
+      postId,
+      chatId,
+      extra,
+    })
+  }
   const payload = maxStartappPayload(postId, chatId, messageMid, extra)
   const nick = config.botNickname.trim()
   let buttonUrl: string
