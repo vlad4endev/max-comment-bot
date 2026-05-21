@@ -3,17 +3,21 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.sendTelegramHowItWorksMessage = sendTelegramHowItWorksMessage;
+exports.handleTelegramBotStartWelcome = handleTelegramBotStartWelcome;
 exports.listTelegramMiniappChannelsForUser = listTelegramMiniappChannelsForUser;
 exports.getTelegramMiniappStats = getTelegramMiniappStats;
 exports.getTelegramChannelAdminsForMiniapp = getTelegramChannelAdminsForMiniapp;
 exports.resolveTelegramChannelInviteAccess = resolveTelegramChannelInviteAccess;
 exports.registerTelegramChannelNotifyLink = registerTelegramChannelNotifyLink;
+exports.notifyChannelLinkSucceededPrivate = notifyChannelLinkSucceededPrivate;
 exports.handleTelegramBotStartJoin = handleTelegramBotStartJoin;
 exports.processTelegramMiniappBotUpdates = processTelegramMiniappBotUpdates;
 const axios_1 = __importDefault(require("axios"));
 const config_1 = require("../config");
 const integrationsStore_1 = require("./integrationsStore");
 const integrationPlatformClient_1 = require("./integrationPlatformClient");
+const ownerProfileStore_1 = require("./ownerProfileStore");
 const telegramBotUserStore_1 = require("./telegramBotUserStore");
 const telegramChannelNotifyLinkStore_1 = require("./telegramChannelNotifyLinkStore");
 const telegramChannelRegistry_1 = require("./telegramChannelRegistry");
@@ -22,6 +26,7 @@ const postStore_1 = require("./postStore");
 const adminPanelState_1 = require("../api/adminPanelState");
 const telegramDeeplink_1 = require("../utils/telegramDeeplink");
 const telegramChannelActivation_1 = require("./telegramChannelActivation");
+const logger_1 = require("../utils/logger");
 const TG_API = 'https://api.telegram.org/bot';
 function resolveTelegramBotToken() {
     const integ = integrationsStore_1.integrationsStore.getTelegramIntegration();
@@ -37,6 +42,113 @@ async function sendTelegramBotMessage(token, chatId, text, extra) {
         text,
         ...(extra?.reply_markup ? { reply_markup: extra.reply_markup } : {}),
     }, { timeout: 15_000 });
+}
+async function answerTelegramCallbackQuery(token, callbackQueryId) {
+    await axios_1.default.post(`${TG_API}${token}/answerCallbackQuery`, { callback_query_id: callbackQueryId }, { timeout: 10_000 });
+}
+function buildTelegramMiniAppHomeUrl() {
+    return process.env.MINI_APP_URL?.trim() || 'https://t.me/commentvmax_bot';
+}
+function buildTelegramStartInlineKeyboard(homeUrl, options) {
+    const openBtn = /^https:\/\//i.test(homeUrl)
+        ? { text: '🚀 Открыть панель', web_app: { url: homeUrl } }
+        : { text: '🚀 Открыть панель', url: homeUrl };
+    const rows = [[openBtn]];
+    if (options?.includeHowItWorks !== false) {
+        rows.push([{ text: '📖 Как это работает', callback_data: 'tg_how_it_works' }]);
+    }
+    return { inline_keyboard: rows };
+}
+function resolveTelegramUserFirstName(from) {
+    const first = typeof from?.first_name === 'string' ? from.first_name.trim() : '';
+    if (first) {
+        return first;
+    }
+    const username = typeof from?.username === 'string' ? from.username.trim() : '';
+    if (username) {
+        return username;
+    }
+    return 'друг';
+}
+async function getTelegramUserActivitySummary(telegramUserId) {
+    const token = resolveTelegramBotToken();
+    const notifyLinks = telegramChannelNotifyLinkStore_1.telegramChannelNotifyLinkStore.getLinkedChannels(telegramUserId);
+    if (!token) {
+        const notifyLinksCount = notifyLinks.length;
+        return {
+            channelsCount: 0,
+            linksCount: 0,
+            notifyLinksCount,
+            isActive: notifyLinksCount > 0,
+        };
+    }
+    await integrationsStore_1.integrationsStore.load();
+    const { channels } = await listTelegramMiniappChannelsForUser(telegramUserId);
+    await (0, adminPanelState_1.ensureAdminPanelStateLoaded)();
+    const adminTgIds = new Set(channels.map((c) => c.chat_id));
+    const linksCount = (0, adminPanelState_1.listTgChainsSync)().filter((c) => {
+        const id = c.tg_channel_id?.trim();
+        return Boolean(id && adminTgIds.has(id));
+    }).length;
+    const channelsCount = channels.length;
+    const notifyLinksCount = notifyLinks.length;
+    return {
+        channelsCount,
+        linksCount,
+        notifyLinksCount,
+        isActive: channelsCount > 0 || linksCount > 0 || notifyLinksCount > 0,
+    };
+}
+async function sendTelegramHowItWorksMessage(token, telegramUserId) {
+    const homeUrl = buildTelegramMiniAppHomeUrl();
+    const text = `📖 Как работает CommentBot в Telegram:\n\n` +
+        `1️⃣ Добавьте @commentvmax_bot в канал и выдайте права администратора\n` +
+        `2️⃣ В мини-приложении создайте связку с каналом в MAX\n` +
+        `3️⃣ Посты из Telegram пересылаются в MAX, под ними — кнопка «Комментарии»\n` +
+        `4️⃣ Вы получаете уведомления о новых комментариях\n` +
+        `5️⃣ Отвечаете из одной панели — в Telegram и MAX`;
+    await sendTelegramBotMessage(token, telegramUserId, text, {
+        reply_markup: buildTelegramStartInlineKeyboard(homeUrl, { includeHowItWorks: false }),
+    });
+}
+async function handleTelegramBotStartWelcome(telegramUserId, from) {
+    const token = resolveTelegramBotToken();
+    if (!token) {
+        return;
+    }
+    const firstName = resolveTelegramUserFirstName(from);
+    const homeUrl = buildTelegramMiniAppHomeUrl();
+    const activity = await getTelegramUserActivitySummary(telegramUserId);
+    if (!activity.isActive) {
+        const text = `👋 Привет, ${firstName}!\n\n` +
+            `Я CommentBot — помогу связать ваш канал в Telegram с каналом в MAX.\n\n` +
+            `Что можно сделать:\n` +
+            `📢 Подключить Telegram-канал к боту\n` +
+            `🔗 Создать связку TG ↔ MAX\n` +
+            `🔔 Получать уведомления о комментариях\n\n` +
+            `Нажмите кнопку ниже — откроется панель с пошаговым подключением.`;
+        await sendTelegramBotMessage(token, telegramUserId, text, {
+            reply_markup: buildTelegramStartInlineKeyboard(homeUrl),
+        });
+        return;
+    }
+    const parts = [];
+    if (activity.channelsCount > 0) {
+        parts.push(`${activity.channelsCount} ${activity.channelsCount === 1 ? 'канал' : activity.channelsCount < 5 ? 'канала' : 'каналов'}`);
+    }
+    if (activity.linksCount > 0) {
+        parts.push(`${activity.linksCount} ${activity.linksCount === 1 ? 'связка' : activity.linksCount < 5 ? 'связки' : 'связок'}`);
+    }
+    if (activity.notifyLinksCount > 0 && activity.channelsCount === 0) {
+        parts.push('уведомления включены');
+    }
+    const summary = parts.length > 0 ? parts.join(' · ') : 'есть подключения';
+    const text = `👋 С возвращением, ${firstName}!\n\n` +
+        `У вас уже настроено: ${summary}.\n\n` +
+        `Откройте панель в мини-приложении — там каналы, связки TG↔MAX, статистика и настройки уведомлений.`;
+    await sendTelegramBotMessage(token, telegramUserId, text, {
+        reply_markup: buildTelegramStartInlineKeyboard(homeUrl, { includeHowItWorks: false }),
+    });
 }
 async function isTelegramChannelAdmin(token, channelChatId, telegramUserId) {
     const admins = await (0, integrationPlatformClient_1.listTelegramChatAdministrators)(token, channelChatId);
@@ -173,6 +285,49 @@ async function registerTelegramChannelNotifyLink(telegramUserId, channelChatId) 
         already_linked: wasLinked,
     };
 }
+/** Личные сообщения в Telegram-боте после успешной связки TG ↔ MAX. */
+async function notifyChannelLinkSucceededPrivate(params) {
+    const token = resolveTelegramBotToken();
+    if (!token) {
+        return;
+    }
+    const maxTitle = (params.maxTitle && params.maxTitle.trim()) || 'MAX-канал';
+    const tgTitle = (params.tgTitle && params.tgTitle.trim()) || 'Telegram-канал';
+    const homeUrl = buildTelegramMiniAppHomeUrl();
+    const keyboard = buildTelegramStartInlineKeyboard(homeUrl, { includeHowItWorks: false });
+    const accounts = ownerProfileStore_1.ownerProfileStore.getAccountsForProfile(params.profileId);
+    const maxOnProfile = accounts.some((a) => a.platform === 'max' && a.platform_user_id === String(params.maxUserId));
+    const recipientRoles = new Map();
+    recipientRoles.set(params.confirmedByTgUserId, 'confirmer');
+    for (const acc of accounts) {
+        if (acc.platform !== 'telegram') {
+            continue;
+        }
+        const tgId = Number.parseInt(acc.platform_user_id, 10);
+        if (!Number.isInteger(tgId) || tgId <= 0) {
+            continue;
+        }
+        if (tgId === params.confirmedByTgUserId) {
+            recipientRoles.set(tgId, 'confirmer');
+        }
+        else if (maxOnProfile) {
+            recipientRoles.set(tgId, 'max_initiator');
+        }
+    }
+    telegramBotUserStore_1.telegramBotUserStore.markStarted({ id: params.confirmedByTgUserId });
+    for (const [tgId, role] of recipientRoles) {
+        const text = role === 'max_initiator'
+            ? `✅ Связка с Telegram завершена!\n\n📺 MAX: «${maxTitle}»\n📱 Telegram: «${tgTitle}»\n\nПосты из Telegram будут пересылаться в ваш MAX-канал.`
+            : `✅ Связка создана!\n\n📱 Telegram: «${tgTitle}»\n📺 MAX: «${maxTitle}»\n\nПосты из Telegram будут пересылаться в MAX.`;
+        try {
+            await sendTelegramBotMessage(token, tgId, text, { reply_markup: keyboard });
+            logger_1.logger.info('notifyChannelLinkSucceededPrivate: sent', { tgId, role });
+        }
+        catch (err) {
+            logger_1.logger.warn('notifyChannelLinkSucceededPrivate: send failed', { tgId, role, err });
+        }
+    }
+}
 async function handleTelegramBotStartJoin(telegramUserId, startPayload) {
     const token = resolveTelegramBotToken();
     const m = /^jointg(\d+)$/i.exec(String(startPayload).trim());
@@ -202,6 +357,21 @@ async function processTelegramMiniappBotUpdates(token, updates) {
             await (0, telegramChannelActivation_1.handleTelegramMyChatMemberUpdate)(upd);
         }
         if (upd.callback_query) {
+            const cq = upd.callback_query;
+            const cqData = typeof cq.data === 'string' ? cq.data.trim() : '';
+            const cqFrom = cq.from;
+            const cqUserId = typeof cqFrom?.id === 'number' ? cqFrom.id : null;
+            const cqId = typeof cq.id === 'string' ? cq.id : null;
+            if (cqData === 'tg_how_it_works' && cqUserId != null && cqId) {
+                try {
+                    await answerTelegramCallbackQuery(token, cqId);
+                }
+                catch (err) {
+                    logger_1.logger.warn('processTelegramMiniappBotUpdates: answer tg_how_it_works failed', { err });
+                }
+                await sendTelegramHowItWorksMessage(token, cqUserId);
+                continue;
+            }
             await (0, telegramChannelActivation_1.handleTelegramCallbackQuery)(upd);
         }
         const message = upd.message;
@@ -227,13 +397,13 @@ async function processTelegramMiniappBotUpdates(token, updates) {
                 continue;
             }
             if (/^linkmax$/i.test(payload)) {
-                const homeUrl = process.env.MINI_APP_URL?.trim() || 'https://t.me/commentvmax_bot';
+                const homeUrl = buildTelegramMiniAppHomeUrl();
                 await sendTelegramBotMessage(token, from.id, '🔗 Связка с MAX\n\nОткройте мини-приложение CommentBot → «Создать связку» → выберите Telegram-канал и введите код из MAX.', {
-                    reply_markup: {
-                        inline_keyboard: [[{ text: '💬 Открыть мини-приложение', url: homeUrl }]],
-                    },
+                    reply_markup: buildTelegramStartInlineKeyboard(homeUrl, { includeHowItWorks: false }),
                 });
+                continue;
             }
+            await handleTelegramBotStartWelcome(from.id, from);
             continue;
         }
         if (text) {

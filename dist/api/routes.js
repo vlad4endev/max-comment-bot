@@ -928,6 +928,9 @@ function createCommentApiRouter(deps) {
         if (msg === 'invalid code' || msg === 'code not available' || msg === 'code expired') {
             return { status: 404, error: 'Код не найден или истёк' };
         }
+        if (msg === 'not awaiting confirm') {
+            return { status: 409, error: 'Связка уже подтверждена или код недоступен' };
+        }
         if (msg === 'max channel already linked' || msg === 'pair already linked') {
             return { status: 409, error: 'Эта связка уже существует' };
         }
@@ -1083,8 +1086,15 @@ function createCommentApiRouter(deps) {
                 account: parseOwnerAccountFromBody(body, 'telegram', userId),
                 forwardPosts: forwardPosts === null ? true : forwardPosts,
                 addCommentsButton: addCommentsButton === null ? true : addCommentsButton,
+            }, { maxBot: deps.bot });
+            res.json({
+                ok: true,
+                status: result.status,
+                profile_id: result.profile_id,
+                max_title: result.max_title,
+                tg_title: result.tg_title,
+                message: 'Код принят. Инициатору в MAX отправлено сообщение — нужно нажать «Подтвердить связку» в боте.',
             });
-            res.json({ ok: true, chain: result.chain, profile_id: result.profile_id });
         }
         catch (err) {
             const mapped = mapChannelLinkError(err);

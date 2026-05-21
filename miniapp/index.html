@@ -2521,7 +2521,7 @@
         </div>
         <button type="button" class="btn-secondary" id="linkCodeCopyBtn">Скопировать код</button>
         <p class="muted text-sm" style="margin-top:10px">
-          Откройте мини-приложение в Telegram → «Создать связку» → выберите канал и введите код.
+          В Telegram: «Создать связку» → канал и код. Затем здесь в MAX в личке с ботом нажмите «Подтвердить связку».
         </p>
       </div>
       <div id="channelLinkStepTg" class="hidden">
@@ -3975,9 +3975,11 @@
             })
             .then(function (x) {
               if (!x.ok) throw new Error((x.body && x.body.error) || 'Ошибка')
-              showToast('Связка создана')
+              var msg =
+                (x.body && x.body.message) ||
+                'Код принят. Подтвердите связку в личке с ботом MAX.'
+              showToast(msg)
               hideChannelLinkOverlay()
-              loadChannelLinks(uid)
             })
             .catch(function (e) {
               showToast(e.message || 'Не удалось связать')
@@ -4015,6 +4017,11 @@
               }
               if (data.status === 'pending') {
                 preview.textContent = 'MAX: «' + (data.max_title || 'канал') + '»'
+              } else if (data.status === 'awaiting_max_confirm') {
+                preview.textContent =
+                  'MAX: «' +
+                  (data.max_title || 'канал') +
+                  '» — ждёт подтверждения в боте MAX'
               } else {
                 preview.textContent = 'Код недоступен (' + (data.status || '?') + ')'
               }

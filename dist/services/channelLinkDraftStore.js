@@ -25,6 +25,8 @@ function rowFromDb(raw) {
         tg_username: typeof raw.tg_username === 'string' ? raw.tg_username : null,
         tg_user_id: typeof raw.tg_user_id === 'number' && Number.isInteger(raw.tg_user_id) ? raw.tg_user_id : null,
         chain_id: typeof raw.chain_id === 'string' ? raw.chain_id : null,
+        forward_posts: raw.forward_posts === 0 ? false : true,
+        add_comments_button: raw.add_comments_button === 0 ? false : true,
         created_at: String(raw.created_at),
         expires_at: String(raw.expires_at),
     };
@@ -33,7 +35,7 @@ class ChannelLinkDraftStore {
     statements = null;
     createDraft(input) {
         const stmts = this.getStatements();
-        stmts.cancelPendingForMax.run(input.maxChatId);
+        stmts.cancelOpenForMax.run(input.maxChatId);
         const expiresAt = new Date(Date.now() + exports.CHANNEL_LINK_DRAFT_TTL_MS).toISOString();
         let code = generateLinkCode();
         for (let attempt = 0; attempt < 8; attempt += 1) {
@@ -63,6 +65,9 @@ class ChannelLinkDraftStore {
         const row = this.getStatements().getByCode.get(normalized);
         return row ? rowFromDb(row) : null;
     }
+    markAwaitingMaxConfirm(code, patch) {
+        this.getStatements().markAwaitingMaxConfirm.run(patch.tgChannelId, patch.tgUsername, patch.tgUserId, patch.forwardPosts ? 1 : 0, patch.addCommentsButton ? 1 : 0, code.trim().toUpperCase());
+    }
     markCompleted(code, patch) {
         this.getStatements().markCompleted.run(patch.tgChannelId, patch.tgUsername, patch.tgUserId, patch.chainId, code.trim().toUpperCase());
     }
@@ -80,15 +85,26 @@ class ChannelLinkDraftStore {
           code, profile_id, max_chat_id, max_user_id, max_title, status, expires_at
         ) VALUES (?, ?, ?, ?, ?, 'pending', ?)
       `),
-            cancelPendingForMax: db.prepare(`
+            cancelOpenForMax: db.prepare(`
         UPDATE channel_link_drafts
         SET status = 'cancelled'
-        WHERE max_chat_id = ? AND status = 'pending'
+        WHERE max_chat_id = ? AND status IN ('pending', 'awaiting_max_confirm')
       `),
             getByCode: db.prepare(`
         SELECT code, profile_id, max_chat_id, max_user_id, max_title, status,
-               tg_channel_id, tg_username, tg_user_id, chain_id, created_at, expires_at
+               tg_channel_id, tg_username, tg_user_id, chain_id,
+               forward_posts, add_comments_button, created_at, expires_at
         FROM channel_link_drafts
+        WHERE code = ?
+      `),
+            markAwaitingMaxConfirm: db.prepare(`
+        UPDATE channel_link_drafts
+        SET status = 'awaiting_max_confirm',
+            tg_channel_id = ?,
+            tg_username = ?,
+            tg_user_id = ?,
+            forward_posts = ?,
+            add_comments_button = ?
         WHERE code = ?
       `),
             markCompleted: db.prepare(`
@@ -103,7 +119,8 @@ class ChannelLinkDraftStore {
             expireStale: db.prepare(`
         UPDATE channel_link_drafts
         SET status = 'expired'
-        WHERE status = 'pending' AND expires_at < datetime('now')
+        WHERE status IN ('pending', 'awaiting_max_confirm')
+          AND expires_at < datetime('now')
       `),
         };
         return this.statements;

@@ -262,6 +262,21 @@ function initSchema(targetDb: Database.Database): void {
   migratePostsSchema(targetDb)
   migratePostIdAliasesSchema(targetDb)
   migrateTgChainForwardedSchema(targetDb)
+  migrateChannelLinkDraftsSchema(targetDb)
+}
+
+function migrateChannelLinkDraftsSchema(database: Database.Database): void {
+  const cols = database.prepare('PRAGMA table_info(channel_link_drafts)').all() as { name: string }[]
+  if (!cols.some((c) => c.name === 'forward_posts')) {
+    database.exec(
+      'ALTER TABLE channel_link_drafts ADD COLUMN forward_posts INTEGER NOT NULL DEFAULT 1',
+    )
+  }
+  if (!cols.some((c) => c.name === 'add_comments_button')) {
+    database.exec(
+      'ALTER TABLE channel_link_drafts ADD COLUMN add_comments_button INTEGER NOT NULL DEFAULT 1',
+    )
+  }
 }
 
 function migratePostIdAliasesSchema(database: Database.Database): void {

@@ -62,6 +62,11 @@ import {
   listChannelLinksForTelegramUser,
   syncOwnerProfileFromMiniapp,
 } from '../services/channelLinkService'
+import {
+  syncAllChannelLinkAdminTeamsForUser,
+  syncChannelLinkAdminTeam,
+} from '../services/channelLinkAdminTeamSync'
+import { ensureAdminPanelStateLoaded, listTgChains } from '../api/adminPanelState'
 import { integrationsStore } from '../services/integrationsStore'
 import { ownerProfileStore } from '../services/ownerProfileStore'
 import { logger } from '../utils/logger'
@@ -1058,6 +1063,9 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
     if (msg === 'invalid code' || msg === 'code not available' || msg === 'code expired') {
       return { status: 404, error: 'Код не найден или истёк' }
     }
+    if (msg === 'not awaiting confirm') {
+      return { status: 409, error: 'Связка уже подтверждена или код недоступен' }
+    }
     if (msg === 'max channel already linked' || msg === 'pair already linked') {
       return { status: 409, error: 'Эта связка уже существует' }
     }
@@ -1069,6 +1077,9 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
     }
     if (msg === 'invalid tg channel') {
       return { status: 400, error: 'Некорректный Telegram-канал' }
+    }
+    if (msg === 'chain not found' || msg === 'chain has no telegram channel id') {
+      return { status: 404, error: 'Связка не найдена' }
     }
     return { status: 500, error: 'internal error' }
   }
@@ -1110,6 +1121,67 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
       return
     }
     res.json(getOwnerProfileBundle(profileId))
+  })
+
+  router.post('/channel-links/sync-admin-team', async (req, res) => {
+    const body = req.body
+    if (!isRecord(body)) {
+      res.status(400).json({ error: 'invalid body' })
+      return
+    }
+    const userId = parsePositiveInt(body.user_id)
+    if (!userId) {
+      res.status(400).json({ error: 'missing or invalid user_id' })
+      return
+    }
+    const linkId = parseNonEmptyString(body.link_id)
+    try {
+      await integrationsStore.load()
+      const integ = integrationsStore.getTelegramIntegration()
+      const tgToken = (integ?.token?.trim() || getTelegramToken()).trim()
+      if (!tgToken) {
+        res.status(400).json({ error: 'telegram not connected' })
+        return
+      }
+      await ensureAdminPanelStateLoaded()
+      const isTg = isTelegramMiniappPlatform(req)
+      let linkIds: string[] = []
+      if (linkId) {
+        linkIds = [linkId]
+      } else if (isTg) {
+        const links = await listChannelLinksForTelegramUser(tgToken, userId)
+        linkIds = links.map((l) => l.id)
+      } else {
+        const links = await listChannelLinksForMaxUser(deps.bot, userId)
+        linkIds = links.map((l) => l.id)
+      }
+      const chains = (await listTgChains()).filter((c) => linkIds.includes(c.id))
+      if (chains.length === 0) {
+        res.status(404).json({ error: 'Нет связок для синхронизации' })
+        return
+      }
+      const results = await syncAllChannelLinkAdminTeamsForUser(deps.bot, tgToken, {
+        chains,
+        actorMaxUserId: isTg ? undefined : userId,
+        actorTgUserId: isTg ? userId : undefined,
+      })
+      if (results.length === 0 && linkId) {
+        const single = await syncChannelLinkAdminTeam(deps.bot, tgToken, {
+          chainId: linkId,
+          actorMaxUserId: isTg ? undefined : userId,
+          actorTgUserId: isTg ? userId : undefined,
+        })
+        res.json({ ok: true, results: [single] })
+        return
+      }
+      res.json({ ok: true, results })
+    } catch (err: unknown) {
+      const mapped = mapChannelLinkError(err)
+      if (mapped.status >= 500) {
+        logger.error('POST /api/channel-links/sync-admin-team failed', { err })
+      }
+      res.status(mapped.status).json({ error: mapped.error })
+    }
   })
 
   router.get('/channel-links', async (req, res) => {
@@ -1212,15 +1284,27 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
     try {
       const forwardPosts = parseBoolean(body.forward_posts)
       const addCommentsButton = parseBoolean(body.add_comments_button)
-      const result = await confirmChannelLinkDraft(token, {
-        code,
-        tgUserId: userId,
-        tgChannelId,
-        account: parseOwnerAccountFromBody(body, 'telegram', userId),
-        forwardPosts: forwardPosts === null ? true : forwardPosts,
-        addCommentsButton: addCommentsButton === null ? true : addCommentsButton,
+      const result = await confirmChannelLinkDraft(
+        token,
+        {
+          code,
+          tgUserId: userId,
+          tgChannelId,
+          account: parseOwnerAccountFromBody(body, 'telegram', userId),
+          forwardPosts: forwardPosts === null ? true : forwardPosts,
+          addCommentsButton: addCommentsButton === null ? true : addCommentsButton,
+        },
+        { maxBot: deps.bot },
+      )
+      res.json({
+        ok: true,
+        status: result.status,
+        profile_id: result.profile_id,
+        max_title: result.max_title,
+        tg_title: result.tg_title,
+        message:
+          'Код принят. Инициатору в MAX отправлено сообщение — нужно нажать «Подтвердить связку» в боте.',
       })
-      res.json({ ok: true, chain: result.chain, profile_id: result.profile_id })
     } catch (err: unknown) {
       const mapped = mapChannelLinkError(err)
       if (mapped.status >= 500) {

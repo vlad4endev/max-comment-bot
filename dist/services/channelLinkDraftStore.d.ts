@@ -1,5 +1,5 @@
 export declare const CHANNEL_LINK_DRAFT_TTL_MS: number;
-export type ChannelLinkDraftStatus = 'pending' | 'completed' | 'expired' | 'cancelled';
+export type ChannelLinkDraftStatus = 'pending' | 'awaiting_max_confirm' | 'completed' | 'expired' | 'cancelled';
 export interface ChannelLinkDraftRow {
     code: string;
     profile_id: string;
@@ -11,6 +11,8 @@ export interface ChannelLinkDraftRow {
     tg_username: string | null;
     tg_user_id: number | null;
     chain_id: string | null;
+    forward_posts: boolean;
+    add_comments_button: boolean;
     created_at: string;
     expires_at: string;
 }
@@ -23,6 +25,13 @@ export declare class ChannelLinkDraftStore {
         maxTitle: string | null;
     }): ChannelLinkDraftRow;
     getByCode(code: string): ChannelLinkDraftRow | null;
+    markAwaitingMaxConfirm(code: string, patch: {
+        tgChannelId: string;
+        tgUsername: string;
+        tgUserId: number;
+        forwardPosts: boolean;
+        addCommentsButton: boolean;
+    }): void;
     markCompleted(code: string, patch: {
         tgChannelId: string;
         tgUsername: string;

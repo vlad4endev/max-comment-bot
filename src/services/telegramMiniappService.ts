@@ -7,6 +7,7 @@ import {
   listTelegramBotChats,
   listTelegramChatAdministrators,
 } from './integrationPlatformClient'
+import { ownerProfileStore } from './ownerProfileStore'
 import { telegramBotUserStore } from './telegramBotUserStore'
 import { telegramChannelNotifyLinkStore } from './telegramChannelNotifyLinkStore'
 import { telegramChannelRegistry } from './telegramChannelRegistry'
@@ -56,6 +57,151 @@ async function sendTelegramBotMessage(
     },
     { timeout: 15_000 },
   )
+}
+
+async function answerTelegramCallbackQuery(
+  token: string,
+  callbackQueryId: string,
+): Promise<void> {
+  await axios.post(
+    `${TG_API}${token}/answerCallbackQuery`,
+    { callback_query_id: callbackQueryId },
+    { timeout: 10_000 },
+  )
+}
+
+function buildTelegramMiniAppHomeUrl(): string {
+  return process.env.MINI_APP_URL?.trim() || 'https://t.me/commentvmax_bot'
+}
+
+function buildTelegramStartInlineKeyboard(
+  homeUrl: string,
+  options?: { includeHowItWorks?: boolean },
+): { inline_keyboard: Array<Array<Record<string, unknown>>> } {
+  const openBtn = /^https:\/\//i.test(homeUrl)
+    ? { text: '🚀 Открыть панель', web_app: { url: homeUrl } }
+    : { text: '🚀 Открыть панель', url: homeUrl }
+  const rows: Array<Array<Record<string, unknown>>> = [[openBtn]]
+  if (options?.includeHowItWorks !== false) {
+    rows.push([{ text: '📖 Как это работает', callback_data: 'tg_how_it_works' }])
+  }
+  return { inline_keyboard: rows }
+}
+
+function resolveTelegramUserFirstName(from: Record<string, unknown> | undefined): string {
+  const first = typeof from?.first_name === 'string' ? from.first_name.trim() : ''
+  if (first) {
+    return first
+  }
+  const username = typeof from?.username === 'string' ? from.username.trim() : ''
+  if (username) {
+    return username
+  }
+  return 'друг'
+}
+
+async function getTelegramUserActivitySummary(telegramUserId: number): Promise<{
+  channelsCount: number
+  linksCount: number
+  notifyLinksCount: number
+  isActive: boolean
+}> {
+  const token = resolveTelegramBotToken()
+  const notifyLinks = telegramChannelNotifyLinkStore.getLinkedChannels(telegramUserId)
+  if (!token) {
+    const notifyLinksCount = notifyLinks.length
+    return {
+      channelsCount: 0,
+      linksCount: 0,
+      notifyLinksCount,
+      isActive: notifyLinksCount > 0,
+    }
+  }
+  await integrationsStore.load()
+  const { channels } = await listTelegramMiniappChannelsForUser(telegramUserId)
+  await ensureAdminPanelStateLoaded()
+  const adminTgIds = new Set(channels.map((c) => c.chat_id))
+  const linksCount = listTgChainsSync().filter((c) => {
+    const id = c.tg_channel_id?.trim()
+    return Boolean(id && adminTgIds.has(id))
+  }).length
+  const channelsCount = channels.length
+  const notifyLinksCount = notifyLinks.length
+  return {
+    channelsCount,
+    linksCount,
+    notifyLinksCount,
+    isActive: channelsCount > 0 || linksCount > 0 || notifyLinksCount > 0,
+  }
+}
+
+export async function sendTelegramHowItWorksMessage(
+  token: string,
+  telegramUserId: number,
+): Promise<void> {
+  const homeUrl = buildTelegramMiniAppHomeUrl()
+  const text =
+    `📖 Как работает CommentBot в Telegram:\n\n` +
+    `1️⃣ Добавьте @commentvmax_bot в канал и выдайте права администратора\n` +
+    `2️⃣ В мини-приложении создайте связку с каналом в MAX\n` +
+    `3️⃣ Посты из Telegram пересылаются в MAX, под ними — кнопка «Комментарии»\n` +
+    `4️⃣ Вы получаете уведомления о новых комментариях\n` +
+    `5️⃣ Отвечаете из одной панели — в Telegram и MAX`
+  await sendTelegramBotMessage(token, telegramUserId, text, {
+    reply_markup: buildTelegramStartInlineKeyboard(homeUrl, { includeHowItWorks: false }),
+  })
+}
+
+export async function handleTelegramBotStartWelcome(
+  telegramUserId: number,
+  from?: Record<string, unknown>,
+): Promise<void> {
+  const token = resolveTelegramBotToken()
+  if (!token) {
+    return
+  }
+  const firstName = resolveTelegramUserFirstName(from)
+  const homeUrl = buildTelegramMiniAppHomeUrl()
+  const activity = await getTelegramUserActivitySummary(telegramUserId)
+
+  if (!activity.isActive) {
+    const text =
+      `👋 Привет, ${firstName}!\n\n` +
+      `Я CommentBot — помогу связать ваш канал в Telegram с каналом в MAX.\n\n` +
+      `Что можно сделать:\n` +
+      `📢 Подключить Telegram-канал к боту\n` +
+      `🔗 Создать связку TG ↔ MAX\n` +
+      `🔔 Получать уведомления о комментариях\n\n` +
+      `Нажмите кнопку ниже — откроется панель с пошаговым подключением.`
+    await sendTelegramBotMessage(token, telegramUserId, text, {
+      reply_markup: buildTelegramStartInlineKeyboard(homeUrl),
+    })
+    return
+  }
+
+  const parts: string[] = []
+  if (activity.channelsCount > 0) {
+    parts.push(
+      `${activity.channelsCount} ${activity.channelsCount === 1 ? 'канал' : activity.channelsCount < 5 ? 'канала' : 'каналов'}`,
+    )
+  }
+  if (activity.linksCount > 0) {
+    parts.push(
+      `${activity.linksCount} ${activity.linksCount === 1 ? 'связка' : activity.linksCount < 5 ? 'связки' : 'связок'}`,
+    )
+  }
+  if (activity.notifyLinksCount > 0 && activity.channelsCount === 0) {
+    parts.push('уведомления включены')
+  }
+  const summary = parts.length > 0 ? parts.join(' · ') : 'есть подключения'
+
+  const text =
+    `👋 С возвращением, ${firstName}!\n\n` +
+    `У вас уже настроено: ${summary}.\n\n` +
+    `Откройте панель в мини-приложении — там каналы, связки TG↔MAX, статистика и настройки уведомлений.`
+  await sendTelegramBotMessage(token, telegramUserId, text, {
+    reply_markup: buildTelegramStartInlineKeyboard(homeUrl, { includeHowItWorks: false }),
+  })
 }
 
 async function isTelegramChannelAdmin(
@@ -239,6 +385,63 @@ export async function registerTelegramChannelNotifyLink(
   }
 }
 
+/** Личные сообщения в Telegram-боте после успешной связки TG ↔ MAX. */
+export async function notifyChannelLinkSucceededPrivate(params: {
+  profileId: string
+  maxUserId: number
+  maxTitle: string | null
+  tgTitle: string
+  confirmedByTgUserId: number
+}): Promise<void> {
+  const token = resolveTelegramBotToken()
+  if (!token) {
+    return
+  }
+
+  const maxTitle = (params.maxTitle && params.maxTitle.trim()) || 'MAX-канал'
+  const tgTitle = (params.tgTitle && params.tgTitle.trim()) || 'Telegram-канал'
+  const homeUrl = buildTelegramMiniAppHomeUrl()
+  const keyboard = buildTelegramStartInlineKeyboard(homeUrl, { includeHowItWorks: false })
+
+  const accounts = ownerProfileStore.getAccountsForProfile(params.profileId)
+  const maxOnProfile = accounts.some(
+    (a) => a.platform === 'max' && a.platform_user_id === String(params.maxUserId),
+  )
+
+  const recipientRoles = new Map<number, 'confirmer' | 'max_initiator'>()
+  recipientRoles.set(params.confirmedByTgUserId, 'confirmer')
+
+  for (const acc of accounts) {
+    if (acc.platform !== 'telegram') {
+      continue
+    }
+    const tgId = Number.parseInt(acc.platform_user_id, 10)
+    if (!Number.isInteger(tgId) || tgId <= 0) {
+      continue
+    }
+    if (tgId === params.confirmedByTgUserId) {
+      recipientRoles.set(tgId, 'confirmer')
+    } else if (maxOnProfile) {
+      recipientRoles.set(tgId, 'max_initiator')
+    }
+  }
+
+  telegramBotUserStore.markStarted({ id: params.confirmedByTgUserId })
+
+  for (const [tgId, role] of recipientRoles) {
+    const text =
+      role === 'max_initiator'
+        ? `✅ Связка с Telegram завершена!\n\n📺 MAX: «${maxTitle}»\n📱 Telegram: «${tgTitle}»\n\nПосты из Telegram будут пересылаться в ваш MAX-канал.`
+        : `✅ Связка создана!\n\n📱 Telegram: «${tgTitle}»\n📺 MAX: «${maxTitle}»\n\nПосты из Telegram будут пересылаться в MAX.`
+    try {
+      await sendTelegramBotMessage(token, tgId, text, { reply_markup: keyboard })
+      logger.info('notifyChannelLinkSucceededPrivate: sent', { tgId, role })
+    } catch (err: unknown) {
+      logger.warn('notifyChannelLinkSucceededPrivate: send failed', { tgId, role, err })
+    }
+  }
+}
+
 export async function handleTelegramBotStartJoin(
   telegramUserId: number,
   startPayload: string,
@@ -281,6 +484,20 @@ export async function processTelegramMiniappBotUpdates(
       await handleTelegramMyChatMemberUpdate(upd)
     }
     if (upd.callback_query) {
+      const cq = upd.callback_query as Record<string, unknown>
+      const cqData = typeof cq.data === 'string' ? cq.data.trim() : ''
+      const cqFrom = cq.from as Record<string, unknown> | undefined
+      const cqUserId = typeof cqFrom?.id === 'number' ? cqFrom.id : null
+      const cqId = typeof cq.id === 'string' ? cq.id : null
+      if (cqData === 'tg_how_it_works' && cqUserId != null && cqId) {
+        try {
+          await answerTelegramCallbackQuery(token, cqId)
+        } catch (err: unknown) {
+          logger.warn('processTelegramMiniappBotUpdates: answer tg_how_it_works failed', { err })
+        }
+        await sendTelegramHowItWorksMessage(token, cqUserId)
+        continue
+      }
       await handleTelegramCallbackQuery(upd)
     }
     const message = upd.message as Record<string, unknown> | undefined
@@ -307,18 +524,18 @@ export async function processTelegramMiniappBotUpdates(
         continue
       }
       if (/^linkmax$/i.test(payload)) {
-        const homeUrl = process.env.MINI_APP_URL?.trim() || 'https://t.me/commentvmax_bot'
+        const homeUrl = buildTelegramMiniAppHomeUrl()
         await sendTelegramBotMessage(
           token,
           from.id,
           '🔗 Связка с MAX\n\nОткройте мини-приложение CommentBot → «Создать связку» → выберите Telegram-канал и введите код из MAX.',
           {
-            reply_markup: {
-              inline_keyboard: [[{ text: '💬 Открыть мини-приложение', url: homeUrl }]],
-            },
+            reply_markup: buildTelegramStartInlineKeyboard(homeUrl, { includeHowItWorks: false }),
           },
         )
+        continue
       }
+      await handleTelegramBotStartWelcome(from.id, from)
       continue
     }
 

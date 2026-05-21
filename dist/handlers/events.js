@@ -4,11 +4,13 @@ exports.clearAdminJoinNotifiedForChannel = void 0;
 exports.registerEventHandlers = registerEventHandlers;
 const max_bot_api_1 = require("@maxhub/max-bot-api");
 const config_1 = require("../config");
+const channelLinkCallback_1 = require("../utils/channelLinkCallback");
 const botChannelMembership_1 = require("../services/botChannelMembership");
 const channelAdminJoinNotified_1 = require("../services/channelAdminJoinNotified");
 const commentButtonRetryQueue_1 = require("../services/commentButtonRetryQueue");
 const channelPoller_1 = require("../services/channelPoller");
 const channelPostActions_1 = require("../services/channelPostActions");
+const channelLinkService_1 = require("../services/channelLinkService");
 const channelRegistry_1 = require("../services/channelRegistry");
 const channelFullDisconnect_1 = require("../services/channelFullDisconnect");
 const resolveChannelChatId_1 = require("../services/resolveChannelChatId");
@@ -649,6 +651,39 @@ function registerEventHandlers(bot) {
                 }
                 catch (e) {
                     logger_1.logger.warn('message_callback: confirm_ch reply failed', { userId, confirmChannelId, e });
+                }
+                return;
+            }
+            const linkCode = (0, channelLinkCallback_1.parseConfirmChannelLinkPayload)(rawPayload);
+            if (linkCode !== null) {
+                try {
+                    const result = await (0, channelLinkService_1.finalizeChannelLinkDraftInMax)(bot, linkCode, userId);
+                    const maxT = result.chain.max_title ?? 'MAX';
+                    const tgT = result.chain.tg_title ?? 'Telegram';
+                    await bot.api.sendMessageToUser(userId, `✅ Связка создана!\n\n📱 ${tgT} → 📺 ${maxT}\n\nПосты из Telegram будут пересылаться в MAX.`);
+                }
+                catch (err) {
+                    const msg = err instanceof Error ? err.message : String(err);
+                    let userText = 'Не удалось подтвердить связку. Попробуйте создать новый код в мини-приложении.';
+                    if (msg === 'forbidden') {
+                        userText = 'Подтвердить связку может только тот, кто создал код в MAX.';
+                    }
+                    else if (msg === 'code expired' || msg === 'invalid code') {
+                        userText = 'Код истёк или не найден. Создайте новый код в MAX.';
+                    }
+                    else if (msg === 'not awaiting confirm') {
+                        userText = 'Эта связка уже подтверждена или код больше не действует.';
+                    }
+                    else if (msg === 'pair already linked') {
+                        userText = 'Такая связка уже существует.';
+                    }
+                    try {
+                        await bot.api.sendMessageToUser(userId, userText);
+                    }
+                    catch (e) {
+                        logger_1.logger.warn('message_callback: confirm_link reply failed', { userId, linkCode, e });
+                    }
+                    logger_1.logger.warn('message_callback: confirm_link failed', { userId, linkCode, err });
                 }
                 return;
             }

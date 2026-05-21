@@ -3,6 +3,7 @@ import type { ChatType } from '@maxhub/max-bot-api/types'
 import type { Chat, Message, User } from '@maxhub/max-bot-api/types'
 
 import { config } from '../config'
+import { parseConfirmChannelLinkPayload } from '../utils/channelLinkCallback'
 import {
   fetchBotChatMember,
   fetchBotChatMemberWithRetry,
@@ -22,6 +23,7 @@ import {
   lookupRegisteredChannelForMessage,
   tryAttachCommentsToChannelPost,
 } from '../services/channelPostActions'
+import { finalizeChannelLinkDraftInMax } from '../services/channelLinkService'
 import { channelRegistry } from '../services/channelRegistry'
 import { fullyDisconnectRegisteredChannel } from '../services/channelFullDisconnect'
 import { resolveChannelChatIdFromInviteParam } from '../services/resolveChannelChatId'
@@ -788,6 +790,38 @@ export function registerEventHandlers(bot: Bot): void {
           await bot.api.sendMessageToUser(userId, lines.join('\n'))
         } catch (e: unknown) {
           logger.warn('message_callback: confirm_ch reply failed', { userId, confirmChannelId, e })
+        }
+        return
+      }
+
+      const linkCode = parseConfirmChannelLinkPayload(rawPayload)
+      if (linkCode !== null) {
+        try {
+          const result = await finalizeChannelLinkDraftInMax(bot, linkCode, userId)
+          const maxT = result.chain.max_title ?? 'MAX'
+          const tgT = result.chain.tg_title ?? 'Telegram'
+          await bot.api.sendMessageToUser(
+            userId,
+            `✅ Связка создана!\n\n📱 ${tgT} → 📺 ${maxT}\n\nПосты из Telegram будут пересылаться в MAX.`,
+          )
+        } catch (err: unknown) {
+          const msg = err instanceof Error ? err.message : String(err)
+          let userText = 'Не удалось подтвердить связку. Попробуйте создать новый код в мини-приложении.'
+          if (msg === 'forbidden') {
+            userText = 'Подтвердить связку может только тот, кто создал код в MAX.'
+          } else if (msg === 'code expired' || msg === 'invalid code') {
+            userText = 'Код истёк или не найден. Создайте новый код в MAX.'
+          } else if (msg === 'not awaiting confirm') {
+            userText = 'Эта связка уже подтверждена или код больше не действует.'
+          } else if (msg === 'pair already linked') {
+            userText = 'Такая связка уже существует.'
+          }
+          try {
+            await bot.api.sendMessageToUser(userId, userText)
+          } catch (e: unknown) {
+            logger.warn('message_callback: confirm_link reply failed', { userId, linkCode, e })
+          }
+          logger.warn('message_callback: confirm_link failed', { userId, linkCode, err })
         }
         return
       }

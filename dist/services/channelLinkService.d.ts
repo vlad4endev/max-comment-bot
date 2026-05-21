@@ -28,9 +28,32 @@ export declare function createChannelLinkDraft(bot: Bot, input: {
 }>;
 export declare function getChannelLinkDraftPreview(code: string): {
     max_title: string | null;
+    tg_title: string | null;
     expires_at: string;
     status: string;
 } | null;
+/** Шаг 1 (Telegram): указать канал и код — ждёт подтверждения в MAX. */
+export declare function submitChannelLinkDraftFromTelegram(tgToken: string, input: {
+    code: string;
+    tgUserId: number;
+    tgChannelId: string;
+    account: OwnerAccountInput;
+    forwardPosts?: boolean;
+    addCommentsButton?: boolean;
+}, options?: {
+    maxBot?: Bot;
+}): Promise<{
+    status: 'awaiting_max_confirm';
+    profile_id: string;
+    max_title: string | null;
+    tg_title: string;
+}>;
+/** Шаг 2 (MAX): кнопка «Подтвердить связку» — создаёт цепочку TG → MAX. */
+export declare function finalizeChannelLinkDraftInMax(bot: Bot, code: string, maxUserId: number): Promise<{
+    chain: ChannelLinkWire;
+    profile_id: string;
+}>;
+/** @deprecated Use submit + finalize; kept for route name compatibility. */
 export declare function confirmChannelLinkDraft(tgToken: string, input: {
     code: string;
     tgUserId: number;
@@ -38,9 +61,13 @@ export declare function confirmChannelLinkDraft(tgToken: string, input: {
     account: OwnerAccountInput;
     forwardPosts?: boolean;
     addCommentsButton?: boolean;
+}, options?: {
+    maxBot?: Bot;
 }): Promise<{
-    chain: ChannelLinkWire;
+    status: 'awaiting_max_confirm';
     profile_id: string;
+    max_title: string | null;
+    tg_title: string;
 }>;
 export declare function listChannelLinksForMaxUser(bot: Bot, maxUserId: number): Promise<ChannelLinkWire[]>;
 export declare function listChannelLinksForTelegramUser(tgToken: string, tgUserId: number): Promise<ChannelLinkWire[]>;

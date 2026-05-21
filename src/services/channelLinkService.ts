@@ -1,4 +1,5 @@
 import type { Bot } from '@maxhub/max-bot-api'
+import { Keyboard } from '@maxhub/max-bot-api'
 
 import {
   createTgChain,
@@ -6,14 +7,20 @@ import {
   listTgChains,
   type TgChainRecord,
 } from '../api/adminPanelState'
+import { buildConfirmChannelLinkPayload } from '../utils/channelLinkCallback'
 import { channelRegistry } from './channelRegistry'
 import { channelLinkDraftStore } from './channelLinkDraftStore'
 import { isUserChannelAdmin } from './channelPostActions'
 import { listTelegramChatAdministrators } from './integrationPlatformClient'
 import { ownerProfileStore, type OwnerAccountInput } from './ownerProfileStore'
 import { stateManager } from './stateManager'
-import { listTelegramMiniappChannelsForUser } from './telegramMiniappService'
+import {
+  listTelegramMiniappChannelsForUser,
+  notifyChannelLinkSucceededPrivate,
+} from './telegramMiniappService'
+import { telegramBotUserStore } from './telegramBotUserStore'
 import { telegramChannelRegistry } from './telegramChannelRegistry'
+import { logger } from '../utils/logger'
 
 export interface ChannelLinkWire {
   id: string
@@ -69,6 +76,13 @@ function findActiveChainConflict(
   )
 }
 
+function assertDraftNotExpired(draft: { expires_at: string }): void {
+  const expiresMs = Date.parse(draft.expires_at)
+  if (Number.isFinite(expiresMs) && expiresMs < Date.now()) {
+    throw new Error('code expired')
+  }
+}
+
 async function assertMaxChannelReady(bot: Bot, maxChatId: number, maxUserId: number): Promise<void> {
   const reg = channelRegistry.getChannel(maxChatId)
   if (!reg) {
@@ -103,6 +117,90 @@ async function assertTelegramChannelReady(
       ? reg.username.replace(/^@/, '')
       : tgChannelId
   return { tgUsername: username, tgTitle: reg.title }
+}
+
+async function sendMaxLinkConfirmRequest(
+  bot: Bot | undefined,
+  draft: {
+    code: string
+    max_user_id: number
+    max_title: string | null
+    tg_channel_id: string | null
+  },
+  tgTitle: string,
+  tgUsername: string,
+): Promise<void> {
+  if (!bot) {
+    return
+  }
+  const maxLabel = (draft.max_title && draft.max_title.trim()) || 'MAX-канал'
+  const tgLabel = (tgTitle && tgTitle.trim()) || 'Telegram-канал'
+  const tgHandle = tgUsername ? `@${tgUsername.replace(/^@/, '')}` : ''
+  const text =
+    `📱 Запрос на связку с Telegram\n\n` +
+    `Для MAX-канала «${maxLabel}» указан код ${draft.code}.\n\n` +
+    `Telegram: «${tgLabel}»${tgHandle ? ` (${tgHandle})` : ''}\n\n` +
+    `Если это вы — нажмите «Подтвердить связку». Посты из Telegram начнут пересылаться в MAX.`
+  const keyboard = Keyboard.inlineKeyboard([
+    [Keyboard.button.callback('✅ Подтвердить связку', buildConfirmChannelLinkPayload(draft.code))],
+  ])
+  try {
+    await bot.api.sendMessageToUser(draft.max_user_id, text, { attachments: [keyboard] })
+    logger.info('sendMaxLinkConfirmRequest: sent', {
+      maxUserId: draft.max_user_id,
+      code: draft.code,
+    })
+  } catch (err: unknown) {
+    logger.warn('sendMaxLinkConfirmRequest: send failed', {
+      maxUserId: draft.max_user_id,
+      code: draft.code,
+      err,
+    })
+  }
+}
+
+async function finalizeDraftToChain(
+  draft: {
+    code: string
+    profile_id: string
+    max_chat_id: number
+    max_title: string | null
+    max_user_id: number
+    tg_channel_id: string | null
+    tg_username: string | null
+    tg_user_id: number | null
+    forward_posts: boolean
+    add_comments_button: boolean
+  },
+  tgChannelId: string,
+  tgUsername: string,
+  tgUserId: number,
+): Promise<TgChainRecord> {
+  const chain = await createTgChain({
+    max_chat_id: draft.max_chat_id,
+    max_title: draft.max_title,
+    tg_username: tgUsername,
+    tg_channel_id: tgChannelId,
+    bot_token: '',
+    forward_posts: draft.forward_posts,
+    forward_comments: false,
+    add_comments_button: draft.add_comments_button,
+    add_signature: false,
+    active: true,
+    owner_profile_id: draft.profile_id,
+    created_via: 'miniapp_link',
+    max_user_id: draft.max_user_id,
+    tg_user_id: tgUserId,
+  })
+
+  channelLinkDraftStore.markCompleted(draft.code, {
+    tgChannelId,
+    tgUsername,
+    tgUserId,
+    chainId: chain.id,
+  })
+
+  return chain
 }
 
 export async function syncOwnerProfileFromMiniapp(
@@ -154,6 +252,7 @@ export async function createChannelLinkDraft(
 
 export function getChannelLinkDraftPreview(code: string): {
   max_title: string | null
+  tg_title: string | null
   expires_at: string
   status: string
 } | null {
@@ -161,16 +260,157 @@ export function getChannelLinkDraftPreview(code: string): {
   if (!draft) {
     return null
   }
-  if (draft.status !== 'pending') {
-    return { max_title: draft.max_title, expires_at: draft.expires_at, status: draft.status }
-  }
   const expiresMs = Date.parse(draft.expires_at)
-  if (Number.isFinite(expiresMs) && expiresMs < Date.now()) {
-    return { max_title: draft.max_title, expires_at: draft.expires_at, status: 'expired' }
+  if (Number.isFinite(expiresMs) && expiresMs < Date.now() && draft.status !== 'completed') {
+    return {
+      max_title: draft.max_title,
+      tg_title: null,
+      expires_at: draft.expires_at,
+      status: 'expired',
+    }
   }
-  return { max_title: draft.max_title, expires_at: draft.expires_at, status: 'pending' }
+  const tgTitle =
+    draft.tg_channel_id != null
+      ? (telegramChannelRegistry.getChannel(draft.tg_channel_id)?.title ??
+        draft.tg_username)
+      : null
+  return {
+    max_title: draft.max_title,
+    tg_title: tgTitle,
+    expires_at: draft.expires_at,
+    status: draft.status,
+  }
 }
 
+/** Шаг 1 (Telegram): указать канал и код — ждёт подтверждения в MAX. */
+export async function submitChannelLinkDraftFromTelegram(
+  tgToken: string,
+  input: {
+    code: string
+    tgUserId: number
+    tgChannelId: string
+    account: OwnerAccountInput
+    forwardPosts?: boolean
+    addCommentsButton?: boolean
+  },
+  options?: { maxBot?: Bot },
+): Promise<{
+  status: 'awaiting_max_confirm'
+  profile_id: string
+  max_title: string | null
+  tg_title: string
+}> {
+  await ensureAdminPanelStateLoaded()
+  const normalizedCode = String(input.code).trim().toUpperCase()
+  const draft = channelLinkDraftStore.getByCode(normalizedCode)
+  if (!draft) {
+    throw new Error('invalid code')
+  }
+  if (draft.status === 'awaiting_max_confirm' && draft.tg_channel_id === input.tgChannelId.trim()) {
+    const tgReg = telegramChannelRegistry.getChannel(draft.tg_channel_id)
+    return {
+      status: 'awaiting_max_confirm',
+      profile_id: draft.profile_id,
+      max_title: draft.max_title,
+      tg_title: tgReg?.title ?? draft.tg_username ?? 'Telegram',
+    }
+  }
+  if (draft.status !== 'pending') {
+    throw new Error('code not available')
+  }
+  assertDraftNotExpired(draft)
+
+  const chatId = String(input.tgChannelId).trim()
+  if (!/^-?\d+$/.test(chatId)) {
+    throw new Error('invalid tg channel')
+  }
+
+  const { tgUsername, tgTitle } = await assertTelegramChannelReady(tgToken, chatId, input.tgUserId)
+
+  const chains = await listTgChains()
+  const conflict = findActiveChainConflict(chains, draft.max_chat_id, chatId, tgUsername)
+  if (conflict) {
+    throw new Error('pair already linked')
+  }
+
+  ownerProfileStore.attachAccountToProfile(draft.profile_id, input.account)
+  telegramBotUserStore.markStarted({ id: input.tgUserId })
+
+  const forwardPosts = input.forwardPosts !== false
+  const addCommentsButton = input.addCommentsButton !== false
+
+  channelLinkDraftStore.markAwaitingMaxConfirm(normalizedCode, {
+    tgChannelId: chatId,
+    tgUsername,
+    tgUserId: input.tgUserId,
+    forwardPosts,
+    addCommentsButton,
+  })
+
+  await sendMaxLinkConfirmRequest(options?.maxBot, draft, tgTitle ?? tgUsername, tgUsername)
+
+  return {
+    status: 'awaiting_max_confirm',
+    profile_id: draft.profile_id,
+    max_title: draft.max_title,
+    tg_title: tgTitle ?? tgUsername,
+  }
+}
+
+/** Шаг 2 (MAX): кнопка «Подтвердить связку» — создаёт цепочку TG → MAX. */
+export async function finalizeChannelLinkDraftInMax(
+  bot: Bot,
+  code: string,
+  maxUserId: number,
+): Promise<{ chain: ChannelLinkWire; profile_id: string }> {
+  await ensureAdminPanelStateLoaded()
+  const normalizedCode = String(code).trim().toUpperCase()
+  const draft = channelLinkDraftStore.getByCode(normalizedCode)
+  if (!draft) {
+    throw new Error('invalid code')
+  }
+  if (draft.status !== 'awaiting_max_confirm') {
+    throw new Error('not awaiting confirm')
+  }
+  assertDraftNotExpired(draft)
+  if (draft.max_user_id !== maxUserId) {
+    throw new Error('forbidden')
+  }
+
+  const chatId = draft.tg_channel_id?.trim() ?? ''
+  const tgUsername = draft.tg_username?.trim() ?? ''
+  const tgUserId = draft.tg_user_id
+  if (!chatId || !tgUsername || tgUserId == null) {
+    throw new Error('draft incomplete')
+  }
+
+  await assertMaxChannelReady(bot, draft.max_chat_id, maxUserId)
+
+  const chains = await listTgChains()
+  const conflict = findActiveChainConflict(chains, draft.max_chat_id, chatId, tgUsername)
+  if (conflict) {
+    throw new Error('pair already linked')
+  }
+
+  const chain = await finalizeDraftToChain(draft, chatId, tgUsername, tgUserId)
+
+  const tgReg = telegramChannelRegistry.getChannel(chatId)
+  const tgTitle = tgReg?.title ?? tgUsername
+
+  void notifyChannelLinkSucceededPrivate({
+    profileId: draft.profile_id,
+    maxUserId: draft.max_user_id,
+    maxTitle: draft.max_title,
+    tgTitle,
+    confirmedByTgUserId: tgUserId,
+  }).catch((err: unknown) => {
+    logger.warn('finalizeChannelLinkDraftInMax: telegram notify failed', { err, code: normalizedCode })
+  })
+
+  return { chain: chainToWire(chain), profile_id: draft.profile_id }
+}
+
+/** @deprecated Use submit + finalize; kept for route name compatibility. */
 export async function confirmChannelLinkDraft(
   tgToken: string,
   input: {
@@ -181,61 +421,14 @@ export async function confirmChannelLinkDraft(
     forwardPosts?: boolean
     addCommentsButton?: boolean
   },
-): Promise<{ chain: ChannelLinkWire; profile_id: string }> {
-  await ensureAdminPanelStateLoaded()
-  const normalizedCode = String(input.code).trim().toUpperCase()
-  const draft = channelLinkDraftStore.getByCode(normalizedCode)
-  if (!draft) {
-    throw new Error('invalid code')
-  }
-  if (draft.status !== 'pending') {
-    throw new Error('code not available')
-  }
-  const expiresMs = Date.parse(draft.expires_at)
-  if (Number.isFinite(expiresMs) && expiresMs < Date.now()) {
-    throw new Error('code expired')
-  }
-
-  const chatId = String(input.tgChannelId).trim()
-  if (!/^-?\d+$/.test(chatId)) {
-    throw new Error('invalid tg channel')
-  }
-
-  const { tgUsername } = await assertTelegramChannelReady(tgToken, chatId, input.tgUserId)
-
-  const chains = await listTgChains()
-  const conflict = findActiveChainConflict(chains, draft.max_chat_id, chatId, tgUsername)
-  if (conflict) {
-    throw new Error('pair already linked')
-  }
-
-  ownerProfileStore.attachAccountToProfile(draft.profile_id, input.account)
-
-  const chain = await createTgChain({
-    max_chat_id: draft.max_chat_id,
-    max_title: draft.max_title,
-    tg_username: tgUsername,
-    tg_channel_id: chatId,
-    bot_token: '',
-    forward_posts: input.forwardPosts !== false,
-    forward_comments: false,
-    add_comments_button: input.addCommentsButton !== false,
-    add_signature: false,
-    active: true,
-    owner_profile_id: draft.profile_id,
-    created_via: 'miniapp_link',
-    max_user_id: draft.max_user_id,
-    tg_user_id: input.tgUserId,
-  })
-
-  channelLinkDraftStore.markCompleted(normalizedCode, {
-    tgChannelId: chatId,
-    tgUsername,
-    tgUserId: input.tgUserId,
-    chainId: chain.id,
-  })
-
-  return { chain: chainToWire(chain), profile_id: draft.profile_id }
+  options?: { maxBot?: Bot },
+): Promise<{
+  status: 'awaiting_max_confirm'
+  profile_id: string
+  max_title: string | null
+  tg_title: string
+}> {
+  return submitChannelLinkDraftFromTelegram(tgToken, input, options)
 }
 
 export async function listChannelLinksForMaxUser(

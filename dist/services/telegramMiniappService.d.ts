@@ -6,6 +6,8 @@ export interface TelegramMiniappChannelWire {
     status: 'pending' | 'active';
     platform: 'telegram';
 }
+export declare function sendTelegramHowItWorksMessage(token: string, telegramUserId: number): Promise<void>;
+export declare function handleTelegramBotStartWelcome(telegramUserId: number, from?: Record<string, unknown>): Promise<void>;
 export declare function listTelegramMiniappChannelsForUser(telegramUserId: number): Promise<{
     channels: TelegramMiniappChannelWire[];
     bot_username: string;
@@ -38,5 +40,13 @@ export declare function registerTelegramChannelNotifyLink(telegramUserId: number
     channel_title: string | null;
     already_linked: boolean;
 }>;
+/** Личные сообщения в Telegram-боте после успешной связки TG ↔ MAX. */
+export declare function notifyChannelLinkSucceededPrivate(params: {
+    profileId: string;
+    maxUserId: number;
+    maxTitle: string | null;
+    tgTitle: string;
+    confirmedByTgUserId: number;
+}): Promise<void>;
 export declare function handleTelegramBotStartJoin(telegramUserId: number, startPayload: string): Promise<void>;
 export declare function processTelegramMiniappBotUpdates(token: string, updates: Array<Record<string, unknown>>): Promise<void>;
