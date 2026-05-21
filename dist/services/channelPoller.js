@@ -12,6 +12,7 @@ exports.notifyChannelRegistryChanged = notifyChannelRegistryChanged;
 const adminRuntimeSettingsStore_1 = require("./adminRuntimeSettingsStore");
 const channelAdminJoinNotified_1 = require("./channelAdminJoinNotified");
 const channelRegistry_1 = require("./channelRegistry");
+const channelCommentsButtonPolicy_1 = require("./channelCommentsButtonPolicy");
 const commentButtonRetryQueue_1 = require("./commentButtonRetryQueue");
 const resolveChannelChatId_1 = require("./resolveChannelChatId");
 const logger_1 = require("../utils/logger");
@@ -22,8 +23,8 @@ const MIN_POLL_INTERVAL_MS = 3_000;
 /** Верхняя граница интервала опроса одного канала (стабильность важнее редкого глобального 30 с). */
 const PER_CHANNEL_CAP_MS = 6_000;
 const FETCH_COUNT = 15;
-/** Admin «обновить кнопки»: окно сканирования (последние сутки). */
-exports.REFRESH_BUTTON_LOOKBACK_MS = 24 * 60 * 60 * 1000;
+/** Admin «обновить кнопки»: окно сканирования ленты MAX (сообщения без строки в БД). */
+exports.REFRESH_BUTTON_LOOKBACK_MS = 7 * 24 * 60 * 60 * 1000;
 const REFRESH_MESSAGES_PAGE_SIZE = 100;
 /** До 30×100 сообщений за сутки на канал (защита от бесконечного цикла). */
 const REFRESH_MAX_PAGES = 30;
@@ -39,6 +40,9 @@ function resolvePerChannelIntervalMs(globalMs) {
 }
 async function pollChannel(bot, channel, botUid) {
     const stats = { fetched: 0, candidates: 0, attached: 0, failed: 0 };
+    if (!(0, channelCommentsButtonPolicy_1.isCommentsButtonEnabledForMaxChannel)(channel.chat_id)) {
+        return stats;
+    }
     const { messages } = await (0, maxApiRetry_1.apiCallWithRetry)(() => bot.api.getMessages(channel.chat_id, { count: FETCH_COUNT }));
     stats.fetched = messages.length;
     for (const message of messages) {
@@ -210,7 +214,8 @@ function applyRefreshAttachResult(stats, r, wasInDb) {
     if (r.reason === 'skip_bot' ||
         r.reason === 'no_mid' ||
         r.reason === 'no_chat_id' ||
-        r.reason === 'not_admin') {
+        r.reason === 'not_admin' ||
+        r.reason === 'chain_comments_disabled') {
         stats.skipped += 1;
         return;
     }
@@ -237,6 +242,9 @@ async function runChannelPollerForChat(bot, chatId, options) {
     if (!reg || reg.type !== 'channel') {
         throw new RefreshButtonsError('channel_not_found', 'Канал не найден в реестре бота');
     }
+    if (!(0, channelCommentsButtonPolicy_1.isCommentsButtonEnabledForMaxChannel)(reg.chat_id)) {
+        throw new RefreshButtonsError('chain_comments_disabled', 'Кнопка «Комментарии» отключена в связке TG→MAX для этого канала');
+    }
     const lookbackMs = options?.lookbackMs && Number.isFinite(options.lookbackMs)
         ? Math.max(5 * 60 * 1000, Math.floor(options.lookbackMs))
         : exports.REFRESH_BUTTON_LOOKBACK_MS;
@@ -247,6 +255,7 @@ async function runChannelPollerForChat(bot, chatId, options) {
         lookback_hours: lookbackHours,
         messages_fetched: 0,
         posts_in_db: 0,
+        posts_in_db_recent: 0,
         posts_in_db_total: 0,
         created: 0,
         refreshed: 0,
@@ -256,17 +265,19 @@ async function runChannelPollerForChat(bot, chatId, options) {
     const botUid = bot.botInfo?.user_id;
     const knownPosts = postStore_1.postStore.getPostsByChatId(reg.chat_id);
     stats.posts_in_db_total = knownPosts.length;
+    stats.posts_in_db = knownPosts.length;
     const recentPosts = knownPosts.filter((post) => isWithinLookbackMs(postTimestampMs(post), cutoffMs));
-    stats.posts_in_db = recentPosts.length;
+    stats.posts_in_db_recent = recentPosts.length;
     const processedMids = new Set();
     logger_1.logger.info('channelPoller: refresh window', {
         chatId: reg.chat_id,
         lookbackHours,
         postsInDbTotal: stats.posts_in_db_total,
-        postsInDbRecent: stats.posts_in_db,
+        postsInDbProcessed: stats.posts_in_db,
+        postsInDbRecent: stats.posts_in_db_recent,
         cutoffIso: new Date(cutoffMs).toISOString(),
     });
-    for (const post of recentPosts) {
+    for (const post of knownPosts) {
         processedMids.add(post.message_mid);
         if (post.comments_ui_message_mid) {
             processedMids.add(post.comments_ui_message_mid);

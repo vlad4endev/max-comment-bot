@@ -3,6 +3,7 @@ import pLimit from 'p-limit'
 
 import { logger } from '../utils/logger'
 import { resolveCanonicalChannelChatId } from './resolveChannelChatId'
+import { isCommentsButtonEnabledForMaxChannel } from './channelCommentsButtonPolicy'
 import { ensurePostFromChannelMessage } from './channelPostActions'
 import { postStore } from './postStore'
 
@@ -38,6 +39,9 @@ export function scheduleCommentButtonRetry(chatId: number, messageMid: string): 
     return
   }
   const canonical = resolveCanonicalChannelChatId(chatId) ?? chatId
+  if (!isCommentsButtonEnabledForMaxChannel(canonical)) {
+    return
+  }
   const existing = postStore.findPostByChannelMessage(canonical, mid)
   if (existing && existing.button_attach_pending !== true) {
     return

@@ -185,6 +185,17 @@ class PostStore {
         this.getStatements().deleteAll.run();
         logger_1.logger.warn('postStore: clearAllPosts');
     }
+    /** Removes a single post row (rollback after failed TG→MAX comment gate). */
+    deletePostById(postId) {
+        const id = postId.trim();
+        if (!id) {
+            return;
+        }
+        const r = (0, database_1.getDb)().prepare('DELETE FROM posts WHERE post_id = ?').run(id);
+        if (r.changes > 0) {
+            logger_1.logger.info('db: пост удалён', { postId: id });
+        }
+    }
     getTotalPostCount() {
         const row = this.getStatements().countAll.get();
         return Number(row.n) || 0;

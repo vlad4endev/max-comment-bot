@@ -5,6 +5,7 @@ import { adminRuntimeSettingsStore } from './adminRuntimeSettingsStore'
 import { clearAdminJoinNotifiedForChannel } from './channelAdminJoinNotified'
 import type { ChannelRecord } from './channelRegistry'
 import { channelRegistry } from './channelRegistry'
+import { isCommentsButtonEnabledForMaxChannel } from './channelCommentsButtonPolicy'
 import { scheduleCommentButtonRetry } from './commentButtonRetryQueue'
 import { resolveCanonicalChannelChatId } from './resolveChannelChatId'
 import { logger } from '../utils/logger'
@@ -20,8 +21,8 @@ const MIN_POLL_INTERVAL_MS = 3_000
 /** Верхняя граница интервала опроса одного канала (стабильность важнее редкого глобального 30 с). */
 const PER_CHANNEL_CAP_MS = 6_000
 const FETCH_COUNT = 15
-/** Admin «обновить кнопки»: окно сканирования (последние сутки). */
-export const REFRESH_BUTTON_LOOKBACK_MS = 24 * 60 * 60 * 1000
+/** Admin «обновить кнопки»: окно сканирования ленты MAX (сообщения без строки в БД). */
+export const REFRESH_BUTTON_LOOKBACK_MS = 7 * 24 * 60 * 60 * 1000
 const REFRESH_MESSAGES_PAGE_SIZE = 100
 /** До 30×100 сообщений за сутки на канал (защита от бесконечного цикла). */
 const REFRESH_MAX_PAGES = 30
@@ -44,6 +45,9 @@ async function pollChannel(
   botUid: number | undefined,
 ): Promise<{ fetched: number; candidates: number; attached: number; failed: number }> {
   const stats = { fetched: 0, candidates: 0, attached: 0, failed: 0 }
+  if (!isCommentsButtonEnabledForMaxChannel(channel.chat_id)) {
+    return stats
+  }
   const { messages } = await apiCallWithRetry(() =>
     bot.api.getMessages(channel.chat_id, { count: FETCH_COUNT }),
   )
@@ -152,11 +156,14 @@ export function syncPerChannelPollers(bot: Bot): void {
 
 export interface RefreshButtonsStats {
   chat_id: number
+  /** Окно сканирования ленты MAX (часы). */
   lookback_hours: number
   messages_fetched: number
-  /** Постов в базе за lookback (обработаны при refresh). */
+  /** Постов из базы канала, по которым прошла перепривязка (все строки). */
   posts_in_db: number
-  /** Всего постов канала в базе (справочно). */
+  /** Постов в базе за lookback_hours (справочно). */
+  posts_in_db_recent: number
+  /** Всего постов канала в базе. */
   posts_in_db_total: number
   created: number
   refreshed: number
@@ -262,7 +269,8 @@ function applyRefreshAttachResult(
     r.reason === 'skip_bot' ||
     r.reason === 'no_mid' ||
     r.reason === 'no_chat_id' ||
-    r.reason === 'not_admin'
+    r.reason === 'not_admin' ||
+    r.reason === 'chain_comments_disabled'
   ) {
     stats.skipped += 1
     return
@@ -272,7 +280,11 @@ function applyRefreshAttachResult(
 
 export class RefreshButtonsError extends Error {
   constructor(
-    readonly code: 'miniapp_not_configured' | 'channel_not_found' | 'api_error',
+    readonly code:
+      | 'miniapp_not_configured'
+      | 'channel_not_found'
+      | 'api_error'
+      | 'chain_comments_disabled',
     message: string,
   ) {
     super(message)
@@ -301,6 +313,13 @@ export async function runChannelPollerForChat(
     throw new RefreshButtonsError('channel_not_found', 'Канал не найден в реестре бота')
   }
 
+  if (!isCommentsButtonEnabledForMaxChannel(reg.chat_id)) {
+    throw new RefreshButtonsError(
+      'chain_comments_disabled',
+      'Кнопка «Комментарии» отключена в связке TG→MAX для этого канала',
+    )
+  }
+
   const lookbackMs =
     options?.lookbackMs && Number.isFinite(options.lookbackMs)
       ? Math.max(5 * 60 * 1000, Math.floor(options.lookbackMs))
@@ -313,6 +332,7 @@ export async function runChannelPollerForChat(
     lookback_hours: lookbackHours,
     messages_fetched: 0,
     posts_in_db: 0,
+    posts_in_db_recent: 0,
     posts_in_db_total: 0,
     created: 0,
     refreshed: 0,
@@ -323,19 +343,21 @@ export async function runChannelPollerForChat(
   const botUid = bot.botInfo?.user_id
   const knownPosts = postStore.getPostsByChatId(reg.chat_id)
   stats.posts_in_db_total = knownPosts.length
+  stats.posts_in_db = knownPosts.length
   const recentPosts = knownPosts.filter((post) => isWithinLookbackMs(postTimestampMs(post), cutoffMs))
-  stats.posts_in_db = recentPosts.length
+  stats.posts_in_db_recent = recentPosts.length
   const processedMids = new Set<string>()
 
   logger.info('channelPoller: refresh window', {
     chatId: reg.chat_id,
     lookbackHours,
     postsInDbTotal: stats.posts_in_db_total,
-    postsInDbRecent: stats.posts_in_db,
+    postsInDbProcessed: stats.posts_in_db,
+    postsInDbRecent: stats.posts_in_db_recent,
     cutoffIso: new Date(cutoffMs).toISOString(),
   })
 
-  for (const post of recentPosts) {
+  for (const post of knownPosts) {
     processedMids.add(post.message_mid)
     if (post.comments_ui_message_mid) {
       processedMids.add(post.comments_ui_message_mid)

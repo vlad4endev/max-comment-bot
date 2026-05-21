@@ -8,6 +8,8 @@ exports.pushAntispamLog = pushAntispamLog;
 exports.getChannelExtras = getChannelExtras;
 exports.saveChannelExtras = saveChannelExtras;
 exports.listTgChains = listTgChains;
+exports.listTgChainsSync = listTgChainsSync;
+exports.ensureAdminPanelStateLoaded = ensureAdminPanelStateLoaded;
 exports.createTgChain = createTgChain;
 exports.updateTgChain = updateTgChain;
 exports.deleteTgChain = deleteTgChain;
@@ -157,6 +159,16 @@ async function saveChannelExtras(chatId, patch) {
 async function listTgChains() {
     const s = await loadState();
     return [...s.tg_chains];
+}
+/** In-memory snapshot for hot paths (poller, webhook); call {@link ensureAdminPanelStateLoaded} at startup. */
+function listTgChainsSync() {
+    if (!cache) {
+        return [];
+    }
+    return [...cache.tg_chains];
+}
+async function ensureAdminPanelStateLoaded() {
+    await loadState();
 }
 async function createTgChain(input) {
     const s = await loadState();

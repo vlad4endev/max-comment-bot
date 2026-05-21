@@ -15,8 +15,7 @@ import {
 } from '../forwarder/telegramReader'
 import { listTgChains, updateTgChain, type TgChainRecord } from '../api/adminPanelState'
 import { assertTelegramPollingReady } from './channelImportService'
-import { ensurePostFromChannelMessage } from './channelPostActions'
-import { scheduleCommentButtonRetry } from './commentButtonRetryQueue'
+import { attachAndVerifyCommentsForForwardedPost } from './channelPostPublishGate'
 import { postStore } from './postStore'
 import { resolveCanonicalChannelChatId } from './resolveChannelChatId'
 import { telegramChannelMatchesTarget } from '../utils/tgChannelMatch'
@@ -699,20 +698,25 @@ async function processChainMessageGroup(
           chain.max_chat_id,
           chunkCaption,
         )
-        if (resultMid) {
-          published += 1
-          for (const msg of chunk) {
-            markForwarded(chain.id, msg, resultMid, i)
-          }
+        if (typeof resultMid === 'string' && resultMid.trim() !== '') {
+          const maxMid = resultMid.trim()
+          let keepPublished = true
           if (attachComments) {
-            const chatId = resolveCanonicalChannelChatId(chain.max_chat_id) ?? chain.max_chat_id
-            const mid: string = resultMid
-            const post = await maxApi(() =>
-              ensurePostFromChannelMessage(bot, chatId, mid, { inlineOnly: true }),
-            )
-            if (!post) {
-              scheduleCommentButtonRetry(chatId, mid)
+            keepPublished = await attachAndVerifyCommentsForForwardedPost(bot, chain.max_chat_id, maxMid, {
+              chainId: chain.id,
+            })
+          }
+          if (keepPublished) {
+            published += 1
+            for (const msg of chunk) {
+              markForwarded(chain.id, msg, maxMid, i)
             }
+          } else {
+            logger.warn('[tgChain] chunk not marked forwarded — comment gate rollback, TG retry later', {
+              chainId: chain.id,
+              maxMessageMid: maxMid,
+              chunkIndex: i,
+            })
           }
         }
       }
@@ -729,18 +733,23 @@ async function processChainMessageGroup(
         chain.max_chat_id,
         caption,
       )
-      if (resultMid) {
-        published = 1
-        markForwarded(chain.id, msg, resultMid, null)
+      if (typeof resultMid === 'string' && resultMid.trim() !== '') {
+        const maxMid = resultMid.trim()
+        let keepPublished = true
         if (attachComments) {
-          const chatId = resolveCanonicalChannelChatId(chain.max_chat_id) ?? chain.max_chat_id
-          const mid: string = resultMid
-          const post = await maxApi(() =>
-            ensurePostFromChannelMessage(bot, chatId, mid, { inlineOnly: true }),
-          )
-          if (!post) {
-            scheduleCommentButtonRetry(chatId, mid)
-          }
+          keepPublished = await attachAndVerifyCommentsForForwardedPost(bot, chain.max_chat_id, maxMid, {
+            chainId: chain.id,
+          })
+        }
+        if (keepPublished) {
+          published = 1
+          markForwarded(chain.id, msg, maxMid, null)
+        } else {
+          logger.warn('[tgChain] post not marked forwarded — comment gate rollback, TG retry later', {
+            chainId: chain.id,
+            maxMessageMid: resultMid,
+            tgMessageId: msg.message_id,
+          })
         }
       }
     }

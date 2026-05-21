@@ -37,6 +37,7 @@ import { flowProcessor } from './services/flowProcessor'
 import { integrationsStore } from './services/integrationsStore'
 import { startAutopostScheduler } from './services/autopostScheduler'
 import { startChannelImportWorker } from './services/channelImportService'
+import { ensureAdminPanelStateLoaded } from './api/adminPanelState'
 import { setTgChainForwarderBot, startTgChainForwarder } from './services/tgChainForwarder'
 import { createHttpApp, createWebhookApp } from './webhook/createWebhookApp'
 
@@ -55,6 +56,7 @@ async function main(): Promise<void> {
   await disabledAdminStore.loadFromDisk()
   await ensureBotProfile(bot)
   await integrationsStore.load()
+  await ensureAdminPanelStateLoaded()
   const tgIntegration = integrationsStore
     .getIntegrations()
     .find((i) => i.platform === 'telegram' && i.status === 'connected')

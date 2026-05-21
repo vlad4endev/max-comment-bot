@@ -1,5 +1,6 @@
 import type { Bot } from '@maxhub/max-bot-api'
 
+import { isCommentsButtonEnabledForMaxChannel } from './channelCommentsButtonPolicy'
 import { ensurePostFromChannelMessage } from './channelPostActions'
 import { resolveCanonicalChannelChatId } from './resolveChannelChatId'
 import { postStore } from './postStore'
@@ -109,6 +110,14 @@ async function runRecoveryTask(task: RecoveryTask): Promise<void> {
     return
   }
   const canonicalChatId = resolveCanonicalChannelChatId(task.chatId) ?? task.chatId
+  if (!isCommentsButtonEnabledForMaxChannel(canonicalChatId)) {
+    logger.info('postLinkAutoRecovery: пропуск — кнопка отключена в связке TG→MAX', {
+      chatId: canonicalChatId,
+      messageMid: task.messageMid,
+      reason: task.reason,
+    })
+    return
+  }
   const restored = await ensurePostFromChannelMessage(bot, canonicalChatId, task.messageMid)
   if (restored) {
     markRecovered()

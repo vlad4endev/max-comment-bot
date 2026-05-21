@@ -6,6 +6,7 @@ import { logger } from '../utils/logger'
 import { scheduleCommentButtonRetry } from './commentButtonRetryQueue'
 import { pushAdminActivity } from './adminActivityStore'
 import { channelRegistry } from './channelRegistry'
+import { isCommentsButtonEnabledForMaxChannel } from './channelCommentsButtonPolicy'
 import { resolveCanonicalChannelChatId } from './resolveChannelChatId'
 import { disabledAdminStore } from './disabledAdminStore'
 import {
@@ -145,6 +146,7 @@ export type AttachChannelCommentsResult =
         | 'not_admin'
         | 'already_exists'
         | 'attach_failed'
+        | 'chain_comments_disabled'
     }
 
 export type CommentButtonAttachSource =
@@ -165,6 +167,8 @@ const COMMENT_BUTTON_REASON_RU: Record<AttachFailReason, string> = {
   not_admin: 'автор не администратор канала (или отключён в боте)',
   already_exists: 'пост уже в базе — кнопка была привязана ранее',
   attach_failed: 'не удалось edit поста и reply с кнопкой в MAX',
+  chain_comments_disabled:
+    'кнопка отключена в связке TG→MAX (add_comments_button) — poller/recovery не трогают канал',
 }
 
 function durationFields(since: number): { durationMs: number; duration: string } {
@@ -201,7 +205,7 @@ function logCommentButtonSkip(
   })
 }
 
-function buildPostFromChannelMessage(
+export function buildPostFromChannelMessage(
   message: Message,
   chatId: number,
   postId: string,
@@ -285,6 +289,12 @@ export async function tryAttachCommentsToChannelPost(
     return result
   }
   const chatId = resolveCanonicalChannelChatId(rawChatId) ?? rawChatId
+
+  if (source !== 'manual' && !isCommentsButtonEnabledForMaxChannel(chatId)) {
+    const result = { ok: false as const, reason: 'chain_comments_disabled' as const }
+    logCommentButtonSkip(source, result.reason, { chatId }, attachStartedAt)
+    return result
+  }
 
   if (!isMiniAppOpenUrlConfigured()) {
     const result = { ok: false as const, reason: 'no_miniapp' as const }
@@ -571,6 +581,9 @@ export async function ensurePostFromChannelMessage(
   options: { inlineOnly?: boolean } = {},
 ): Promise<Post | null> {
   const canonicalChatId = resolveCanonicalChannelChatId(chatId) ?? chatId
+  if (!isCommentsButtonEnabledForMaxChannel(canonicalChatId)) {
+    return postStore.findPostByChannelMessage(canonicalChatId, messageMid)
+  }
   const existing = postStore.findPostByChannelMessage(canonicalChatId, messageMid)
   if (existing && existing.button_attach_pending !== true) {
     return existing

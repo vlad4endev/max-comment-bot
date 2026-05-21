@@ -929,9 +929,11 @@ export function createAdminRouter(deps: AdminRouterDeps): express.Router {
         const status =
           err.code === 'miniapp_not_configured'
             ? 503
-            : err.code === 'channel_not_found'
-              ? 404
-              : 502
+            : err.code === 'chain_comments_disabled'
+              ? 400
+              : err.code === 'channel_not_found'
+                ? 404
+                : 502
         res.status(status).json({ error: err.message, code: err.code })
         return
       }

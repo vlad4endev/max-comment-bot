@@ -272,6 +272,18 @@ export class PostStore {
     logger.warn('postStore: clearAllPosts')
   }
 
+  /** Removes a single post row (rollback after failed TG→MAX comment gate). */
+  deletePostById(postId: string): void {
+    const id = postId.trim()
+    if (!id) {
+      return
+    }
+    const r = getDb().prepare('DELETE FROM posts WHERE post_id = ?').run(id)
+    if (r.changes > 0) {
+      logger.info('db: пост удалён', { postId: id })
+    }
+  }
+
   getTotalPostCount(): number {
     const row = this.getStatements().countAll.get() as { n: number }
     return Number(row.n) || 0

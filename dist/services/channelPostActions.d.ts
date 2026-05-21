@@ -1,5 +1,5 @@
 import { Bot } from '@maxhub/max-bot-api';
-import type { Message } from '@maxhub/max-bot-api/types';
+import type { Message, User } from '@maxhub/max-bot-api/types';
 import { type Post } from './postStore';
 /**
  * Resolves chat id for a message (channel/group/dialog). Falls back to sender id for 1:1.
@@ -23,9 +23,10 @@ export type AttachChannelCommentsResult = {
     ok: true;
 } | {
     ok: false;
-    reason: 'no_chat_id' | 'no_mid' | 'skip_bot' | 'no_miniapp' | 'not_admin' | 'already_exists' | 'attach_failed';
+    reason: 'no_chat_id' | 'no_mid' | 'skip_bot' | 'no_miniapp' | 'not_admin' | 'already_exists' | 'attach_failed' | 'chain_comments_disabled';
 };
 export type CommentButtonAttachSource = 'webhook' | 'poller' | 'refresh' | 'manual' | 'ensure' | 'tg_chain';
+export declare function buildPostFromChannelMessage(message: Message, chatId: number, postId: string, user?: User): Post;
 /**
  * Creates a {@link Post}, saves it, and attaches the Mini App inline button (edit or reply fallback).
  *

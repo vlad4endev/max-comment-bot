@@ -76,6 +76,9 @@ export declare function pushAntispamLog(entry: Omit<AntispamLogEntry, 'id' | 'cr
 export declare function getChannelExtras(chatId: number): Promise<ChannelAdminExtras>;
 export declare function saveChannelExtras(chatId: number, patch: Partial<ChannelAdminExtras>): Promise<ChannelAdminExtras>;
 export declare function listTgChains(): Promise<TgChainRecord[]>;
+/** In-memory snapshot for hot paths (poller, webhook); call {@link ensureAdminPanelStateLoaded} at startup. */
+export declare function listTgChainsSync(): TgChainRecord[];
+export declare function ensureAdminPanelStateLoaded(): Promise<void>;
 export declare function createTgChain(input: Omit<TgChainRecord, 'id' | 'created_at' | 'forwarded_today' | 'errors_today'>): Promise<TgChainRecord>;
 export declare function updateTgChain(id: string, patch: Partial<TgChainRecord>): Promise<TgChainRecord | null>;
 export declare function deleteTgChain(id: string): Promise<boolean>;

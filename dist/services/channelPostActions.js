@@ -4,6 +4,7 @@ exports.resolveMessageChatId = resolveMessageChatId;
 exports.lookupRegisteredChannelForMessage = lookupRegisteredChannelForMessage;
 exports.isLikelyChannelPost = isLikelyChannelPost;
 exports.isUserChannelAdmin = isUserChannelAdmin;
+exports.buildPostFromChannelMessage = buildPostFromChannelMessage;
 exports.tryAttachCommentsToChannelPost = tryAttachCommentsToChannelPost;
 exports.loadChannelPostMessage = loadChannelPostMessage;
 exports.ensurePostFromChannelMessage = ensurePostFromChannelMessage;
@@ -13,6 +14,7 @@ const logger_1 = require("../utils/logger");
 const commentButtonRetryQueue_1 = require("./commentButtonRetryQueue");
 const adminActivityStore_1 = require("./adminActivityStore");
 const channelRegistry_1 = require("./channelRegistry");
+const channelCommentsButtonPolicy_1 = require("./channelCommentsButtonPolicy");
 const resolveChannelChatId_1 = require("./resolveChannelChatId");
 const disabledAdminStore_1 = require("./disabledAdminStore");
 const postStore_1 = require("./postStore");
@@ -122,6 +124,7 @@ const COMMENT_BUTTON_REASON_RU = {
     not_admin: 'автор не администратор канала (или отключён в боте)',
     already_exists: 'пост уже в базе — кнопка была привязана ранее',
     attach_failed: 'не удалось edit поста и reply с кнопкой в MAX',
+    chain_comments_disabled: 'кнопка отключена в связке TG→MAX (add_comments_button) — poller/recovery не трогают канал',
 };
 function durationFields(since) {
     const durationMs = Math.round(performance.now() - since);
@@ -206,6 +209,11 @@ async function tryAttachCommentsToChannelPost(bot, message, options = {}) {
         return result;
     }
     const chatId = (0, resolveChannelChatId_1.resolveCanonicalChannelChatId)(rawChatId) ?? rawChatId;
+    if (source !== 'manual' && !(0, channelCommentsButtonPolicy_1.isCommentsButtonEnabledForMaxChannel)(chatId)) {
+        const result = { ok: false, reason: 'chain_comments_disabled' };
+        logCommentButtonSkip(source, result.reason, { chatId }, attachStartedAt);
+        return result;
+    }
     if (!(0, postStore_1.isMiniAppOpenUrlConfigured)()) {
         const result = { ok: false, reason: 'no_miniapp' };
         logCommentButtonSkip(source, result.reason, { chatId }, attachStartedAt);
@@ -436,6 +444,9 @@ async function loadChannelPostMessage(bot, post) {
  */
 async function ensurePostFromChannelMessage(bot, chatId, messageMid, options = {}) {
     const canonicalChatId = (0, resolveChannelChatId_1.resolveCanonicalChannelChatId)(chatId) ?? chatId;
+    if (!(0, channelCommentsButtonPolicy_1.isCommentsButtonEnabledForMaxChannel)(canonicalChatId)) {
+        return postStore_1.postStore.findPostByChannelMessage(canonicalChatId, messageMid);
+    }
     const existing = postStore_1.postStore.findPostByChannelMessage(canonicalChatId, messageMid);
     if (existing && existing.button_attach_pending !== true) {
         return existing;

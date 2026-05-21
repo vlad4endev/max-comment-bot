@@ -233,6 +233,18 @@ export async function listTgChains(): Promise<TgChainRecord[]> {
   return [...s.tg_chains]
 }
 
+/** In-memory snapshot for hot paths (poller, webhook); call {@link ensureAdminPanelStateLoaded} at startup. */
+export function listTgChainsSync(): TgChainRecord[] {
+  if (!cache) {
+    return []
+  }
+  return [...cache.tg_chains]
+}
+
+export async function ensureAdminPanelStateLoaded(): Promise<void> {
+  await loadState()
+}
+
 export async function createTgChain(input: Omit<TgChainRecord, 'id' | 'created_at' | 'forwarded_today' | 'errors_today'>): Promise<TgChainRecord> {
   const s = await loadState()
   const row: TgChainRecord = {
