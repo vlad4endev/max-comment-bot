@@ -30,6 +30,8 @@
   var userDetailCache = {};
   var usersFilterQuery = '';
   var usersFilterStatus = 'all';
+  var usersFilterStarted = 'all';
+  var usersFilterChannel = 'all';
   var channelImportPollTimer = null;
   var channelImportJobId = null;
 
@@ -4123,14 +4125,26 @@
     var html = '';
     html += '<span class="badge ' + (user.is_restricted ? 'badge-danger' : 'badge-active') + '">' + esc(user.is_restricted ? 'Ограничен' : 'Активен') + '</span>';
     html += '<span class="badge badge-muted">' + esc(userRoleLabel(user.role)) + '</span>';
+    html += '<span class="badge ' + (user.started_bot ? 'badge-accent' : 'badge-muted') + '">' + esc(user.started_bot ? 'Бот запущен' : 'Бот не запускал') + '</span>';
     return html;
   }
 
   function filterUsersList() {
     var q = String(usersFilterQuery || '').trim().toLowerCase();
+    var channelFilterNum = /^-?\d+$/.test(String(usersFilterChannel || ''))
+      ? Number(usersFilterChannel)
+      : null;
     return usersCache.filter(function (u) {
       if (usersFilterStatus === 'restricted' && !u.is_restricted) return false;
       if (usersFilterStatus === 'active' && u.is_restricted) return false;
+      if (usersFilterStarted === 'started' && !u.started_bot) return false;
+      if (usersFilterStarted === 'not_started' && u.started_bot) return false;
+      if (channelFilterNum !== null) {
+        var hasChannel = (u.channel_links || []).some(function (link) {
+          return Number(link.chat_id) === channelFilterNum;
+        });
+        if (!hasChannel) return false;
+      }
       if (!q) return true;
       var channelText = (u.channel_links || [])
         .map(function (x) {
@@ -4148,6 +4162,44 @@
         .toLowerCase();
       return hay.indexOf(q) !== -1;
     });
+  }
+
+  function usersChannelFilterOptionsHtml() {
+    var byChat = {};
+    usersCache.forEach(function (u) {
+      (u.channel_links || []).forEach(function (link) {
+        var key = String(link.chat_id);
+        if (!byChat[key]) {
+          byChat[key] = {
+            chat_id: link.chat_id,
+            title: link.channel_title || 'Канал ' + link.chat_id,
+          };
+        }
+      });
+    });
+    var list = Object.keys(byChat)
+      .map(function (k) {
+        return byChat[k];
+      })
+      .sort(function (a, b) {
+        return String(a.title).localeCompare(String(b.title), 'ru');
+      });
+    var html =
+      '<option value="all"' +
+      (usersFilterChannel === 'all' ? ' selected' : '') +
+      '>Все каналы</option>';
+    list.forEach(function (ch) {
+      var value = String(ch.chat_id);
+      html +=
+        '<option value="' +
+        esc(value) +
+        '"' +
+        (usersFilterChannel === value ? ' selected' : '') +
+        '>' +
+        esc(ch.title) +
+        '</option>';
+    });
+    return html;
   }
 
   function usersListHtml(list) {
@@ -4431,6 +4483,8 @@
     if (!main) return;
     var search = qs('#usersSearch', main);
     var status = qs('#usersStatusFilter', main);
+    var started = qs('#usersStartedFilter', main);
+    var channel = qs('#usersChannelFilter', main);
     if (search && search.getAttribute('data-bound') !== '1') {
       search.setAttribute('data-bound', '1');
       search.addEventListener('input', function () {
@@ -4445,6 +4499,26 @@
       status.setAttribute('data-bound', '1');
       status.addEventListener('change', function () {
         usersFilterStatus = String(status.value || 'all');
+        var listHost = qs('#usersListHost', main);
+        if (listHost) listHost.innerHTML = usersListHtml(filterUsersList());
+        bindUsersListItemEvents(main);
+        refreshIcons();
+      });
+    }
+    if (started && started.getAttribute('data-bound') !== '1') {
+      started.setAttribute('data-bound', '1');
+      started.addEventListener('change', function () {
+        usersFilterStarted = String(started.value || 'all');
+        var listHost = qs('#usersListHost', main);
+        if (listHost) listHost.innerHTML = usersListHtml(filterUsersList());
+        bindUsersListItemEvents(main);
+        refreshIcons();
+      });
+    }
+    if (channel && channel.getAttribute('data-bound') !== '1') {
+      channel.setAttribute('data-bound', '1');
+      channel.addEventListener('change', function () {
+        usersFilterChannel = String(channel.value || 'all');
         var listHost = qs('#usersListHost', main);
         if (listHost) listHost.innerHTML = usersListHtml(filterUsersList());
         bindUsersListItemEvents(main);
@@ -4474,6 +4548,8 @@
         html += '<div class="search-bar">';
         html += '<input id="usersSearch" class="input" placeholder="Поиск по ID, имени, роли, каналу" value="' + esc(usersFilterQuery) + '" />';
         html += '<select id="usersStatusFilter" class="select"><option value="all"' + (usersFilterStatus === 'all' ? ' selected' : '') + '>Все</option><option value="active"' + (usersFilterStatus === 'active' ? ' selected' : '') + '>Только активные</option><option value="restricted"' + (usersFilterStatus === 'restricted' ? ' selected' : '') + '>Только ограниченные</option></select>';
+        html += '<select id="usersStartedFilter" class="select"><option value="all"' + (usersFilterStarted === 'all' ? ' selected' : '') + '>Все (старт бота)</option><option value="started"' + (usersFilterStarted === 'started' ? ' selected' : '') + '>Бот запускали</option><option value="not_started"' + (usersFilterStarted === 'not_started' ? ' selected' : '') + '>Бот не запускали</option></select>';
+        html += '<select id="usersChannelFilter" class="select">' + usersChannelFilterOptionsHtml() + '</select>';
         html += '</div>';
         html += '<div class="text-sm text-secondary">Всего: ' + esc(String(usersCache.length)) + ', в выдаче: ' + esc(String(filtered.length)) + '</div>';
         html += '</div>';
@@ -4950,6 +5026,37 @@
               renderTelegramDashboard(true);
             }
           });
+        });
+      }
+    } else if (currentRoute === 'users') {
+      setTopbarActions(
+        '<button type="button" class="btn btn-ghost btn-sm" id="usersSyncBtn"><i data-lucide="refresh-cw"></i> Обновить подписчиков каналов</button>',
+      );
+      var syncBtn = qs('#usersSyncBtn');
+      if (syncBtn) {
+        syncBtn.addEventListener('click', function () {
+          syncBtn.disabled = true;
+          postJson('/users/sync-channel-subscribers', {})
+            .then(function (data) {
+              var synced = Number(data && data.synced_channels ? data.synced_channels : 0);
+              var failed = Number(data && data.failed_channels ? data.failed_channels : 0);
+              var members = Number(data && data.members_total ? data.members_total : 0);
+              showToast(
+                'Синхронизация завершена: каналов ' +
+                  synced +
+                  ', участников ' +
+                  members +
+                  (failed > 0 ? ', ошибок ' + failed : ''),
+                failed > 0 ? 'info' : 'success',
+              );
+              renderUsers();
+            })
+            .catch(function (e) {
+              showToast(e.message || 'Не удалось синхронизировать подписчиков', 'error');
+            })
+            .finally(function () {
+              syncBtn.disabled = false;
+            });
         });
       }
     } else {

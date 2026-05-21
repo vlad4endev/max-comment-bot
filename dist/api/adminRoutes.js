@@ -23,6 +23,7 @@ const postLinkDiagnostics_1 = require("../services/postLinkDiagnostics");
 const postStore_1 = require("../services/postStore");
 const stateManager_1 = require("../services/stateManager");
 const subscriberStore_1 = require("../services/subscriberStore");
+const channelSubscriberSnapshotStore_1 = require("../services/channelSubscriberSnapshotStore");
 const userAccessCleanup_1 = require("../services/userAccessCleanup");
 const userMiniappSettingsStore_1 = require("../services/userMiniappSettingsStore");
 const adminPanelSession_1 = require("../utils/adminPanelSession");
@@ -100,6 +101,7 @@ async function listChannelAdminsShort(bot, chatId) {
 }
 const REL_CHANNEL_ADMIN = 'Админ канала';
 const REL_COMMENT_NOTIFY = 'Уведомления о комментариях';
+const REL_CHANNEL_SUBSCRIBER = 'Подписчик канала';
 function latestUsernameFromComments(userId) {
     for (const c of commentStore_1.commentStore.listAllCommentsNewestFirst()) {
         if (c.user_id === userId) {
@@ -317,6 +319,16 @@ function createAdminRouter(deps) {
         const ownerId = config_1.config.ownerUserId;
         const channels = channelRegistry_1.channelRegistry.getAllChannels().filter((ch) => ch.type === 'channel');
         const comments = commentStore_1.commentStore.listAllCommentsNewestFirst();
+        let snapshotMembers = channelSubscriberSnapshotStore_1.channelSubscriberSnapshotStore.listAllMembers();
+        if (snapshotMembers.length === 0 && channels.length > 0) {
+            try {
+                await channelSubscriberSnapshotStore_1.channelSubscriberSnapshotStore.syncAllRegisteredChannels(deps.bot);
+                snapshotMembers = channelSubscriberSnapshotStore_1.channelSubscriberSnapshotStore.listAllMembers();
+            }
+            catch (err) {
+                logger_1.logger.warn('admin /users: initial snapshot sync failed', { err });
+            }
+        }
         const byUser = new Map();
         function touch(userId) {
             let row = byUser.get(userId);
@@ -356,6 +368,17 @@ function createAdminRouter(deps) {
         for (const uid of subscriberStore_1.subscriberStore.getAllSubscribers()) {
             const row = touch(uid);
             row.is_subscriber = true;
+        }
+        for (const member of snapshotMembers) {
+            const row = touch(member.user_id);
+            if (!row.name?.trim()) {
+                row.name = member.name;
+            }
+            if (!row.avatar_url && member.avatar_url) {
+                row.avatar_url = member.avatar_url;
+            }
+            const title = channelRegistry_1.channelRegistry.getChannel(member.channel_chat_id)?.title ?? null;
+            rowAddLinkRelation(row, member.channel_chat_id, title, REL_CHANNEL_SUBSCRIBER);
         }
         for (const c of comments) {
             const row = touch(c.user_id);
@@ -464,6 +487,7 @@ function createAdminRouter(deps) {
                 user_id: row.user_id,
                 name: row.name,
                 role: row.role,
+                started_bot: row.is_subscriber,
                 is_restricted: disabledAdminStore_1.disabledAdminStore.isDisabled(row.user_id),
                 /** @deprecated Используйте channel_links; оставлено для совместимости */
                 channels: channel_links.map((l) => ({ chat_id: l.chat_id, title: l.channel_title })),
@@ -508,6 +532,10 @@ function createAdminRouter(deps) {
         for (const link of links) {
             const title = channelRegistry_1.channelRegistry.getChannel(link.channel_chat_id)?.title ?? null;
             addChannelRelation(link.channel_chat_id, title, REL_COMMENT_NOTIFY);
+        }
+        for (const member of channelSubscriberSnapshotStore_1.channelSubscriberSnapshotStore.listMembersForUser(userId)) {
+            const title = channelRegistry_1.channelRegistry.getChannel(member.channel_chat_id)?.title ?? null;
+            addChannelRelation(member.channel_chat_id, title, REL_CHANNEL_SUBSCRIBER);
         }
         for (const ch of channelsWithAdminRole) {
             try {
@@ -613,6 +641,7 @@ function createAdminRouter(deps) {
                     last_comment_at: comments[0]?.timestamp ?? null,
                 },
                 is_subscriber: isSubscriber,
+                started_bot: isSubscriber,
                 has_miniapp_settings: hasMiniappSettings,
                 private_chat_id: stateManager_1.stateManager.getUserPrivateChatId(userId) ?? null,
             },
@@ -622,6 +651,17 @@ function createAdminRouter(deps) {
                 total: comments.length,
             },
         });
+    });
+    secured.post('/users/sync-channel-subscribers', async (_req, res) => {
+        try {
+            await (0, channelFullDisconnect_1.pruneRegisteredChannelsNotAccessibleByBot)(deps.bot);
+            const result = await channelSubscriberSnapshotStore_1.channelSubscriberSnapshotStore.syncAllRegisteredChannels(deps.bot);
+            res.json({ ok: true, ...result });
+        }
+        catch (err) {
+            logger_1.logger.error('admin /users/sync-channel-subscribers failed', err);
+            res.status(500).json({ error: 'failed to sync channel subscribers' });
+        }
     });
     secured.get('/comments', (req, res) => {
         const chatId = parseNonZeroInt(req.query.chat_id);

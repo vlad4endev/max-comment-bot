@@ -180,6 +180,28 @@ function initSchema(targetDb) {
       last_seen_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
     CREATE INDEX IF NOT EXISTS idx_tg_bot_users_started ON tg_bot_users(started);
+
+    CREATE TABLE IF NOT EXISTS channel_subscribers (
+      channel_chat_id      INTEGER NOT NULL,
+      user_id              INTEGER NOT NULL,
+      name                 TEXT,
+      username             TEXT,
+      avatar_url           TEXT,
+      is_admin             INTEGER NOT NULL DEFAULT 0,
+      is_owner             INTEGER NOT NULL DEFAULT 0,
+      join_time            INTEGER,
+      last_activity_time   INTEGER,
+      synced_at            TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (channel_chat_id, user_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_channel_subscribers_user ON channel_subscribers(user_id);
+    CREATE INDEX IF NOT EXISTS idx_channel_subscribers_channel ON channel_subscribers(channel_chat_id);
+
+    CREATE TABLE IF NOT EXISTS channel_subscribers_sync (
+      channel_chat_id      INTEGER PRIMARY KEY,
+      last_synced_at       TEXT NOT NULL,
+      members_total        INTEGER NOT NULL DEFAULT 0
+    );
   `);
     migrateChannelImportSchema(targetDb);
     migratePostsSchema(targetDb);
