@@ -326,45 +326,50 @@ export async function tryAttachCommentsToChannelPost(
       return result
     }
 
-    /** Сначала edit существующего сообщения (оригинал или reply-stub) — без новых постов в канале. */
-    const captionStartedAt = performance.now()
-    const captionOk = await postStore.updateButtonCaption(bot, existingPost)
-    const captionTiming = durationFields(captionStartedAt)
-    if (captionOk) {
-      clearButtonAttachPending(existingPost)
-      logCommentButton('info', `commentButton: пост уже с кнопкой — обновлена подпись (${captionTiming.duration})`, {
-        source: source ?? 'unknown',
-        chatId,
-        messageMid: mid,
-        postId: existingPost.post_id,
-        captionUpdateMs: captionTiming.durationMs,
-      })
-      const result = { ok: false as const, reason: 'already_exists' as const }
-      logCommentButtonSkip(
-        source,
-        result.reason,
-        {
+    /** Админ «Обновить кнопки» — всегда полная перепривязка startapp (исправляет старые pid на кнопке). */
+    const forceReattach = source === 'refresh'
+
+    if (!forceReattach) {
+      const captionStartedAt = performance.now()
+      const captionOk = await postStore.updateButtonCaption(bot, existingPost)
+      const captionTiming = durationFields(captionStartedAt)
+      if (captionOk) {
+        clearButtonAttachPending(existingPost)
+        logCommentButton('info', `commentButton: пост уже с кнопкой — обновлена подпись (${captionTiming.duration})`, {
+          source: source ?? 'unknown',
           chatId,
           messageMid: mid,
           postId: existingPost.post_id,
-          captionRefreshed: true,
           captionUpdateMs: captionTiming.durationMs,
-        },
-        attachStartedAt,
-      )
-      return result
+        })
+        const result = { ok: false as const, reason: 'already_exists' as const }
+        logCommentButtonSkip(
+          source,
+          result.reason,
+          {
+            chatId,
+            messageMid: mid,
+            postId: existingPost.post_id,
+            captionRefreshed: true,
+            captionUpdateMs: captionTiming.durationMs,
+          },
+          attachStartedAt,
+        )
+        return result
+      }
     }
 
     logCommentButton(
       'warn',
-      source === 'refresh'
-        ? 'commentButton: обновление подписи не удалось — повторное присвоение'
+      forceReattach
+        ? 'commentButton: обновление кнопки — полная перепривязка'
         : 'commentButton: пост в базе, кнопка не видна — повторное присвоение',
       {
         source: source ?? 'unknown',
         chatId,
         messageMid: mid,
         postId: existingPost.post_id,
+        forceReattach,
         hasCommentsUi: Boolean(existingPost.comments_ui_message_mid),
       },
     )

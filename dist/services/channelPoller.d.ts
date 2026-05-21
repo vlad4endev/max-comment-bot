@@ -1,4 +1,6 @@
 import type { Bot } from '@maxhub/max-bot-api';
+/** Admin «обновить кнопки»: окно сканирования (последние сутки). */
+export declare const REFRESH_BUTTON_LOOKBACK_MS: number;
 /** Exported for startup diagnostics. */
 export declare const POLL_CONCURRENCY = 8;
 /**
@@ -7,9 +9,12 @@ export declare const POLL_CONCURRENCY = 8;
 export declare function syncPerChannelPollers(bot: Bot): void;
 export interface RefreshButtonsStats {
     chat_id: number;
+    lookback_hours: number;
     messages_fetched: number;
-    /** Постов в базе бота для этого канала (перепривязка кнопки по каждому). */
+    /** Постов в базе за lookback (обработаны при refresh). */
     posts_in_db: number;
+    /** Всего постов канала в базе (справочно). */
+    posts_in_db_total: number;
     created: number;
     refreshed: number;
     skipped: number;

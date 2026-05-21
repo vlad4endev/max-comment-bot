@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.RefreshButtonsError = exports.POLL_CONCURRENCY = void 0;
+exports.RefreshButtonsError = exports.POLL_CONCURRENCY = exports.REFRESH_BUTTON_LOOKBACK_MS = void 0;
 exports.syncPerChannelPollers = syncPerChannelPollers;
 exports.runChannelPollerForChat = runChannelPollerForChat;
 exports.runChannelPollerTick = runChannelPollerTick;
@@ -22,8 +22,11 @@ const MIN_POLL_INTERVAL_MS = 3_000;
 /** Верхняя граница интервала опроса одного канала (стабильность важнее редкого глобального 30 с). */
 const PER_CHANNEL_CAP_MS = 6_000;
 const FETCH_COUNT = 15;
-/** Admin «обновить кнопки» scans more history than the periodic poller. */
-const REFRESH_BUTTONS_FETCH_COUNT = 100;
+/** Admin «обновить кнопки»: окно сканирования (последние сутки). */
+exports.REFRESH_BUTTON_LOOKBACK_MS = 24 * 60 * 60 * 1000;
+const REFRESH_MESSAGES_PAGE_SIZE = 100;
+/** До 30×100 сообщений за сутки на канал (защита от бесконечного цикла). */
+const REFRESH_MAX_PAGES = 30;
 /** Exported for startup diagnostics. */
 exports.POLL_CONCURRENCY = 8;
 const DISABLE_AFTER_ERRORS = 5;
@@ -130,6 +133,60 @@ function syncPerChannelPollers(bot) {
         fetchCount: FETCH_COUNT,
     });
 }
+function postTimestampMs(post) {
+    const t = Date.parse(post.timestamp);
+    return Number.isFinite(t) ? t : 0;
+}
+/** MAX API: `timestamp` в секундах или миллисекундах. */
+function messageTimestampMs(message) {
+    const ts = message.timestamp;
+    return ts > 1e12 ? ts : ts * 1000;
+}
+function messageTimestampSec(message) {
+    return Math.floor(messageTimestampMs(message) / 1000);
+}
+function isWithinLookbackMs(atMs, cutoffMs) {
+    return atMs >= cutoffMs;
+}
+/**
+ * Сообщения канала за последние сутки (пагинация GET /messages, newest-first).
+ */
+async function fetchChannelMessagesSince(bot, chatId, cutoffMs) {
+    const cutoffSec = Math.floor(cutoffMs / 1000);
+    const collected = [];
+    let pageFrom;
+    for (let page = 0; page < REFRESH_MAX_PAGES; page += 1) {
+        const extra = {
+            count: REFRESH_MESSAGES_PAGE_SIZE,
+            to: cutoffSec,
+        };
+        if (pageFrom !== undefined) {
+            extra.from = pageFrom;
+        }
+        const { messages: batch } = await (0, maxApiRetry_1.apiCallWithRetry)(() => bot.api.getMessages(chatId, extra));
+        if (batch.length === 0) {
+            break;
+        }
+        let reachedOlderThanWindow = false;
+        for (const message of batch) {
+            if (isWithinLookbackMs(messageTimestampMs(message), cutoffMs)) {
+                collected.push(message);
+            }
+            else {
+                reachedOlderThanWindow = true;
+            }
+        }
+        const oldest = batch[batch.length - 1];
+        if (reachedOlderThanWindow || batch.length < REFRESH_MESSAGES_PAGE_SIZE) {
+            break;
+        }
+        pageFrom = messageTimestampSec(oldest);
+        if (pageFrom <= cutoffSec) {
+            break;
+        }
+    }
+    return collected;
+}
 function applyRefreshAttachResult(stats, r, wasInDb) {
     if (r.ok) {
         if (wasInDb) {
@@ -174,10 +231,14 @@ async function runChannelPollerForChat(bot, chatId) {
     if (!reg || reg.type !== 'channel') {
         throw new RefreshButtonsError('channel_not_found', 'Канал не найден в реестре бота');
     }
+    const cutoffMs = Date.now() - exports.REFRESH_BUTTON_LOOKBACK_MS;
+    const lookbackHours = Math.round(exports.REFRESH_BUTTON_LOOKBACK_MS / (60 * 60 * 1000));
     const stats = {
         chat_id: reg.chat_id,
+        lookback_hours: lookbackHours,
         messages_fetched: 0,
         posts_in_db: 0,
+        posts_in_db_total: 0,
         created: 0,
         refreshed: 0,
         skipped: 0,
@@ -185,9 +246,18 @@ async function runChannelPollerForChat(bot, chatId) {
     };
     const botUid = bot.botInfo?.user_id;
     const knownPosts = postStore_1.postStore.getPostsByChatId(reg.chat_id);
-    stats.posts_in_db = knownPosts.length;
+    stats.posts_in_db_total = knownPosts.length;
+    const recentPosts = knownPosts.filter((post) => isWithinLookbackMs(postTimestampMs(post), cutoffMs));
+    stats.posts_in_db = recentPosts.length;
     const processedMids = new Set();
-    for (const post of knownPosts) {
+    logger_1.logger.info('channelPoller: refresh window', {
+        chatId: reg.chat_id,
+        lookbackHours,
+        postsInDbTotal: stats.posts_in_db_total,
+        postsInDbRecent: stats.posts_in_db,
+        cutoffIso: new Date(cutoffMs).toISOString(),
+    });
+    for (const post of recentPosts) {
         processedMids.add(post.message_mid);
         if (post.comments_ui_message_mid) {
             processedMids.add(post.comments_ui_message_mid);
@@ -211,8 +281,7 @@ async function runChannelPollerForChat(bot, chatId) {
     }
     let messages;
     try {
-        const result = await (0, maxApiRetry_1.apiCallWithRetry)(() => bot.api.getMessages(reg.chat_id, { count: REFRESH_BUTTONS_FETCH_COUNT }));
-        messages = result.messages;
+        messages = await fetchChannelMessagesSince(bot, reg.chat_id, cutoffMs);
     }
     catch (err) {
         logger_1.logger.warn('channelPoller: runChannelPollerForChat getMessages failed', {

@@ -1,4 +1,5 @@
 import type { Bot } from '@maxhub/max-bot-api'
+import type { Message } from '@maxhub/max-bot-api/types'
 
 import { adminRuntimeSettingsStore } from './adminRuntimeSettingsStore'
 import { clearAdminJoinNotifiedForChannel } from './channelAdminJoinNotified'
@@ -13,14 +14,17 @@ import {
   tryAttachCommentsToChannelPost,
   type AttachChannelCommentsResult,
 } from './channelPostActions'
-import { isMiniAppOpenUrlConfigured, postStore } from './postStore'
+import { isMiniAppOpenUrlConfigured, postStore, type Post } from './postStore'
 
 const MIN_POLL_INTERVAL_MS = 3_000
 /** Верхняя граница интервала опроса одного канала (стабильность важнее редкого глобального 30 с). */
 const PER_CHANNEL_CAP_MS = 6_000
 const FETCH_COUNT = 15
-/** Admin «обновить кнопки» scans more history than the periodic poller. */
-const REFRESH_BUTTONS_FETCH_COUNT = 100
+/** Admin «обновить кнопки»: окно сканирования (последние сутки). */
+export const REFRESH_BUTTON_LOOKBACK_MS = 24 * 60 * 60 * 1000
+const REFRESH_MESSAGES_PAGE_SIZE = 100
+/** До 30×100 сообщений за сутки на канал (защита от бесконечного цикла). */
+const REFRESH_MAX_PAGES = 30
 /** Exported for startup diagnostics. */
 export const POLL_CONCURRENCY = 8
 const DISABLE_AFTER_ERRORS = 5
@@ -148,13 +152,84 @@ export function syncPerChannelPollers(bot: Bot): void {
 
 export interface RefreshButtonsStats {
   chat_id: number
+  lookback_hours: number
   messages_fetched: number
-  /** Постов в базе бота для этого канала (перепривязка кнопки по каждому). */
+  /** Постов в базе за lookback (обработаны при refresh). */
   posts_in_db: number
+  /** Всего постов канала в базе (справочно). */
+  posts_in_db_total: number
   created: number
   refreshed: number
   skipped: number
   failed: number
+}
+
+function postTimestampMs(post: Post): number {
+  const t = Date.parse(post.timestamp)
+  return Number.isFinite(t) ? t : 0
+}
+
+/** MAX API: `timestamp` в секундах или миллисекундах. */
+function messageTimestampMs(message: Message): number {
+  const ts = message.timestamp
+  return ts > 1e12 ? ts : ts * 1000
+}
+
+function messageTimestampSec(message: Message): number {
+  return Math.floor(messageTimestampMs(message) / 1000)
+}
+
+function isWithinLookbackMs(atMs: number, cutoffMs: number): boolean {
+  return atMs >= cutoffMs
+}
+
+/**
+ * Сообщения канала за последние сутки (пагинация GET /messages, newest-first).
+ */
+async function fetchChannelMessagesSince(
+  bot: Bot,
+  chatId: number,
+  cutoffMs: number,
+): Promise<Message[]> {
+  const cutoffSec = Math.floor(cutoffMs / 1000)
+  const collected: Message[] = []
+  let pageFrom: number | undefined
+
+  for (let page = 0; page < REFRESH_MAX_PAGES; page += 1) {
+    const extra: { count: number; to: number; from?: number } = {
+      count: REFRESH_MESSAGES_PAGE_SIZE,
+      to: cutoffSec,
+    }
+    if (pageFrom !== undefined) {
+      extra.from = pageFrom
+    }
+
+    const { messages: batch } = await apiCallWithRetry(() => bot.api.getMessages(chatId, extra))
+    if (batch.length === 0) {
+      break
+    }
+
+    let reachedOlderThanWindow = false
+    for (const message of batch) {
+      if (isWithinLookbackMs(messageTimestampMs(message), cutoffMs)) {
+        collected.push(message)
+      } else {
+        reachedOlderThanWindow = true
+      }
+    }
+
+    const oldest = batch[batch.length - 1]
+    if (reachedOlderThanWindow || batch.length < REFRESH_MESSAGES_PAGE_SIZE) {
+      break
+    }
+
+    pageFrom = messageTimestampSec(oldest)
+    if (pageFrom <= cutoffSec) {
+      break
+    }
+  }
+
+  return collected
 }
 
 function applyRefreshAttachResult(
@@ -216,10 +291,15 @@ export async function runChannelPollerForChat(
     throw new RefreshButtonsError('channel_not_found', 'Канал не найден в реестре бота')
   }
 
+  const cutoffMs = Date.now() - REFRESH_BUTTON_LOOKBACK_MS
+  const lookbackHours = Math.round(REFRESH_BUTTON_LOOKBACK_MS / (60 * 60 * 1000))
+
   const stats: RefreshButtonsStats = {
     chat_id: reg.chat_id,
+    lookback_hours: lookbackHours,
     messages_fetched: 0,
     posts_in_db: 0,
+    posts_in_db_total: 0,
     created: 0,
     refreshed: 0,
     skipped: 0,
@@ -228,10 +308,20 @@ export async function runChannelPollerForChat(
 
   const botUid = bot.botInfo?.user_id
   const knownPosts = postStore.getPostsByChatId(reg.chat_id)
-  stats.posts_in_db = knownPosts.length
+  stats.posts_in_db_total = knownPosts.length
+  const recentPosts = knownPosts.filter((post) => isWithinLookbackMs(postTimestampMs(post), cutoffMs))
+  stats.posts_in_db = recentPosts.length
   const processedMids = new Set<string>()
 
-  for (const post of knownPosts) {
+  logger.info('channelPoller: refresh window', {
+    chatId: reg.chat_id,
+    lookbackHours,
+    postsInDbTotal: stats.posts_in_db_total,
+    postsInDbRecent: stats.posts_in_db,
+    cutoffIso: new Date(cutoffMs).toISOString(),
+  })
+
+  for (const post of recentPosts) {
     processedMids.add(post.message_mid)
     if (post.comments_ui_message_mid) {
       processedMids.add(post.comments_ui_message_mid)
@@ -254,12 +344,9 @@ export async function runChannelPollerForChat(
     }
   }
 
-  let messages: Awaited<ReturnType<typeof bot.api.getMessages>>['messages']
+  let messages: Message[]
   try {
-    const result = await apiCallWithRetry(() =>
-      bot.api.getMessages(reg.chat_id, { count: REFRESH_BUTTONS_FETCH_COUNT }),
-    )
-    messages = result.messages
+    messages = await fetchChannelMessagesSince(bot, reg.chat_id, cutoffMs)
   } catch (err: unknown) {
     logger.warn('channelPoller: runChannelPollerForChat getMessages failed', {
       chatId: reg.chat_id,
