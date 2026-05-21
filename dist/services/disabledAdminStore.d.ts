@@ -9,6 +9,8 @@ export declare class DisabledAdminStore {
     loadFromDisk(): Promise<void>;
     isDisabled(userId: number): boolean;
     disableUser(userId: number): void;
+    enableUser(userId: number): void;
+    getAllDisabledUserIds(): number[];
     private queuePersist;
     private persist;
 }

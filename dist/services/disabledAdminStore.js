@@ -63,6 +63,19 @@ class DisabledAdminStore {
         this.queuePersist();
         logger_1.logger.info('disabledAdminStore: disableUser', { userId });
     }
+    enableUser(userId) {
+        if (!isPositiveInt(userId)) {
+            return;
+        }
+        if (!this.disabledUserIds.delete(userId)) {
+            return;
+        }
+        this.queuePersist();
+        logger_1.logger.info('disabledAdminStore: enableUser', { userId });
+    }
+    getAllDisabledUserIds() {
+        return [...this.disabledUserIds].sort((a, b) => a - b);
+    }
     queuePersist() {
         this.persistChain = this.persistChain
             .then(() => this.persist())

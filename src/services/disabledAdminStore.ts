@@ -72,6 +72,21 @@ export class DisabledAdminStore {
     logger.info('disabledAdminStore: disableUser', { userId })
   }
 
+  enableUser(userId: number): void {
+    if (!isPositiveInt(userId)) {
+      return
+    }
+    if (!this.disabledUserIds.delete(userId)) {
+      return
+    }
+    this.queuePersist()
+    logger.info('disabledAdminStore: enableUser', { userId })
+  }
+
+  getAllDisabledUserIds(): number[] {
+    return [...this.disabledUserIds].sort((a, b) => a - b)
+  }
+
   private queuePersist(): void {
     this.persistChain = this.persistChain
       .then(() => this.persist())

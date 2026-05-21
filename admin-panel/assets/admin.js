@@ -17,6 +17,7 @@
   var dashRefreshTimer = null;
   var logsRefreshTimer = null;
   var dashPeriodDays = 7;
+  var tgDashPeriodDays = 7;
   var channelsCache = [];
   var selectedChannelId = null;
   var channelDetailTab = 'stats';
@@ -25,11 +26,21 @@
   var commentsChatId = null;
   var commentsQuery = '';
   var usersCache = [];
+  var selectedUserId = null;
+  var userDetailCache = {};
+  var usersFilterQuery = '';
+  var usersFilterStatus = 'all';
   var channelImportPollTimer = null;
   var channelImportJobId = null;
 
   var NAV = [
-    { group: 'Обзор', items: [{ id: 'dashboard', label: 'Дашборд', icon: 'layout-dashboard' }] },
+    {
+      group: 'Обзор',
+      items: [
+        { id: 'dashboard', label: 'MAX Дашборд', icon: 'layout-dashboard' },
+        { id: 'dashboard_tg', label: 'Telegram Дашборд', icon: 'send' },
+      ],
+    },
     {
       group: 'Контент',
       items: [
@@ -58,7 +69,8 @@
   ];
 
   var PAGE_TITLES = {
-    dashboard: 'Дашборд',
+    dashboard: 'MAX Дашборд',
+    dashboard_tg: 'Telegram Дашборд',
     channels: 'Каналы',
     tgchains: 'TG → MAX',
     channelimport: 'Импорт TG→MAX',
@@ -158,6 +170,45 @@
       );
     }
     return '<span class="' + esc(cls) + '">' + esc(channelInitials(title)) + '</span>';
+  }
+
+  function userInitials(name, userId) {
+    var t = String(name || '').trim();
+    if (t) {
+      var parts = t.split(/\s+/).filter(Boolean);
+      if (parts.length >= 2) return (parts[0].charAt(0) + parts[1].charAt(0)).toUpperCase();
+      return t.slice(0, 2).toUpperCase();
+    }
+    var tail = String(userId || '').slice(-2);
+    return tail ? ('U' + tail).slice(0, 2).toUpperCase() : 'U';
+  }
+
+  function userAvatarHtml(user, extraClass) {
+    var cls = 'user-avatar' + (extraClass ? ' ' + extraClass : '');
+    var avUrl = user && user.avatar_url ? String(user.avatar_url).trim() : '';
+    if (avUrl) {
+      return (
+        '<span class="' +
+        esc(cls) +
+        ' with-photo"><img src="' +
+        esc(avUrl) +
+        '" alt="" loading="lazy" /></span>'
+      );
+    }
+    return '<span class="' + esc(cls) + '">' + esc(userInitials(user && user.name, user && user.user_id)) + '</span>';
+  }
+
+  function fmtDateTime(iso) {
+    if (!iso) return '—';
+    var t = Date.parse(iso);
+    if (!Number.isFinite(t)) return String(iso);
+    return new Date(t).toLocaleString('ru-RU', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
   }
 
   function truncateText(text, maxLen) {
@@ -580,6 +631,38 @@
       html += ' <span class="mono text-sm">' + esc(ch.username) + '</span>';
     }
     html += '</div><div class="tg-chat-meta muted">' + esc(meta) + '</div>';
+    var admins = Array.isArray(ch.admins) ? ch.admins : [];
+    if (admins.length) {
+      var started = admins.filter(function (a) {
+        return a.started_bot === true;
+      }).length;
+      html +=
+        '<div class="tg-chat-meta" style="margin-top:6px"><strong>Администраторы:</strong> ' +
+        started +
+        '/' +
+        admins.length +
+        ' запустили бота</div>';
+      html += '<ul class="tg-chat-admin-list" style="margin:6px 0 0 16px;padding:0">';
+      admins.forEach(function (a) {
+        var role = a.is_creator ? 'владелец' : 'админ';
+        var startedMark = a.started_bot ? '✅' : '⚠️';
+        var uname = a.username ? ' ' + String(a.username) : '';
+        html +=
+          '<li class="tg-chat-meta" style="list-style:disc">' +
+          startedMark +
+          ' ' +
+          esc(a.name || String(a.user_id)) +
+          (uname ? ' <span class="mono text-sm">' + esc(uname) + '</span>' : '') +
+          ' <span class="muted">(' +
+          esc(role) +
+          ')</span>' +
+          '</li>';
+      });
+      html += '</ul>';
+    } else {
+      html +=
+        '<div class="tg-chat-meta muted" style="margin-top:6px">Администраторы канала недоступны</div>';
+    }
     if (opts.copyable !== false) {
       html +=
         '<button type="button" class="btn btn-ghost btn-sm" data-copy-tg-channel="' +
@@ -700,17 +783,33 @@
         maxChannelAccessLabel(ch.access) +
         ' · ID ' +
         ch.id;
-      return (
+      var html =
         '<li class="tg-chat-item' +
         (ch.botIsAdmin ? ' tg-chat-item--admin' : '') +
         '"><div class="tg-chat-main"><strong>' +
         esc(ch.title) +
         '</strong></div><div class="tg-chat-meta muted">' +
         esc(meta) +
-        '</div><button type="button" class="btn btn-ghost btn-sm" data-copy-max-channel="' +
+        '</div>';
+      var admins = Array.isArray(ch.admins) ? ch.admins : [];
+      if (admins.length) {
+        html += '<div class="tg-chat-meta" style="margin-top:6px"><strong>Администраторы:</strong></div>';
+        html += '<ul class="tg-chat-admin-list" style="margin:6px 0 0 16px;padding:0">';
+        admins.forEach(function (a) {
+          html +=
+            '<li class="tg-chat-meta" style="list-style:disc">👤 ' +
+            esc(a.name || String(a.user_id)) +
+            ' <span class="muted">(' +
+            esc(a.is_owner ? 'владелец' : 'админ') +
+            ')</span></li>';
+        });
+        html += '</ul>';
+      }
+      html +=
+        '<button type="button" class="btn btn-ghost btn-sm" data-copy-max-channel="' +
         esc(ch.id) +
-        '">Копировать ID</button></li>'
-      );
+        '">Копировать ID</button></li>';
+      return html;
     }
     if (adminChats.length) {
       html +=
@@ -1084,6 +1183,8 @@
     dashRefreshTimer = window.setInterval(function () {
       if (currentRoute === 'dashboard') {
         renderDashboard(false);
+      } else if (currentRoute === 'dashboard_tg') {
+        renderTelegramDashboard(false);
       }
     }, 30000);
   }
@@ -1102,6 +1203,7 @@
     var id = raw.split(/[/?]/)[0];
     var allowed = {
       dashboard: 1,
+      dashboard_tg: 1,
       channels: 1,
       tgchains: 1,
       channelimport: 1,
@@ -1425,6 +1527,122 @@
         if (currentRoute !== 'dashboard') return;
         main.innerHTML =
           '<p class="muted">Не удалось загрузить дашборд: ' + esc(err.message || String(err)) + '</p>';
+      });
+  }
+
+  function renderTelegramDashboard(showLoading) {
+    var main = qs('#mainContent');
+    if (!main) return;
+    if (showLoading !== false) {
+      main.innerHTML = '<div class="dash-loading muted">Загрузка Telegram дашборда…</div>';
+    }
+    getJson('/dashboard-telegram?days=' + encodeURIComponent(String(tgDashPeriodDays)))
+      .then(function (data) {
+        if (currentRoute !== 'dashboard_tg') return;
+        var totals = data.totals || {};
+        var channels = data.channels || [];
+        var recent = data.recent_forwarded || [];
+        var html = '';
+        html += '<div class="stats-grid">';
+        html +=
+          '<div class="stat-card"><div class="label">Telegram каналы</div><div class="value">' +
+          esc(fmtNum(totals.channels)) +
+          '</div><div class="sub">бот админ: ' +
+          esc(fmtNum(totals.channels_admin)) +
+          '</div></div>';
+        html +=
+          '<div class="stat-card"><div class="label">Администраторы Telegram</div><div class="value">' +
+          esc(fmtNum(totals.admins_total)) +
+          '</div><div class="sub">запустили бота: ' +
+          esc(fmtNum(totals.admins_started)) +
+          '</div></div>';
+        html +=
+          '<div class="stat-card"><div class="label">Активные TG потоки</div><div class="value">' +
+          esc(fmtNum(totals.flows_active)) +
+          '</div><div class="sub">связки TG ↔ MAX</div></div>';
+        html +=
+          '<div class="stat-card"><div class="label">Последние пересылки</div><div class="value">' +
+          esc(fmtNum(totals.forwarded_total)) +
+          '</div><div class="sub">из журнала интеграций</div></div>';
+        html += '</div>';
+        html += '<h3>Telegram каналы</h3><div class="channel-cards">';
+        channels.forEach(function (ch) {
+          var admins = Array.isArray(ch.admins) ? ch.admins : [];
+          html += '<div class="channel-card">';
+          html +=
+            '<div class="channel-card-title"><span class="channel-avatar">TG</span><span><strong>' +
+            esc(ch.title || 'Telegram канал') +
+            '</strong><span class="channel-card-meta mono">' +
+            esc(ch.username || ch.id || '—') +
+            '</span></span><span class="badge ' +
+            (ch.botIsAdmin ? 'badge-active' : 'badge-pending') +
+            '">' +
+            esc(ch.botIsAdmin ? 'бот админ' : 'бот не админ') +
+            '</span></div>';
+          html +=
+            '<div class="channel-card-meta">' +
+            esc(telegramChatTypeLabel(ch.type)) +
+            ' · ID ' +
+            esc(String(ch.id || '')) +
+            ' · админов: ' +
+            esc(String(ch.admins_total || admins.length || 0)) +
+            ' · запустили: ' +
+            esc(String(ch.admins_started || 0)) +
+            '</div>';
+          if (admins.length) {
+            html += '<ul class="muted" style="margin:8px 0 0 16px;padding:0">';
+            admins.forEach(function (a) {
+              html +=
+                '<li style="list-style:disc">' +
+                (a.started_bot ? '✅ ' : '⚠️ ') +
+                esc(a.name || String(a.user_id)) +
+                (a.username ? ' <span class="mono text-sm">' + esc(String(a.username)) + '</span>' : '') +
+                (a.is_creator ? ' <span class="muted">(владелец)</span>' : '') +
+                '</li>';
+            });
+            html += '</ul>';
+          }
+          html += '</div>';
+        });
+        if (!channels.length) {
+          html += '<p class="muted">Telegram каналы не найдены. Подключите Telegram интеграцию.</p>';
+        }
+        html += '</div>';
+
+        html += '<h3 class="mt-md">Журнал TG пересылок</h3><div class="activity-feed">';
+        recent.forEach(function (ev) {
+          html += '<div class="activity-item">';
+          html += '<div class="activity-icon"><i data-lucide="arrow-right-left"></i></div>';
+          html += '<div class="activity-body">';
+          html +=
+            '<div class="activity-title">' +
+            esc((ev.fromPlatform || '?') + ' → ' + (ev.toPlatform || '?')) +
+            '</div>';
+          html +=
+            '<div class="activity-meta">' +
+            esc((ev.fromChannel || '—') + ' → ' + (ev.toChannel || '—')) +
+            ' · ' +
+            esc(formatRelativeTime(ev.forwardedAt)) +
+            '</div>';
+          if (ev.preview) {
+            html += '<div class="activity-preview">' + esc(ev.preview) + '</div>';
+          }
+          html += '</div></div>';
+        });
+        if (!recent.length) {
+          html += '<p class="muted">Пока нет событий Telegram пересылок</p>';
+        }
+        html += '</div>';
+        main.innerHTML = html;
+        refreshIcons();
+      })
+      .catch(function (err) {
+        if (err && err.message === 'auth') return;
+        if (currentRoute !== 'dashboard_tg') return;
+        main.innerHTML =
+          '<p class="muted">Не удалось загрузить Telegram дашборд: ' +
+          esc(err.message || String(err)) +
+          '</p>';
       });
   }
 
@@ -3847,65 +4065,382 @@
       });
   }
 
+  function userRoleLabel(role) {
+    if (role === 'owner') return 'Владелец';
+    if (role === 'admin') return 'Администратор';
+    return 'Пользователь';
+  }
+
+  function renderUserStatusBadges(user) {
+    var html = '';
+    html += '<span class="badge ' + (user.is_restricted ? 'badge-danger' : 'badge-active') + '">' + esc(user.is_restricted ? 'Ограничен' : 'Активен') + '</span>';
+    html += '<span class="badge badge-muted">' + esc(userRoleLabel(user.role)) + '</span>';
+    return html;
+  }
+
+  function filterUsersList() {
+    var q = String(usersFilterQuery || '').trim().toLowerCase();
+    return usersCache.filter(function (u) {
+      if (usersFilterStatus === 'restricted' && !u.is_restricted) return false;
+      if (usersFilterStatus === 'active' && u.is_restricted) return false;
+      if (!q) return true;
+      var channelText = (u.channel_links || [])
+        .map(function (x) {
+          return String(x.channel_title || x.chat_id || '');
+        })
+        .join(' ')
+        .toLowerCase();
+      var hay = [
+        String(u.user_id || ''),
+        String(u.name || ''),
+        String(u.role || ''),
+        channelText,
+      ]
+        .join(' ')
+        .toLowerCase();
+      return hay.indexOf(q) !== -1;
+    });
+  }
+
+  function usersListHtml(list) {
+    if (!list.length) {
+      return '<div class="empty-state"><i data-lucide="users"></i><h3>Пользователи не найдены</h3><p>Измените фильтр или дождитесь новых подписчиков.</p></div>';
+    }
+    var html = '';
+    list.forEach(function (u) {
+      var channels = u.channel_links || [];
+      html +=
+        '<button type="button" class="user-list-item' +
+        (u.user_id === selectedUserId ? ' active' : '') +
+        '" data-user-id="' +
+        esc(String(u.user_id)) +
+        '">';
+      html += '<div class="user-list-head user-list-head-clean">';
+      html += '<div class="user-list-identity">';
+      html += '<div class="user-list-name">' + esc(u.name || 'Без имени') + '</div>';
+      html += '</div>';
+      html += '</div>';
+      html += '<div class="user-list-channels">';
+      if (!channels.length) {
+        html += '<span class="user-channel-tag user-channel-tag-empty">Не привязан к каналу</span>';
+      } else {
+        channels.forEach(function (link) {
+          var title = link.channel_title || ('Канал ' + link.chat_id);
+          html += '<span class="user-channel-tag" title="' + esc(title) + '">' + esc(title) + '</span>';
+        });
+      }
+      html += '</div>';
+      html += '</button>';
+    });
+    return html;
+  }
+
+  function renderUserCommentsHistory(detail, filter) {
+    var bucket = detail && detail.comments ? detail.comments : {};
+    var list =
+      filter === 'answered'
+        ? bucket.answered || []
+        : filter === 'unanswered'
+          ? bucket.unanswered || []
+          : (bucket.answered || []).concat(bucket.unanswered || []);
+    if (!list.length) {
+      return '<p class="muted">Комментариев по фильтру нет.</p>';
+    }
+    var html = '<div class="recent-comments">';
+    list.forEach(function (c) {
+      var post = c.post_context || {};
+      var channelLabel = post.channel_title ? String(post.channel_title) : post.chat_id ? 'Канал ' + post.chat_id : 'Канал не найден';
+      html += '<article class="comment-card">';
+      html += '<div class="comment-card-head">';
+      html += '<div class="comment-card-user"><strong>' + esc(channelLabel) + '</strong>';
+      html += '<span class="comment-card-time">' + esc(fmtDateTime(c.timestamp)) + '</span></div>';
+      html +=
+        '<span class="comment-status ' +
+        (c.status === 'answered' ? 'answered' : 'pending') +
+        '">' +
+        esc(c.status === 'answered' ? 'Отвечено' : 'Без ответа') +
+        '</span>';
+      html += '</div>';
+      html += '<div class="comment-card-text">' + esc(c.text || '') + '</div>';
+      var postUrl = post.channel_post_url && String(post.channel_post_url).trim() ? String(post.channel_post_url).trim() : '';
+      html += postUrl
+        ? '<a class="comment-post-context" href="' + esc(postUrl) + '" target="_blank" rel="noopener noreferrer">'
+        : '<div class="comment-post-context">';
+      html += '<span class="comment-post-label">Пост</span>';
+      if (post.photo_url) {
+        html += '<img class="comment-post-thumb" src="' + esc(post.photo_url) + '" alt="" loading="lazy" />';
+      }
+      html += '<div class="comment-post-body">';
+      html += '<div class="comment-post-text">' + esc(truncateText(post.text || 'Без текста', 140)) + '</div>';
+      if (post.timestamp) {
+        html += '<span class="comment-post-time">' + esc(fmtDateTime(post.timestamp)) + '</span>';
+      }
+      html += '</div>' + (postUrl ? '</a>' : '</div>');
+      if (c.reply && c.reply.text) {
+        html += '<div class="comment-reply-block">';
+        html += '<div class="comment-reply-label">Ответ администратора' + (c.reply.admin_name ? ' · ' + esc(c.reply.admin_name) : '') + '</div>';
+        html += '<div class="comment-reply-text">' + esc(c.reply.text) + '</div>';
+        html += '<span class="comment-reply-time">' + esc(fmtDateTime(c.reply.timestamp)) + '</span>';
+        html += '</div>';
+      }
+      html += '</article>';
+    });
+    html += '</div>';
+    return html;
+  }
+
+  function renderUserDetail(userId) {
+    var detailHost = qs('#usersDetail');
+    if (!detailHost) return;
+    if (!userId) {
+      detailHost.innerHTML =
+        '<div class="empty-state"><i data-lucide="user"></i><h3>Выберите пользователя</h3><p>Слева откройте карточку, чтобы увидеть профиль, каналы и историю комментариев.</p></div>';
+      refreshIcons();
+      return;
+    }
+    detailHost.innerHTML = '<div class="dash-loading muted">Загрузка карточки пользователя…</div>';
+    getJson('/users/' + encodeURIComponent(String(userId)))
+      .then(function (data) {
+        if (currentRoute !== 'users' || selectedUserId !== userId) return;
+        userDetailCache[userId] = data;
+        var u = data.user || {};
+        var stats = u.comment_stats || {};
+        var links = u.channel_links || [];
+        var html = '<section class="panel user-detail-panel">';
+        html += '<div class="user-detail-header">';
+        html += userAvatarHtml(u, 'user-detail-avatar');
+        html += '<div class="user-detail-head-main">';
+        html += '<h2>' + esc(u.name || 'Без имени') + '</h2>';
+        html += '<div class="user-detail-id mono">ID: ' + esc(String(u.user_id || userId)) + '</div>';
+        html += '<div class="user-detail-badges">' + renderUserStatusBadges(u) + '</div>';
+        html += '</div>';
+        html += '</div>';
+
+        html += '<div class="user-kpi-grid">';
+        html += '<div class="stat-card"><div class="label">Дата подписки</div><div class="value user-kpi-value">' + esc(fmtDateTime(u.registered_at)) + '</div></div>';
+        html += '<div class="stat-card"><div class="label">Последний комментарий</div><div class="value user-kpi-value">' + esc(fmtDateTime(stats.last_comment_at)) + '</div></div>';
+        html += '<div class="stat-card"><div class="label">Комментарии</div><div class="value">' + esc(String(stats.total || 0)) + '</div><div class="sub">Ответов: ' + esc(String(stats.answered || 0)) + ' · Без ответа: ' + esc(String(stats.unanswered || 0)) + '</div></div>';
+        html += '<div class="stat-card"><div class="label">Привязанный чат</div><div class="value user-kpi-value mono">' + esc(u.private_chat_id ? String(u.private_chat_id) : '—') + '</div></div>';
+        html += '</div>';
+
+        html += '<h3 class="section-title">Привязанные каналы</h3>';
+        if (!links.length) {
+          html += '<p class="muted">' + esc(u.context_hint || 'Нет привязанных каналов') + '</p>';
+        } else {
+          html += '<div class="user-channel-links">';
+          links.forEach(function (l) {
+            html += '<div class="user-channel-card">';
+            html += '<strong>' + esc(l.channel_title || ('Канал ' + l.chat_id)) + '</strong>';
+            html += '<div class="text-sm text-secondary mono">chat_id: ' + esc(String(l.chat_id)) + '</div>';
+            html += '<div class="text-sm">' + esc((l.relations || []).join(', ') || '—') + '</div>';
+            html += '</div>';
+          });
+          html += '</div>';
+        }
+
+        html += '<div class="user-actions-row">';
+        html += '<button type="button" class="btn btn-ghost btn-sm" data-user-action="notify" data-user-id="' + esc(String(u.user_id || userId)) + '"><i data-lucide="send"></i> Уведомить</button>';
+        if (u.role !== 'owner') {
+          html += '<button type="button" class="btn btn-ghost btn-sm" data-user-action="restrict" data-user-id="' + esc(String(u.user_id || userId)) + '" data-restricted="' + (u.is_restricted ? '1' : '0') + '"><i data-lucide="' + (u.is_restricted ? 'unlock' : 'shield-ban') + '"></i> ' + esc(u.is_restricted ? 'Снять ограничение' : 'Ограничить') + '</button>';
+          html += '<button type="button" class="btn btn-danger btn-sm" data-user-action="remove" data-user-id="' + esc(String(u.user_id || userId)) + '"><i data-lucide="user-minus"></i> Удалить</button>';
+        }
+        html += '</div>';
+
+        html += '<div class="tabs user-comments-tabs">';
+        html += '<button type="button" class="tab active" data-user-comments-filter="all">Все (' + esc(String(data.comments && data.comments.total ? data.comments.total : 0)) + ')</button>';
+        html += '<button type="button" class="tab" data-user-comments-filter="answered">С ответом (' + esc(String((data.comments && data.comments.answered ? data.comments.answered.length : 0))) + ')</button>';
+        html += '<button type="button" class="tab" data-user-comments-filter="unanswered">Без ответа (' + esc(String((data.comments && data.comments.unanswered ? data.comments.unanswered.length : 0))) + ')</button>';
+        html += '</div>';
+        html += '<div id="userCommentsHost">' + renderUserCommentsHistory(data, 'all') + '</div>';
+        html += '</section>';
+        detailHost.innerHTML = html;
+        bindUserDetailEvents();
+        refreshIcons();
+      })
+      .catch(function (e) {
+        detailHost.innerHTML = '<p class="muted">' + esc(e.message || 'Не удалось загрузить карточку пользователя') + '</p>';
+      });
+  }
+
+  function openNotifyUserModal(userId) {
+    var host = qs('#modalRoot');
+    if (!host) return;
+    var backdrop = document.createElement('div');
+    backdrop.className = 'modal-backdrop';
+    var modal = document.createElement('div');
+    modal.className = 'modal';
+    modal.innerHTML =
+      '<h2>Отправить уведомление</h2>' +
+      '<p>Пользователь получит сообщение от бота в личный чат.</p>' +
+      '<div class="form-group"><label for="userNotifyText">Текст сообщения</label><textarea id="userNotifyText" class="textarea" rows="5" maxlength="2000" placeholder="Введите текст уведомления"></textarea></div>' +
+      '<div class="modal-actions">' +
+      '<button type="button" class="btn btn-ghost" data-close-modal>Отмена</button>' +
+      '<button type="button" class="btn btn-primary" data-send-notify>Отправить</button>' +
+      '</div>';
+    backdrop.appendChild(modal);
+    host.appendChild(backdrop);
+    function close() {
+      if (backdrop.parentNode) backdrop.parentNode.removeChild(backdrop);
+    }
+    var closeBtn = qs('[data-close-modal]', modal);
+    var sendBtn = qs('[data-send-notify]', modal);
+    var textArea = qs('#userNotifyText', modal);
+    if (closeBtn) closeBtn.addEventListener('click', close);
+    if (sendBtn) {
+      sendBtn.addEventListener('click', function () {
+        var text = textArea ? String(textArea.value || '').trim() : '';
+        if (!text) {
+          showToast('Введите текст уведомления', 'error');
+          return;
+        }
+        sendBtn.disabled = true;
+        postJson('/users/notify', { user_id: userId, text: text })
+          .then(function () {
+            showToast('Уведомление отправлено', 'success');
+            close();
+          })
+          .catch(function (e) {
+            showToast(e.message || 'Не удалось отправить уведомление', 'error');
+          })
+          .finally(function () {
+            sendBtn.disabled = false;
+          });
+      });
+    }
+    if (textArea) textArea.focus();
+  }
+
+  function bindUserDetailEvents() {
+    var root = qs('#usersDetail');
+    if (!root) return;
+    qsa('[data-user-comments-filter]', root).forEach(function (tab) {
+      tab.addEventListener('click', function () {
+        qsa('[data-user-comments-filter]', root).forEach(function (x) {
+          x.classList.remove('active');
+        });
+        tab.classList.add('active');
+        var filter = tab.getAttribute('data-user-comments-filter') || 'all';
+        var detail = selectedUserId ? userDetailCache[selectedUserId] : null;
+        var host = qs('#userCommentsHost', root);
+        if (host) host.innerHTML = renderUserCommentsHistory(detail, filter);
+      });
+    });
+    qsa('[data-user-action]', root).forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var action = btn.getAttribute('data-user-action');
+        var uid = Number(btn.getAttribute('data-user-id'));
+        if (!uid || !action) return;
+        if (action === 'notify') {
+          openNotifyUserModal(uid);
+          return;
+        }
+        if (action === 'restrict') {
+          var restricted = btn.getAttribute('data-restricted') === '1';
+          var next = !restricted;
+          postJson('/users/restrict', { user_id: uid, restricted: next })
+            .then(function () {
+              showToast(next ? 'Пользователь ограничен' : 'Ограничение снято', 'success');
+              renderUsers();
+            })
+            .catch(function (e) {
+              showToast(e.message || 'Ошибка', 'error');
+            });
+          return;
+        }
+        if (action === 'remove') {
+          showConfirm('Удалить пользователя?', 'Пользователь ' + uid + ' будет отключён от бота.', function () {
+            postJson('/users/remove', { user_id: uid })
+              .then(function () {
+                showToast('Пользователь удалён', 'success');
+                renderUsers();
+              })
+              .catch(function (e) {
+                showToast(e.message || 'Ошибка', 'error');
+              });
+          });
+        }
+      });
+    });
+  }
+
+  function bindUsersListItemEvents(main) {
+    qsa('.user-list-item[data-user-id]', main).forEach(function (item) {
+      item.addEventListener('click', function () {
+        var uid = Number(item.getAttribute('data-user-id'));
+        if (!uid || uid === selectedUserId) return;
+        selectedUserId = uid;
+        qsa('.user-list-item', main).forEach(function (x) {
+          x.classList.remove('active');
+        });
+        item.classList.add('active');
+        renderUserDetail(uid);
+      });
+    });
+  }
+
+  function bindUsersPageEvents() {
+    var main = qs('#mainContent');
+    if (!main) return;
+    var search = qs('#usersSearch', main);
+    var status = qs('#usersStatusFilter', main);
+    if (search && search.getAttribute('data-bound') !== '1') {
+      search.setAttribute('data-bound', '1');
+      search.addEventListener('input', function () {
+        usersFilterQuery = String(search.value || '');
+        var listHost = qs('#usersListHost', main);
+        if (listHost) listHost.innerHTML = usersListHtml(filterUsersList());
+        bindUsersListItemEvents(main);
+        refreshIcons();
+      });
+    }
+    if (status && status.getAttribute('data-bound') !== '1') {
+      status.setAttribute('data-bound', '1');
+      status.addEventListener('change', function () {
+        usersFilterStatus = String(status.value || 'all');
+        var listHost = qs('#usersListHost', main);
+        if (listHost) listHost.innerHTML = usersListHtml(filterUsersList());
+        bindUsersListItemEvents(main);
+        refreshIcons();
+      });
+    }
+    bindUsersListItemEvents(main);
+  }
+
   function renderUsers() {
     var main = qs('#mainContent');
     if (!main) return;
-    main.innerHTML = '<div class="dash-loading muted">Загрузка…</div>';
+    main.innerHTML = '<div class="dash-loading muted">Загрузка пользователей…</div>';
     getJson('/users')
       .then(function (data) {
         if (currentRoute !== 'users') return;
-        usersCache = data.users || [];
-        var html = '<h2>Пользователи</h2><div class="table-wrap"><table><thead><tr>';
-        html += '<th>ID</th><th>Имя</th><th>Роль</th><th>Связи</th><th></th></tr></thead><tbody>';
-        usersCache.forEach(function (u) {
-          html += '<tr>';
-          html += '<td class="mono">' + esc(String(u.user_id)) + '</td>';
-          html += '<td>' + esc(u.name || '—') + '</td>';
-          html += '<td>' + esc(u.role) + '</td>';
-          var links = (u.channel_links || [])
-            .map(function (l) {
-              return esc((l.channel_title || l.chat_id) + ': ' + (l.relations || []).join(', '));
-            })
-            .join('<br/>');
-          html += '<td class="text-sm">' + (links || esc(u.context_hint || '—')) + '</td>';
-          html += '<td>';
-          if (u.role !== 'owner') {
-            html +=
-              '<button type="button" class="btn btn-danger btn-sm" data-del-user="' +
-              esc(String(u.user_id)) +
-              '">Удалить</button>';
-          } else {
-            html += '<span class="muted">—</span>';
-          }
-          html += '</td></tr>';
-        });
-        if (!usersCache.length) html += '<tr><td colspan="5" class="muted">Нет пользователей</td></tr>';
-        html += '</tbody></table></div>';
+        usersCache = (data && data.users) || [];
+        if (!selectedUserId && usersCache.length) {
+          selectedUserId = usersCache[0].user_id;
+        }
+        if (selectedUserId && !usersCache.some(function (u) { return u.user_id === selectedUserId; })) {
+          selectedUserId = usersCache.length ? usersCache[0].user_id : null;
+        }
+        var filtered = filterUsersList();
+        var html = '<section class="users-page">';
+        html += '<div class="panel users-toolbar">';
+        html += '<div class="search-bar">';
+        html += '<input id="usersSearch" class="input" placeholder="Поиск по ID, имени, роли, каналу" value="' + esc(usersFilterQuery) + '" />';
+        html += '<select id="usersStatusFilter" class="select"><option value="all"' + (usersFilterStatus === 'all' ? ' selected' : '') + '>Все</option><option value="active"' + (usersFilterStatus === 'active' ? ' selected' : '') + '>Только активные</option><option value="restricted"' + (usersFilterStatus === 'restricted' ? ' selected' : '') + '>Только ограниченные</option></select>';
+        html += '</div>';
+        html += '<div class="text-sm text-secondary">Всего: ' + esc(String(usersCache.length)) + ', в выдаче: ' + esc(String(filtered.length)) + '</div>';
+        html += '</div>';
+        html += '<div class="panel panel-flush users-split">';
+        html += '<aside class="users-list-pane"><div id="usersListHost" class="users-list-host">' + usersListHtml(filtered) + '</div></aside>';
+        html += '<section id="usersDetail" class="users-detail-pane"></section>';
+        html += '</div></section>';
         main.innerHTML = html;
-        qsa('[data-del-user]', main).forEach(function (b) {
-          b.addEventListener('click', function () {
-            var uid = Number(b.getAttribute('data-del-user'));
-            showConfirm(
-              'Удалить пользователя?',
-              'Пользователь ' + uid + ' будет отключён от бота.',
-              function () {
-                postJson('/users/remove', { user_id: uid })
-                  .then(function () {
-                    showToast('Пользователь удалён', 'success');
-                    renderUsers();
-                  })
-                  .catch(function (e) {
-                    showToast(e.message || 'Ошибка', 'error');
-                  });
-              },
-            );
-          });
-        });
+        bindUsersPageEvents();
+        renderUserDetail(selectedUserId);
         refreshIcons();
       })
       .catch(function (err) {
         if (err && err.message === 'auth') return;
-        main.innerHTML = '<p class="muted">Ошибка</p>';
+        main.innerHTML = '<p class="muted">Не удалось загрузить пользователей</p>';
       });
   }
 
@@ -4338,27 +4873,33 @@
   }
 
   function renderTopbarForRoute() {
-    if (currentRoute === 'dashboard') {
+    if (currentRoute === 'dashboard' || currentRoute === 'dashboard_tg') {
+      var periodValue = currentRoute === 'dashboard_tg' ? tgDashPeriodDays : dashPeriodDays;
       setTopbarActions(
         '<div class="period-tabs">' +
           '<button type="button" class="period-tab' +
-          (dashPeriodDays === 7 ? ' active' : '') +
+          (periodValue === 7 ? ' active' : '') +
           '" data-days="7">7 дн.</button>' +
           '<button type="button" class="period-tab' +
-          (dashPeriodDays === 30 ? ' active' : '') +
+          (periodValue === 30 ? ' active' : '') +
           '" data-days="30">30 дн.</button>' +
           '<button type="button" class="period-tab' +
-          (dashPeriodDays === 0 ? ' active' : '') +
+          (periodValue === 0 ? ' active' : '') +
           '" data-days="0">Всё время</button></div>',
       );
       var tb = qs('#topbarActions');
       if (tb) {
         qsa('.period-tab', tb).forEach(function (b) {
           b.addEventListener('click', function () {
-            dashPeriodDays = Number(b.getAttribute('data-days'));
+            var picked = Number(b.getAttribute('data-days'));
             if (currentRoute === 'dashboard') {
+              dashPeriodDays = picked;
               renderTopbarForRoute();
               renderDashboard(true);
+            } else if (currentRoute === 'dashboard_tg') {
+              tgDashPeriodDays = picked;
+              renderTopbarForRoute();
+              renderTelegramDashboard(true);
             }
           });
         });
@@ -4388,6 +4929,9 @@
     if (currentRoute === 'dashboard') {
       scheduleDashRefresh();
       renderDashboard(true);
+    } else if (currentRoute === 'dashboard_tg') {
+      scheduleDashRefresh();
+      renderTelegramDashboard(true);
     } else if (currentRoute === 'channels') {
       renderChannels();
     } else if (currentRoute === 'tgchains') {

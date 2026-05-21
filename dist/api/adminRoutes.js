@@ -31,6 +31,9 @@ const autopostRoutes_1 = require("./autopostRoutes");
 const analyticsService_1 = require("../services/analyticsService");
 const adminLogFormat_1 = require("../utils/adminLogFormat");
 const logger_1 = require("../utils/logger");
+const memberAvatar_1 = require("../utils/memberAvatar");
+const integrationsStore_1 = require("../services/integrationsStore");
+const integrationPlatformClient_1 = require("../services/integrationPlatformClient");
 const RUNTIME_LOG_PATH = (0, node_path_1.join)(process.cwd(), 'data', 'runtime.log');
 function isRecord(value) {
     return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -65,6 +68,12 @@ function parseNonEmptyString(value) {
     }
     const t = value.trim();
     return t === '' ? null : t;
+}
+function parseBoolean(value) {
+    if (typeof value === 'boolean') {
+        return value;
+    }
+    return null;
 }
 function extractChatAvatarUrl(chat) {
     const icon = chat.icon;
@@ -138,6 +147,39 @@ async function resolveDisplayNameFromMax(bot, userId, channelChatIds) {
     }
     return null;
 }
+async function resolveAvatarFromMax(bot, userId, channelChatIds) {
+    const ordered = [...new Set(channelChatIds)];
+    for (const chatId of ordered) {
+        try {
+            const { members } = await bot.api.getChatMembers(chatId, { user_ids: [userId] });
+            const avatarUrl = (0, memberAvatar_1.extractMemberAvatarUrl)(members[0]);
+            if (avatarUrl) {
+                return avatarUrl;
+            }
+        }
+        catch (err) {
+            logger_1.logger.debug('admin /users: getChatMembers for avatar failed', { chatId, userId, err });
+        }
+    }
+    const priv = stateManager_1.stateManager.getUserPrivateChatId(userId);
+    if (priv !== undefined) {
+        try {
+            const { members } = await bot.api.getChatMembers(priv, { user_ids: [userId] });
+            const avatarUrl = (0, memberAvatar_1.extractMemberAvatarUrl)(members[0]);
+            if (avatarUrl) {
+                return avatarUrl;
+            }
+        }
+        catch (err) {
+            logger_1.logger.debug('admin /users: getChatMembers private for avatar failed', {
+                priv,
+                userId,
+                err,
+            });
+        }
+    }
+    return null;
+}
 function createAdminRouter(deps) {
     const router = express_1.default.Router();
     router.use(express_1.default.json({ limit: '256kb' }));
@@ -187,6 +229,88 @@ function createAdminRouter(deps) {
         const periodDays = (0, analyticsService_1.parseDashboardPeriodDays)(req.query.days);
         const payload = (0, analyticsService_1.buildDashboardAnalytics)(periodDays);
         res.json(payload);
+    });
+    secured.get('/dashboard-telegram', async (_req, res) => {
+        const periodDays = (0, analyticsService_1.parseDashboardPeriodDays)(_req.query.days);
+        const periodFromMs = periodDays > 0 ? Date.now() - periodDays * 24 * 60 * 60 * 1000 : null;
+        await integrationsStore_1.integrationsStore.load();
+        const tgIntegration = integrationsStore_1.integrationsStore.getTelegramIntegration();
+        if (!tgIntegration) {
+            res.json({
+                connected: false,
+                totals: {
+                    channels: 0,
+                    channels_admin: 0,
+                    admins_total: 0,
+                    admins_started: 0,
+                    flows_active: 0,
+                    forwarded_total: 0,
+                },
+                channels: [],
+                recent_forwarded: [],
+            });
+            return;
+        }
+        const linkedChats = tgIntegration.linkedChats ?? [];
+        const token = tgIntegration.token.trim();
+        const channels = [];
+        let adminsTotal = 0;
+        let adminsStarted = 0;
+        for (const ch of linkedChats) {
+            const admins = token ? await (0, integrationPlatformClient_1.listTelegramChatAdministrators)(token, ch.id) : [];
+            const startedCount = admins.filter((a) => a.startedBot).length;
+            adminsTotal += admins.length;
+            adminsStarted += startedCount;
+            channels.push({
+                id: ch.id,
+                title: ch.title,
+                username: ch.username ?? null,
+                type: ch.type ?? 'unknown',
+                botIsAdmin: ch.botIsAdmin === true,
+                admins_total: admins.length,
+                admins_started: startedCount,
+                admins: admins.map((a) => ({
+                    user_id: a.userId,
+                    name: a.name,
+                    username: a.username ?? null,
+                    is_creator: a.isCreator,
+                    started_bot: a.startedBot,
+                })),
+            });
+        }
+        const tgFlows = integrationsStore_1.integrationsStore
+            .getFlows()
+            .filter((f) => f.source.platform === 'telegram' || f.destination.platform === 'telegram');
+        const forwardedRaw = integrationsStore_1.integrationsStore.getForwardedLog(500);
+        const forwarded = forwardedRaw.filter((e) => {
+            if (e.fromPlatform !== 'telegram' && e.toPlatform !== 'telegram') {
+                return false;
+            }
+            if (periodFromMs === null) {
+                return true;
+            }
+            const ts = Date.parse(e.forwardedAt);
+            return Number.isFinite(ts) && ts >= periodFromMs;
+        });
+        res.json({
+            connected: true,
+            integration: {
+                id: tgIntegration.id,
+                name: tgIntegration.name,
+                period_days: periodDays,
+                linkedChatsUpdatedAt: tgIntegration.linkedChatsUpdatedAt ?? null,
+            },
+            totals: {
+                channels: channels.length,
+                channels_admin: channels.filter((c) => c.botIsAdmin).length,
+                admins_total: adminsTotal,
+                admins_started: adminsStarted,
+                flows_active: tgFlows.filter((f) => f.enabled).length,
+                forwarded_total: forwarded.length,
+            },
+            channels,
+            recent_forwarded: forwarded.slice(0, 20),
+        });
     });
     secured.get('/channels', async (_req, res) => {
         await (0, channelFullDisconnect_1.pruneRegisteredChannelsNotAccessibleByBot)(deps.bot);
@@ -276,6 +400,7 @@ function createAdminRouter(deps) {
         await (0, channelFullDisconnect_1.pruneRegisteredChannelsNotAccessibleByBot)(deps.bot);
         const ownerId = config_1.config.ownerUserId;
         const channels = channelRegistry_1.channelRegistry.getAllChannels().filter((ch) => ch.type === 'channel');
+        const comments = commentStore_1.commentStore.listAllCommentsNewestFirst();
         const byUser = new Map();
         function touch(userId) {
             let row = byUser.get(userId);
@@ -288,6 +413,11 @@ function createAdminRouter(deps) {
                     registered_at: null,
                     is_subscriber: false,
                     has_miniapp_settings: false,
+                    avatar_url: null,
+                    comments_total: 0,
+                    comments_answered: 0,
+                    comments_unanswered: 0,
+                    last_comment_at: null,
                 };
                 byUser.set(userId, row);
             }
@@ -310,6 +440,28 @@ function createAdminRouter(deps) {
         for (const uid of subscriberStore_1.subscriberStore.getAllSubscribers()) {
             const row = touch(uid);
             row.is_subscriber = true;
+        }
+        for (const c of comments) {
+            const row = touch(c.user_id);
+            row.comments_total += 1;
+            if (c.reply?.text?.trim()) {
+                row.comments_answered += 1;
+            }
+            else {
+                row.comments_unanswered += 1;
+            }
+            if (row.last_comment_at === null || c.timestamp.localeCompare(row.last_comment_at) > 0) {
+                row.last_comment_at = c.timestamp;
+            }
+            if (!row.avatar_url && c.avatar_url?.trim()) {
+                row.avatar_url = c.avatar_url.trim();
+            }
+            if (!row.name?.trim()) {
+                const fromComment = c.username.trim();
+                if (fromComment) {
+                    row.name = fromComment;
+                }
+            }
         }
         for (const ch of channels) {
             let admins = [];
@@ -366,6 +518,12 @@ function createAdminRouter(deps) {
                     row.name = fromComments;
                 }
             }
+            if (!row.avatar_url) {
+                const fromMax = await resolveAvatarFromMax(deps.bot, row.user_id, chatIdsForName);
+                if (fromMax) {
+                    row.avatar_url = fromMax;
+                }
+            }
         }
         const out = rows.map((row) => {
             const channel_links = [...row.linkByChatId.entries()]
@@ -390,16 +548,164 @@ function createAdminRouter(deps) {
                 user_id: row.user_id,
                 name: row.name,
                 role: row.role,
+                is_restricted: disabledAdminStore_1.disabledAdminStore.isDisabled(row.user_id),
                 /** @deprecated Используйте channel_links; оставлено для совместимости */
                 channels: channel_links.map((l) => ({ chat_id: l.chat_id, title: l.channel_title })),
                 channel_links,
                 context_hint,
                 registered_at: row.registered_at,
-                avatar_url: null,
+                avatar_url: row.avatar_url,
+                comment_stats: {
+                    total: row.comments_total,
+                    answered: row.comments_answered,
+                    unanswered: row.comments_unanswered,
+                    last_comment_at: row.last_comment_at,
+                },
             };
         });
         out.sort((a, b) => a.user_id - b.user_id);
         res.json({ users: out });
+    });
+    secured.get('/users/:userId', async (req, res) => {
+        const userId = parsePositiveInt(req.params.userId);
+        if (!userId) {
+            res.status(400).json({ error: 'invalid user_id' });
+            return;
+        }
+        await (0, channelFullDisconnect_1.pruneRegisteredChannelsNotAccessibleByBot)(deps.bot);
+        const ownerId = config_1.config.ownerUserId;
+        const links = channelNotifyLinkStore_1.channelNotifyLinkStore.getAllLinks().filter((link) => link.user_id === userId);
+        const channelsWithAdminRole = channelRegistry_1.channelRegistry.getAllChannels().filter((channel) => channel.type === 'channel');
+        const commentsRaw = commentStore_1.commentStore.listAllCommentsNewestFirst().filter((c) => c.user_id === userId);
+        const channelLinksById = new Map();
+        function addChannelRelation(chatId, title, relation) {
+            let row = channelLinksById.get(chatId);
+            if (!row) {
+                row = { title, relations: new Set() };
+                channelLinksById.set(chatId, row);
+            }
+            if (title && !row.title) {
+                row.title = title;
+            }
+            row.relations.add(relation);
+        }
+        for (const link of links) {
+            const title = channelRegistry_1.channelRegistry.getChannel(link.channel_chat_id)?.title ?? null;
+            addChannelRelation(link.channel_chat_id, title, REL_COMMENT_NOTIFY);
+        }
+        for (const ch of channelsWithAdminRole) {
+            try {
+                const { members } = await deps.bot.api.getChatMembers(ch.chat_id, { user_ids: [userId] });
+                const m = members[0];
+                if (m && !m.is_bot && (m.is_admin || m.is_owner)) {
+                    addChannelRelation(ch.chat_id, ch.title, REL_CHANNEL_ADMIN);
+                }
+            }
+            catch (err) {
+                logger_1.logger.debug('admin /users/:userId getChatMembers failed', { chatId: ch.chat_id, userId, err });
+            }
+        }
+        const isSubscriber = subscriberStore_1.subscriberStore.hasSubscriber(userId);
+        const hasMiniappSettings = userMiniappSettingsStore_1.userMiniappSettingsStore
+            .getAllUserIdsWithSettings()
+            .includes(userId);
+        if (channelLinksById.size === 0 &&
+            !isSubscriber &&
+            !hasMiniappSettings &&
+            commentsRaw.length === 0 &&
+            userId !== ownerId) {
+            res.status(404).json({ error: 'user not found' });
+            return;
+        }
+        const channelIds = [...channelLinksById.keys()].sort((a, b) => a - b);
+        const avatarFromComment = commentsRaw.find((c) => c.avatar_url?.trim())?.avatar_url?.trim() ?? null;
+        let name = commentsRaw.find((c) => c.username.trim())?.username.trim() ?? null;
+        const fromMaxName = await resolveDisplayNameFromMax(deps.bot, userId, channelIds);
+        if (fromMaxName) {
+            name = fromMaxName;
+        }
+        let avatarUrl = avatarFromComment;
+        if (!avatarUrl) {
+            avatarUrl = await resolveAvatarFromMax(deps.bot, userId, channelIds);
+        }
+        let registeredAt = null;
+        for (const link of links) {
+            if (!registeredAt || link.joined_at.localeCompare(registeredAt) < 0) {
+                registeredAt = link.joined_at;
+            }
+        }
+        const channel_links = [...channelLinksById.entries()]
+            .sort((a, b) => a[0] - b[0])
+            .map(([chat_id, value]) => ({
+            chat_id,
+            channel_title: value.title,
+            relations: [...value.relations].sort((x, y) => x.localeCompare(y, 'ru')),
+        }));
+        const hasAdminRelation = channel_links.some((link) => link.relations.includes(REL_CHANNEL_ADMIN));
+        const comments = commentsRaw.map((c) => {
+            const post = postStore_1.postStore.getPost(c.post_id);
+            const answered = Boolean(c.reply?.text?.trim());
+            return {
+                comment_id: c.comment_id,
+                post_id: c.post_id,
+                text: c.text,
+                timestamp: c.timestamp,
+                status: answered ? 'answered' : 'unanswered',
+                reply: answered
+                    ? {
+                        text: c.reply.text,
+                        timestamp: c.reply.timestamp,
+                        admin_name: c.reply.admin_name ?? null,
+                    }
+                    : null,
+                post_context: post
+                    ? {
+                        chat_id: post.chat_id,
+                        channel_title: channelRegistry_1.channelRegistry.getChannel(post.chat_id)?.title ?? null,
+                        text: post.text,
+                        photo_url: post.photo_url ?? null,
+                        channel_post_url: post.channel_post_url ?? null,
+                        timestamp: post.timestamp,
+                    }
+                    : null,
+            };
+        });
+        const answeredComments = comments.filter((c) => c.status === 'answered');
+        const unansweredComments = comments.filter((c) => c.status === 'unanswered');
+        res.json({
+            user: {
+                user_id: userId,
+                name,
+                role: userId === ownerId
+                    ? 'owner'
+                    : hasAdminRelation
+                        ? 'admin'
+                        : 'subscriber',
+                is_restricted: disabledAdminStore_1.disabledAdminStore.isDisabled(userId),
+                channel_links,
+                context_hint: channel_links.length === 0 && isSubscriber
+                    ? 'Подписчик бота (/start): привязка к каналу не найдена'
+                    : channel_links.length === 0 && hasMiniappSettings
+                        ? 'Пользователь открывал мини-приложение, но не привязан к каналу'
+                        : null,
+                registered_at: registeredAt,
+                avatar_url: avatarUrl,
+                comment_stats: {
+                    total: comments.length,
+                    answered: answeredComments.length,
+                    unanswered: unansweredComments.length,
+                    last_comment_at: comments[0]?.timestamp ?? null,
+                },
+                is_subscriber: isSubscriber,
+                has_miniapp_settings: hasMiniappSettings,
+                private_chat_id: stateManager_1.stateManager.getUserPrivateChatId(userId) ?? null,
+            },
+            comments: {
+                answered: answeredComments,
+                unanswered: unansweredComments,
+                total: comments.length,
+            },
+        });
     });
     secured.get('/comments', (req, res) => {
         const chatId = parseNonZeroInt(req.query.chat_id);
@@ -884,6 +1190,47 @@ function createAdminRouter(deps) {
             subscriberStore_1.subscriberStore.clearAllSubscribers();
         }
         res.json({ ok: true });
+    });
+    secured.post('/users/restrict', (req, res) => {
+        const body = req.body;
+        const userId = isRecord(body) ? parsePositiveInt(body.user_id) : null;
+        const restricted = isRecord(body) ? parseBoolean(body.restricted) : null;
+        if (!userId || restricted === null) {
+            res.status(400).json({ error: 'invalid user_id or restricted flag' });
+            return;
+        }
+        if (userId === config_1.config.ownerUserId) {
+            res.status(400).json({ error: 'cannot restrict owner' });
+            return;
+        }
+        if (restricted) {
+            disabledAdminStore_1.disabledAdminStore.disableUser(userId);
+        }
+        else {
+            disabledAdminStore_1.disabledAdminStore.enableUser(userId);
+        }
+        res.json({ ok: true, user_id: userId, restricted });
+    });
+    secured.post('/users/notify', async (req, res) => {
+        const body = req.body;
+        const userId = isRecord(body) ? parsePositiveInt(body.user_id) : null;
+        const text = isRecord(body) ? parseNonEmptyString(body.text) : null;
+        if (!userId || !text) {
+            res.status(400).json({ error: 'invalid user_id or text' });
+            return;
+        }
+        if (text.length > 2000) {
+            res.status(400).json({ error: 'text is too long' });
+            return;
+        }
+        try {
+            await deps.bot.api.sendMessageToUser(userId, text);
+            res.json({ ok: true });
+        }
+        catch (err) {
+            logger_1.logger.warn('admin /users/notify failed', { userId, err });
+            res.status(502).json({ error: 'не удалось отправить уведомление пользователю' });
+        }
     });
     secured.post('/users/remove', (req, res) => {
         const body = req.body;
