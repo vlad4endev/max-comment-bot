@@ -17,7 +17,6 @@
   var dashRefreshTimer = null;
   var logsRefreshTimer = null;
   var dashPeriodDays = 7;
-  var tgDashPeriodDays = 7;
   var channelsCache = [];
   var selectedChannelId = null;
   var channelDetailTab = 'stats';
@@ -38,10 +37,7 @@
   var NAV = [
     {
       group: 'Обзор',
-      items: [
-        { id: 'dashboard', label: 'MAX Дашборд', icon: 'layout-dashboard' },
-        { id: 'dashboard_tg', label: 'Telegram Дашборд', icon: 'send' },
-      ],
+      items: [{ id: 'dashboard', label: 'Дашборд', icon: 'layout-dashboard' }],
     },
     {
       group: 'Контент',
@@ -71,8 +67,7 @@
   ];
 
   var PAGE_TITLES = {
-    dashboard: 'MAX Дашборд',
-    dashboard_tg: 'Telegram Дашборд',
+    dashboard: 'Дашборд',
     channels: 'Каналы',
     tgchains: 'TG → MAX',
     channelimport: 'Импорт TG→MAX',
@@ -1185,8 +1180,6 @@
     dashRefreshTimer = window.setInterval(function () {
       if (currentRoute === 'dashboard') {
         renderDashboard(false);
-      } else if (currentRoute === 'dashboard_tg') {
-        renderTelegramDashboard(false);
       }
     }, 30000);
   }
@@ -1203,9 +1196,11 @@
     var raw = (location.hash || '').replace(/^#/, '').trim();
     if (raw === '') return 'dashboard';
     var id = raw.split(/[/?]/)[0];
+    if (id === 'dashboard_tg') {
+      return 'dashboard';
+    }
     var allowed = {
       dashboard: 1,
-      dashboard_tg: 1,
       channels: 1,
       tgchains: 1,
       channelimport: 1,
@@ -1322,31 +1317,69 @@
     });
   }
 
-  function renderDashboard(showLoading) {
-    var main = qs('#mainContent');
-    if (!main) return;
-    if (showLoading !== false) {
-      main.innerHTML = '<div class="dash-loading muted">Загрузка дашборда…</div>';
-    }
-    Promise.all([
-      getJson('/dashboard?days=' + encodeURIComponent(String(dashPeriodDays))),
-      getJson('/activity?limit=20'),
-    ])
-      .then(function (pair) {
-        var d = pair[0];
-        var act = pair[1];
-        if (currentRoute !== 'dashboard') return;
-        var eff = d.effectiveness || {};
-        var score = Number(eff.score) || 0;
-        var funnel = d.funnel || {};
-        var totals = d.totals || {};
-        var ts = d.timeseries || [];
-        var chans = d.channels || [];
-        var insights = eff.insights || [];
-        var events = (act && act.events) || [];
-        var periodLabel =
-          dashPeriodDays === 0 ? 'всё время' : dashPeriodDays === 30 ? '30 дней' : '7 дней';
-        var html = '';
+  function renderHomeBotLauncher() {
+    var tgUrl = 'https://t.me/commentvmax_bot';
+    var maxUrl = 'https://max.ru/id683003981770_bot';
+    return (
+      '<section class="home-bot-launcher">' +
+      '<div class="home-bot-launcher-head">' +
+      '<h2 class="home-bot-launcher-title">Боты CommentBot</h2>' +
+      '<p class="home-bot-launcher-sub muted">Откройте нужную платформу — управление каналами и комментариями в одном месте.</p>' +
+      '</div>' +
+      '<div class="home-bot-grid">' +
+      '<a class="home-bot-card home-bot-card--tg" target="_blank" rel="noopener noreferrer" href="' +
+      esc(tgUrl) +
+      '">' +
+      '<div class="home-bot-card-top">' +
+      '<span class="home-bot-platform tg">Telegram</span>' +
+      '<i data-lucide="send"></i></div>' +
+      '<div class="home-bot-card-title">@commentvmax_bot</div>' +
+      '<p class="home-bot-card-desc">Уведомления админам, TG-каналы и переход к комментариям из Telegram.</p>' +
+      '<span class="home-bot-card-cta">Открыть в Telegram <i data-lucide="external-link"></i></span>' +
+      '</a>' +
+      '<a class="home-bot-card home-bot-card--max" target="_blank" rel="noopener noreferrer" href="' +
+      esc(maxUrl) +
+      '">' +
+      '<div class="home-bot-card-top">' +
+      '<span class="home-bot-platform max">MAX</span>' +
+      '<i data-lucide="layout-dashboard"></i></div>' +
+      '<div class="home-bot-card-title">MAX CommentBot</div>' +
+      '<p class="home-bot-card-desc">Комментарии к постам MAX-каналов, мини-приложение и ответы администраторов.</p>' +
+      '<span class="home-bot-card-cta">Открыть в MAX <i data-lucide="external-link"></i></span>' +
+      '</a></div></section>'
+    );
+  }
+
+  function renderDashPlatformHeading(platform, title, subtitle) {
+    var badgeClass = platform === 'telegram' ? 'tg' : 'max';
+    var badgeLabel = platform === 'telegram' ? 'Telegram' : 'MAX';
+    return (
+      '<div class="dash-platform-head">' +
+      '<h2 class="dash-platform-title"><span class="dash-platform-badge ' +
+      esc(badgeClass) +
+      '">' +
+      esc(badgeLabel) +
+      '</span>' +
+      esc(title) +
+      '</h2>' +
+      (subtitle ? '<p class="dash-platform-sub muted">' + esc(subtitle) + '</p>' : '') +
+      '</div>'
+    );
+  }
+
+  function renderMaxDashboardSection(d, act, periodLabel) {
+    var eff = d.effectiveness || {};
+    var score = Number(eff.score) || 0;
+    var funnel = d.funnel || {};
+    var totals = d.totals || {};
+    var ts = d.timeseries || [];
+    var chans = d.channels || [];
+    var insights = eff.insights || [];
+    var events = (act && act.events) || [];
+    var html =
+      '<section class="dash-platform-section dash-platform-section--max">' +
+      renderDashPlatformHeading('max', 'Метрики MAX', 'Каналы, комментарии и эффективность за выбранный период.') +
+      '<div class="dash-platform-body">';
         html += '<div class="dash-grid-top">';
         html += '<div class="eff-card">';
         html +=
@@ -1517,35 +1550,25 @@
           }
           html += '</div></div>';
         });
-        if (events.length === 0) {
-          html += '<p class="muted">Событий пока нет</p>';
-        }
-        html += '</div>';
-        html += renderCrossBotFooter('max');
-        main.innerHTML = html;
-        refreshIcons();
-      })
-      .catch(function (err) {
-        if (err && err.message === 'auth') return;
-        if (currentRoute !== 'dashboard') return;
-        main.innerHTML =
-          '<p class="muted">Не удалось загрузить дашборд: ' + esc(err.message || String(err)) + '</p>';
-      });
+    if (events.length === 0) {
+      html += '<p class="muted">Событий пока нет</p>';
+    }
+    html += '</div></div></section>';
+    return html;
   }
 
-  function renderTelegramDashboard(showLoading) {
-    var main = qs('#mainContent');
-    if (!main) return;
-    if (showLoading !== false) {
-      main.innerHTML = '<div class="dash-loading muted">Загрузка Telegram дашборда…</div>';
-    }
-    getJson('/dashboard-telegram?days=' + encodeURIComponent(String(tgDashPeriodDays)))
-      .then(function (data) {
-        if (currentRoute !== 'dashboard_tg') return;
-        var totals = data.totals || {};
-        var channels = data.channels || [];
-        var recent = data.recent_forwarded || [];
-        var html = '';
+  function renderTelegramDashboardSection(data) {
+    var totals = data.totals || {};
+    var channels = data.channels || [];
+    var recent = data.recent_forwarded || [];
+    var html =
+      '<section class="dash-platform-section dash-platform-section--tg">' +
+      renderDashPlatformHeading(
+        'telegram',
+        'Метрики Telegram',
+        'Каналы, администраторы и журнал пересылок TG → MAX.',
+      ) +
+      '<div class="dash-platform-body">';
         html += '<div class="stats-grid">';
         html +=
           '<div class="stat-card"><div class="label">Telegram каналы</div><div class="value">' +
@@ -1632,68 +1655,43 @@
           }
           html += '</div></div>';
         });
-        if (!recent.length) {
-          html += '<p class="muted">Пока нет событий Telegram пересылок</p>';
-        }
-        html += '</div>';
-        html += renderCrossBotFooter('telegram');
+    if (!recent.length) {
+      html += '<p class="muted">Пока нет событий Telegram пересылок</p>';
+    }
+    html += '</div></div></section>';
+    return html;
+  }
+
+  function renderDashboard(showLoading) {
+    var main = qs('#mainContent');
+    if (!main) return;
+    if (showLoading !== false) {
+      main.innerHTML = '<div class="dash-loading muted">Загрузка дашборда…</div>';
+    }
+    var periodLabel =
+      dashPeriodDays === 0 ? 'всё время' : dashPeriodDays === 30 ? '30 дней' : '7 дней';
+    Promise.all([
+      getJson('/dashboard?days=' + encodeURIComponent(String(dashPeriodDays))),
+      getJson('/dashboard-telegram?days=' + encodeURIComponent(String(dashPeriodDays))),
+      getJson('/activity?limit=20'),
+    ])
+      .then(function (parts) {
+        var d = parts[0];
+        var tgData = parts[1];
+        var act = parts[2];
+        if (currentRoute !== 'dashboard') return;
+        var html = renderHomeBotLauncher();
+        html += renderMaxDashboardSection(d, act, periodLabel);
+        html += renderTelegramDashboardSection(tgData);
         main.innerHTML = html;
         refreshIcons();
       })
       .catch(function (err) {
         if (err && err.message === 'auth') return;
-        if (currentRoute !== 'dashboard_tg') return;
+        if (currentRoute !== 'dashboard') return;
         main.innerHTML =
-          '<p class="muted">Не удалось загрузить Telegram дашборд: ' +
-          esc(err.message || String(err)) +
-          '</p>';
+          '<p class="muted">Не удалось загрузить дашборд: ' + esc(err.message || String(err)) + '</p>';
       });
-  }
-
-  function renderCrossBotFooter(currentPlatform) {
-    var tgUrl = 'https://t.me/commentvmax_bot';
-    var maxUrl = 'https://max.ru/id683003981770_bot';
-    var isTelegram = currentPlatform === 'telegram';
-    var title = isTelegram ? 'Переход в MAX-бот' : 'Переход в Telegram-бот';
-    var hint = isTelegram
-      ? 'Открой MAX-бот для управления MAX каналами и комментариями.'
-      : 'Открой Telegram-бот для управления Telegram каналами и комментариями.';
-    var primaryUrl = isTelegram ? maxUrl : tgUrl;
-    var primaryLabel = isTelegram ? 'Открыть MAX-бот' : 'Открыть Telegram-бот';
-    var secondaryUrl = isTelegram ? tgUrl : maxUrl;
-    var secondaryLabel = isTelegram ? 'Открыть Telegram-бот' : 'Открыть MAX-бот';
-    var targetBadge = isTelegram
-      ? '<span class="cross-bot-platform max">MAX</span>'
-      : '<span class="cross-bot-platform tg">TG</span>';
-    var sourceBadge = isTelegram
-      ? '<span class="cross-bot-platform tg">TG</span>'
-      : '<span class="cross-bot-platform max">MAX</span>';
-    return (
-      '<div class="cross-bot-footer panel">' +
-      '<div class="cross-bot-title-row">' +
-      '<div class="cross-bot-title">🔄 ' +
-      esc(title) +
-      '</div>' +
-      '<div class="cross-bot-route">' +
-      sourceBadge +
-      '<span class="cross-bot-arrow">→</span>' +
-      targetBadge +
-      '</div></div>' +
-      '<div class="cross-bot-hint muted">' + esc(hint) + '</div>' +
-      '<div class="cross-bot-actions">' +
-      '<a class="btn btn-primary cross-bot-primary" target="_blank" rel="noopener noreferrer" href="' +
-      esc(primaryUrl) +
-      '">🚀 ' +
-      esc(primaryLabel) +
-      '</a>' +
-      '<a class="btn btn-ghost" target="_blank" rel="noopener noreferrer" href="' +
-      esc(secondaryUrl) +
-      '">↔ ' +
-      esc(secondaryLabel) +
-      '</a></div>' +
-      '<div class="cross-bot-open-note muted">Откроется в новой вкладке</div>' +
-      '</div></div>'
-    );
   }
 
   function renderChannels() {
@@ -4997,8 +4995,8 @@
   }
 
   function renderTopbarForRoute() {
-    if (currentRoute === 'dashboard' || currentRoute === 'dashboard_tg') {
-      var periodValue = currentRoute === 'dashboard_tg' ? tgDashPeriodDays : dashPeriodDays;
+    if (currentRoute === 'dashboard') {
+      var periodValue = dashPeriodDays;
       setTopbarActions(
         '<div class="period-tabs">' +
           '<button type="button" class="period-tab' +
@@ -5020,10 +5018,6 @@
               dashPeriodDays = picked;
               renderTopbarForRoute();
               renderDashboard(true);
-            } else if (currentRoute === 'dashboard_tg') {
-              tgDashPeriodDays = picked;
-              renderTopbarForRoute();
-              renderTelegramDashboard(true);
             }
           });
         });
@@ -5084,9 +5078,6 @@
     if (currentRoute === 'dashboard') {
       scheduleDashRefresh();
       renderDashboard(true);
-    } else if (currentRoute === 'dashboard_tg') {
-      scheduleDashRefresh();
-      renderTelegramDashboard(true);
     } else if (currentRoute === 'channels') {
       renderChannels();
     } else if (currentRoute === 'tgchains') {

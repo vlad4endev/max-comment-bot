@@ -38,8 +38,5 @@ export declare function registerTelegramChannelNotifyLink(telegramUserId: number
     channel_title: string | null;
     already_linked: boolean;
 }>;
-export declare function notifyTelegramChannelJoined(channelChatId: string): Promise<void>;
-export declare function postTelegramChannelAdminInvite(channelChatId: string): Promise<void>;
 export declare function handleTelegramBotStartJoin(telegramUserId: number, startPayload: string): Promise<void>;
-export declare function handleTelegramMyChatMemberUpdate(update: Record<string, unknown>): Promise<void>;
 export declare function processTelegramMiniappBotUpdates(token: string, updates: Array<Record<string, unknown>>): Promise<void>;

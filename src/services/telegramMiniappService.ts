@@ -266,59 +266,6 @@ export async function handleTelegramBotStartJoin(
   await sendTelegramBotMessage(token, telegramUserId, text)
 }
 
-export async function handleTelegramMyChatMemberUpdate(
-  update: Record<string, unknown>,
-): Promise<void> {
-  const mcm = update.my_chat_member as Record<string, unknown> | undefined
-  if (!mcm) {
-    return
-  }
-  const chat = mcm.chat as Record<string, unknown> | undefined
-  const member = mcm.new_chat_member as Record<string, unknown> | undefined
-  const status = typeof member?.status === 'string' ? member.status : ''
-  if (!chat || typeof chat.id !== 'number' && typeof chat.id !== 'string') {
-    return
-  }
-  const chatId = String(chat.id)
-  const chatType = typeof chat.type === 'string' ? chat.type : 'channel'
-  if (chatType !== 'channel' && chatType !== 'supergroup') {
-    return
-  }
-  const isAdmin = status === 'administrator' || status === 'creator'
-  const isMember = isAdmin || status === 'member'
-  if (!isMember) {
-    telegramChannelRegistry.saveChannel({
-      chatId,
-      title: typeof chat.title === 'string' ? chat.title : null,
-      username: typeof chat.username === 'string' ? `@${chat.username}` : null,
-      type: chatType,
-      botIsAdmin: false,
-    })
-    return
-  }
-
-  const title =
-    typeof chat.title === 'string' && chat.title.trim() !== '' ? chat.title.trim() : null
-  const username =
-    typeof chat.username === 'string' && chat.username.trim() !== ''
-      ? `@${chat.username.replace(/^@/, '')}`
-      : null
-
-  const wasAdmin = telegramChannelRegistry.getChannel(chatId)?.bot_is_admin === true
-  telegramChannelRegistry.saveChannel({
-    chatId,
-    title,
-    username,
-    type: chatType,
-    botIsAdmin: isAdmin,
-  })
-
-  if (isAdmin && !wasAdmin) {
-    await postTelegramChannelAdminInvite(chatId)
-    await notifyTelegramChannelJoined(chatId)
-  }
-}
-
 export async function processTelegramMiniappBotUpdates(
   token: string,
   updates: Array<Record<string, unknown>>,
@@ -332,6 +279,9 @@ export async function processTelegramMiniappBotUpdates(
   for (const upd of updates) {
     if (upd.my_chat_member) {
       await handleTelegramMyChatMemberUpdate(upd)
+    }
+    if (upd.callback_query) {
+      await handleTelegramCallbackQuery(upd)
     }
     const message = upd.message as Record<string, unknown> | undefined
     if (!message) {
@@ -349,26 +299,31 @@ export async function processTelegramMiniappBotUpdates(
       first_name: typeof from.first_name === 'string' ? from.first_name : undefined,
       last_name: typeof from.last_name === 'string' ? from.last_name : undefined,
     })
-    if (!text.startsWith('/start')) {
-      continue
-    }
-    const payload = text.replace(/^\/start\s*/i, '').trim()
-    if (/^jointg\d+$/i.test(payload)) {
-      await handleTelegramBotStartJoin(from.id, payload)
-      continue
-    }
-    if (/^linkmax$/i.test(payload)) {
-      const homeUrl = process.env.MINI_APP_URL?.trim() || 'https://t.me/commentvmax_bot'
-      await sendTelegramBotMessage(
-        token,
-        from.id,
-        '🔗 Связка с MAX\n\nОткройте мини-приложение CommentBot → «Создать связку» → выберите Telegram-канал и введите код из MAX.',
-        {
-          reply_markup: {
-            inline_keyboard: [[{ text: '💬 Открыть мини-приложение', url: homeUrl }]],
+
+    if (text.startsWith('/start')) {
+      const payload = text.replace(/^\/start\s*/i, '').trim()
+      if (/^jointg\d+$/i.test(payload)) {
+        await handleTelegramBotStartJoin(from.id, payload)
+        continue
+      }
+      if (/^linkmax$/i.test(payload)) {
+        const homeUrl = process.env.MINI_APP_URL?.trim() || 'https://t.me/commentvmax_bot'
+        await sendTelegramBotMessage(
+          token,
+          from.id,
+          '🔗 Связка с MAX\n\nОткройте мини-приложение CommentBot → «Создать связку» → выберите Telegram-канал и введите код из MAX.',
+          {
+            reply_markup: {
+              inline_keyboard: [[{ text: '💬 Открыть мини-приложение', url: homeUrl }]],
+            },
           },
-        },
-      )
+        )
+      }
+      continue
+    }
+
+    if (text) {
+      await handleTelegramPrivateMessage(from.id, text)
     }
   }
 }
