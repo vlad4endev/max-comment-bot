@@ -2576,6 +2576,14 @@
       var bridgeUser = user;
       var bid = getBridgeNumericUserId(bridgeUser);
       if (bid != null && !sp.get('user_id')) sp.set('user_id', String(bid));
+      // Telegram WebApp fallback: when opened from TG bot link, use signed tg_uid
+      // as runtime identity so UI/API can work without manual ?user_id.
+      if (!sp.get('user_id')) {
+        var tgUid = (sp.get('tg_uid') || '').trim();
+        if (/^\d+$/.test(tgUid)) {
+          sp.set('user_id', tgUid);
+        }
+      }
       var uname =
         (bridgeUser.username && String(bridgeUser.username).trim()) ||
         (bridgeUser.first_name && String(bridgeUser.first_name).trim()) ||
@@ -3241,7 +3249,7 @@
       if (uid == null) {
         if (testFb) testFb.classList.add('show');
         wireTestUserApply();
-        setHomeErr('Откройте мини-приложение из MAX или укажите user_id для теста.');
+        setHomeErr('Откройте мини-приложение из MAX/Telegram или укажите user_id для теста.');
         wireFeatureToggles(null);
         return;
       }
@@ -4045,7 +4053,7 @@
         return;
       }
       if (!userId || !String(userId).trim()) {
-        setErr('Нет user_id — войдите через MAX');
+        setErr('Нет user_id — войдите через MAX/Telegram');
         return;
       }
 
@@ -5475,7 +5483,7 @@
           return;
         }
         if (!userId || !String(userId).trim()) {
-          setErr('Нет user_id — войдите через MAX');
+          setErr('Нет user_id — войдите через MAX/Telegram');
           return;
         }
         var text = inputEl.value.trim();
