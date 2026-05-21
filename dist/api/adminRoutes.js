@@ -32,8 +32,6 @@ const analyticsService_1 = require("../services/analyticsService");
 const adminLogFormat_1 = require("../utils/adminLogFormat");
 const logger_1 = require("../utils/logger");
 const memberAvatar_1 = require("../utils/memberAvatar");
-const integrationsStore_1 = require("../services/integrationsStore");
-const integrationPlatformClient_1 = require("../services/integrationPlatformClient");
 const RUNTIME_LOG_PATH = (0, node_path_1.join)(process.cwd(), 'data', 'runtime.log');
 function isRecord(value) {
     return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -229,88 +227,6 @@ function createAdminRouter(deps) {
         const periodDays = (0, analyticsService_1.parseDashboardPeriodDays)(req.query.days);
         const payload = (0, analyticsService_1.buildDashboardAnalytics)(periodDays);
         res.json(payload);
-    });
-    secured.get('/dashboard-telegram', async (_req, res) => {
-        const periodDays = (0, analyticsService_1.parseDashboardPeriodDays)(_req.query.days);
-        const periodFromMs = periodDays > 0 ? Date.now() - periodDays * 24 * 60 * 60 * 1000 : null;
-        await integrationsStore_1.integrationsStore.load();
-        const tgIntegration = integrationsStore_1.integrationsStore.getTelegramIntegration();
-        if (!tgIntegration) {
-            res.json({
-                connected: false,
-                totals: {
-                    channels: 0,
-                    channels_admin: 0,
-                    admins_total: 0,
-                    admins_started: 0,
-                    flows_active: 0,
-                    forwarded_total: 0,
-                },
-                channels: [],
-                recent_forwarded: [],
-            });
-            return;
-        }
-        const linkedChats = tgIntegration.linkedChats ?? [];
-        const token = tgIntegration.token.trim();
-        const channels = [];
-        let adminsTotal = 0;
-        let adminsStarted = 0;
-        for (const ch of linkedChats) {
-            const admins = token ? await (0, integrationPlatformClient_1.listTelegramChatAdministrators)(token, ch.id) : [];
-            const startedCount = admins.filter((a) => a.startedBot).length;
-            adminsTotal += admins.length;
-            adminsStarted += startedCount;
-            channels.push({
-                id: ch.id,
-                title: ch.title,
-                username: ch.username ?? null,
-                type: ch.type ?? 'unknown',
-                botIsAdmin: ch.botIsAdmin === true,
-                admins_total: admins.length,
-                admins_started: startedCount,
-                admins: admins.map((a) => ({
-                    user_id: a.userId,
-                    name: a.name,
-                    username: a.username ?? null,
-                    is_creator: a.isCreator,
-                    started_bot: a.startedBot,
-                })),
-            });
-        }
-        const tgFlows = integrationsStore_1.integrationsStore
-            .getFlows()
-            .filter((f) => f.source.platform === 'telegram' || f.destination.platform === 'telegram');
-        const forwardedRaw = integrationsStore_1.integrationsStore.getForwardedLog(500);
-        const forwarded = forwardedRaw.filter((e) => {
-            if (e.fromPlatform !== 'telegram' && e.toPlatform !== 'telegram') {
-                return false;
-            }
-            if (periodFromMs === null) {
-                return true;
-            }
-            const ts = Date.parse(e.forwardedAt);
-            return Number.isFinite(ts) && ts >= periodFromMs;
-        });
-        res.json({
-            connected: true,
-            integration: {
-                id: tgIntegration.id,
-                name: tgIntegration.name,
-                period_days: periodDays,
-                linkedChatsUpdatedAt: tgIntegration.linkedChatsUpdatedAt ?? null,
-            },
-            totals: {
-                channels: channels.length,
-                channels_admin: channels.filter((c) => c.botIsAdmin).length,
-                admins_total: adminsTotal,
-                admins_started: adminsStarted,
-                flows_active: tgFlows.filter((f) => f.enabled).length,
-                forwarded_total: forwarded.length,
-            },
-            channels,
-            recent_forwarded: forwarded.slice(0, 20),
-        });
     });
     secured.get('/channels', async (_req, res) => {
         await (0, channelFullDisconnect_1.pruneRegisteredChannelsNotAccessibleByBot)(deps.bot);

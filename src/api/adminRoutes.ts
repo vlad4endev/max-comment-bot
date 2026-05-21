@@ -53,8 +53,6 @@ import { buildDashboardAnalytics, parseDashboardPeriodDays } from '../services/a
 import { parseAdminLogLine, type AdminLogEntry, type AdminLogLevel } from '../utils/adminLogFormat'
 import { getAdminLogTail, logger } from '../utils/logger'
 import { extractMemberAvatarUrl } from '../utils/memberAvatar'
-import { integrationsStore } from '../services/integrationsStore'
-import { listTelegramChatAdministrators } from '../services/integrationPlatformClient'
 
 const RUNTIME_LOG_PATH = join(process.cwd(), 'data', 'runtime.log')
 
@@ -290,94 +288,6 @@ export function createAdminRouter(deps: AdminRouterDeps): express.Router {
     const periodDays = parseDashboardPeriodDays(req.query.days)
     const payload = buildDashboardAnalytics(periodDays)
     res.json(payload)
-  })
-
-  secured.get('/dashboard-telegram', async (_req, res) => {
-    const periodDays = parseDashboardPeriodDays(_req.query.days)
-    const periodFromMs =
-      periodDays > 0 ? Date.now() - periodDays * 24 * 60 * 60 * 1000 : null
-    await integrationsStore.load()
-    const tgIntegration = integrationsStore.getTelegramIntegration()
-    if (!tgIntegration) {
-      res.json({
-        connected: false,
-        totals: {
-          channels: 0,
-          channels_admin: 0,
-          admins_total: 0,
-          admins_started: 0,
-          flows_active: 0,
-          forwarded_total: 0,
-        },
-        channels: [],
-        recent_forwarded: [],
-      })
-      return
-    }
-
-    const linkedChats = tgIntegration.linkedChats ?? []
-    const token = tgIntegration.token.trim()
-    const channels = []
-    let adminsTotal = 0
-    let adminsStarted = 0
-
-    for (const ch of linkedChats) {
-      const admins = token ? await listTelegramChatAdministrators(token, ch.id) : []
-      const startedCount = admins.filter((a) => a.startedBot).length
-      adminsTotal += admins.length
-      adminsStarted += startedCount
-      channels.push({
-        id: ch.id,
-        title: ch.title,
-        username: ch.username ?? null,
-        type: ch.type ?? 'unknown',
-        botIsAdmin: ch.botIsAdmin === true,
-        admins_total: admins.length,
-        admins_started: startedCount,
-        admins: admins.map((a) => ({
-          user_id: a.userId,
-          name: a.name,
-          username: a.username ?? null,
-          is_creator: a.isCreator,
-          started_bot: a.startedBot,
-        })),
-      })
-    }
-
-    const tgFlows = integrationsStore
-      .getFlows()
-      .filter((f) => f.source.platform === 'telegram' || f.destination.platform === 'telegram')
-    const forwardedRaw = integrationsStore.getForwardedLog(500)
-    const forwarded = forwardedRaw.filter((e) => {
-      if (e.fromPlatform !== 'telegram' && e.toPlatform !== 'telegram') {
-        return false
-      }
-      if (periodFromMs === null) {
-        return true
-      }
-      const ts = Date.parse(e.forwardedAt)
-      return Number.isFinite(ts) && ts >= periodFromMs
-    })
-
-    res.json({
-      connected: true,
-      integration: {
-        id: tgIntegration.id,
-        name: tgIntegration.name,
-        period_days: periodDays,
-        linkedChatsUpdatedAt: tgIntegration.linkedChatsUpdatedAt ?? null,
-      },
-      totals: {
-        channels: channels.length,
-        channels_admin: channels.filter((c) => c.botIsAdmin).length,
-        admins_total: adminsTotal,
-        admins_started: adminsStarted,
-        flows_active: tgFlows.filter((f) => f.enabled).length,
-        forwarded_total: forwarded.length,
-      },
-      channels,
-      recent_forwarded: forwarded.slice(0, 20),
-    })
   })
 
   secured.get('/channels', async (_req, res) => {
