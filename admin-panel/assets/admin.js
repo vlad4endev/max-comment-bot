@@ -354,9 +354,26 @@
     opts = opts || {};
     opts.credentials = 'same-origin';
     if (!opts.headers) opts.headers = {};
+    var timeoutMs =
+      typeof opts.timeoutMs === 'number' && Number.isFinite(opts.timeoutMs) && opts.timeoutMs > 0
+        ? opts.timeoutMs
+        : 0;
+    delete opts.timeoutMs;
     if (opts.body && typeof opts.body === 'object' && !(opts.body instanceof FormData)) {
       opts.headers['Content-Type'] = 'application/json';
       opts.body = JSON.stringify(opts.body);
+    }
+    if (typeof AbortController === 'function' && timeoutMs > 0) {
+      var controller = new AbortController();
+      opts.signal = controller.signal;
+      var timer = window.setTimeout(function () {
+        controller.abort();
+      }, timeoutMs);
+      return fetch(url, opts)
+        .then(handleAuth)
+        .finally(function () {
+          window.clearTimeout(timer);
+        });
     }
     return fetch(url, opts).then(handleAuth);
   }
@@ -369,7 +386,11 @@
   }
 
   function postJson(path, body) {
-    return authFetch(apiPath(path), { method: 'POST', body: body || {} }).then(function (r) {
+    return authFetch(apiPath(path), {
+      method: 'POST',
+      body: body || {},
+      timeoutMs: path === '/refresh-buttons' ? 60000 : 20000,
+    }).then(function (r) {
       if (!r.ok) {
         return r.json().then(function (j) {
           throw new Error(j.error || j.message || 'Ошибка');
@@ -1605,8 +1626,14 @@
                 loadChannelDetail(chatId);
               })
               .catch(function (e) {
-                setRefreshStatus('Ошибка: ' + (e && e.message ? e.message : 'неизвестно'), true);
-                showToast(e.message || 'Ошибка', 'error');
+                var msg = e && e.message ? e.message : 'неизвестно';
+                if (msg === 'Failed to fetch') {
+                  msg = 'Нет ответа от сервера. Проверьте, что бот запущен и /api/admin доступен.';
+                } else if (msg === 'The operation was aborted.') {
+                  msg = 'Запрос выполнялся слишком долго и был прерван. Повторите ещё раз.';
+                }
+                setRefreshStatus('Ошибка: ' + msg, true);
+                showToast(msg, 'error');
               })
               .finally(function () {
                 btnRef.disabled = false;

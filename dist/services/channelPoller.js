@@ -151,13 +151,19 @@ function isWithinLookbackMs(atMs, cutoffMs) {
 /**
  * Сообщения канала за последние сутки (пагинация GET /messages, newest-first).
  */
-async function fetchChannelMessagesSince(bot, chatId, cutoffMs) {
+async function fetchChannelMessagesSince(bot, chatId, cutoffMs, options) {
+    const pageSize = options?.pageSize && Number.isFinite(options.pageSize)
+        ? Math.max(20, Math.min(100, Math.floor(options.pageSize)))
+        : REFRESH_MESSAGES_PAGE_SIZE;
+    const maxPages = options?.maxPages && Number.isFinite(options.maxPages)
+        ? Math.max(1, Math.min(100, Math.floor(options.maxPages)))
+        : REFRESH_MAX_PAGES;
     const cutoffSec = Math.floor(cutoffMs / 1000);
     const collected = [];
     let pageFrom;
-    for (let page = 0; page < REFRESH_MAX_PAGES; page += 1) {
+    for (let page = 0; page < maxPages; page += 1) {
         const extra = {
-            count: REFRESH_MESSAGES_PAGE_SIZE,
+            count: pageSize,
             to: cutoffSec,
         };
         if (pageFrom !== undefined) {
@@ -177,7 +183,7 @@ async function fetchChannelMessagesSince(bot, chatId, cutoffMs) {
             }
         }
         const oldest = batch[batch.length - 1];
-        if (reachedOlderThanWindow || batch.length < REFRESH_MESSAGES_PAGE_SIZE) {
+        if (reachedOlderThanWindow || batch.length < pageSize) {
             break;
         }
         pageFrom = messageTimestampSec(oldest);
@@ -222,7 +228,7 @@ exports.RefreshButtonsError = RefreshButtonsError;
 /**
  * One sweep for a single channel (admin «обновить кнопки»).
  */
-async function runChannelPollerForChat(bot, chatId) {
+async function runChannelPollerForChat(bot, chatId, options) {
     if (!(0, postStore_1.isMiniAppOpenUrlConfigured)()) {
         throw new RefreshButtonsError('miniapp_not_configured', 'Не заданы BOT_NICKNAME или MINI_APP_URL — ссылки на Mini App недоступны');
     }
@@ -231,8 +237,11 @@ async function runChannelPollerForChat(bot, chatId) {
     if (!reg || reg.type !== 'channel') {
         throw new RefreshButtonsError('channel_not_found', 'Канал не найден в реестре бота');
     }
-    const cutoffMs = Date.now() - exports.REFRESH_BUTTON_LOOKBACK_MS;
-    const lookbackHours = Math.round(exports.REFRESH_BUTTON_LOOKBACK_MS / (60 * 60 * 1000));
+    const lookbackMs = options?.lookbackMs && Number.isFinite(options.lookbackMs)
+        ? Math.max(5 * 60 * 1000, Math.floor(options.lookbackMs))
+        : exports.REFRESH_BUTTON_LOOKBACK_MS;
+    const cutoffMs = Date.now() - lookbackMs;
+    const lookbackHours = Math.max(1, Math.round(lookbackMs / (60 * 60 * 1000)));
     const stats = {
         chat_id: reg.chat_id,
         lookback_hours: lookbackHours,
@@ -281,7 +290,10 @@ async function runChannelPollerForChat(bot, chatId) {
     }
     let messages;
     try {
-        messages = await fetchChannelMessagesSince(bot, reg.chat_id, cutoffMs);
+        messages = await fetchChannelMessagesSince(bot, reg.chat_id, cutoffMs, {
+            pageSize: options?.pageSize,
+            maxPages: options?.maxPages,
+        });
     }
     catch (err) {
         logger_1.logger.warn('channelPoller: runChannelPollerForChat getMessages failed', {

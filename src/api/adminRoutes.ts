@@ -892,7 +892,11 @@ export function createAdminRouter(deps: AdminRouterDeps): express.Router {
       return
     }
     try {
-      const firstPass = await runChannelPollerForChat(deps.bot, chatId)
+      const firstPass = await runChannelPollerForChat(deps.bot, chatId, {
+        // Admin click should return quickly; deep 24h sweep is handled by scheduled poller and retries.
+        lookbackMs: 6 * 60 * 60 * 1000,
+        maxPages: 8,
+      })
       const diagnosis = await diagnosePostLinks(chatId)
 
       const mids = [...new Set(
@@ -909,24 +913,9 @@ export function createAdminRouter(deps: AdminRouterDeps): express.Router {
         }
       }
 
-      const secondPass = restoredFromLogs > 0 ? await runChannelPollerForChat(deps.bot, chatId) : null
-
-      const resultStats =
-        secondPass !== null
-          ? {
-              chat_id: firstPass.chat_id,
-              messages_fetched: Math.max(firstPass.messages_fetched, secondPass.messages_fetched),
-              posts_in_db: Math.max(firstPass.posts_in_db, secondPass.posts_in_db),
-              created: firstPass.created + secondPass.created,
-              refreshed: firstPass.refreshed + secondPass.refreshed,
-              skipped: firstPass.skipped + secondPass.skipped,
-              failed: firstPass.failed + secondPass.failed,
-            }
-          : firstPass
-
       res.json({
         ok: true,
-        ...resultStats,
+        ...firstPass,
         restored_from_logs: restoredFromLogs,
         diagnostics: {
           signals_total: diagnosis.signals_total,

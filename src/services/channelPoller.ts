@@ -190,14 +190,23 @@ async function fetchChannelMessagesSince(
   bot: Bot,
   chatId: number,
   cutoffMs: number,
+  options?: { pageSize?: number; maxPages?: number },
 ): Promise<Message[]> {
+  const pageSize =
+    options?.pageSize && Number.isFinite(options.pageSize)
+      ? Math.max(20, Math.min(100, Math.floor(options.pageSize)))
+      : REFRESH_MESSAGES_PAGE_SIZE
+  const maxPages =
+    options?.maxPages && Number.isFinite(options.maxPages)
+      ? Math.max(1, Math.min(100, Math.floor(options.maxPages)))
+      : REFRESH_MAX_PAGES
   const cutoffSec = Math.floor(cutoffMs / 1000)
   const collected: Message[] = []
   let pageFrom: number | undefined
 
-  for (let page = 0; page < REFRESH_MAX_PAGES; page += 1) {
+  for (let page = 0; page < maxPages; page += 1) {
     const extra: { count: number; to: number; from?: number } = {
-      count: REFRESH_MESSAGES_PAGE_SIZE,
+      count: pageSize,
       to: cutoffSec,
     }
     if (pageFrom !== undefined) {
@@ -219,7 +228,7 @@ async function fetchChannelMessagesSince(
     }
 
     const oldest = batch[batch.length - 1]
-    if (reachedOlderThanWindow || batch.length < REFRESH_MESSAGES_PAGE_SIZE) {
+    if (reachedOlderThanWindow || batch.length < pageSize) {
       break
     }
 
@@ -277,6 +286,7 @@ export class RefreshButtonsError extends Error {
 export async function runChannelPollerForChat(
   bot: Bot,
   chatId: number,
+  options?: { lookbackMs?: number; pageSize?: number; maxPages?: number },
 ): Promise<RefreshButtonsStats> {
   if (!isMiniAppOpenUrlConfigured()) {
     throw new RefreshButtonsError(
@@ -291,8 +301,12 @@ export async function runChannelPollerForChat(
     throw new RefreshButtonsError('channel_not_found', 'Канал не найден в реестре бота')
   }
 
-  const cutoffMs = Date.now() - REFRESH_BUTTON_LOOKBACK_MS
-  const lookbackHours = Math.round(REFRESH_BUTTON_LOOKBACK_MS / (60 * 60 * 1000))
+  const lookbackMs =
+    options?.lookbackMs && Number.isFinite(options.lookbackMs)
+      ? Math.max(5 * 60 * 1000, Math.floor(options.lookbackMs))
+      : REFRESH_BUTTON_LOOKBACK_MS
+  const cutoffMs = Date.now() - lookbackMs
+  const lookbackHours = Math.max(1, Math.round(lookbackMs / (60 * 60 * 1000)))
 
   const stats: RefreshButtonsStats = {
     chat_id: reg.chat_id,
@@ -346,7 +360,10 @@ export async function runChannelPollerForChat(
 
   let messages: Message[]
   try {
-    messages = await fetchChannelMessagesSince(bot, reg.chat_id, cutoffMs)
+    messages = await fetchChannelMessagesSince(bot, reg.chat_id, cutoffMs, {
+      pageSize: options?.pageSize,
+      maxPages: options?.maxPages,
+    })
   } catch (err: unknown) {
     logger.warn('channelPoller: runChannelPollerForChat getMessages failed', {
       chatId: reg.chat_id,

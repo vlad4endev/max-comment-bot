@@ -27,7 +27,11 @@ export declare class RefreshButtonsError extends Error {
 /**
  * One sweep for a single channel (admin «обновить кнопки»).
  */
-export declare function runChannelPollerForChat(bot: Bot, chatId: number): Promise<RefreshButtonsStats>;
+export declare function runChannelPollerForChat(bot: Bot, chatId: number, options?: {
+    lookbackMs?: number;
+    pageSize?: number;
+    maxPages?: number;
+}): Promise<RefreshButtonsStats>;
 /**
  * @deprecated Используется syncPerChannelPollers; оставлено для совместимости вызовов.
  */
