@@ -231,7 +231,23 @@ class PostStore {
         const usesReplyUi = post.comments_ui_message_mid !== undefined;
         const { media } = usesReplyUi ? { media: [] } : await resolveChannelPostMediaForEdit(bot, post);
         if (!usesReplyUi && media.length > 0 && !canMergeKeyboardWithMedia(media.length)) {
-            return false;
+            logger_1.logger.info('postStore.updateButtonCaption: много медиа — обновляем только клавиатуру', {
+                postId: post.post_id,
+                targetMid,
+                mediaCount: media.length,
+            });
+            try {
+                await (0, maxApiRetry_1.apiCallWithRetry)(() => bot.api.editMessage(targetMid, { text, attachments: [kb] }));
+                return true;
+            }
+            catch (err) {
+                logger_1.logger.warn('postStore.updateButtonCaption: keyboard-only edit failed', {
+                    postId: post.post_id,
+                    targetMid,
+                    err,
+                });
+                return false;
+            }
         }
         const attachments = usesReplyUi || media.length === 0 ? [kb] : [...media, kb];
         try {
@@ -447,6 +463,36 @@ async function attachCommentButtonToChannelPost(bot, post, editText, keyboard, l
                 logger_1.logger.info('commentButton: inline-only mode, skip reply fallback after edit failure', {
                     ...logBase,
                 });
+                return false;
+            }
+        }
+    }
+    else if (media.length > 0) {
+        logger_1.logger.info('commentButton: много медиа — пробуем edit только с клавиатурой', {
+            ...logBase,
+            mediaCount: media.length,
+        });
+        try {
+            const editStartedAt = performance.now();
+            await (0, maxApiRetry_1.apiCallWithRetry)(() => bot.api.editMessage(post.message_mid, { text: editText, attachments: [keyboard] }));
+            const editMs = Math.round(performance.now() - editStartedAt);
+            const timing = apiDuration();
+            logger_1.logger.info(`commentButton: кнопка добавлена через edit (только клавиатура) (${timing.apiDuration})`, {
+                ...logBase,
+                method: 'edit_keyboard_only',
+                editMs,
+                ...timing,
+            });
+            return true;
+        }
+        catch (err) {
+            logger_1.logger.warn('commentButton: edit только с клавиатурой не удался — пробуем reply', {
+                ...logBase,
+                mediaCount: media.length,
+                ...apiDuration(),
+                err,
+            });
+            if (logCtx?.inlineOnly) {
                 return false;
             }
         }
