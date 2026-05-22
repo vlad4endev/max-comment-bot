@@ -292,6 +292,7 @@
       bottom: 0;
     }
     .view.hidden { display: none !important; }
+    .hidden { display: none !important; }
     #view-join {
       display: flex;
       flex-direction: column;
@@ -832,6 +833,38 @@
       text-align: center;
       text-transform: uppercase;
       margin-bottom: 10px;
+    }
+    .link-wizard-steps {
+      display: flex;
+      gap: 6px;
+      margin: 10px 0 14px;
+    }
+    .link-wizard-step-dot {
+      flex: 1;
+      height: 4px;
+      border-radius: 2px;
+      background: var(--border);
+    }
+    .link-wizard-step-dot.on { background: var(--teal); }
+    .link-wizard-hint {
+      font-size: 13px;
+      color: var(--muted);
+      line-height: 1.45;
+      margin: 10px 0 0;
+      padding: 10px 12px;
+      border-radius: 10px;
+      background: var(--bg-surface);
+      border: 1px solid var(--surface-border);
+    }
+    .link-wizard-hint ol {
+      margin: 6px 0 0;
+      padding-left: 18px;
+    }
+    .link-wizard-hint li { margin-bottom: 4px; }
+    #channelLinkOverlay .overlay-card {
+      max-height: min(88vh, 640px);
+      overflow-y: auto;
+      -webkit-overflow-scrolling: touch;
     }
     .btn-dashed {
       width: 100%;
@@ -2194,7 +2227,7 @@
           <button type="button" class="btn-primary" id="btnSyncAdminTeam">Связать автоматически</button>
         </div>
         <button type="button" class="btn-dashed" id="btnCreateChannelLink" style="margin-top:8px">
-          Создать связку
+          Связать TG ↔ MAX
         </button>
       </div>
       <div>
@@ -2587,29 +2620,48 @@
     <div class="overlay-card" id="channelLinkOverlayCard">
       <h2 id="channelLinkOverlayTitle">Связка каналов</h2>
       <p class="muted text-sm" id="channelLinkOverlayDesc"></p>
-      <div id="channelLinkStepMax" class="hidden">
-        <div class="link-step-label">Канал MAX — куда приходят посты из Telegram</div>
+      <div class="link-wizard-steps" id="linkWizardSteps" aria-hidden="true">
+        <div class="link-wizard-step-dot" id="linkWizardDot1"></div>
+        <div class="link-wizard-step-dot" id="linkWizardDot2"></div>
+        <div class="link-wizard-step-dot" id="linkWizardDot3"></div>
+      </div>
+      <div id="channelLinkStepMax" class="hidden channel-link-wizard-pane">
+        <div class="link-step-label">Шаг 1. Канал MAX — куда приходят посты</div>
         <select class="link-channel-select" id="linkMaxChannelSelect"></select>
         <button type="button" class="btn-primary" id="linkMaxGenerateBtn">Получить код</button>
       </div>
-      <div id="channelLinkStepCode" class="hidden">
+      <div id="channelLinkStepCode" class="hidden channel-link-wizard-pane">
         <div class="link-code-box">
-          <div class="link-step-label">Код для Telegram</div>
+          <div class="link-step-label">Шаг 2. Код для Telegram</div>
           <div class="link-code-value" id="linkCodeValue">------</div>
           <div class="link-step-label" id="linkCodeHint" style="margin-top:8px"></div>
         </div>
         <button type="button" class="btn-secondary" id="linkCodeCopyBtn">Скопировать код</button>
-        <p class="muted text-sm" style="margin-top:10px">
-          В Telegram: «Создать связку» → канал и код. Затем здесь в MAX в личке с ботом нажмите «Подтвердить связку».
-        </p>
+        <div class="link-wizard-hint">
+          <strong>Дальше в Telegram:</strong>
+          <ol>
+            <li>Откройте мини-приложение CommentBot в Telegram</li>
+            <li>«Создать связку» → выберите канал и введите код</li>
+            <li>Вернитесь в MAX — в чат с ботом придёт кнопка «Подтвердить связку»</li>
+          </ol>
+        </div>
       </div>
-      <div id="channelLinkStepTg" class="hidden">
-        <div class="link-step-label">Канал Telegram — откуда пересылать посты</div>
+      <div id="channelLinkStepTg" class="hidden channel-link-wizard-pane">
+        <div class="link-step-label">Канал Telegram — откуда пересылать</div>
         <select class="link-channel-select" id="linkTgChannelSelect"></select>
-        <div class="link-step-label">Код из MAX</div>
-        <input type="text" class="link-code-input" id="linkCodeInput" maxlength="6" placeholder="AB12CD" autocomplete="off" />
-        <button type="button" class="btn-primary" id="linkTgConfirmBtn">Связать каналы</button>
-        <p class="muted text-sm" id="linkTgPreview" style="margin-top:8px"></p>
+        <p class="muted text-sm hidden" id="linkTgNoChannelsHint" style="margin:8px 0 0"></p>
+        <div class="link-step-label">Код из MAX (6 символов)</div>
+        <input type="text" class="link-code-input" id="linkCodeInput" maxlength="6" placeholder="YR5G99" autocomplete="off" />
+        <p class="muted text-sm" id="linkTgPreview" style="margin-top:6px"></p>
+        <button type="button" class="btn-primary" id="linkTgConfirmBtn">Отправить код</button>
+        <div class="link-wizard-hint">
+          После отправки откройте <strong>чат с ботом в MAX</strong> и нажмите «Подтвердить связку». Без этого шага связка не создаётся.
+        </div>
+      </div>
+      <div id="channelLinkStepTgDone" class="hidden channel-link-wizard-pane">
+        <div class="link-wizard-hint" style="border-color:var(--teal-border-strong);color:var(--teal)">
+          Код принят. Теперь в <strong>MAX</strong> откройте личные сообщения с ботом CommentBot и нажмите «Подтвердить связку».
+        </div>
       </div>
       <button type="button" class="overlay-close" id="channelLinkOverlayClose" style="margin-top:12px">Закрыть</button>
     </div>
@@ -3767,12 +3819,12 @@
             });
           });
           if (pendingOpenChannelLink && inTelegram) {
-            showChannelLinkOverlay('tg');
             fillLinkChannelSelect(
               document.getElementById('linkTgChannelSelect'),
               channelsCache,
               'TG'
             );
+            showChannelLinkOverlay('tg');
           }
         })
         .catch(function () {});
@@ -3884,8 +3936,8 @@
               host.innerHTML =
                 '<div style="color:var(--muted);font-size:13px;padding:8px 4px;">' +
                 (inTelegram
-                  ? 'Связок пока нет. Получите код в MAX и завершите привязку здесь.'
-                  : 'Связок пока нет. Создайте код, затем завершите в Telegram.') +
+                  ? 'Связок пока нет. Получите код в MAX → здесь введите его и подтвердите в боте MAX.'
+                  : 'Связок пока нет. Создайте код и завершите привязку в Telegram.') +
                 '</div>'
               return
             }
@@ -3919,24 +3971,61 @@
           .catch(function () {})
       }
 
-      function showChannelLinkOverlay(mode) {
+      function setLinkWizardProgress(step) {
+        var wrap = document.getElementById('linkWizardSteps')
+        var d1 = document.getElementById('linkWizardDot1')
+        var d2 = document.getElementById('linkWizardDot2')
+        var d3 = document.getElementById('linkWizardDot3')
+        if (!wrap || !d1 || !d2 || !d3) return
+        if (inTelegram) {
+          wrap.classList.add('hidden')
+          wrap.setAttribute('aria-hidden', 'true')
+          return
+        }
+        wrap.classList.remove('hidden')
+        wrap.setAttribute('aria-hidden', 'false')
+        d1.classList.toggle('on', step >= 1)
+        d2.classList.toggle('on', step >= 2)
+        d3.classList.toggle('on', step >= 3)
+      }
+
+      function hideAllChannelLinkPanes() {
+        ;['channelLinkStepMax', 'channelLinkStepCode', 'channelLinkStepTg', 'channelLinkStepTgDone'].forEach(
+          function (id) {
+            var el = document.getElementById(id)
+            if (el) el.classList.add('hidden')
+          }
+        )
+      }
+
+      function showChannelLinkOverlay(mode, subStep) {
         var ov = document.getElementById('channelLinkOverlay')
         var stepMax = document.getElementById('channelLinkStepMax')
         var stepCode = document.getElementById('channelLinkStepCode')
         var stepTg = document.getElementById('channelLinkStepTg')
+        var stepTgDone = document.getElementById('channelLinkStepTgDone')
         var title = document.getElementById('channelLinkOverlayTitle')
         var desc = document.getElementById('channelLinkOverlayDesc')
         if (!ov || !stepMax || !stepCode || !stepTg) return
-        stepMax.classList.add('hidden')
-        stepCode.classList.add('hidden')
-        stepTg.classList.add('hidden')
+        hideAllChannelLinkPanes()
         if (mode === 'max') {
           title.textContent = 'Связка с Telegram'
-          desc.textContent = 'Выберите MAX-канал — в него будут приходить посты из Telegram.'
-          stepMax.classList.remove('hidden')
+          if (subStep === 'code') {
+            desc.textContent = 'Скопируйте код и завершите шаги в Telegram, затем подтвердите в боте MAX.'
+            stepCode.classList.remove('hidden')
+            setLinkWizardProgress(2)
+          } else {
+            desc.textContent = 'Сначала MAX: выберите канал и получите код.'
+            stepMax.classList.remove('hidden')
+            setLinkWizardProgress(1)
+          }
+        } else if (subStep === 'done') {
+          title.textContent = 'Почти готово'
+          desc.textContent = 'Остался последний шаг в MAX.'
+          if (stepTgDone) stepTgDone.classList.remove('hidden')
         } else {
           title.textContent = 'Связка с MAX'
-          desc.textContent = 'Выберите Telegram-канал и введите код из MAX.'
+          desc.textContent = 'Введите код из MAX и выберите активный Telegram-канал.'
           stepTg.classList.remove('hidden')
         }
         ov.classList.remove('hidden')
@@ -3948,25 +4037,48 @@
         if (!ov) return
         ov.classList.add('hidden')
         ov.setAttribute('aria-hidden', 'true')
+        hideAllChannelLinkPanes()
+        var codeIn = document.getElementById('linkCodeInput')
+        if (codeIn) codeIn.value = ''
+        window.__linkDraftCode = ''
       }
 
-      function fillLinkChannelSelect(selectEl, arr, platformLabel) {
-        if (!selectEl) return
+      function linkableChannelsForWizard(arr) {
+        return (arr || []).filter(function (ch) {
+          return ch.status !== 'pending'
+        })
+      }
+
+      function fillLinkChannelSelect(selectEl, arr, platformLabel, options) {
+        if (!selectEl) return []
+        var list = options && options.allowPending ? arr || [] : linkableChannelsForWizard(arr)
+        var hint = document.getElementById('linkTgNoChannelsHint')
         selectEl.innerHTML = ''
-        if (!arr.length) {
+        if (!list.length) {
           var opt = document.createElement('option')
           opt.value = ''
-          opt.textContent = 'Нет доступных каналов'
+          opt.textContent = 'Нет готовых каналов'
           selectEl.appendChild(opt)
-          return
+          if (hint && inTelegram) {
+            hint.textContent =
+              'Нет каналов с правами бота. Добавьте @commentvmax_bot администратором в Telegram-канал и обновите список.'
+            hint.classList.remove('hidden')
+          }
+          var confirmBtnEmpty = document.getElementById('linkTgConfirmBtn')
+          if (confirmBtnEmpty && inTelegram) confirmBtnEmpty.disabled = true
+          return list
         }
-        arr.forEach(function (ch) {
+        if (hint) hint.classList.add('hidden')
+        var confirmBtn = document.getElementById('linkTgConfirmBtn')
+        if (confirmBtn && inTelegram) confirmBtn.disabled = false
+        list.forEach(function (ch) {
           var opt = document.createElement('option')
           opt.value = String(ch.chat_id)
           var t = (ch.title && String(ch.title).trim()) || platformLabel + ' ' + ch.chat_id
-          opt.textContent = t + (ch.status === 'pending' ? ' (ожидает прав)' : '')
+          opt.textContent = t
           selectEl.appendChild(opt)
         })
+        return list
       }
 
       function renderAccountPairingRow(status) {
@@ -4179,7 +4291,6 @@
             return
           }
           if (inTelegram) {
-            showChannelLinkOverlay('tg')
             fillLinkChannelSelect(
               document.getElementById('linkTgChannelSelect'),
               channelsCache,
@@ -4187,14 +4298,17 @@
             )
             var codeIn = document.getElementById('linkCodeInput')
             if (codeIn) codeIn.value = ''
+            var prev = document.getElementById('linkTgPreview')
+            if (prev) prev.textContent = ''
+            showChannelLinkOverlay('tg')
             return
           }
-          showChannelLinkOverlay('max')
           fillLinkChannelSelect(
             document.getElementById('linkMaxChannelSelect'),
             channelsCache,
             'MAX'
           )
+          showChannelLinkOverlay('max', 'pick')
         })
       }
 
@@ -4224,8 +4338,6 @@
             })
             .then(function (x) {
               if (!x.ok) throw new Error((x.body && x.body.error) || 'Ошибка')
-              document.getElementById('channelLinkStepMax').classList.add('hidden')
-              document.getElementById('channelLinkStepCode').classList.remove('hidden')
               var codeEl = document.getElementById('linkCodeValue')
               if (codeEl) codeEl.textContent = String(x.body.code || '')
               var hint = document.getElementById('linkCodeHint')
@@ -4236,6 +4348,7 @@
                   '». Действует 15 минут.'
               }
               window.__linkDraftCode = String(x.body.code || '')
+              showChannelLinkOverlay('max', 'code')
             })
             .catch(function (e) {
               showToast(e.message || 'Не удалось создать код')
@@ -4270,8 +4383,19 @@
           var tgId = sel ? String(sel.value).trim() : ''
           var code = document.getElementById('linkCodeInput')
           var codeVal = code ? String(code.value || '').trim().toUpperCase() : ''
-          if (!tgId || !/^[A-Z0-9]{6}$/.test(codeVal)) {
-            showToast('Выберите канал и введите код из MAX')
+          if (!tgId) {
+            showToast('Выберите Telegram-канал (бот должен быть админом)')
+            return
+          }
+          if (!/^[A-Z0-9]{6}$/.test(codeVal)) {
+            showToast('Введите 6-символьный код из MAX')
+            return
+          }
+          var picked = channelsCache.find(function (c) {
+            return String(c.chat_id) === tgId
+          })
+          if (picked && picked.status === 'pending') {
+            showToast('Сначала выдайте боту права администратора в канале')
             return
           }
           linkTgBtn.disabled = true
@@ -4295,11 +4419,13 @@
             })
             .then(function (x) {
               if (!x.ok) throw new Error((x.body && x.body.error) || 'Ошибка')
-              var msg =
-                (x.body && x.body.message) ||
-                'Код принят. Подтвердите связку в личке с ботом MAX.'
-              showToast(msg)
-              hideChannelLinkOverlay()
+              showToast('Код принят — подтвердите в боте MAX')
+              showChannelLinkOverlay('tg', 'done')
+              if (uid != null) {
+                setTimeout(function () {
+                  loadChannelLinks(uid)
+                }, 1500)
+              }
             })
             .catch(function (e) {
               showToast(e.message || 'Не удалось связать')
@@ -4336,14 +4462,15 @@
                 return
               }
               if (data.status === 'pending') {
-                preview.textContent = 'MAX: «' + (data.max_title || 'канал') + '»'
+                preview.textContent = '✓ MAX: «' + (data.max_title || 'канал') + '»'
               } else if (data.status === 'awaiting_max_confirm') {
-                preview.textContent =
-                  'MAX: «' +
-                  (data.max_title || 'канал') +
-                  '» — ждёт подтверждения в боте MAX'
+                preview.textContent = 'Код уже использован — ждёт кнопку в боте MAX'
+              } else if (data.status === 'completed') {
+                preview.textContent = 'Связка уже создана'
+              } else if (data.status === 'expired') {
+                preview.textContent = 'Код истёк — создайте новый в MAX'
               } else {
-                preview.textContent = 'Код недоступен (' + (data.status || '?') + ')'
+                preview.textContent = 'Код недоступен'
               }
             })
             .catch(function () {})
