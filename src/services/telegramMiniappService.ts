@@ -5,6 +5,7 @@ import { resolveTelegramBotToken } from './resolveTelegramBotToken'
 import {
   enrichTelegramChatsWithBotAdmin,
   listTelegramBotChats,
+  getTelegramBotUserId,
   listTelegramChatAdministrators,
 } from './integrationPlatformClient'
 import { ownerProfileStore } from './ownerProfileStore'
@@ -320,9 +321,14 @@ export async function getTelegramChannelAdminsForMiniapp(
     throw new Error('forbidden')
   }
 
-  const rows = await listTelegramChatAdministrators(token, chatId)
+  const [rows, botUserId] = await Promise.all([
+    listTelegramChatAdministrators(token, chatId),
+    getTelegramBotUserId(token),
+  ])
   const linkedIds = new Set(telegramChannelNotifyLinkStore.getUserIdsForChannel(chatId))
-  const admins = rows.map((a) => {
+  const admins = rows
+    .filter((a) => botUserId == null || a.userId !== botUserId)
+    .map((a) => {
     const name = a.name
     const initials =
       name.trim().length >= 2
@@ -347,7 +353,7 @@ export async function getTelegramChannelAdminsForMiniapp(
       tg_user_id: pairing.tg_user_id,
       peer_platform: peerPlatform,
     }
-  })
+    })
 
   return {
     admins,

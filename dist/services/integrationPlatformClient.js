@@ -5,6 +5,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.ensureTelegramPollingMode = ensureTelegramPollingMode;
 exports.mergePlatformChannels = mergePlatformChannels;
+exports.getTelegramBotUserId = getTelegramBotUserId;
 exports.enrichTelegramChatsWithBotAdmin = enrichTelegramChatsWithBotAdmin;
 exports.validateTelegramToken = validateTelegramToken;
 exports.validateVkToken = validateVkToken;

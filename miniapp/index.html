@@ -652,15 +652,50 @@
       margin: 4px 0 0 2px;
     }
     .channel-list { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+    .channel-block {
+      border-radius: 12px;
+      background: var(--bg-surface);
+      border: 1px solid var(--surface-border);
+      overflow: hidden;
+    }
+    .channel-block.expanded { border-color: var(--accent-border); }
     .channel-item {
       display: flex;
       align-items: center;
       gap: 10px;
       padding: 10px;
-      border-radius: 12px;
-      background: var(--bg-surface);
-      border: 1px solid var(--surface-border);
     }
+    .ch-admins-toggle {
+      width: 30px;
+      height: 30px;
+      border-radius: 8px;
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--text-muted);
+      font-size: 11px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      padding: 0;
+      transition: transform 0.15s ease;
+    }
+    .channel-block.expanded .ch-admins-toggle { transform: rotate(180deg); }
+    .channel-admins-panel {
+      display: none;
+      padding: 0 10px 10px;
+      border-top: 1px solid var(--overlay-transition);
+    }
+    .channel-block.expanded .channel-admins-panel { display: block; }
+    .channel-admins-panel .admin-row:first-child { border-top: none; }
+    .channel-admins-loading {
+      font-size: 12px;
+      color: var(--muted);
+      padding: 8px 0;
+    }
+    #homeChannelsBlock { margin-top: 12px; }
+    #homeChannelsBlock > div + div { margin-top: 16px; }
     .ch-icon {
       width: 40px;
       height: 40px;
@@ -897,22 +932,12 @@
       letter-spacing: 0.06em;
       margin: 16px 0 0 2px;
     }
-    #adminsList { margin-top: 8px; }
-    .admins-card {
-      background: var(--surface);
-      border: 1px solid var(--surface-border);
-      border-radius: 14px;
-      padding: 12px;
-      margin-bottom: 10px;
-    }
-    .admins-card-title {
-      font-size: 13px;
-      font-weight: 600;
-      color: var(--text-secondary);
-      margin-bottom: 10px;
-      display: flex;
-      align-items: center;
-      gap: 6px;
+    .channel-admins-panel .admins-card {
+      background: transparent;
+      border: none;
+      border-radius: 0;
+      padding: 0;
+      margin: 0;
     }
     .admin-row {
       display: flex;
@@ -2209,30 +2234,28 @@
         <div class="stat-cell"><div class="n" id="statPosts">0</div><div class="l">посты</div></div>
         <div class="stat-cell"><div class="n" id="statComm">0</div><div class="l">комменты</div></div>
       </div>
-      <div>
-        <div class="section-title">Мои каналы</div>
-        <div class="channel-list" id="homeChannelList"></div>
-        <button type="button" class="btn-dashed" id="btnConnect">Подключить канал</button>
-        <div class="connect-hint" id="connectHint"></div>
-      </div>
-      <div>
-        <div class="section-title">Связки TG ↔ MAX</div>
-        <div class="channel-link-list" id="homeChannelLinksList"></div>
-        <div id="homeTeamSyncCard" class="team-sync-card" aria-live="polite">
-          <div class="team-sync-title">Связать команду админов</div>
-          <p class="team-sync-desc">
-            Два шага: нажмите кнопку и подтвердите — бот сопоставит админов MAX и Telegram по
-            @username и сохранит оба аккаунта в одном профиле.
-          </p>
-          <button type="button" class="btn-primary" id="btnSyncAdminTeam">Связать автоматически</button>
+      <div id="homeChannelsBlock">
+        <div>
+          <div class="section-title">Связки TG ↔ MAX</div>
+          <div class="channel-link-list" id="homeChannelLinksList"></div>
+          <div id="homeTeamSyncCard" class="team-sync-card" aria-live="polite">
+            <div class="team-sync-title">Связать команду админов</div>
+            <p class="team-sync-desc">
+              Два шага: нажмите кнопку и подтвердите — бот сопоставит админов MAX и Telegram по
+              @username и сохранит оба аккаунта в одном профиле.
+            </p>
+            <button type="button" class="btn-primary" id="btnSyncAdminTeam">Связать автоматически</button>
+          </div>
+          <button type="button" class="btn-dashed" id="btnCreateChannelLink" style="margin-top:8px">
+            Связать TG ↔ MAX
+          </button>
         </div>
-        <button type="button" class="btn-dashed" id="btnCreateChannelLink" style="margin-top:8px">
-          Связать TG ↔ MAX
-        </button>
-      </div>
-      <div>
-        <div class="section-label">Администраторы каналов</div>
-        <div id="adminsList"></div>
+        <div>
+          <div class="section-title">Мои каналы</div>
+          <div class="channel-list" id="homeChannelList"></div>
+          <button type="button" class="btn-dashed" id="btnConnect">Подключить канал</button>
+          <div class="connect-hint" id="connectHint"></div>
+        </div>
       </div>
       <div>
         <div class="section-title">Возможности</div>
@@ -3359,22 +3382,17 @@
 
       var channelsById = {}
 
-      function renderChannelAdmins(ch, data) {
-        var adminsHost = document.getElementById('adminsList')
-        if (!adminsHost) return
-        var title = (ch.title && String(ch.title).trim()) || 'Канал ' + ch.chat_id
-        var cardIdAttr = ' data-channel-id="' + esc(String(ch.chat_id)) + '"'
+      function findChannelBlock(channelChatId) {
+        return document.querySelector(
+          '.channel-block[data-channel-id="' + String(channelChatId) + '"]'
+        )
+      }
+
+      function renderChannelAdminsIntoPanel(ch, data, panelEl) {
+        if (!panelEl) return
         if (!data || !Array.isArray(data.admins)) {
-          adminsHost.insertAdjacentHTML(
-            'beforeend',
-            '<div class="admins-card" role="article"' +
-              cardIdAttr +
-              '>' +
-              '<div class="admins-card-title"><span aria-hidden="true">📢</span><span>' +
-              esc(title) +
-              '</span></div>' +
-              '<div style="font-size:12px;color:var(--muted);padding:4px 0;">Не удалось загрузить список администраторов.</div></div>'
-          )
+          panelEl.innerHTML =
+            '<div class="admins-card"><div style="font-size:12px;color:var(--muted);padding:4px 0;">Не удалось загрузить список администраторов.</div></div>'
           return
         }
         var inviteRaw = data.invite_url ? String(data.invite_url) : ''
@@ -3439,26 +3457,53 @@
           rows !== ''
             ? rows
             : '<div style="font-size:12px;color:var(--muted);padding:4px 0;">Нет администраторов в ответе API.</div>'
-        var card =
+        panelEl.innerHTML =
           '<div class="admins-card" role="article"' +
-          cardIdAttr +
           (inviteAttr !== '' ? ' data-invite-url="' + inviteAttr + '"' : '') +
           '>' +
-          '<div class="admins-card-title"><span aria-hidden="true">📢</span><span>' +
-          esc(title) +
-          '</span></div>' +
           bodyRows +
           inviteBtn +
           '</div>'
-        adminsHost.insertAdjacentHTML('beforeend', card)
+        panelEl.dataset.adminsLoaded = '1'
       }
 
-      function removeChannelAdminsCard(channelChatId) {
-        var adminsHost = document.getElementById('adminsList')
-        if (!adminsHost) return
-        var selector = '.admins-card[data-channel-id="' + String(channelChatId) + '"]'
-        var card = adminsHost.querySelector(selector)
-        if (card) card.remove()
+      function loadChannelAdminsPanel(channelChatId, apiUid) {
+        var block = findChannelBlock(channelChatId)
+        if (!block || apiUid == null) return Promise.resolve()
+        var panel = block.querySelector('.channel-admins-panel')
+        if (!panel) return Promise.resolve()
+        panel.innerHTML = '<div class="channel-admins-loading">Загрузка администраторов…</div>'
+        return fetch(
+          '/api/channel-admins?chat_id=' +
+            encodeURIComponent(String(channelChatId)) +
+            '&user_id=' +
+            encodeURIComponent(String(apiUid)) +
+            platformQs,
+          { headers: homeApiHeaders(false) }
+        )
+          .then(function (r) {
+            return r.ok ? r.json() : null
+          })
+          .then(function (admData) {
+            var ch = channelsById[String(channelChatId)] || { chat_id: channelChatId, title: null }
+            renderChannelAdminsIntoPanel(ch, admData, panel)
+          })
+      }
+
+      function toggleChannelAdminsBlock(block, apiUid) {
+        if (!block) return
+        var willExpand = !block.classList.contains('expanded')
+        block.classList.toggle('expanded', willExpand)
+        var toggle = block.querySelector('.ch-admins-toggle')
+        if (toggle) {
+          toggle.setAttribute('aria-expanded', willExpand ? 'true' : 'false')
+        }
+        if (!willExpand) return
+        var panel = block.querySelector('.channel-admins-panel')
+        if (!panel || panel.dataset.adminsLoaded === '1') return
+        var chatId = block.getAttribute('data-channel-id')
+        if (!chatId) return
+        loadChannelAdminsPanel(chatId, apiUid)
       }
 
       function refreshChannelAdminsCard(channelChatId, apiUid) {
@@ -3476,8 +3521,11 @@
             return r.ok ? r.json() : null
           })
           .then(function (admData) {
-            removeChannelAdminsCard(channelChatId)
-            renderChannelAdmins(ch, admData)
+            var block = findChannelBlock(channelChatId)
+            var panel = block && block.querySelector('.channel-admins-panel')
+            if (!panel) return
+            var ch = channelsById[String(channelChatId)] || { chat_id: channelChatId, title: null }
+            renderChannelAdminsIntoPanel(ch, admData, panel)
           })
       }
 
@@ -3599,10 +3647,16 @@
       wireFeatureToggles(uid);
 
       ;(function bindAdminsActions() {
-        var host = document.getElementById('adminsList')
+        var host = document.getElementById('homeChannelList')
         if (!host || host.dataset.actionsBound === '1') return
         host.dataset.actionsBound = '1'
         host.addEventListener('click', function (ev) {
+          var toggleBtn = ev.target.closest('.ch-admins-toggle')
+          if (toggleBtn) {
+            var block = toggleBtn.closest('.channel-block')
+            toggleChannelAdminsBlock(block, uid)
+            return
+          }
           var inviteBtn = ev.target.closest('.btn-invite')
           if (inviteBtn) {
             var cardForInvite = inviteBtn.closest('.admins-card')
@@ -3737,9 +3791,7 @@
         })
         .then(function (data) {
           var list = document.getElementById('homeChannelList');
-          var adminsHost = document.getElementById('adminsList');
           list.innerHTML = '';
-          if (adminsHost) adminsHost.innerHTML = '';
           channelsById = {}
           channelsCache = []
           if (data.bot_nickname) botNick = '@' + String(data.bot_nickname).replace(/^@/, '');
@@ -3751,10 +3803,6 @@
                 ? 'Каналов пока нет. Добавьте @commentvmax_bot администратором в Telegram-канал, затем обновите мини-приложение.'
                 : 'Каналов пока нет. Подключите бота в свой канал.') +
               '</div>';
-            if (adminsHost) {
-              adminsHost.innerHTML =
-                '<div style="color:var(--muted);font-size:13px;padding:8px 4px;">Подключите канал, чтобы увидеть администраторов.</div>';
-            }
             return;
           }
           arr.forEach(function (ch) {
@@ -3783,6 +3831,9 @@
                 ')" ' +
                 'aria-label="Настройки канала">⚙️</button>';
             var row =
+              '<div class="channel-block" data-channel-id="' +
+              esc(String(ch.chat_id)) +
+              '">' +
               '<div class="channel-item">' +
               iconHtml +
               '<div class="ch-body"><div class="ch-name">' +
@@ -3795,28 +3846,12 @@
               '" title="' +
               (ch.status === 'pending' ? 'Ожидает прав' : 'Активен') +
               '"></span>' +
+              '<button type="button" class="ch-admins-toggle" aria-expanded="false" aria-label="Администраторы канала">▼</button>' +
               gearBtn +
+              '</div>' +
+              '<div class="channel-admins-panel" data-admins-loaded="0"></div>' +
               '</div>';
             list.insertAdjacentHTML('beforeend', row);
-          });
-          if (!adminsHost) return;
-          Promise.all(
-            arr.map(function (ch) {
-              return fetch(
-                '/api/channel-admins?chat_id=' +
-                  encodeURIComponent(String(ch.chat_id)) +
-                  '&user_id=' +
-                  encodeURIComponent(String(uid)) +
-                  platformQs,
-                { headers: homeApiHeaders(false) }
-              ).then(function (r) {
-                return r.ok ? r.json() : null;
-              });
-            })
-          ).then(function (results) {
-            results.forEach(function (admData, i) {
-              renderChannelAdmins(arr[i], admData);
-            });
           });
           if (pendingOpenChannelLink && inTelegram) {
             fillLinkChannelSelect(
@@ -3888,26 +3923,19 @@
       }
 
       function reloadHomeAdmins(apiUid) {
-        var adminsHost = document.getElementById('adminsList')
-        if (!adminsHost || apiUid == null || !channelsCache.length) return
-        adminsHost.innerHTML = ''
-        Promise.all(
-          channelsCache.map(function (ch) {
-            return fetch(
-              '/api/channel-admins?chat_id=' +
-                encodeURIComponent(String(ch.chat_id)) +
-                '&user_id=' +
-                encodeURIComponent(String(apiUid)) +
-                platformQs,
-              { headers: homeApiHeaders(false) }
-            ).then(function (r) {
-              return r.ok ? r.json() : null
-            })
-          })
-        ).then(function (results) {
-          results.forEach(function (admData, i) {
-            renderChannelAdmins(channelsCache[i], admData)
-          })
+        if (apiUid == null || !channelsCache.length) return
+        channelsCache.forEach(function (ch) {
+          var block = findChannelBlock(ch.chat_id)
+          if (!block) return
+          var panel = block.querySelector('.channel-admins-panel')
+          if (!panel) return
+          if (block.classList.contains('expanded')) {
+            panel.dataset.adminsLoaded = '0'
+            loadChannelAdminsPanel(ch.chat_id, apiUid)
+          } else {
+            panel.dataset.adminsLoaded = '0'
+            panel.innerHTML = ''
+          }
         })
       }
 

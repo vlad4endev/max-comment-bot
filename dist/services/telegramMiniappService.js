@@ -231,9 +231,14 @@ async function getTelegramChannelAdminsForMiniapp(telegramUserId, channelChatId)
     if (!(await isTelegramChannelAdmin(token, chatId, telegramUserId))) {
         throw new Error('forbidden');
     }
-    const rows = await (0, integrationPlatformClient_1.listTelegramChatAdministrators)(token, chatId);
+    const [rows, botUserId] = await Promise.all([
+        (0, integrationPlatformClient_1.listTelegramChatAdministrators)(token, chatId),
+        (0, integrationPlatformClient_1.getTelegramBotUserId)(token),
+    ]);
     const linkedIds = new Set(telegramChannelNotifyLinkStore_1.telegramChannelNotifyLinkStore.getUserIdsForChannel(chatId));
-    const admins = rows.map((a) => {
+    const admins = rows
+        .filter((a) => botUserId == null || a.userId !== botUserId)
+        .map((a) => {
         const name = a.name;
         const initials = name.trim().length >= 2
             ? name

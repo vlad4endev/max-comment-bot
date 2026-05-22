@@ -106,7 +106,7 @@ export function mergePlatformChannels(
   })
 }
 
-async function getTelegramBotUserId(token: string): Promise<number | null> {
+export async function getTelegramBotUserId(token: string): Promise<number | null> {
   try {
     const { data } = await axios.get<{
       ok: boolean
