@@ -567,6 +567,7 @@
     }
 
     function initApp() {
+      window.__miniappReady = true
       hideMiniappLoading()
       var bridge = getWebAppBridge() || {};
       var inTelegram = isTelegramMiniappBridge(bridge);

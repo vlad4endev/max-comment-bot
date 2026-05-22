@@ -26,5 +26,12 @@ echo "==> последние логи:"
 docker compose logs --tail=40 bot
 
 echo ""
-echo "Готово. Проверка: curl -sS http://127.0.0.1:\${PORT:-3000}/health"
-echo "Mini App: откройте /miniapp/index.html и при необходимости перезапустите Mini App в MAX."
+echo "==> проверка miniapp (все 3 файла обязательны):"
+PORT="${PORT:-3000}"
+for path in /miniapp/ /miniapp/app.js /miniapp/styles.css; do
+  code="$(curl -sS -o /dev/null -w '%{http_code}' "http://127.0.0.1:${PORT}${path}" || echo 000)"
+  echo "  ${path} -> HTTP ${code}"
+done
+curl -sS "http://127.0.0.1:${PORT}/health" && echo ""
+echo ""
+echo "Готово. Если app.js или styles.css не 200 — выполните снова: docker compose up -d --build"

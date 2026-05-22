@@ -582,6 +582,32 @@
   </div>
   </div>
 
-  <script src="app.js"></script>
+  <script src="app.js" id="miniappAppScript"></script>
+  <script>
+    function showMiniappAssetError(msg) {
+      var el = document.getElementById('miniappLoading')
+      if (el) {
+        el.textContent = msg
+        el.style.color = '#ff8a80'
+        el.style.padding = '16px'
+        el.style.lineHeight = '1.45'
+      }
+    }
+    var appScript = document.getElementById('miniappAppScript')
+    if (appScript) {
+      appScript.onerror = function () {
+        showMiniappAssetError(
+          'Не загружен app.js (404). На сервере в папке проекта: git pull && docker compose up -d --build'
+        )
+      }
+    }
+    window.setTimeout(function () {
+      if (!window.__miniappReady) {
+        showMiniappAssetError(
+          'Приложение не запустилось. Пересоберите контейнер: docker compose up -d --build'
+        )
+      }
+    }, 5000)
+  </script>
 </body>
 </html>
