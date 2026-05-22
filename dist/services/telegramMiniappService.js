@@ -15,8 +15,8 @@ exports.handleTelegramBotAccountPair = handleTelegramBotAccountPair;
 exports.handleTelegramBotStartJoin = handleTelegramBotStartJoin;
 exports.processTelegramMiniappBotUpdates = processTelegramMiniappBotUpdates;
 const axios_1 = __importDefault(require("axios"));
-const config_1 = require("../config");
 const integrationsStore_1 = require("./integrationsStore");
+const resolveTelegramBotToken_1 = require("./resolveTelegramBotToken");
 const integrationPlatformClient_1 = require("./integrationPlatformClient");
 const ownerProfileStore_1 = require("./ownerProfileStore");
 const telegramBotUserStore_1 = require("./telegramBotUserStore");
@@ -31,14 +31,6 @@ const telegramChannelActivation_1 = require("./telegramChannelActivation");
 const channelLinkAdminTeamSync_1 = require("./channelLinkAdminTeamSync");
 const logger_1 = require("../utils/logger");
 const TG_API = 'https://api.telegram.org/bot';
-function resolveTelegramBotToken() {
-    const integ = integrationsStore_1.integrationsStore.getTelegramIntegration();
-    const fromInteg = integ?.token?.trim() ?? '';
-    if (fromInteg) {
-        return fromInteg;
-    }
-    return (0, config_1.getTelegramToken)().trim();
-}
 async function sendTelegramBotMessage(token, chatId, text, extra) {
     await axios_1.default.post(`${TG_API}${token}/sendMessage`, {
         chat_id: chatId,
@@ -74,7 +66,7 @@ function resolveTelegramUserFirstName(from) {
     return 'друг';
 }
 async function getTelegramUserActivitySummary(telegramUserId) {
-    const token = resolveTelegramBotToken();
+    const token = (0, resolveTelegramBotToken_1.resolveTelegramBotToken)();
     const notifyLinks = telegramChannelNotifyLinkStore_1.telegramChannelNotifyLinkStore.getLinkedChannels(telegramUserId);
     if (!token) {
         const notifyLinksCount = notifyLinks.length;
@@ -115,7 +107,7 @@ async function sendTelegramHowItWorksMessage(token, telegramUserId) {
     });
 }
 async function handleTelegramBotStartWelcome(telegramUserId, from) {
-    const token = resolveTelegramBotToken();
+    const token = (0, resolveTelegramBotToken_1.resolveTelegramBotToken)();
     if (!token) {
         return;
     }
@@ -175,7 +167,7 @@ async function refreshTelegramChannelsCache(token) {
     }
 }
 async function listTelegramMiniappChannelsForUser(telegramUserId) {
-    const token = resolveTelegramBotToken();
+    const token = (0, resolveTelegramBotToken_1.resolveTelegramBotToken)();
     if (!token) {
         return { channels: [], bot_username: 'commentvmax_bot' };
     }
@@ -190,12 +182,14 @@ async function listTelegramMiniappChannelsForUser(telegramUserId) {
         if (!(await isTelegramChannelAdmin(token, row.chat_id, telegramUserId))) {
             continue;
         }
+        await (0, telegramChannelActivation_1.reconcileTelegramChannelForMiniappUser)(row.chat_id, telegramUserId);
+        const fresh = telegramChannelRegistry_1.telegramChannelRegistry.getChannel(row.chat_id);
         channels.push({
             chat_id: row.chat_id,
-            title: row.title,
+            title: fresh?.title ?? row.title,
             subscribers: null,
             avatar_url: null,
-            status: row.bot_is_admin ? 'active' : 'pending',
+            status: fresh?.bot_is_admin ? 'active' : 'pending',
             platform: 'telegram',
         });
     }
@@ -228,7 +222,7 @@ async function getTelegramMiniappStats(telegramUserId) {
     };
 }
 async function getTelegramChannelAdminsForMiniapp(telegramUserId, channelChatId) {
-    const token = resolveTelegramBotToken();
+    const token = (0, resolveTelegramBotToken_1.resolveTelegramBotToken)();
     const chatId = String(channelChatId).trim();
     const reg = telegramChannelRegistry_1.telegramChannelRegistry.getChannel(chatId);
     if (!reg) {
@@ -296,7 +290,7 @@ async function registerTelegramChannelNotifyLink(telegramUserId, channelChatId) 
 }
 /** Личные сообщения в Telegram-боте после успешной связки TG ↔ MAX. */
 async function notifyChannelLinkSucceededPrivate(params) {
-    const token = resolveTelegramBotToken();
+    const token = (0, resolveTelegramBotToken_1.resolveTelegramBotToken)();
     if (!token) {
         return;
     }
@@ -338,7 +332,7 @@ async function notifyChannelLinkSucceededPrivate(params) {
     }
 }
 async function handleTelegramBotAccountPair(telegramUserId, from, startPayload) {
-    const token = resolveTelegramBotToken();
+    const token = (0, resolveTelegramBotToken_1.resolveTelegramBotToken)();
     const firstName = typeof from.first_name === 'string' ? from.first_name : null;
     const lastName = typeof from.last_name === 'string' ? from.last_name : null;
     const username = typeof from.username === 'string' ? from.username : null;
@@ -371,7 +365,7 @@ async function handleTelegramBotAccountPair(telegramUserId, from, startPayload) 
     }
 }
 async function handleTelegramBotStartJoin(telegramUserId, startPayload) {
-    const token = resolveTelegramBotToken();
+    const token = (0, resolveTelegramBotToken_1.resolveTelegramBotToken)();
     const m = /^jointg(\d+)$/i.exec(String(startPayload).trim());
     const channelChatId = m ? `-${m[1]}` : '';
     if (!channelChatId) {
@@ -389,7 +383,7 @@ async function handleTelegramBotStartJoin(telegramUserId, startPayload) {
     await sendTelegramBotMessage(token, telegramUserId, text);
 }
 async function processTelegramMiniappBotUpdates(token, updates) {
-    const mainToken = resolveTelegramBotToken();
+    const mainToken = (0, resolveTelegramBotToken_1.resolveTelegramBotToken)();
     if (!mainToken || token.trim() !== mainToken) {
         return;
     }

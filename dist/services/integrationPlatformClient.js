@@ -19,6 +19,7 @@ exports.publishVkWallPost = publishVkWallPost;
 const axios_1 = __importDefault(require("axios"));
 const logger_1 = require("../utils/logger");
 const telegramBotUserStore_1 = require("./telegramBotUserStore");
+const telegramMainBotUpdates_1 = require("./telegramMainBotUpdates");
 const flowStateStore_1 = require("./flowStateStore");
 const TG_API = 'https://api.telegram.org';
 const TELEGRAM_DISCOVERY_UPDATES = [
@@ -334,6 +335,7 @@ async function listTelegramBotChats(token, integrationId) {
                     offset = updateId + 1;
                 }
                 rememberTelegramStartedUserFromUpdate(upd);
+                await (0, telegramMainBotUpdates_1.processMainTelegramBotMyChatMemberUpdate)(trimmed, upd);
                 ingestTelegramUpdate(seen, upd);
             }
             if (data.result.length < 100) {
@@ -568,6 +570,7 @@ async function fetchTelegramChannelPosts(token, integrationId, channelId, afterM
                     maxUpdateId = updateId + 1;
                 }
                 rememberTelegramStartedUserFromUpdate(upd);
+                await (0, telegramMainBotUpdates_1.processMainTelegramBotMyChatMemberUpdate)(token.trim(), upd);
                 // Capture bot becoming admin in a channel/group so the caller can update linkedChats
                 // immediately — without this, the event would be consumed by this loop and lost
                 // before listTelegramBotChats ever gets a chance to see it.

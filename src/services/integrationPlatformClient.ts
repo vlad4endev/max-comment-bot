@@ -2,6 +2,7 @@ import axios from 'axios'
 
 import { logger } from '../utils/logger'
 import { telegramBotUserStore } from './telegramBotUserStore'
+import { processMainTelegramBotMyChatMemberUpdate } from './telegramMainBotUpdates'
 import type { IntegrationPlatform } from './integrationsStore'
 import { flowStateStore } from './flowStateStore'
 
@@ -422,6 +423,7 @@ export async function listTelegramBotChats(
           offset = updateId + 1
         }
         rememberTelegramStartedUserFromUpdate(upd)
+        await processMainTelegramBotMyChatMemberUpdate(trimmed, upd)
         ingestTelegramUpdate(seen, upd)
       }
 
@@ -725,6 +727,7 @@ export async function fetchTelegramChannelPosts(
           maxUpdateId = updateId + 1
         }
         rememberTelegramStartedUserFromUpdate(upd)
+        await processMainTelegramBotMyChatMemberUpdate(token.trim(), upd)
 
         // Capture bot becoming admin in a channel/group so the caller can update linkedChats
         // immediately — without this, the event would be consumed by this loop and lost

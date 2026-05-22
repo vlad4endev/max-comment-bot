@@ -1,7 +1,7 @@
 import axios from 'axios'
 
-import { getTelegramToken } from '../config'
 import { integrationsStore } from './integrationsStore'
+import { resolveTelegramBotToken } from './resolveTelegramBotToken'
 import {
   enrichTelegramChatsWithBotAdmin,
   listTelegramBotChats,
@@ -20,6 +20,7 @@ import {
   handleTelegramCallbackQuery,
   handleTelegramMyChatMemberUpdate,
   handleTelegramPrivateMessage,
+  reconcileTelegramChannelForMiniappUser,
 } from './telegramChannelActivation'
 import { profilePairingForPlatformUser } from './channelLinkAdminTeamSync'
 import { logger } from '../utils/logger'
@@ -33,15 +34,6 @@ export interface TelegramMiniappChannelWire {
   avatar_url: string | null
   status: 'pending' | 'active'
   platform: 'telegram'
-}
-
-function resolveTelegramBotToken(): string {
-  const integ = integrationsStore.getTelegramIntegration()
-  const fromInteg = integ?.token?.trim() ?? ''
-  if (fromInteg) {
-    return fromInteg
-  }
-  return getTelegramToken().trim()
 }
 
 async function sendTelegramBotMessage(
@@ -253,12 +245,14 @@ export async function listTelegramMiniappChannelsForUser(
     if (!(await isTelegramChannelAdmin(token, row.chat_id, telegramUserId))) {
       continue
     }
+    await reconcileTelegramChannelForMiniappUser(row.chat_id, telegramUserId)
+    const fresh = telegramChannelRegistry.getChannel(row.chat_id)
     channels.push({
       chat_id: row.chat_id,
-      title: row.title,
+      title: fresh?.title ?? row.title,
       subscribers: null,
       avatar_url: null,
-      status: row.bot_is_admin ? 'active' : 'pending',
+      status: fresh?.bot_is_admin ? 'active' : 'pending',
       platform: 'telegram',
     })
   }

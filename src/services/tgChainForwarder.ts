@@ -4,7 +4,7 @@ import axios from 'axios'
 import type { Bot } from '@maxhub/max-bot-api'
 import type { AttachmentRequest, ImageAttachmentRequest } from '@maxhub/max-bot-api/types'
 
-import { getTelegramToken } from '../config'
+import { isMainTelegramBotToken, resolveTelegramBotToken } from './resolveTelegramBotToken'
 import { getDb } from '../db/database'
 import {
   type TgChannelUpdate,
@@ -159,7 +159,7 @@ function markForwarded(
 function resolveTgToken(chain: TgChainRecord): string {
   const fromChain = chain.bot_token?.trim()
   if (fromChain) return fromChain
-  return (process.env.TG_READER_BOT_TOKEN || '').trim() || getTelegramToken()
+  return (process.env.TG_READER_BOT_TOKEN || '').trim() || resolveTelegramBotToken()
 }
 
 function pickAlbumCaption(messages: TgMessage[], addSignature: boolean): string {
@@ -849,7 +849,7 @@ export async function runTgChainsOnce(): Promise<boolean> {
     }
 
     const offset = getReaderOffset(tgToken)
-    const includeMiniappBotUpdates = tgToken.trim() === getTelegramToken().trim()
+    const includeMiniappBotUpdates = isMainTelegramBotToken(tgToken)
     let batch: TgChannelUpdate[]
     try {
       // При ожидающемся flush альбома не блокируемся длинным long-poll.
@@ -880,7 +880,7 @@ export async function runTgChainsOnce(): Promise<boolean> {
         .map((u) => u.raw)
         .filter((u): u is Record<string, unknown> => !!u)
       if (rawUpdates.length > 0) {
-        void processTelegramMiniappBotUpdates(tgToken, rawUpdates)
+        await processTelegramMiniappBotUpdates(tgToken, rawUpdates)
       }
     }
 

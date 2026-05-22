@@ -1,7 +1,7 @@
 import axios from 'axios'
 
-import { integrationsStore } from './integrationsStore'
 import { listTelegramChatAdministrators } from './integrationPlatformClient'
+import { resolveTelegramBotToken } from './resolveTelegramBotToken'
 import { telegramBotUserStore } from './telegramBotUserStore'
 import { telegramChannelNotifyLinkStore } from './telegramChannelNotifyLinkStore'
 import { telegramChannelRegistry } from './telegramChannelRegistry'
@@ -11,7 +11,6 @@ import {
   markTelegramAdminJoinNotified,
 } from './telegramChannelAdminJoinNotified'
 import { telegramChannelActivationState } from './telegramChannelActivationState'
-import { getTelegramToken } from '../config'
 import {
   buildTelegramBotJoinUrl,
   buildTelegramConfirmChannelPayload,
@@ -33,14 +32,7 @@ type TelegramActivationOutcome =
   | { status: 'reconnected' }
   | { status: 'pending'; shouldNotifyMissingAdmin: boolean }
 
-function resolveTelegramBotToken(): string {
-  const integ = integrationsStore.getTelegramIntegration()
-  const fromInteg = integ?.token?.trim() ?? ''
-  if (fromInteg) {
-    return fromInteg
-  }
-  return getTelegramToken().trim()
-}
+const missingAdminRightsNotifiedChannels = new Set<string>()
 
 async function sendTelegramBotMessage(
   token: string,
@@ -223,22 +215,25 @@ async function notifyTelegramAdminsBotLostAdminRights(channelChatId: string): Pr
   }
 }
 
-async function dmTelegramInviterAboutMissingAdmin(
-  inviterUserId: number | undefined,
+async function notifyTelegramAdminsChannelNeedsAdminRights(
   channelChatId: string,
   channelTitle: string | null,
+  preferredUserId?: number,
 ): Promise<void> {
-  if (inviterUserId == null) {
+  const normalized = String(channelChatId).trim()
+  if (missingAdminRightsNotifiedChannels.has(normalized)) {
     return
   }
   const token = resolveTelegramBotToken()
+  if (!token) {
+    return
+  }
   const title = channelTitle ?? 'ваш канал'
   const text =
     `📢 Канал «${title}»\n\n` +
-    `Вы добавили CommentBot в этот канал — спасибо.\n\n` +
-    `Чтобы бот мог работать с каналом, ему нужны права администратора.\n\n` +
-    `1. Откройте настройки канала → администраторы → выдайте @commentvmax_bot права админа.\n` +
-    `2. Нажмите кнопку ниже — я проверю доступ и завершу подключение.`
+    `CommentBot добавлен в канал, но пока без прав администратора.\n\n` +
+    `1. Настройки канала → администраторы → выдайте @commentvmax_bot права админа.\n` +
+    `2. Нажмите кнопку ниже — бот проверит доступ и завершит подключение.`
   const keyboard = {
     inline_keyboard: [
       [
@@ -249,15 +244,42 @@ async function dmTelegramInviterAboutMissingAdmin(
       ],
     ],
   }
-  try {
-    await sendTelegramBotMessage(token, inviterUserId, text, { reply_markup: keyboard })
-  } catch (err: unknown) {
-    logger.warn('dmTelegramInviterAboutMissingAdmin: send failed', {
-      inviterUserId,
-      channelChatId,
-      err,
-    })
+  const notified = new Set<number>()
+  if (preferredUserId != null) {
+    try {
+      await sendTelegramBotMessage(token, preferredUserId, text, { reply_markup: keyboard })
+      notified.add(preferredUserId)
+    } catch (err: unknown) {
+      logger.warn('notifyTelegramAdminsChannelNeedsAdminRights: preferred user send failed', {
+        preferredUserId,
+        channelChatId,
+        err,
+      })
+    }
   }
+  const admins = await listTelegramChatAdministrators(token, channelChatId)
+  for (const admin of admins) {
+    if (!admin.startedBot || notified.has(admin.userId)) {
+      continue
+    }
+    try {
+      await sendTelegramBotMessage(token, admin.userId, text, { reply_markup: keyboard })
+      notified.add(admin.userId)
+    } catch (err: unknown) {
+      logger.warn('notifyTelegramAdminsChannelNeedsAdminRights: admin send failed', {
+        adminId: admin.userId,
+        channelChatId,
+        err,
+      })
+    }
+  }
+  if (notified.size > 0) {
+    missingAdminRightsNotifiedChannels.add(normalized)
+  }
+}
+
+export function clearMissingAdminRightsNotifyDedup(channelChatId: string): void {
+  missingAdminRightsNotifiedChannels.delete(String(channelChatId).trim())
 }
 
 function linkInviterAsAdmin(inviterUserId: number | undefined, channelChatId: string): void {
@@ -294,6 +316,7 @@ export async function tryActivateTelegramChannelRegistration(
     return { status: 'pending', shouldNotifyMissingAdmin: true }
   }
 
+  clearMissingAdminRightsNotifyDedup(channelChatId)
   telegramChannelActivationState.clearChannelPendingAdminRights(channelChatId)
   linkInviterAsAdmin(inviterUserId, channelChatId)
 
@@ -430,8 +453,35 @@ export async function handleTelegramMyChatMemberUpdate(
       !isAdminNow &&
       (oldStatus === 'left' || oldStatus === 'kicked' || oldStatus === '' || !wasAdmin)
     if (shouldDm) {
-      await dmTelegramInviterAboutMissingAdmin(inviterUserId, chatId, title)
+      await notifyTelegramAdminsChannelNeedsAdminRights(chatId, title, inviterUserId)
     }
+  }
+}
+
+/** Повторная проверка прав бота и уведомление при открытии мини-приложения. */
+export async function reconcileTelegramChannelForMiniappUser(
+  channelChatId: string,
+  telegramUserId: number,
+): Promise<void> {
+  const token = resolveTelegramBotToken()
+  if (!token) {
+    return
+  }
+  const reg = telegramChannelRegistry.getChannel(channelChatId)
+  if (!reg) {
+    return
+  }
+  const admins = await listTelegramChatAdministrators(token, channelChatId)
+  if (!admins.some((a) => a.userId === telegramUserId)) {
+    return
+  }
+  const outcome = await tryActivateTelegramChannelRegistration(channelChatId, telegramUserId)
+  if (outcome.status === 'pending' && outcome.shouldNotifyMissingAdmin) {
+    await notifyTelegramAdminsChannelNeedsAdminRights(
+      channelChatId,
+      reg.title,
+      telegramUserId,
+    )
   }
 }
 

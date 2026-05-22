@@ -8,7 +8,7 @@ exports.runTgChainsOnce = runTgChainsOnce;
 exports.startTgChainForwarder = startTgChainForwarder;
 const node_crypto_1 = require("node:crypto");
 const axios_1 = __importDefault(require("axios"));
-const config_1 = require("../config");
+const resolveTelegramBotToken_1 = require("./resolveTelegramBotToken");
 const database_1 = require("../db/database");
 const telegramReader_1 = require("../forwarder/telegramReader");
 const adminPanelState_1 = require("../api/adminPanelState");
@@ -112,7 +112,7 @@ function resolveTgToken(chain) {
     const fromChain = chain.bot_token?.trim();
     if (fromChain)
         return fromChain;
-    return (process.env.TG_READER_BOT_TOKEN || '').trim() || (0, config_1.getTelegramToken)();
+    return (process.env.TG_READER_BOT_TOKEN || '').trim() || (0, resolveTelegramBotToken_1.resolveTelegramBotToken)();
 }
 function pickAlbumCaption(messages, addSignature) {
     for (const m of messages) {
@@ -705,7 +705,7 @@ async function runTgChainsOnce() {
             continue;
         }
         const offset = getReaderOffset(tgToken);
-        const includeMiniappBotUpdates = tgToken.trim() === (0, config_1.getTelegramToken)().trim();
+        const includeMiniappBotUpdates = (0, resolveTelegramBotToken_1.isMainTelegramBotToken)(tgToken);
         let batch;
         try {
             // При ожидающемся flush альбома не блокируемся длинным long-poll.
@@ -735,7 +735,7 @@ async function runTgChainsOnce() {
                 .map((u) => u.raw)
                 .filter((u) => !!u);
             if (rawUpdates.length > 0) {
-                void (0, telegramMiniappService_1.processTelegramMiniappBotUpdates)(tgToken, rawUpdates);
+                await (0, telegramMiniappService_1.processTelegramMiniappBotUpdates)(tgToken, rawUpdates);
             }
         }
         const channelPosts = [];

@@ -3,33 +3,27 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.clearMissingAdminRightsNotifyDedup = clearMissingAdminRightsNotifyDedup;
 exports.tryActivateTelegramChannelRegistration = tryActivateTelegramChannelRegistration;
 exports.runTelegramChannelConnectAttempt = runTelegramChannelConnectAttempt;
 exports.handleTelegramMyChatMemberUpdate = handleTelegramMyChatMemberUpdate;
+exports.reconcileTelegramChannelForMiniappUser = reconcileTelegramChannelForMiniappUser;
 exports.handleTelegramCallbackQuery = handleTelegramCallbackQuery;
 exports.handleTelegramPrivateMessage = handleTelegramPrivateMessage;
 const axios_1 = __importDefault(require("axios"));
-const integrationsStore_1 = require("./integrationsStore");
 const integrationPlatformClient_1 = require("./integrationPlatformClient");
+const resolveTelegramBotToken_1 = require("./resolveTelegramBotToken");
 const telegramBotUserStore_1 = require("./telegramBotUserStore");
 const telegramChannelNotifyLinkStore_1 = require("./telegramChannelNotifyLinkStore");
 const telegramChannelRegistry_1 = require("./telegramChannelRegistry");
 const telegramChannelAdminJoinNotified_1 = require("./telegramChannelAdminJoinNotified");
 const telegramChannelActivationState_1 = require("./telegramChannelActivationState");
-const config_1 = require("../config");
 const telegramDeeplink_1 = require("../utils/telegramDeeplink");
 const telegramTgChainLifecycle_1 = require("./telegramTgChainLifecycle");
 const logger_1 = require("../utils/logger");
 const TG_API = 'https://api.telegram.org/bot';
 let cachedBotUserId = null;
-function resolveTelegramBotToken() {
-    const integ = integrationsStore_1.integrationsStore.getTelegramIntegration();
-    const fromInteg = integ?.token?.trim() ?? '';
-    if (fromInteg) {
-        return fromInteg;
-    }
-    return (0, config_1.getTelegramToken)().trim();
-}
+const missingAdminRightsNotifiedChannels = new Set();
 async function sendTelegramBotMessage(token, chatId, text, extra) {
     await axios_1.default.post(`${TG_API}${token}/sendMessage`, {
         chat_id: chatId,
@@ -93,7 +87,7 @@ function extractChatMeta(chat) {
     return { chatId, title, username, chatType };
 }
 async function postTelegramChannelAdminInvite(channelChatId) {
-    const token = resolveTelegramBotToken();
+    const token = (0, resolveTelegramBotToken_1.resolveTelegramBotToken)();
     if (!token) {
         return;
     }
@@ -112,7 +106,7 @@ async function postTelegramChannelAdminInvite(channelChatId) {
     }
 }
 async function notifyTelegramChannelJoined(channelChatId) {
-    const token = resolveTelegramBotToken();
+    const token = (0, resolveTelegramBotToken_1.resolveTelegramBotToken)();
     if (!token) {
         return;
     }
@@ -143,7 +137,7 @@ async function notifyTelegramChannelJoined(channelChatId) {
     }
 }
 async function notifyTelegramAdminsBotLostAdminRights(channelChatId) {
-    const token = resolveTelegramBotToken();
+    const token = (0, resolveTelegramBotToken_1.resolveTelegramBotToken)();
     if (!token) {
         return;
     }
@@ -174,17 +168,20 @@ async function notifyTelegramAdminsBotLostAdminRights(channelChatId) {
         }
     }
 }
-async function dmTelegramInviterAboutMissingAdmin(inviterUserId, channelChatId, channelTitle) {
-    if (inviterUserId == null) {
+async function notifyTelegramAdminsChannelNeedsAdminRights(channelChatId, channelTitle, preferredUserId) {
+    const normalized = String(channelChatId).trim();
+    if (missingAdminRightsNotifiedChannels.has(normalized)) {
         return;
     }
-    const token = resolveTelegramBotToken();
+    const token = (0, resolveTelegramBotToken_1.resolveTelegramBotToken)();
+    if (!token) {
+        return;
+    }
     const title = channelTitle ?? 'ваш канал';
     const text = `📢 Канал «${title}»\n\n` +
-        `Вы добавили CommentBot в этот канал — спасибо.\n\n` +
-        `Чтобы бот мог работать с каналом, ему нужны права администратора.\n\n` +
-        `1. Откройте настройки канала → администраторы → выдайте @commentvmax_bot права админа.\n` +
-        `2. Нажмите кнопку ниже — я проверю доступ и завершу подключение.`;
+        `CommentBot добавлен в канал, но пока без прав администратора.\n\n` +
+        `1. Настройки канала → администраторы → выдайте @commentvmax_bot права админа.\n` +
+        `2. Нажмите кнопку ниже — бот проверит доступ и завершит подключение.`;
     const keyboard = {
         inline_keyboard: [
             [
@@ -195,16 +192,43 @@ async function dmTelegramInviterAboutMissingAdmin(inviterUserId, channelChatId, 
             ],
         ],
     };
-    try {
-        await sendTelegramBotMessage(token, inviterUserId, text, { reply_markup: keyboard });
+    const notified = new Set();
+    if (preferredUserId != null) {
+        try {
+            await sendTelegramBotMessage(token, preferredUserId, text, { reply_markup: keyboard });
+            notified.add(preferredUserId);
+        }
+        catch (err) {
+            logger_1.logger.warn('notifyTelegramAdminsChannelNeedsAdminRights: preferred user send failed', {
+                preferredUserId,
+                channelChatId,
+                err,
+            });
+        }
     }
-    catch (err) {
-        logger_1.logger.warn('dmTelegramInviterAboutMissingAdmin: send failed', {
-            inviterUserId,
-            channelChatId,
-            err,
-        });
+    const admins = await (0, integrationPlatformClient_1.listTelegramChatAdministrators)(token, channelChatId);
+    for (const admin of admins) {
+        if (!admin.startedBot || notified.has(admin.userId)) {
+            continue;
+        }
+        try {
+            await sendTelegramBotMessage(token, admin.userId, text, { reply_markup: keyboard });
+            notified.add(admin.userId);
+        }
+        catch (err) {
+            logger_1.logger.warn('notifyTelegramAdminsChannelNeedsAdminRights: admin send failed', {
+                adminId: admin.userId,
+                channelChatId,
+                err,
+            });
+        }
     }
+    if (notified.size > 0) {
+        missingAdminRightsNotifiedChannels.add(normalized);
+    }
+}
+function clearMissingAdminRightsNotifyDedup(channelChatId) {
+    missingAdminRightsNotifiedChannels.delete(String(channelChatId).trim());
 }
 function linkInviterAsAdmin(inviterUserId, channelChatId) {
     if (inviterUserId == null) {
@@ -214,7 +238,7 @@ function linkInviterAsAdmin(inviterUserId, channelChatId) {
     telegramChannelNotifyLinkStore_1.telegramChannelNotifyLinkStore.register(inviterUserId, channelChatId);
 }
 async function tryActivateTelegramChannelRegistration(channelChatId, inviterUserId) {
-    const token = resolveTelegramBotToken();
+    const token = (0, resolveTelegramBotToken_1.resolveTelegramBotToken)();
     if (!token) {
         return { status: 'pending', shouldNotifyMissingAdmin: false };
     }
@@ -232,6 +256,7 @@ async function tryActivateTelegramChannelRegistration(channelChatId, inviterUser
         telegramChannelActivationState_1.telegramChannelActivationState.markChannelPendingAdminRights(channelChatId);
         return { status: 'pending', shouldNotifyMissingAdmin: true };
     }
+    clearMissingAdminRightsNotifyDedup(channelChatId);
     telegramChannelActivationState_1.telegramChannelActivationState.clearChannelPendingAdminRights(channelChatId);
     linkInviterAsAdmin(inviterUserId, channelChatId);
     const updatedReg = telegramChannelRegistry_1.telegramChannelRegistry.getChannel(channelChatId);
@@ -348,8 +373,27 @@ async function handleTelegramMyChatMemberUpdate(update) {
         const shouldDm = !isAdminNow &&
             (oldStatus === 'left' || oldStatus === 'kicked' || oldStatus === '' || !wasAdmin);
         if (shouldDm) {
-            await dmTelegramInviterAboutMissingAdmin(inviterUserId, chatId, title);
+            await notifyTelegramAdminsChannelNeedsAdminRights(chatId, title, inviterUserId);
         }
+    }
+}
+/** Повторная проверка прав бота и уведомление при открытии мини-приложения. */
+async function reconcileTelegramChannelForMiniappUser(channelChatId, telegramUserId) {
+    const token = (0, resolveTelegramBotToken_1.resolveTelegramBotToken)();
+    if (!token) {
+        return;
+    }
+    const reg = telegramChannelRegistry_1.telegramChannelRegistry.getChannel(channelChatId);
+    if (!reg) {
+        return;
+    }
+    const admins = await (0, integrationPlatformClient_1.listTelegramChatAdministrators)(token, channelChatId);
+    if (!admins.some((a) => a.userId === telegramUserId)) {
+        return;
+    }
+    const outcome = await tryActivateTelegramChannelRegistration(channelChatId, telegramUserId);
+    if (outcome.status === 'pending' && outcome.shouldNotifyMissingAdmin) {
+        await notifyTelegramAdminsChannelNeedsAdminRights(channelChatId, reg.title, telegramUserId);
     }
 }
 async function handleTelegramCallbackQuery(update) {
@@ -357,7 +401,7 @@ async function handleTelegramCallbackQuery(update) {
     if (!cq) {
         return;
     }
-    const token = resolveTelegramBotToken();
+    const token = (0, resolveTelegramBotToken_1.resolveTelegramBotToken)();
     const data = typeof cq.data === 'string' ? cq.data.trim() : '';
     const from = cq.from;
     const userId = typeof from?.id === 'number' ? from.id : null;
@@ -384,7 +428,7 @@ async function handleTelegramCallbackQuery(update) {
     }
 }
 async function handleTelegramPrivateMessage(fromUserId, text) {
-    const token = resolveTelegramBotToken();
+    const token = (0, resolveTelegramBotToken_1.resolveTelegramBotToken)();
     const trimmed = text.trim();
     const pendingJoin = telegramChannelActivationState_1.telegramChannelActivationState.getPendingAdminJoin(fromUserId);
     if (pendingJoin && !trimmed.startsWith('/')) {
