@@ -24,6 +24,12 @@ import {
   reconcileTelegramChannelForMiniappUser,
 } from './telegramChannelActivation'
 import { profilePairingForPlatformUser } from './channelLinkAdminTeamSync'
+import {
+  buildTelegramOpenPanelButton,
+  isTelegramWebAppUrl,
+  normalizeMiniAppUrl,
+} from '../utils/telegramMiniAppUrl'
+import { config } from '../config'
 import { logger } from '../utils/logger'
 
 const TG_API = 'https://api.telegram.org/bot'
@@ -65,17 +71,23 @@ async function answerTelegramCallbackQuery(
   )
 }
 
-function buildTelegramMiniAppHomeUrl(): string {
-  return process.env.MINI_APP_URL?.trim() || 'https://t.me/commentvmax_bot'
+function buildTelegramMiniAppHomeUrl(): string | null {
+  const fromConfig = config.miniAppUrl?.trim()
+  if (fromConfig && isTelegramWebAppUrl(fromConfig)) {
+    return normalizeMiniAppUrl(fromConfig) ?? null
+  }
+  const fromEnv = normalizeMiniAppUrl(process.env.MINI_APP_URL ?? '')
+  if (fromEnv && isTelegramWebAppUrl(fromEnv)) {
+    return fromEnv
+  }
+  return null
 }
 
 function buildTelegramStartInlineKeyboard(
-  homeUrl: string,
+  homeUrl: string | null,
   options?: { includeHowItWorks?: boolean },
 ): { inline_keyboard: Array<Array<Record<string, unknown>>> } {
-  const openBtn = /^https:\/\//i.test(homeUrl)
-    ? { text: '🚀 Открыть панель', web_app: { url: homeUrl } }
-    : { text: '🚀 Открыть панель', url: homeUrl }
+  const openBtn = buildTelegramOpenPanelButton(homeUrl)
   const rows: Array<Array<Record<string, unknown>>> = [[openBtn]]
   if (options?.includeHowItWorks !== false) {
     rows.push([{ text: '📖 Как это работает', callback_data: 'tg_how_it_works' }])

@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto'
 import dotenv from 'dotenv'
 
 import { logger } from './utils/logger'
+import { deriveMiniAppUrlFromWebhook, normalizeMiniAppUrl } from './utils/telegramMiniAppUrl'
 
 dotenv.config()
 
@@ -141,7 +142,11 @@ function getConfig(): Config {
   const receiveMode = parseReceiveMode(process.env.MAX_RECEIVE_MODE, NODE_ENV);
 
   const miniAppUrlRaw = (process.env.MINI_APP_URL ?? '').trim();
-  const miniAppUrl = miniAppUrlRaw === '' ? undefined : miniAppUrlRaw.replace(/\/+$/, '');
+  let miniAppUrl = normalizeMiniAppUrl(miniAppUrlRaw);
+  const webhookUrlEarly = (process.env.WEBHOOK_URL ?? '').trim();
+  if (!miniAppUrl && webhookUrlEarly.startsWith('https://')) {
+    miniAppUrl = deriveMiniAppUrlFromWebhook(webhookUrlEarly);
+  }
 
   const apiPortRaw = (process.env.API_PORT ?? '').trim();
   let listenPort = PORT;

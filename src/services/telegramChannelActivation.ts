@@ -21,7 +21,9 @@ import {
   pauseTgChainsForTelegramChannelLostAdmin,
   restoreTgChainsForTelegramChannelAdminRestored,
 } from './telegramTgChainLifecycle'
+import { config } from '../config'
 import { logger } from '../utils/logger'
+import { buildTelegramOpenPanelButton } from '../utils/telegramMiniAppUrl'
 
 const TG_API = 'https://api.telegram.org/bot'
 
@@ -157,14 +159,14 @@ async function notifyTelegramChannelJoined(channelChatId: string): Promise<void>
   }
   const reg = telegramChannelRegistry.getChannel(channelChatId)
   const title = reg?.title ?? 'канал'
-  const homeUrl = process.env.MINI_APP_URL?.trim() || 'https://t.me/commentvmax_bot'
   const admins = await listTelegramChatAdministrators(token, channelChatId)
   const message =
     `✅ Канал подключён\n\n` +
     `«${title}» успешно связан с CommentBot в Telegram.\n\n` +
     `Подключите уведомления и настройки в мини-приложении.`
+  const openBtn = buildTelegramOpenPanelButton(config.miniAppUrl)
   const keyboard = {
-    inline_keyboard: [[{ text: '💬 Открыть панель управления', url: homeUrl }]],
+    inline_keyboard: [[{ ...openBtn, text: '💬 Открыть панель управления' }]],
   }
   for (const admin of admins) {
     if (!admin.startedBot) {

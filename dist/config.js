@@ -9,6 +9,7 @@ exports.getFlowPollIntervalMs = getFlowPollIntervalMs;
 const node_crypto_1 = require("node:crypto");
 const dotenv_1 = __importDefault(require("dotenv"));
 const logger_1 = require("./utils/logger");
+const telegramMiniAppUrl_1 = require("./utils/telegramMiniAppUrl");
 dotenv_1.default.config();
 function computeAdminToken(ownerUserId, botToken) {
     return (0, node_crypto_1.createHash)('sha256')
@@ -79,7 +80,11 @@ function getConfig() {
     }
     const receiveMode = parseReceiveMode(process.env.MAX_RECEIVE_MODE, NODE_ENV);
     const miniAppUrlRaw = (process.env.MINI_APP_URL ?? '').trim();
-    const miniAppUrl = miniAppUrlRaw === '' ? undefined : miniAppUrlRaw.replace(/\/+$/, '');
+    let miniAppUrl = (0, telegramMiniAppUrl_1.normalizeMiniAppUrl)(miniAppUrlRaw);
+    const webhookUrlEarly = (process.env.WEBHOOK_URL ?? '').trim();
+    if (!miniAppUrl && webhookUrlEarly.startsWith('https://')) {
+        miniAppUrl = (0, telegramMiniAppUrl_1.deriveMiniAppUrlFromWebhook)(webhookUrlEarly);
+    }
     const apiPortRaw = (process.env.API_PORT ?? '').trim();
     let listenPort = PORT;
     if (apiPortRaw !== '') {

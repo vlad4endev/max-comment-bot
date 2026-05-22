@@ -6,6 +6,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.createHttpApp = createHttpApp;
 exports.createWebhookApp = createWebhookApp;
 const node_path_1 = require("node:path");
+const compression_1 = __importDefault(require("compression"));
 const express_1 = __importDefault(require("express"));
 const adminRoutes_1 = require("../api/adminRoutes");
 const channelImportRoutes_1 = require("../api/channelImportRoutes");
@@ -34,6 +35,15 @@ function looksLikeUpdate(body) {
 function createHttpApp(options) {
     const app = (0, express_1.default)();
     app.disable('x-powered-by');
+    app.use((0, compression_1.default)({
+        threshold: 1024,
+        filter: (req, res) => {
+            if (req.headers['x-no-compression']) {
+                return false;
+            }
+            return compression_1.default.filter(req, res);
+        },
+    }));
     app.get('/health', (_req, res) => {
         res.status(200).type('text/plain').send('ok');
     });
@@ -84,9 +94,22 @@ function createHttpApp(options) {
         });
     });
     const miniappRoot = (0, node_path_1.join)(process.cwd(), 'miniapp');
+    const miniappIndex = (0, node_path_1.join)(miniappRoot, 'index.html');
+    /** Без редиректа на `/miniapp/` — WebView MAX/Telegram иногда не следует за 301. */
+    app.get('/miniapp', (_req, res) => {
+        res.sendFile(miniappIndex, (err) => {
+            if (err) {
+                logger_1.logger.error('/miniapp: sendFile failed', err);
+                if (!res.headersSent) {
+                    res.status(500).end();
+                }
+            }
+        });
+    });
     app.use('/miniapp', express_1.default.static(miniappRoot, {
         etag: true,
         lastModified: true,
+        redirect: false,
         setHeaders(res, filePath) {
             if (filePath.endsWith('.html')) {
                 res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');

@@ -20,7 +20,9 @@ const telegramChannelAdminJoinNotified_1 = require("./telegramChannelAdminJoinNo
 const telegramChannelActivationState_1 = require("./telegramChannelActivationState");
 const telegramDeeplink_1 = require("../utils/telegramDeeplink");
 const telegramTgChainLifecycle_1 = require("./telegramTgChainLifecycle");
+const config_1 = require("../config");
 const logger_1 = require("../utils/logger");
+const telegramMiniAppUrl_1 = require("../utils/telegramMiniAppUrl");
 const TG_API = 'https://api.telegram.org/bot';
 let cachedBotUserId = null;
 const missingAdminRightsNotifiedChannels = new Set();
@@ -112,13 +114,13 @@ async function notifyTelegramChannelJoined(channelChatId) {
     }
     const reg = telegramChannelRegistry_1.telegramChannelRegistry.getChannel(channelChatId);
     const title = reg?.title ?? 'канал';
-    const homeUrl = process.env.MINI_APP_URL?.trim() || 'https://t.me/commentvmax_bot';
     const admins = await (0, integrationPlatformClient_1.listTelegramChatAdministrators)(token, channelChatId);
     const message = `✅ Канал подключён\n\n` +
         `«${title}» успешно связан с CommentBot в Telegram.\n\n` +
         `Подключите уведомления и настройки в мини-приложении.`;
+    const openBtn = (0, telegramMiniAppUrl_1.buildTelegramOpenPanelButton)(config_1.config.miniAppUrl);
     const keyboard = {
-        inline_keyboard: [[{ text: '💬 Открыть панель управления', url: homeUrl }]],
+        inline_keyboard: [[{ ...openBtn, text: '💬 Открыть панель управления' }]],
     };
     for (const admin of admins) {
         if (!admin.startedBot) {

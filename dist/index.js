@@ -31,6 +31,7 @@ const channelLinkService_1 = require("./services/channelLinkService");
 const tgChainForwarder_1 = require("./services/tgChainForwarder");
 const telegramTgChainLifecycle_1 = require("./services/telegramTgChainLifecycle");
 const createWebhookApp_1 = require("./webhook/createWebhookApp");
+const telegramMiniAppUrl_1 = require("./utils/telegramMiniAppUrl");
 async function main() {
     (0, migrate_1.migrateFromJson)();
     (0, migrateAutopostsFromJson_1.migrateAutopostsFromJson)();
@@ -78,6 +79,7 @@ async function main() {
         .getAllChannels()
         .filter((c) => c.type === 'channel').length;
     const enabledFlows = integrationsStore_1.integrationsStore.getFlows().filter((f) => f.enabled);
+    (0, telegramMiniAppUrl_1.logMiniAppUrlDiagnostics)(config_1.config.miniAppUrl, config_1.config.botNickname);
     logger_1.logger.info('🚀 Бот запущен', {
         channelCount,
         pollerConcurrency: channelPoller_1.POLL_CONCURRENCY,

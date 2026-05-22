@@ -2,6 +2,7 @@ import { join } from 'node:path'
 
 import type { Bot } from '@maxhub/max-bot-api'
 import type { Update } from '@maxhub/max-bot-api/types'
+import compression from 'compression'
 import express from 'express'
 
 import { createAdminRouter } from '../api/adminRoutes'
@@ -56,6 +57,17 @@ function looksLikeUpdate(body: unknown): body is Update {
 export function createHttpApp(options: HttpAppOptions): express.Express {
   const app = express()
   app.disable('x-powered-by')
+  app.use(
+    compression({
+      threshold: 1024,
+      filter: (req, res) => {
+        if (req.headers['x-no-compression']) {
+          return false
+        }
+        return compression.filter(req, res)
+      },
+    }),
+  )
 
   app.get('/health', (_req, res) => {
     res.status(200).type('text/plain').send('ok')
@@ -120,11 +132,24 @@ export function createHttpApp(options: HttpAppOptions): express.Express {
   })
 
   const miniappRoot = join(process.cwd(), 'miniapp')
+  const miniappIndex = join(miniappRoot, 'index.html')
+  /** Без редиректа на `/miniapp/` — WebView MAX/Telegram иногда не следует за 301. */
+  app.get('/miniapp', (_req, res) => {
+    res.sendFile(miniappIndex, (err) => {
+      if (err) {
+        logger.error('/miniapp: sendFile failed', err)
+        if (!res.headersSent) {
+          res.status(500).end()
+        }
+      }
+    })
+  })
   app.use(
     '/miniapp',
     express.static(miniappRoot, {
       etag: true,
       lastModified: true,
+      redirect: false,
       setHeaders(res, filePath) {
         if (filePath.endsWith('.html')) {
           res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate')

@@ -29,6 +29,8 @@ const accountPairingService_1 = require("./accountPairingService");
 const telegramDeeplink_1 = require("../utils/telegramDeeplink");
 const telegramChannelActivation_1 = require("./telegramChannelActivation");
 const channelLinkAdminTeamSync_1 = require("./channelLinkAdminTeamSync");
+const telegramMiniAppUrl_1 = require("../utils/telegramMiniAppUrl");
+const config_1 = require("../config");
 const logger_1 = require("../utils/logger");
 const TG_API = 'https://api.telegram.org/bot';
 async function sendTelegramBotMessage(token, chatId, text, extra) {
@@ -42,12 +44,18 @@ async function answerTelegramCallbackQuery(token, callbackQueryId) {
     await axios_1.default.post(`${TG_API}${token}/answerCallbackQuery`, { callback_query_id: callbackQueryId }, { timeout: 10_000 });
 }
 function buildTelegramMiniAppHomeUrl() {
-    return process.env.MINI_APP_URL?.trim() || 'https://t.me/commentvmax_bot';
+    const fromConfig = config_1.config.miniAppUrl?.trim();
+    if (fromConfig && (0, telegramMiniAppUrl_1.isTelegramWebAppUrl)(fromConfig)) {
+        return (0, telegramMiniAppUrl_1.normalizeMiniAppUrl)(fromConfig) ?? null;
+    }
+    const fromEnv = (0, telegramMiniAppUrl_1.normalizeMiniAppUrl)(process.env.MINI_APP_URL ?? '');
+    if (fromEnv && (0, telegramMiniAppUrl_1.isTelegramWebAppUrl)(fromEnv)) {
+        return fromEnv;
+    }
+    return null;
 }
 function buildTelegramStartInlineKeyboard(homeUrl, options) {
-    const openBtn = /^https:\/\//i.test(homeUrl)
-        ? { text: '🚀 Открыть панель', web_app: { url: homeUrl } }
-        : { text: '🚀 Открыть панель', url: homeUrl };
+    const openBtn = (0, telegramMiniAppUrl_1.buildTelegramOpenPanelButton)(homeUrl);
     const rows = [[openBtn]];
     if (options?.includeHowItWorks !== false) {
         rows.push([{ text: '📖 Как это работает', callback_data: 'tg_how_it_works' }]);

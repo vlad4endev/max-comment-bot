@@ -42,6 +42,7 @@ import { repairLegacyMiniappTgChains } from './services/channelLinkService'
 import { setTgChainForwarderBot, startTgChainForwarder } from './services/tgChainForwarder'
 import { setTelegramTgChainLifecycleBot } from './services/telegramTgChainLifecycle'
 import { createHttpApp, createWebhookApp } from './webhook/createWebhookApp'
+import { logMiniAppUrlDiagnostics } from './utils/telegramMiniAppUrl'
 
 async function main(): Promise<void> {
   migrateFromJson()
@@ -90,6 +91,8 @@ async function main(): Promise<void> {
     .getAllChannels()
     .filter((c) => c.type === 'channel').length
   const enabledFlows = integrationsStore.getFlows().filter((f) => f.enabled)
+  logMiniAppUrlDiagnostics(config.miniAppUrl, config.botNickname)
+
   logger.info('🚀 Бот запущен', {
     channelCount,
     pollerConcurrency: POLL_CONCURRENCY,
