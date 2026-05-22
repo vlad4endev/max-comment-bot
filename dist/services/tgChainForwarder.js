@@ -13,6 +13,7 @@ const database_1 = require("../db/database");
 const telegramReader_1 = require("../forwarder/telegramReader");
 const adminPanelState_1 = require("../api/adminPanelState");
 const channelImportService_1 = require("./channelImportService");
+const integrationPlatformClient_1 = require("./integrationPlatformClient");
 const channelPostPublishGate_1 = require("./channelPostPublishGate");
 const postStore_1 = require("./postStore");
 const resolveChannelChatId_1 = require("./resolveChannelChatId");
@@ -108,11 +109,12 @@ function markForwarded(chainId, message, maxMid, chunkIndex) {
          tg_payload = excluded.tg_payload`)
         .run(chainId, message.message_id, maxMid, mediaGroupId, chunkIndex, payload);
 }
+/** Токен TG-бота для опроса channel_post. Пустой bot_token в связке = основной CommentBot (как в miniapp), не reader. */
 function resolveTgToken(chain) {
     const fromChain = chain.bot_token?.trim();
     if (fromChain)
         return fromChain;
-    return (process.env.TG_READER_BOT_TOKEN || '').trim() || (0, resolveTelegramBotToken_1.resolveTelegramBotToken)();
+    return (0, resolveTelegramBotToken_1.resolveTelegramBotToken)();
 }
 function pickAlbumCaption(messages, addSignature) {
     for (const m of messages) {
@@ -699,9 +701,10 @@ async function runTgChainsOnce() {
         tokenGroups.set(token, list);
     }
     for (const [tgToken, group] of tokenGroups) {
+        await (0, integrationPlatformClient_1.ensureTelegramPollingMode)(tgToken);
         const pollErr = await (0, channelImportService_1.assertTelegramPollingReady)(tgToken);
         if (pollErr) {
-            logger_1.logger.warn('[tgChain] telegram polling not ready', { err: pollErr });
+            logger_1.logger.warn('[tgChain] telegram polling not ready', { err: pollErr, chainIds: group.map((c) => c.id) });
             continue;
         }
         const offset = getReaderOffset(tgToken);

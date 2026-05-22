@@ -8,15 +8,18 @@ exports.finalizeChannelLinkDraftInMax = finalizeChannelLinkDraftInMax;
 exports.confirmChannelLinkDraft = confirmChannelLinkDraft;
 exports.listChannelLinksForMaxUser = listChannelLinksForMaxUser;
 exports.listChannelLinksForTelegramUser = listChannelLinksForTelegramUser;
+exports.repairLegacyMiniappTgChains = repairLegacyMiniappTgChains;
 exports.getOwnerProfileBundle = getOwnerProfileBundle;
 const max_bot_api_1 = require("@maxhub/max-bot-api");
 const adminPanelState_1 = require("../api/adminPanelState");
 const channelLinkCallback_1 = require("../utils/channelLinkCallback");
+const tgChainPair_1 = require("../utils/tgChainPair");
 const channelRegistry_1 = require("./channelRegistry");
 const channelLinkDraftStore_1 = require("./channelLinkDraftStore");
 const channelPostActions_1 = require("./channelPostActions");
 const integrationPlatformClient_1 = require("./integrationPlatformClient");
 const ownerProfileStore_1 = require("./ownerProfileStore");
+const resolveTelegramBotToken_1 = require("./resolveTelegramBotToken");
 const stateManager_1 = require("./stateManager");
 const telegramMiniappService_1 = require("./telegramMiniappService");
 const telegramBotUserStore_1 = require("./telegramBotUserStore");
@@ -40,14 +43,6 @@ function chainToWire(chain) {
         forwarded_today: chain.forwarded_today,
         created_at: chain.created_at,
     };
-}
-function findActiveChainConflict(chains, maxChatId, tgChannelId, tgUsername) {
-    const tgKey = tgChannelId.trim();
-    const uname = tgUsername.trim().replace(/^@/, '').toLowerCase();
-    return (chains.find((c) => c.active &&
-        (c.max_chat_id === maxChatId ||
-            (tgKey && c.tg_channel_id === tgKey) ||
-            (!tgKey && uname && c.tg_username.toLowerCase() === uname))) ?? null);
 }
 function assertDraftNotExpired(draft) {
     const expiresMs = Date.parse(draft.expires_at);
@@ -114,15 +109,17 @@ async function sendMaxLinkConfirmRequest(bot, draft, tgTitle, tgUsername) {
     }
 }
 async function finalizeDraftToChain(draft, tgChannelId, tgUsername, tgUserId) {
+    const tgToken = (0, resolveTelegramBotToken_1.resolveTelegramBotToken)();
+    const normalizedUsername = tgUsername.trim().replace(/^@/, '');
     const chain = await (0, adminPanelState_1.createTgChain)({
         max_chat_id: draft.max_chat_id,
         max_title: draft.max_title,
-        tg_username: tgUsername,
+        tg_username: normalizedUsername,
         tg_channel_id: tgChannelId,
-        bot_token: '',
-        forward_posts: draft.forward_posts,
+        bot_token: tgToken,
+        forward_posts: draft.forward_posts !== false,
         forward_comments: false,
-        add_comments_button: draft.add_comments_button,
+        add_comments_button: draft.add_comments_button !== false,
         add_signature: false,
         active: true,
         owner_profile_id: draft.profile_id,
@@ -130,6 +127,9 @@ async function finalizeDraftToChain(draft, tgChannelId, tgUsername, tgUserId) {
         max_user_id: draft.max_user_id,
         tg_user_id: tgUserId,
     });
+    if (tgToken) {
+        await (0, integrationPlatformClient_1.ensureTelegramPollingMode)(tgToken);
+    }
     channelLinkDraftStore_1.channelLinkDraftStore.markCompleted(draft.code, {
         tgChannelId,
         tgUsername,
@@ -145,11 +145,6 @@ async function syncOwnerProfileFromMiniapp(platform, account) {
 async function createChannelLinkDraft(bot, input) {
     await (0, adminPanelState_1.ensureAdminPanelStateLoaded)();
     await assertMaxChannelReady(bot, input.maxChatId, input.maxUserId);
-    const chains = await (0, adminPanelState_1.listTgChains)();
-    const existing = chains.find((c) => c.active && c.max_chat_id === input.maxChatId);
-    if (existing) {
-        throw new Error('max channel already linked');
-    }
     const reg = channelRegistry_1.channelRegistry.getChannel(input.maxChatId);
     const profileId = ownerProfileStore_1.ownerProfileStore.syncAccount(input.account);
     const draft = channelLinkDraftStore_1.channelLinkDraftStore.createDraft({
@@ -217,7 +212,7 @@ async function submitChannelLinkDraftFromTelegram(tgToken, input, options) {
     }
     const { tgUsername, tgTitle } = await assertTelegramChannelReady(tgToken, chatId, input.tgUserId);
     const chains = await (0, adminPanelState_1.listTgChains)();
-    const conflict = findActiveChainConflict(chains, draft.max_chat_id, chatId, tgUsername);
+    const conflict = (0, tgChainPair_1.findActiveTgChainForPair)(chains, draft.max_chat_id, chatId, tgUsername);
     if (conflict) {
         throw new Error('pair already linked');
     }
@@ -263,7 +258,7 @@ async function finalizeChannelLinkDraftInMax(bot, code, maxUserId) {
     }
     await assertMaxChannelReady(bot, draft.max_chat_id, maxUserId);
     const chains = await (0, adminPanelState_1.listTgChains)();
-    const conflict = findActiveChainConflict(chains, draft.max_chat_id, chatId, tgUsername);
+    const conflict = (0, tgChainPair_1.findActiveTgChainForPair)(chains, draft.max_chat_id, chatId, tgUsername);
     if (conflict) {
         throw new Error('pair already linked');
     }
@@ -314,6 +309,27 @@ async function listChannelLinksForTelegramUser(tgToken, tgUserId) {
         return false;
     })
         .map(chainToWire);
+}
+/** Подставляет основной TG-токен в старые miniapp-цепочки с пустым bot_token. */
+async function repairLegacyMiniappTgChains() {
+    await (0, adminPanelState_1.ensureAdminPanelStateLoaded)();
+    const token = (0, resolveTelegramBotToken_1.resolveTelegramBotToken)();
+    if (!token) {
+        return 0;
+    }
+    const chains = await (0, adminPanelState_1.listTgChains)();
+    let repaired = 0;
+    for (const chain of chains) {
+        if (chain.created_via !== 'miniapp_link' || chain.bot_token?.trim()) {
+            continue;
+        }
+        await (0, adminPanelState_1.updateTgChain)(chain.id, { bot_token: token });
+        repaired += 1;
+    }
+    if (repaired > 0) {
+        logger_1.logger.info('repairLegacyMiniappTgChains: bot_token restored', { repaired });
+    }
+    return repaired;
 }
 function getOwnerProfileBundle(profileId) {
     const accounts = ownerProfileStore_1.ownerProfileStore.getAccountsForProfile(profileId);

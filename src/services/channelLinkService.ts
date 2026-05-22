@@ -5,14 +5,20 @@ import {
   createTgChain,
   ensureAdminPanelStateLoaded,
   listTgChains,
+  updateTgChain,
   type TgChainRecord,
 } from '../api/adminPanelState'
 import { buildConfirmChannelLinkPayload } from '../utils/channelLinkCallback'
+import { findActiveTgChainForPair } from '../utils/tgChainPair'
 import { channelRegistry } from './channelRegistry'
 import { channelLinkDraftStore } from './channelLinkDraftStore'
 import { isUserChannelAdmin } from './channelPostActions'
-import { listTelegramChatAdministrators } from './integrationPlatformClient'
+import {
+  ensureTelegramPollingMode,
+  listTelegramChatAdministrators,
+} from './integrationPlatformClient'
 import { ownerProfileStore, type OwnerAccountInput } from './ownerProfileStore'
+import { resolveTelegramBotToken } from './resolveTelegramBotToken'
 import { stateManager } from './stateManager'
 import {
   listTelegramMiniappChannelsForUser,
@@ -55,25 +61,6 @@ function chainToWire(chain: TgChainRecord): ChannelLinkWire {
     forwarded_today: chain.forwarded_today,
     created_at: chain.created_at,
   }
-}
-
-function findActiveChainConflict(
-  chains: TgChainRecord[],
-  maxChatId: number,
-  tgChannelId: string,
-  tgUsername: string,
-): TgChainRecord | null {
-  const tgKey = tgChannelId.trim()
-  const uname = tgUsername.trim().replace(/^@/, '').toLowerCase()
-  return (
-    chains.find(
-      (c) =>
-        c.active &&
-        (c.max_chat_id === maxChatId ||
-          (tgKey && c.tg_channel_id === tgKey) ||
-          (!tgKey && uname && c.tg_username.toLowerCase() === uname)),
-    ) ?? null
-  )
 }
 
 function assertDraftNotExpired(draft: { expires_at: string }): void {
@@ -176,15 +163,17 @@ async function finalizeDraftToChain(
   tgUsername: string,
   tgUserId: number,
 ): Promise<TgChainRecord> {
+  const tgToken = resolveTelegramBotToken()
+  const normalizedUsername = tgUsername.trim().replace(/^@/, '')
   const chain = await createTgChain({
     max_chat_id: draft.max_chat_id,
     max_title: draft.max_title,
-    tg_username: tgUsername,
+    tg_username: normalizedUsername,
     tg_channel_id: tgChannelId,
-    bot_token: '',
-    forward_posts: draft.forward_posts,
+    bot_token: tgToken,
+    forward_posts: draft.forward_posts !== false,
     forward_comments: false,
-    add_comments_button: draft.add_comments_button,
+    add_comments_button: draft.add_comments_button !== false,
     add_signature: false,
     active: true,
     owner_profile_id: draft.profile_id,
@@ -192,6 +181,10 @@ async function finalizeDraftToChain(
     max_user_id: draft.max_user_id,
     tg_user_id: tgUserId,
   })
+
+  if (tgToken) {
+    await ensureTelegramPollingMode(tgToken)
+  }
 
   channelLinkDraftStore.markCompleted(draft.code, {
     tgChannelId,
@@ -226,12 +219,6 @@ export async function createChannelLinkDraft(
 }> {
   await ensureAdminPanelStateLoaded()
   await assertMaxChannelReady(bot, input.maxChatId, input.maxUserId)
-
-  const chains = await listTgChains()
-  const existing = chains.find((c) => c.active && c.max_chat_id === input.maxChatId)
-  if (existing) {
-    throw new Error('max channel already linked')
-  }
 
   const reg = channelRegistry.getChannel(input.maxChatId)
   const profileId = ownerProfileStore.syncAccount(input.account)
@@ -328,7 +315,7 @@ export async function submitChannelLinkDraftFromTelegram(
   const { tgUsername, tgTitle } = await assertTelegramChannelReady(tgToken, chatId, input.tgUserId)
 
   const chains = await listTgChains()
-  const conflict = findActiveChainConflict(chains, draft.max_chat_id, chatId, tgUsername)
+  const conflict = findActiveTgChainForPair(chains, draft.max_chat_id, chatId, tgUsername)
   if (conflict) {
     throw new Error('pair already linked')
   }
@@ -387,7 +374,7 @@ export async function finalizeChannelLinkDraftInMax(
   await assertMaxChannelReady(bot, draft.max_chat_id, maxUserId)
 
   const chains = await listTgChains()
-  const conflict = findActiveChainConflict(chains, draft.max_chat_id, chatId, tgUsername)
+  const conflict = findActiveTgChainForPair(chains, draft.max_chat_id, chatId, tgUsername)
   if (conflict) {
     throw new Error('pair already linked')
   }
@@ -467,6 +454,28 @@ export async function listChannelLinksForTelegramUser(
       return false
     })
     .map(chainToWire)
+}
+
+/** Подставляет основной TG-токен в старые miniapp-цепочки с пустым bot_token. */
+export async function repairLegacyMiniappTgChains(): Promise<number> {
+  await ensureAdminPanelStateLoaded()
+  const token = resolveTelegramBotToken()
+  if (!token) {
+    return 0
+  }
+  const chains = await listTgChains()
+  let repaired = 0
+  for (const chain of chains) {
+    if (chain.created_via !== 'miniapp_link' || chain.bot_token?.trim()) {
+      continue
+    }
+    await updateTgChain(chain.id, { bot_token: token })
+    repaired += 1
+  }
+  if (repaired > 0) {
+    logger.info('repairLegacyMiniappTgChains: bot_token restored', { repaired })
+  }
+  return repaired
 }
 
 export function getOwnerProfileBundle(profileId: string): {

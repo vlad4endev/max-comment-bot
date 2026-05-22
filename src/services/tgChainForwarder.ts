@@ -15,6 +15,7 @@ import {
 } from '../forwarder/telegramReader'
 import { listTgChains, updateTgChain, type TgChainRecord } from '../api/adminPanelState'
 import { assertTelegramPollingReady } from './channelImportService'
+import { ensureTelegramPollingMode } from './integrationPlatformClient'
 import { attachAndVerifyCommentsForForwardedPost } from './channelPostPublishGate'
 import { postStore } from './postStore'
 import { resolveCanonicalChannelChatId } from './resolveChannelChatId'
@@ -156,10 +157,11 @@ function markForwarded(
     .run(chainId, message.message_id, maxMid, mediaGroupId, chunkIndex, payload)
 }
 
+/** Токен TG-бота для опроса channel_post. Пустой bot_token в связке = основной CommentBot (как в miniapp), не reader. */
 function resolveTgToken(chain: TgChainRecord): string {
   const fromChain = chain.bot_token?.trim()
   if (fromChain) return fromChain
-  return (process.env.TG_READER_BOT_TOKEN || '').trim() || resolveTelegramBotToken()
+  return resolveTelegramBotToken()
 }
 
 function pickAlbumCaption(messages: TgMessage[], addSignature: boolean): string {
@@ -842,9 +844,10 @@ export async function runTgChainsOnce(): Promise<boolean> {
   }
 
   for (const [tgToken, group] of tokenGroups) {
+    await ensureTelegramPollingMode(tgToken)
     const pollErr = await assertTelegramPollingReady(tgToken)
     if (pollErr) {
-      logger.warn('[tgChain] telegram polling not ready', { err: pollErr })
+      logger.warn('[tgChain] telegram polling not ready', { err: pollErr, chainIds: group.map((c) => c.id) })
       continue
     }
 

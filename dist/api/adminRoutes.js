@@ -1,4 +1,37 @@
 "use strict";
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
@@ -975,11 +1008,8 @@ function createAdminRouter(deps) {
             res.status(400).json({ error: 'invalid tg channel' });
             return;
         }
-        const existing = (await (0, adminPanelState_1.listTgChains)()).find((c) => c.active &&
-            c.max_chat_id === maxChatId &&
-            (tgChannelId
-                ? c.tg_channel_id === tgChannelId
-                : c.tg_username.toLowerCase() === tgUsername.toLowerCase()));
+        const { findActiveTgChainForPair } = await Promise.resolve().then(() => __importStar(require('../utils/tgChainPair')));
+        const existing = findActiveTgChainForPair(await (0, adminPanelState_1.listTgChains)(), maxChatId, tgChannelId ?? '', tgUsername);
         if (existing) {
             res.status(400).json({ error: 'Активная цепочка для этой пары TG → MAX уже есть' });
             return;
@@ -991,7 +1021,7 @@ function createAdminRouter(deps) {
             tg_username: tgUsername,
             tg_channel_id: tgChannelId,
             bot_token: parseNonEmptyString(req.body.bot_token) ?? '',
-            forward_posts: Boolean(req.body.forward_posts),
+            forward_posts: req.body.forward_posts !== false,
             forward_comments: Boolean(req.body.forward_comments),
             add_comments_button: req.body.add_comments_button !== false,
             add_signature: Boolean(req.body.add_signature),

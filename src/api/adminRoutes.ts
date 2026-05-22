@@ -52,6 +52,7 @@ import {
 import { createAutopostRouter } from './autopostRoutes'
 import { buildDashboardAnalytics, parseDashboardPeriodDays } from '../services/analyticsService'
 import { parseAdminLogLine, type AdminLogEntry, type AdminLogLevel } from '../utils/adminLogFormat'
+import { findActiveTgChainForPair } from '../utils/tgChainPair'
 import { getAdminLogTail, logger } from '../utils/logger'
 import { extractMemberAvatarUrl } from '../utils/memberAvatar'
 
@@ -1099,13 +1100,11 @@ export function createAdminRouter(deps: AdminRouterDeps): express.Router {
       res.status(400).json({ error: 'invalid tg channel' })
       return
     }
-    const existing = (await listTgChains()).find(
-      (c) =>
-        c.active &&
-        c.max_chat_id === maxChatId &&
-        (tgChannelId
-          ? c.tg_channel_id === tgChannelId
-          : c.tg_username.toLowerCase() === tgUsername.toLowerCase()),
+    const existing = findActiveTgChainForPair(
+      await listTgChains(),
+      maxChatId,
+      tgChannelId ?? '',
+      tgUsername,
     )
     if (existing) {
       res.status(400).json({ error: 'Активная цепочка для этой пары TG → MAX уже есть' })
@@ -1118,7 +1117,7 @@ export function createAdminRouter(deps: AdminRouterDeps): express.Router {
       tg_username: tgUsername,
       tg_channel_id: tgChannelId,
       bot_token: parseNonEmptyString(req.body.bot_token) ?? '',
-      forward_posts: Boolean(req.body.forward_posts),
+      forward_posts: req.body.forward_posts !== false,
       forward_comments: Boolean(req.body.forward_comments),
       add_comments_button: req.body.add_comments_button !== false,
       add_signature: Boolean(req.body.add_signature),

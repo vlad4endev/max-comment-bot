@@ -71,6 +71,8 @@ export declare function confirmChannelLinkDraft(tgToken: string, input: {
 }>;
 export declare function listChannelLinksForMaxUser(bot: Bot, maxUserId: number): Promise<ChannelLinkWire[]>;
 export declare function listChannelLinksForTelegramUser(tgToken: string, tgUserId: number): Promise<ChannelLinkWire[]>;
+/** Подставляет основной TG-токен в старые miniapp-цепочки с пустым bot_token. */
+export declare function repairLegacyMiniappTgChains(): Promise<number>;
 export declare function getOwnerProfileBundle(profileId: string): {
     profile_id: string;
     accounts: Array<{

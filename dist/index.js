@@ -27,6 +27,7 @@ const integrationsStore_1 = require("./services/integrationsStore");
 const autopostScheduler_1 = require("./services/autopostScheduler");
 const channelImportService_1 = require("./services/channelImportService");
 const adminPanelState_1 = require("./api/adminPanelState");
+const channelLinkService_1 = require("./services/channelLinkService");
 const tgChainForwarder_1 = require("./services/tgChainForwarder");
 const telegramTgChainLifecycle_1 = require("./services/telegramTgChainLifecycle");
 const createWebhookApp_1 = require("./webhook/createWebhookApp");
@@ -46,6 +47,7 @@ async function main() {
     await (0, bot_1.ensureBotProfile)(bot);
     await integrationsStore_1.integrationsStore.load();
     await (0, adminPanelState_1.ensureAdminPanelStateLoaded)();
+    await (0, channelLinkService_1.repairLegacyMiniappTgChains)();
     const tgIntegration = integrationsStore_1.integrationsStore
         .getIntegrations()
         .find((i) => i.platform === 'telegram' && i.status === 'connected');
