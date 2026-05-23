@@ -66,41 +66,76 @@
       if (el) el.classList.add('hidden')
     }
 
+    /** Telegram WebView (MAX script also defines `window.WebApp`, so UA/URL must be checked). */
+    function isLikelyTelegramWebView() {
+      var ua = String(navigator.userAgent || '')
+      if (/Telegram/i.test(ua)) return true
+      try {
+        var sp = new URLSearchParams(location.search)
+        if (sp.get('platform') === 'telegram') return true
+        if (/[?&]tg_/i.test(location.search || '')) return true
+      } catch (e) {}
+      var tgApi = window.Telegram && window.Telegram.WebApp
+      if (!tgApi) return false
+      var tgUnsafe = tgApi.initDataUnsafe || {}
+      var tgUser = tgUnsafe.user
+      if (tgUser && getBridgeNumericUserId(tgUser) != null) return true
+      return typeof tgApi.initData === 'string' && tgApi.initData.trim() !== ''
+    }
+
+    function isActiveMaxBridge(maxApi) {
+      if (!maxApi) return false
+      var maxPlatform =
+        typeof maxApi.platform === 'string' ? maxApi.platform.trim().toLowerCase() : ''
+      if (
+        maxPlatform === 'ios' ||
+        maxPlatform === 'android' ||
+        maxPlatform === 'desktop' ||
+        maxPlatform === 'web'
+      ) {
+        return true
+      }
+      var maxUnsafe = maxApi.initDataUnsafe || {}
+      var maxUser = normalizeBridgeUser(maxUnsafe.user || {})
+      if (getBridgeNumericUserId(maxUser) != null) return true
+      return typeof maxApi.initData === 'string' && maxApi.initData.trim() !== ''
+    }
+
+    function isActiveTelegramBridge(tgApi) {
+      if (!tgApi) return false
+      var tgUnsafe = tgApi.initDataUnsafe || {}
+      var tgUser = tgUnsafe.user
+      if (tgUser && getBridgeNumericUserId(tgUser) != null) return true
+      return typeof tgApi.initData === 'string' && tgApi.initData.trim() !== ''
+    }
+
     /** MAX `window.WebApp` or Telegram `Telegram.WebApp` when opened from TG bot. */
     function getWebAppBridge() {
       var maxApi = window.WebApp
       var tgApi = window.Telegram && window.Telegram.WebApp
-      if (maxApi) {
-        var maxPlatform =
-          typeof maxApi.platform === 'string' ? maxApi.platform.trim().toLowerCase() : ''
-        if (
-          maxPlatform === 'ios' ||
-          maxPlatform === 'android' ||
-          maxPlatform === 'desktop' ||
-          maxPlatform === 'web'
-        ) {
-          return maxApi
-        }
-        var maxUnsafe = maxApi.initDataUnsafe || {}
-        var maxUser = normalizeBridgeUser(maxUnsafe.user || {})
-        var hasMaxUser = getBridgeNumericUserId(maxUser) != null
-        var hasMaxInit = typeof maxApi.initData === 'string' && maxApi.initData.trim() !== ''
-        if (hasMaxUser || hasMaxInit) {
-          return maxApi
-        }
+      var likelyTg = isLikelyTelegramWebView()
+
+      if (likelyTg && tgApi) {
+        if (isActiveTelegramBridge(tgApi)) return tgApi
+        if (!isActiveMaxBridge(maxApi)) return tgApi
       }
-      if (tgApi) {
-        var tgUnsafe = tgApi.initDataUnsafe || {}
-        var tgUser = tgUnsafe.user
-        var hasTgUser = !!(tgUser && getBridgeNumericUserId(tgUser) != null)
-        var hasTgInit = typeof tgApi.initData === 'string' && tgApi.initData.trim() !== ''
-        if (hasTgUser || hasTgInit) return tgApi
-      }
-      return maxApi || tgApi || null
+
+      if (isActiveMaxBridge(maxApi)) return maxApi
+
+      if (tgApi && isActiveTelegramBridge(tgApi)) return tgApi
+
+      if (likelyTg && tgApi) return tgApi
+      if (isActiveMaxBridge(maxApi)) return maxApi
+      return tgApi || null
     }
 
     function isMaxMiniappBridge(bridge) {
-      return !!(bridge && window.WebApp && bridge === window.WebApp)
+      return !!(
+        bridge &&
+        window.WebApp &&
+        bridge === window.WebApp &&
+        isActiveMaxBridge(bridge)
+      )
     }
 
     function isTelegramMiniappBridge(bridge) {
@@ -4148,10 +4183,12 @@
           /^\d+$/.test(String(urlSp.get('user_id') || '').trim()) ||
           /^\d+$/.test(String(urlSp.get('tg_uid') || '').trim());
         var hasBridgeUser = getBridgeNumericUserId(user) != null;
+        var likelyTg = isLikelyTelegramWebView();
         var needTgScript =
-          !inMax &&
+          (likelyTg || !inMax) &&
           (!bridge || !hasBridgeUser) &&
-          (urlSp.get('platform') === 'telegram' ||
+          (likelyTg ||
+            urlSp.get('platform') === 'telegram' ||
             /[?&]tg_/i.test(location.search || '') ||
             !!(window.Telegram && window.Telegram.WebApp));
         if (needTgScript && !(window.Telegram && window.Telegram.WebApp)) {
