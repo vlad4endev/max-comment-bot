@@ -11,15 +11,17 @@ exports.buildTelegramCommentNotificationKeyboard = buildTelegramCommentNotificat
 exports.notifyTelegramAdminsNewMiniappComment = notifyTelegramAdminsNewMiniappComment;
 exports.syncTelegramAdminCommentNotification = syncTelegramAdminCommentNotification;
 const axios_1 = __importDefault(require("axios"));
-const config_1 = require("../config");
+const adminPanelState_1 = require("../api/adminPanelState");
 const logger_1 = require("../utils/logger");
 const telegramMiniAppUrl_1 = require("../utils/telegramMiniAppUrl");
 const channelNotifyLinkStore_1 = require("./channelNotifyLinkStore");
 const channelLinkAdminTeamSync_1 = require("./channelLinkAdminTeamSync");
+const channelCommentsButtonPolicy_1 = require("./channelCommentsButtonPolicy");
 const commentStore_1 = require("./commentStore");
 const notificationService_1 = require("./notificationService");
 const integrationsStore_1 = require("./integrationsStore");
 const integrationPlatformClient_1 = require("./integrationPlatformClient");
+const resolveTelegramBotToken_1 = require("./resolveTelegramBotToken");
 const telegramMiniappAuth_1 = require("./telegramMiniappAuth");
 const telegramBotUserStore_1 = require("./telegramBotUserStore");
 const telegramChannelNotifyLinkStore_1 = require("./telegramChannelNotifyLinkStore");
@@ -51,10 +53,23 @@ function resolveTelegramSourceChannelsForMaxChat(maxChatId) {
             out.add(sourceChannel);
         }
     }
+    for (const chain of (0, channelCommentsButtonPolicy_1.listTgChainsForMaxChannel)(maxChatId)) {
+        const tgChannelId = chain.tg_channel_id?.trim();
+        if (tgChannelId) {
+            out.add(tgChannelId);
+        }
+        const tgUsername = chain.tg_username?.trim().replace(/^@/, '');
+        if (tgUsername) {
+            out.add(`@${tgUsername}`);
+        }
+    }
     return [...out];
 }
-function hasTelegramIntegrationForMaxChat(maxChatId) {
-    return resolveTelegramSourceChannelsForMaxChat(maxChatId).length > 0;
+function hasTelegramLinkForMaxChat(maxChatId) {
+    if (resolveTelegramSourceChannelsForMaxChat(maxChatId).length > 0) {
+        return true;
+    }
+    return (0, channelCommentsButtonPolicy_1.listTgChainsForMaxChannel)(maxChatId).length > 0;
 }
 function mapMaxUserToTelegramRecipient(maxUserId, recipients) {
     const pairing = (0, channelLinkAdminTeamSync_1.profilePairingForPlatformUser)('max', maxUserId);
@@ -74,7 +89,15 @@ async function collectTelegramAdminNotifyRecipientIds(bot, maxChannelChatId) {
     for (const maxUserId of maxAdmins) {
         mapMaxUserToTelegramRecipient(maxUserId, recipients);
     }
-    const token = (0, config_1.getTelegramToken)();
+    for (const chain of (0, channelCommentsButtonPolicy_1.listTgChainsForMaxChannel)(maxChannelChatId)) {
+        if (chain.tg_user_id != null && telegramBotUserStore_1.telegramBotUserStore.hasStarted(chain.tg_user_id)) {
+            recipients.add(chain.tg_user_id);
+        }
+        if (chain.max_user_id != null) {
+            mapMaxUserToTelegramRecipient(chain.max_user_id, recipients);
+        }
+    }
+    const token = (0, resolveTelegramBotToken_1.resolveTelegramBotToken)();
     for (const tgChannelId of resolveTelegramSourceChannelsForMaxChat(maxChannelChatId)) {
         for (const tgUserId of telegramChannelNotifyLinkStore_1.telegramChannelNotifyLinkStore.getUserIdsForChannel(tgChannelId)) {
             if (telegramBotUserStore_1.telegramBotUserStore.hasStarted(tgUserId)) {
@@ -139,6 +162,9 @@ async function tgSendMessage(token, chatId, text, replyMarkup) {
         text,
         reply_markup: replyMarkup,
     }, { timeout: 20_000 });
+    if (!data.ok) {
+        throw new Error(data.description ?? 'Telegram sendMessage failed');
+    }
     const messageId = data.result?.message_id;
     return typeof messageId === 'number' ? messageId : null;
 }
@@ -152,33 +178,30 @@ async function tgEditMessage(token, chatId, messageId, text, replyMarkup) {
 }
 async function notifyTelegramAdminsNewMiniappComment(bot, input) {
     await integrationsStore_1.integrationsStore.load();
-    const token = (0, config_1.getTelegramToken)();
+    await (0, adminPanelState_1.ensureAdminPanelStateLoaded)();
+    const token = (0, resolveTelegramBotToken_1.resolveTelegramBotToken)();
     if (!token) {
+        logger_1.logger.debug('notifyTelegramAdminsNewMiniappComment: TG token not configured');
         return;
     }
-    if (!hasTelegramIntegrationForMaxChat(input.maxChannelChatId)) {
+    if (!hasTelegramLinkForMaxChat(input.maxChannelChatId)) {
+        logger_1.logger.debug('notifyTelegramAdminsNewMiniappComment: no TG link for MAX channel', {
+            maxChannelChatId: input.maxChannelChatId,
+        });
         return;
     }
     const message = buildNewCommentNotificationMessage(input);
     commentStore_1.commentStore.saveNotificationText(input.commentId, message);
     const recipientIds = await collectTelegramAdminNotifyRecipientIds(bot, input.maxChannelChatId);
     if (recipientIds.length === 0) {
+        logger_1.logger.info('notifyTelegramAdminsNewMiniappComment: no TG recipients (need /start bot + admin/pairing)', {
+            commentId: input.commentId,
+            maxChannelChatId: input.maxChannelChatId,
+            tgChannels: resolveTelegramSourceChannelsForMaxChat(input.maxChannelChatId),
+        });
         return;
     }
     for (const recipientId of recipientIds) {
-        const url = (0, telegramMiniappAuth_1.buildTelegramMiniappUrl)({
-            postId: input.postId,
-            maxChatId: input.maxChannelChatId,
-            messageMid: input.messageMid,
-            telegramUserId: recipientId,
-        });
-        if (!url) {
-            logger_1.logger.warn('notifyTelegramAdminsNewMiniappComment: MINI_APP_URL не задан, TG-кнопка пропущена', {
-                commentId: input.commentId,
-                recipientId,
-            });
-            continue;
-        }
         const keyboard = buildTelegramCommentNotificationKeyboard({
             postId: input.postId,
             maxChatId: input.maxChannelChatId,
@@ -207,7 +230,7 @@ async function notifyTelegramAdminsNewMiniappComment(bot, input) {
     }
 }
 async function syncTelegramAdminCommentNotification(input) {
-    const token = (0, config_1.getTelegramToken)();
+    const token = (0, resolveTelegramBotToken_1.resolveTelegramBotToken)();
     if (!token) {
         return;
     }

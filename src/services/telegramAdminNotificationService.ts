@@ -1,15 +1,17 @@
 import axios from 'axios'
 import type { Bot } from '@maxhub/max-bot-api'
 
-import { getTelegramToken } from '../config'
+import { ensureAdminPanelStateLoaded } from '../api/adminPanelState'
 import { logger } from '../utils/logger'
 import { withTelegramMiniappPlatform } from '../utils/telegramMiniAppUrl'
 import { channelNotifyLinkStore } from './channelNotifyLinkStore'
 import { profilePairingForPlatformUser } from './channelLinkAdminTeamSync'
+import { listTgChainsForMaxChannel } from './channelCommentsButtonPolicy'
 import { commentStore, type Comment } from './commentStore'
 import { buildAdminCommentNotificationBody, getChannelAdmins } from './notificationService'
 import { integrationsStore } from './integrationsStore'
 import { listTelegramChatAdministrators } from './integrationPlatformClient'
+import { resolveTelegramBotToken } from './resolveTelegramBotToken'
 import { buildTelegramMiniappUrl } from './telegramMiniappAuth'
 import { telegramBotUserStore } from './telegramBotUserStore'
 import { telegramChannelNotifyLinkStore } from './telegramChannelNotifyLinkStore'
@@ -45,11 +47,24 @@ export function resolveTelegramSourceChannelsForMaxChat(maxChatId: number): stri
       out.add(sourceChannel)
     }
   }
+  for (const chain of listTgChainsForMaxChannel(maxChatId)) {
+    const tgChannelId = chain.tg_channel_id?.trim()
+    if (tgChannelId) {
+      out.add(tgChannelId)
+    }
+    const tgUsername = chain.tg_username?.trim().replace(/^@/, '')
+    if (tgUsername) {
+      out.add(`@${tgUsername}`)
+    }
+  }
   return [...out]
 }
 
-function hasTelegramIntegrationForMaxChat(maxChatId: number): boolean {
-  return resolveTelegramSourceChannelsForMaxChat(maxChatId).length > 0
+function hasTelegramLinkForMaxChat(maxChatId: number): boolean {
+  if (resolveTelegramSourceChannelsForMaxChat(maxChatId).length > 0) {
+    return true
+  }
+  return listTgChainsForMaxChannel(maxChatId).length > 0
 }
 
 function mapMaxUserToTelegramRecipient(maxUserId: number, recipients: Set<number>): void {
@@ -77,7 +92,16 @@ export async function collectTelegramAdminNotifyRecipientIds(
     mapMaxUserToTelegramRecipient(maxUserId, recipients)
   }
 
-  const token = getTelegramToken()
+  for (const chain of listTgChainsForMaxChannel(maxChannelChatId)) {
+    if (chain.tg_user_id != null && telegramBotUserStore.hasStarted(chain.tg_user_id)) {
+      recipients.add(chain.tg_user_id)
+    }
+    if (chain.max_user_id != null) {
+      mapMaxUserToTelegramRecipient(chain.max_user_id, recipients)
+    }
+  }
+
+  const token = resolveTelegramBotToken()
   for (const tgChannelId of resolveTelegramSourceChannelsForMaxChat(maxChannelChatId)) {
     for (const tgUserId of telegramChannelNotifyLinkStore.getUserIdsForChannel(tgChannelId)) {
       if (telegramBotUserStore.hasStarted(tgUserId)) {
@@ -171,6 +195,7 @@ async function tgSendMessage(
 ): Promise<number | null> {
   const { data } = await axios.post<{
     ok: boolean
+    description?: string
     result?: { message_id?: number }
   }>(
     `${TG_API}/bot${token}/sendMessage`,
@@ -181,6 +206,9 @@ async function tgSendMessage(
     },
     { timeout: 20_000 },
   )
+  if (!data.ok) {
+    throw new Error(data.description ?? 'Telegram sendMessage failed')
+  }
   const messageId = data.result?.message_id
   return typeof messageId === 'number' ? messageId : null
 }
@@ -219,11 +247,16 @@ export async function notifyTelegramAdminsNewMiniappComment(
   },
 ): Promise<void> {
   await integrationsStore.load()
-  const token = getTelegramToken()
+  await ensureAdminPanelStateLoaded()
+  const token = resolveTelegramBotToken()
   if (!token) {
+    logger.debug('notifyTelegramAdminsNewMiniappComment: TG token not configured')
     return
   }
-  if (!hasTelegramIntegrationForMaxChat(input.maxChannelChatId)) {
+  if (!hasTelegramLinkForMaxChat(input.maxChannelChatId)) {
+    logger.debug('notifyTelegramAdminsNewMiniappComment: no TG link for MAX channel', {
+      maxChannelChatId: input.maxChannelChatId,
+    })
     return
   }
 
@@ -232,23 +265,15 @@ export async function notifyTelegramAdminsNewMiniappComment(
 
   const recipientIds = await collectTelegramAdminNotifyRecipientIds(bot, input.maxChannelChatId)
   if (recipientIds.length === 0) {
+    logger.info('notifyTelegramAdminsNewMiniappComment: no TG recipients (need /start bot + admin/pairing)', {
+      commentId: input.commentId,
+      maxChannelChatId: input.maxChannelChatId,
+      tgChannels: resolveTelegramSourceChannelsForMaxChat(input.maxChannelChatId),
+    })
     return
   }
 
   for (const recipientId of recipientIds) {
-    const url = buildTelegramMiniappUrl({
-      postId: input.postId,
-      maxChatId: input.maxChannelChatId,
-      messageMid: input.messageMid,
-      telegramUserId: recipientId,
-    })
-    if (!url) {
-      logger.warn('notifyTelegramAdminsNewMiniappComment: MINI_APP_URL не задан, TG-кнопка пропущена', {
-        commentId: input.commentId,
-        recipientId,
-      })
-      continue
-    }
     const keyboard = buildTelegramCommentNotificationKeyboard({
       postId: input.postId,
       maxChatId: input.maxChannelChatId,
@@ -283,7 +308,7 @@ export async function syncTelegramAdminCommentNotification(input: {
   messageMid?: string
   deleted?: boolean
 }): Promise<void> {
-  const token = getTelegramToken()
+  const token = resolveTelegramBotToken()
   if (!token) {
     return
   }
