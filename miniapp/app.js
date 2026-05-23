@@ -191,13 +191,12 @@
       }
     }
 
-    function parseTelegramUserFromWebAppHash(hash) {
-      if (!hash) return null
+    function parseUserFromWebAppHash(hash, dataKey) {
+      if (!hash || !dataKey) return null
       try {
         var h = String(hash).replace(/^#/, '')
-        if (h.indexOf('tgWebApp') < 0) return null
         var hp = new URLSearchParams(h)
-        var data = hp.get('tgWebAppData')
+        var data = hp.get(dataKey)
         if (!data) return null
         var inner = new URLSearchParams(data)
         var userStr = inner.get('user')
@@ -208,7 +207,7 @@
       }
     }
 
-    function getTelegramUserFromHash() {
+    function getBridgeUserFromHash() {
       var hashes = [location.hash]
       try {
         var nav = performance.getEntriesByType('navigation')[0]
@@ -217,11 +216,57 @@
           if (navHash) hashes.push(navHash)
         }
       } catch (e) {}
+      var dataKeys = ['WebAppData', 'tgWebAppData']
       for (var i = 0; i < hashes.length; i++) {
-        var user = parseTelegramUserFromWebAppHash(hashes[i])
-        if (user) return user
+        for (var k = 0; k < dataKeys.length; k++) {
+          var user = parseUserFromWebAppHash(hashes[i], dataKeys[k])
+          if (user) return user
+        }
       }
       return null
+    }
+
+    /** MAX mini app host (platform set or MAX SDK loaded), even before initData arrives. */
+    function isLikelyMaxMiniapp() {
+      if (isMiniappTelegramRuntime()) return false
+      if (isLikelyTelegramWebView() && window.Telegram && window.Telegram.WebApp) return false
+      var maxApi = window.WebApp
+      if (!maxApi || window.__miniappPreferTelegram) return false
+      if (getBridgeUserFromHash()) return true
+      var maxPlatform =
+        typeof maxApi.platform === 'string' ? maxApi.platform.trim().toLowerCase() : ''
+      if (maxPlatform === 'ios' || maxPlatform === 'android' || maxPlatform === 'desktop') {
+        return true
+      }
+      if (maxPlatform === 'web') {
+        var maxUnsafe = maxApi.initDataUnsafe || {}
+        var maxUser = normalizeBridgeUser(maxUnsafe.user || {})
+        if (getBridgeNumericUserId(maxUser) != null) return true
+        if (typeof maxApi.initData === 'string' && maxApi.initData.trim() !== '') return true
+        return typeof maxApi.version === 'string' && maxApi.version.trim() !== ''
+      }
+      return false
+    }
+
+    function tryReadyBridge(bridge) {
+      if (!bridge || bridge.__miniappReadyCalled) return
+      try {
+        if (typeof bridge.ready === 'function') {
+          bridge.ready()
+          bridge.__miniappReadyCalled = true
+        }
+      } catch (e) {}
+    }
+
+    function syncHomeUserBadge(uid) {
+      var badge = document.getElementById('homeUserBadge')
+      if (!badge) return
+      if (uid != null) {
+        badge.textContent = 'Активен'
+        badge.classList.remove('hidden')
+      } else {
+        badge.classList.add('hidden')
+      }
     }
 
     function resolveBridgeUser(bridge) {
@@ -235,24 +280,13 @@
           if (getBridgeNumericUserId(user) != null) return user
         }
       }
-      var fromHash = getTelegramUserFromHash()
+      var fromHash = getBridgeUserFromHash()
       if (fromHash) return normalizeBridgeUser(fromHash)
       return user
     }
 
     function isActiveMaxBridge(maxApi) {
-      if (!maxApi) return false
-      var maxPlatform =
-        typeof maxApi.platform === 'string' ? maxApi.platform.trim().toLowerCase() : ''
-      if (maxPlatform === 'ios' || maxPlatform === 'android' || maxPlatform === 'desktop') {
-        return true
-      }
-      if (maxPlatform === 'web') {
-        var maxUnsafeWeb = maxApi.initDataUnsafe || {}
-        var maxUserWeb = normalizeBridgeUser(maxUnsafeWeb.user || {})
-        if (getBridgeNumericUserId(maxUserWeb) != null) return true
-        return typeof maxApi.initData === 'string' && maxApi.initData.trim() !== ''
-      }
+      if (!maxApi || window.__miniappPreferTelegram) return false
       var maxUnsafe = maxApi.initDataUnsafe || {}
       var maxUser = normalizeBridgeUser(maxUnsafe.user || {})
       if (getBridgeNumericUserId(maxUser) != null) return true
@@ -279,13 +313,12 @@
         return null
       }
 
-      if (isActiveMaxBridge(maxApi)) return maxApi
+      if (maxApi && isLikelyMaxMiniapp()) return maxApi
 
       if (tgApi && isActiveTelegramBridge(tgApi)) return tgApi
 
       if (likelyTg && tgApi) return tgApi
-      if (isActiveMaxBridge(maxApi)) return maxApi
-      return tgApi || null
+      return tgApi || maxApi || null
     }
 
     function isMaxMiniappBridge(bridge) {
@@ -294,7 +327,7 @@
         bridge &&
         window.WebApp &&
         bridge === window.WebApp &&
-        isActiveMaxBridge(bridge)
+        isLikelyMaxMiniapp()
       )
     }
 
@@ -1188,6 +1221,8 @@
           var disabled = cell.classList.contains('disabled');
           var sw = cell.querySelector('.switch');
           if (!feature || !sw) return;
+          if (sw.dataset.featureWired === '1') return;
+          sw.dataset.featureWired = '1';
           sw.addEventListener('click', function () {
             if (disabled || apiUid == null) {
               setHomeErr(
@@ -1225,7 +1260,18 @@
         });
       }
 
+      syncHomeUserBadge(uid);
+
       if (uid == null) {
+        var inHostApp = inMax || inTelegram || isLikelyMaxMiniapp() || isLikelyTelegramWebView();
+        if (inHostApp) {
+          if (testFb) testFb.classList.remove('show');
+          setHomeErr('');
+          document.getElementById('homeUserName').textContent = 'Загрузка…';
+          document.getElementById('homeUserId').textContent = 'ID: …';
+          wireFeatureToggles(null);
+          return;
+        }
         if (testFb) testFb.classList.add('show');
         wireTestUserApply();
         setHomeErr('Откройте приложение из MAX или Telegram. Для проверки в браузере введите ID ниже.');
@@ -4426,6 +4472,33 @@
     showJoinPage();
     bootHome();
     bootComments();
+
+    if (getBridgeNumericUserId(user) == null && (inMax || isLikelyMaxMiniapp() || inTelegram)) {
+      var homeUserRetry = 0;
+      var homeUserRetryTimer = window.setInterval(function () {
+        homeUserRetry += 1;
+        var freshBridge = getWebAppBridge();
+        tryReadyBridge(freshBridge);
+        var freshUser = resolveBridgeUser(freshBridge);
+        var freshUid = getBridgeNumericUserId(freshUser);
+        if (freshUid != null) {
+          window.clearInterval(homeUserRetryTimer);
+          user = freshUser;
+          mergedParams = buildMergedSearchParams(user, startParam);
+          bootHome();
+          return;
+        }
+        if (homeUserRetry >= 50) {
+          window.clearInterval(homeUserRetryTimer);
+          var homeErrEl = document.getElementById('homeErr');
+          if (homeErrEl) {
+            homeErrEl.textContent =
+              'Не удалось определить профиль. Закройте приложение и откройте снова из бота MAX.';
+          }
+          syncHomeUserBadge(null);
+        }
+      }, 200);
+    }
     }
 
     window.addEventListener('error', function (ev) {
@@ -4468,14 +4541,17 @@
         preflightBackendInBackground();
       }
       var preferTg = isMiniappTelegramRuntime();
+      var likelyMax = isLikelyMaxMiniapp();
       var postContextHint = hasPostContextInLocation();
-      var hardDeadlineMs = preferTg && !postContextHint ? 10000 : 3000;
+      var hardDeadlineMs =
+        preferTg && !postContextHint ? 10000 : likelyMax ? 12000 : 3000;
       try {
         var earlySp = new URLSearchParams(location.search);
         var earlyStart = String(earlySp.get('startapp') || earlySp.get('start_param') || '');
         if (
           postContextHint ||
           (!preferTg &&
+            !likelyMax &&
             (earlySp.get('post_id') ||
               /post_id|_mid_/i.test(earlyStart) ||
               /^\d+$/.test(String(earlySp.get('user_id') || '').trim())))
@@ -4493,9 +4569,10 @@
         }
         attempts += 1;
         var bridge = getWebAppBridge();
-        var inMax = isMaxMiniappBridge(bridge);
+        tryReadyBridge(bridge);
+        var likelyMaxNow = isLikelyMaxMiniapp();
         var likelyTg = isLikelyTelegramWebView();
-        var maxAttempts = inMax ? 12 : likelyTg || preferTg ? 30 : 8;
+        var maxAttempts = likelyMaxNow ? 80 : likelyTg || preferTg ? 30 : 8;
         var user = resolveBridgeUser(bridge);
         var unsafe = (bridge && bridge.initDataUnsafe) || {};
         var sp = collectStartParam(unsafe, bridge);
@@ -4505,7 +4582,7 @@
           /^\d+$/.test(String(urlSp.get('tg_uid') || '').trim());
         var hasBridgeUser = getBridgeNumericUserId(user) != null;
         var needTgScript =
-          (likelyTg || preferTg || !inMax) &&
+          (likelyTg || preferTg || !likelyMaxNow) &&
           (!bridge || !hasBridgeUser) &&
           (likelyTg ||
             preferTg ||
@@ -4520,8 +4597,18 @@
             });
           return;
         }
-        if (!sp && !hasUrlUser && !hasBridgeUser && (bridge || preferTg) && attempts < maxAttempts) {
+        if (
+          !sp &&
+          !hasUrlUser &&
+          !hasBridgeUser &&
+          (bridge || preferTg || likelyMaxNow) &&
+          attempts < maxAttempts
+        ) {
           window.setTimeout(run, 150);
+          return;
+        }
+        if (likelyMaxNow && !hasBridgeUser && !hasUrlUser && attempts >= maxAttempts) {
+          window.setTimeout(run, 200);
           return;
         }
         window.clearTimeout(hardDeadline);
