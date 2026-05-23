@@ -12,6 +12,11 @@ export interface CommentAdminNotificationMid {
     admin_id: number;
     message_mid: string;
 }
+/** Telegram DM to an admin: message_id for later edits via Bot API. */
+export interface CommentTgNotificationMid {
+    tg_user_id: number;
+    message_id: number;
+}
 /** One channel reply line shown in the admin DM thread (appended on each answer). */
 export interface CommentNotificationReplyLogEntry {
     text: string;
@@ -40,6 +45,8 @@ export interface Comment {
     notification_text?: string;
     /** One entry per admin who received the new-comment DM. */
     notification_mids?: CommentAdminNotificationMid[];
+    /** One entry per Telegram admin who received the new-comment DM. */
+    tg_notification_mids?: CommentTgNotificationMid[];
     /** Chronology of channel replies appended to the single admin notification. */
     notification_reply_log?: CommentNotificationReplyLogEntry[];
     /** Mini App: admin posted from composer without «Ответить» — show as channel, not personal profile. */
@@ -92,6 +99,11 @@ export declare class CommentStore {
      */
     saveNotificationMid(commentId: string, adminId: number, mid: string): void;
     getNotificationMids(commentId: string): CommentAdminNotificationMid[];
+    /**
+     * Records the Telegram DM `message_id` for one admin (upserts by `tg_user_id`).
+     */
+    saveTgNotificationMid(commentId: string, tgUserId: number, messageId: number): void;
+    getTgNotificationMids(commentId: string): CommentTgNotificationMid[];
     /**
      * Counts comments whose posts belong to the given channel (`postIds` from postStore).
      */

@@ -67,6 +67,10 @@ export function setTgChainForwarderBot(bot: Bot): void {
   botRef = bot
 }
 
+export function getTgChainForwarderBot(): Bot | null {
+  return botRef
+}
+
 function tokenKey(token: string): string {
   return createHash('sha256').update(token).digest('hex').slice(0, 16)
 }
@@ -883,7 +887,7 @@ export async function runTgChainsOnce(): Promise<boolean> {
         .map((u) => u.raw)
         .filter((u): u is Record<string, unknown> => !!u)
       if (rawUpdates.length > 0) {
-        await processTelegramMiniappBotUpdates(tgToken, rawUpdates)
+        await processTelegramMiniappBotUpdates(tgToken, rawUpdates, botRef)
       }
     }
 

@@ -58,6 +58,18 @@ function isCommentAdminNotificationMid(value) {
         Number.isInteger(o.admin_id) &&
         typeof o.message_mid === 'string');
 }
+function isCommentTgNotificationMid(value) {
+    if (typeof value !== 'object' || value === null) {
+        return false;
+    }
+    const o = value;
+    return (typeof o.tg_user_id === 'number' &&
+        Number.isInteger(o.tg_user_id) &&
+        o.tg_user_id > 0 &&
+        typeof o.message_id === 'number' &&
+        Number.isInteger(o.message_id) &&
+        o.message_id > 0);
+}
 function normalizeCommentFromDisk(raw) {
     if (typeof raw !== 'object' || raw === null) {
         return null;
@@ -101,6 +113,16 @@ function normalizeCommentFromDisk(raw) {
             }
         }
     }
+    if (o.tg_notification_mids !== undefined) {
+        if (!Array.isArray(o.tg_notification_mids)) {
+            return null;
+        }
+        for (const row of o.tg_notification_mids) {
+            if (!isCommentTgNotificationMid(row)) {
+                return null;
+            }
+        }
+    }
     if (o.notification_reply_log !== undefined) {
         if (!Array.isArray(o.notification_reply_log)) {
             return null;
@@ -140,6 +162,9 @@ function normalizeCommentFromDisk(raw) {
             : {}),
         ...(o.notification_mids !== undefined
             ? { notification_mids: o.notification_mids }
+            : {}),
+        ...(o.tg_notification_mids !== undefined
+            ? { tg_notification_mids: o.tg_notification_mids }
             : {}),
         ...(o.notification_reply_log !== undefined
             ? {
@@ -432,6 +457,30 @@ class CommentStore {
     getNotificationMids(commentId) {
         const c = this.getComment(commentId);
         return c?.notification_mids ? [...c.notification_mids] : [];
+    }
+    /**
+     * Records the Telegram DM `message_id` for one admin (upserts by `tg_user_id`).
+     */
+    saveTgNotificationMid(commentId, tgUserId, messageId) {
+        const c = this.getComment(commentId);
+        if (!c) {
+            return;
+        }
+        const list = c.tg_notification_mids ?? [];
+        const idx = list.findIndex((e) => e.tg_user_id === tgUserId);
+        const entry = { tg_user_id: tgUserId, message_id: messageId };
+        if (idx >= 0) {
+            list[idx] = entry;
+        }
+        else {
+            list.push(entry);
+        }
+        c.tg_notification_mids = list;
+        this.saveRow(c);
+    }
+    getTgNotificationMids(commentId) {
+        const c = this.getComment(commentId);
+        return c?.tg_notification_mids ? [...c.tg_notification_mids] : [];
     }
     /**
      * Counts comments whose posts belong to the given channel (`postIds` from postStore).

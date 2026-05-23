@@ -2273,13 +2273,41 @@
         return;
       }
 
-      var statusUrl =
-        '/api/user-status?user_id=' +
+      function shouldSkipSubscribeGate() {
+        if (adminParam) return true;
+        if (inTelegram) {
+          var tgUid = String(mergedParams.get('tg_uid') || '').trim();
+          var tgSig = String(mergedParams.get('tg_sig') || '').trim();
+          if (/^\d+$/.test(tgUid) && /^[a-f0-9]{64}$/i.test(tgSig)) return true;
+        }
+        return false;
+      }
+
+      function openCommentsAfterStatusCheck() {
+        loadPostAndComments();
+      }
+
+      if (shouldSkipSubscribeGate()) {
+        openCommentsAfterStatusCheck();
+        return;
+      }
+
+      var statusQs =
+        '?user_id=' +
         encodeURIComponent(String(uid)) +
         (inTelegram ? '&platform=telegram' : '') +
         (chatId ? '&chat_id=' + encodeURIComponent(chatId) : '');
+      if (inTelegram) {
+        var tgUidQ = mergedParams.get('tg_uid');
+        var tgExpQ = mergedParams.get('tg_exp');
+        var tgSigQ = mergedParams.get('tg_sig');
+        if (tgUidQ) statusQs += '&tg_uid=' + encodeURIComponent(String(tgUidQ));
+        if (tgExpQ) statusQs += '&tg_exp=' + encodeURIComponent(String(tgExpQ));
+        if (tgSigQ) statusQs += '&tg_sig=' + encodeURIComponent(String(tgSigQ));
+        if (adminParam) statusQs += '&admin=1';
+      }
 
-      fetch(statusUrl)
+      fetch('/api/user-status' + statusQs)
         .then(function (r) {
           return r.json();
         })
@@ -2287,13 +2315,15 @@
           if (data && data.is_admin) {
             mergedParams.set('admin', '1');
           }
-          if (!data.started && !data.is_admin) {
+          if (data && (data.started || data.is_admin)) {
+            openCommentsAfterStatusCheck();
+          } else {
             showGate(uid);
           }
         })
-        .catch(function () {});
-
-      loadPostAndComments();
+        .catch(function () {
+          openCommentsAfterStatusCheck();
+        });
     }
 
     function loadPostAndComments() {
@@ -3987,6 +4017,7 @@
         var url =
           '/api/user-status?user_id=' +
           encodeURIComponent(String(userId)) +
+          (inTelegram ? '&platform=telegram' : '') +
           '&chat_id=' +
           encodeURIComponent(String(chatId));
         return fetch(url)

@@ -23,6 +23,12 @@ export interface CommentAdminNotificationMid {
   message_mid: string
 }
 
+/** Telegram DM to an admin: message_id for later edits via Bot API. */
+export interface CommentTgNotificationMid {
+  tg_user_id: number
+  message_id: number
+}
+
 /** One channel reply line shown in the admin DM thread (appended on each answer). */
 export interface CommentNotificationReplyLogEntry {
   text: string
@@ -52,6 +58,8 @@ export interface Comment {
   notification_text?: string
   /** One entry per admin who received the new-comment DM. */
   notification_mids?: CommentAdminNotificationMid[]
+  /** One entry per Telegram admin who received the new-comment DM. */
+  tg_notification_mids?: CommentTgNotificationMid[]
   /** Chronology of channel replies appended to the single admin notification. */
   notification_reply_log?: CommentNotificationReplyLogEntry[]
   /** Mini App: admin posted from composer without «Ответить» — show as channel, not personal profile. */
@@ -117,6 +125,21 @@ function isCommentAdminNotificationMid(value: unknown): value is CommentAdminNot
   )
 }
 
+function isCommentTgNotificationMid(value: unknown): value is CommentTgNotificationMid {
+  if (typeof value !== 'object' || value === null) {
+    return false
+  }
+  const o = value as Record<string, unknown>
+  return (
+    typeof o.tg_user_id === 'number' &&
+    Number.isInteger(o.tg_user_id) &&
+    o.tg_user_id > 0 &&
+    typeof o.message_id === 'number' &&
+    Number.isInteger(o.message_id) &&
+    o.message_id > 0
+  )
+}
+
 function normalizeCommentFromDisk(raw: unknown): Comment | null {
   if (typeof raw !== 'object' || raw === null) {
     return null
@@ -162,6 +185,16 @@ function normalizeCommentFromDisk(raw: unknown): Comment | null {
       }
     }
   }
+  if (o.tg_notification_mids !== undefined) {
+    if (!Array.isArray(o.tg_notification_mids)) {
+      return null
+    }
+    for (const row of o.tg_notification_mids) {
+      if (!isCommentTgNotificationMid(row)) {
+        return null
+      }
+    }
+  }
   if (o.notification_reply_log !== undefined) {
     if (!Array.isArray(o.notification_reply_log)) {
       return null
@@ -201,6 +234,9 @@ function normalizeCommentFromDisk(raw: unknown): Comment | null {
       : {}),
     ...(o.notification_mids !== undefined
       ? { notification_mids: o.notification_mids as CommentAdminNotificationMid[] }
+      : {}),
+    ...(o.tg_notification_mids !== undefined
+      ? { tg_notification_mids: o.tg_notification_mids as CommentTgNotificationMid[] }
       : {}),
     ...(o.notification_reply_log !== undefined
       ? {
@@ -536,6 +572,31 @@ export class CommentStore {
   getNotificationMids(commentId: string): CommentAdminNotificationMid[] {
     const c = this.getComment(commentId)
     return c?.notification_mids ? [...c.notification_mids] : []
+  }
+
+  /**
+   * Records the Telegram DM `message_id` for one admin (upserts by `tg_user_id`).
+   */
+  saveTgNotificationMid(commentId: string, tgUserId: number, messageId: number): void {
+    const c = this.getComment(commentId)
+    if (!c) {
+      return
+    }
+    const list = c.tg_notification_mids ?? []
+    const idx = list.findIndex((e) => e.tg_user_id === tgUserId)
+    const entry: CommentTgNotificationMid = { tg_user_id: tgUserId, message_id: messageId }
+    if (idx >= 0) {
+      list[idx] = entry
+    } else {
+      list.push(entry)
+    }
+    c.tg_notification_mids = list
+    this.saveRow(c)
+  }
+
+  getTgNotificationMids(commentId: string): CommentTgNotificationMid[] {
+    const c = this.getComment(commentId)
+    return c?.tg_notification_mids ? [...c.tg_notification_mids] : []
   }
 
   /**

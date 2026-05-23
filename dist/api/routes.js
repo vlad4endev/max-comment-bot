@@ -22,6 +22,7 @@ const commentStore_1 = require("../services/commentStore");
 const subscriberStore_1 = require("../services/subscriberStore");
 const notificationService_1 = require("../services/notificationService");
 const telegramAdminNotificationService_1 = require("../services/telegramAdminNotificationService");
+const telegramCommentModerationService_1 = require("../services/telegramCommentModerationService");
 const telegramBotUserStore_1 = require("../services/telegramBotUserStore");
 const telegramMiniappAuth_1 = require("../services/telegramMiniappAuth");
 const telegramMiniappService_1 = require("../services/telegramMiniappService");
@@ -151,6 +152,13 @@ function parseBoolean(value) {
         return false;
     }
     return null;
+}
+function isAdminParamValue(value) {
+    if (value == null) {
+        return false;
+    }
+    const normalized = String(value).trim().toLowerCase();
+    return normalized === '1' || normalized === 'true' || normalized === 'yes';
 }
 function isChannelAdminOrOwnerMember(m) {
     return !m.is_bot && (m.is_admin || m.is_owner);
@@ -415,14 +423,42 @@ function createCommentApiRouter(deps) {
         }
         const chatId = parseNonZeroInt(req.query.chat_id);
         const isTelegram = isTelegramMiniappPlatform(req);
-        const isSubscriber = isTelegram
-            ? telegramBotUserStore_1.telegramBotUserStore.hasStarted(userId)
-            : subscriberStore_1.subscriberStore.hasSubscriber(userId);
-        const isAdmin = isTelegram
-            ? false
-            : chatId !== null
-                ? await (0, channelPostActions_1.isUserChannelAdmin)(deps.bot, chatId, userId)
-                : false;
+        let isSubscriber = false;
+        let isAdmin = false;
+        if (isTelegram) {
+            const pairing = (0, channelLinkAdminTeamSync_1.profilePairingForPlatformUser)('telegram', userId);
+            isSubscriber =
+                telegramBotUserStore_1.telegramBotUserStore.hasStarted(userId) ||
+                    subscriberStore_1.subscriberStore.hasSubscriber(userId) ||
+                    (pairing.max_user_id != null && subscriberStore_1.subscriberStore.hasSubscriber(pairing.max_user_id));
+            if (isAdminParamValue(req.query.admin)) {
+                isAdmin = true;
+            }
+            else if (chatId !== null) {
+                const maxChatId = Math.abs(chatId);
+                if ((0, telegramMiniappAuth_1.verifyTelegramMiniappAuth)({
+                    telegramUserId: userId,
+                    maxChatId,
+                    tgUidRaw: parseNonEmptyString(req.query.tg_uid),
+                    tgExpRaw: parseNonEmptyString(req.query.tg_exp),
+                    tgSigRaw: parseNonEmptyString(req.query.tg_sig),
+                })) {
+                    isAdmin = true;
+                }
+                else {
+                    try {
+                        isAdmin = await (0, telegramCommentModerationService_1.canManageMaxCommentViaTelegram)(deps.bot, userId, maxChatId);
+                    }
+                    catch {
+                        isAdmin = false;
+                    }
+                }
+            }
+        }
+        else {
+            isSubscriber = subscriberStore_1.subscriberStore.hasSubscriber(userId);
+            isAdmin = chatId !== null ? await (0, channelPostActions_1.isUserChannelAdmin)(deps.bot, chatId, userId) : false;
+        }
         const showSubscribeBanner = !isSubscriber && !isAdmin;
         res.json({
             started: isSubscriber,
@@ -452,6 +488,9 @@ function createCommentApiRouter(deps) {
             source: body.source,
             wasAlreadySubscribed,
         });
+        if (isTelegramMiniappPlatform(req)) {
+            telegramBotUserStore_1.telegramBotUserStore.markStarted({ id: userId });
+        }
         subscriberStore_1.subscriberStore.addSubscriber(userId);
         logger_1.logger.info('subscriber registered', { userId, chatId, source });
         res.json({ ok: true });
@@ -1561,7 +1600,7 @@ function createCommentApiRouter(deps) {
             logger_1.logger.warn('POST /api/comment: notify admins failed', { err });
         }
         try {
-            await (0, telegramAdminNotificationService_1.notifyTelegramAdminsNewMiniappComment)({
+            await (0, telegramAdminNotificationService_1.notifyTelegramAdminsNewMiniappComment)(deps.bot, {
                 commentId: saved.comment_id,
                 maxChannelChatId: chatId,
                 postText: post.text,
@@ -1651,6 +1690,17 @@ function createCommentApiRouter(deps) {
         catch (err) {
             logger_1.logger.warn('POST /api/reply: sync admin notification failed', { commentId, err });
         }
+        try {
+            await (0, telegramAdminNotificationService_1.syncTelegramAdminCommentNotification)({
+                comment: updated,
+                postId,
+                channelChatId: chatId,
+                messageMid: post.message_mid,
+            });
+        }
+        catch (err) {
+            logger_1.logger.warn('POST /api/reply: sync TG admin notification failed', { commentId, err });
+        }
         await (0, notificationService_1.notifyUserAboutMiniappReply)(deps.bot, {
             userId: Number(updated.user_id),
             commentId: updated.comment_id,
@@ -1712,6 +1762,21 @@ function createCommentApiRouter(deps) {
         if (!removed) {
             res.status(404).json({ error: 'comment not found' });
             return;
+        }
+        try {
+            await (0, telegramAdminNotificationService_1.syncTelegramAdminCommentNotification)({
+                comment: removed,
+                postId: input.postId,
+                channelChatId: input.chatId,
+                messageMid: access.post.message_mid,
+                deleted: true,
+            });
+        }
+        catch (err) {
+            logger_1.logger.warn('adminDeleteComment: sync TG admin notification failed', {
+                commentId: input.commentId,
+                err,
+            });
         }
         const newCount = postStore_1.postStore.decrementCommentCount(input.postId);
         res.json({ ok: true, comment_count: newCount });

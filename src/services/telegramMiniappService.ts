@@ -1,4 +1,5 @@
 import axios from 'axios'
+import type { Bot } from '@maxhub/max-bot-api'
 
 import { integrationsStore } from './integrationsStore'
 import { resolveTelegramBotToken } from './resolveTelegramBotToken'
@@ -23,6 +24,10 @@ import {
   handleTelegramPrivateMessage,
   reconcileTelegramChannelForMiniappUser,
 } from './telegramChannelActivation'
+import {
+  handleTelegramCommentModerationCallback,
+  tryHandleTelegramCommentModerationReply,
+} from './telegramCommentModerationService'
 import { profilePairingForPlatformUser } from './channelLinkAdminTeamSync'
 import {
   buildTelegramOpenPanelButton,
@@ -538,6 +543,7 @@ export async function handleTelegramBotStartJoin(
 export async function processTelegramMiniappBotUpdates(
   token: string,
   updates: Array<Record<string, unknown>>,
+  bot: Bot | null = null,
 ): Promise<void> {
   const mainToken = resolveTelegramBotToken()
   if (!mainToken || token.trim() !== mainToken) {
@@ -562,6 +568,9 @@ export async function processTelegramMiniappBotUpdates(
           logger.warn('processTelegramMiniappBotUpdates: answer tg_how_it_works failed', { err })
         }
         await sendTelegramHowItWorksMessage(token, cqUserId)
+        continue
+      }
+      if (bot && (await handleTelegramCommentModerationCallback(upd, bot))) {
         continue
       }
       await handleTelegramCallbackQuery(upd)
@@ -610,6 +619,9 @@ export async function processTelegramMiniappBotUpdates(
     }
 
     if (text) {
+      if (bot && (await tryHandleTelegramCommentModerationReply(bot, from.id, text))) {
+        continue
+      }
       await handleTelegramPrivateMessage(from.id, text)
     }
   }

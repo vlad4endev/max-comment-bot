@@ -1,3 +1,4 @@
+import type { Bot } from '@maxhub/max-bot-api';
 export interface TelegramMiniappChannelWire {
     chat_id: string;
     title: string | null;
@@ -54,4 +55,4 @@ export declare function notifyChannelLinkSucceededPrivate(params: {
 }): Promise<void>;
 export declare function handleTelegramBotAccountPair(telegramUserId: number, from: Record<string, unknown>, startPayload: string): Promise<void>;
 export declare function handleTelegramBotStartJoin(telegramUserId: number, startPayload: string): Promise<void>;
-export declare function processTelegramMiniappBotUpdates(token: string, updates: Array<Record<string, unknown>>): Promise<void>;
+export declare function processTelegramMiniappBotUpdates(token: string, updates: Array<Record<string, unknown>>, bot?: Bot | null): Promise<void>;

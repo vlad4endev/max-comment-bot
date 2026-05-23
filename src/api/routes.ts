@@ -30,7 +30,8 @@ import {
   notifyUserAboutMiniappReply,
   syncAdminCommentNotification,
 } from '../services/notificationService'
-import { notifyTelegramAdminsNewMiniappComment } from '../services/telegramAdminNotificationService'
+import { notifyTelegramAdminsNewMiniappComment, syncTelegramAdminCommentNotification } from '../services/telegramAdminNotificationService'
+import { canManageMaxCommentViaTelegram } from '../services/telegramCommentModerationService'
 import { telegramBotUserStore } from '../services/telegramBotUserStore'
 import { verifyTelegramMiniappAuth } from '../services/telegramMiniappAuth'
 import {
@@ -201,6 +202,14 @@ function parseBoolean(value: unknown): boolean | null {
     return false
   }
   return null
+}
+
+function isAdminParamValue(value: unknown): boolean {
+  if (value == null) {
+    return false
+  }
+  const normalized = String(value).trim().toLowerCase()
+  return normalized === '1' || normalized === 'true' || normalized === 'yes'
 }
 
 function isChannelAdminOrOwnerMember(m: ChatMember): boolean {
@@ -549,14 +558,44 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
     }
     const chatId = parseNonZeroInt(req.query.chat_id)
     const isTelegram = isTelegramMiniappPlatform(req)
-    const isSubscriber = isTelegram
-      ? telegramBotUserStore.hasStarted(userId)
-      : subscriberStore.hasSubscriber(userId)
-    const isAdmin = isTelegram
-      ? false
-      : chatId !== null
-        ? await isUserChannelAdmin(deps.bot, chatId, userId)
-        : false
+
+    let isSubscriber = false
+    let isAdmin = false
+
+    if (isTelegram) {
+      const pairing = profilePairingForPlatformUser('telegram', userId)
+      isSubscriber =
+        telegramBotUserStore.hasStarted(userId) ||
+        subscriberStore.hasSubscriber(userId) ||
+        (pairing.max_user_id != null && subscriberStore.hasSubscriber(pairing.max_user_id))
+
+      if (isAdminParamValue(req.query.admin)) {
+        isAdmin = true
+      } else if (chatId !== null) {
+        const maxChatId = Math.abs(chatId)
+        if (
+          verifyTelegramMiniappAuth({
+            telegramUserId: userId,
+            maxChatId,
+            tgUidRaw: parseNonEmptyString(req.query.tg_uid),
+            tgExpRaw: parseNonEmptyString(req.query.tg_exp),
+            tgSigRaw: parseNonEmptyString(req.query.tg_sig),
+          })
+        ) {
+          isAdmin = true
+        } else {
+          try {
+            isAdmin = await canManageMaxCommentViaTelegram(deps.bot, userId, maxChatId)
+          } catch {
+            isAdmin = false
+          }
+        }
+      }
+    } else {
+      isSubscriber = subscriberStore.hasSubscriber(userId)
+      isAdmin = chatId !== null ? await isUserChannelAdmin(deps.bot, chatId, userId) : false
+    }
+
     const showSubscribeBanner = !isSubscriber && !isAdmin
     res.json({
       started: isSubscriber,
@@ -589,6 +628,9 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
       wasAlreadySubscribed,
     })
 
+    if (isTelegramMiniappPlatform(req)) {
+      telegramBotUserStore.markStarted({ id: userId })
+    }
     subscriberStore.addSubscriber(userId)
     logger.info('subscriber registered', { userId, chatId, source })
     res.json({ ok: true })
@@ -1775,7 +1817,7 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
       logger.warn('POST /api/comment: notify admins failed', { err })
     }
     try {
-      await notifyTelegramAdminsNewMiniappComment({
+      await notifyTelegramAdminsNewMiniappComment(deps.bot, {
         commentId: saved.comment_id,
         maxChannelChatId: chatId,
         postText: post.text,
@@ -1880,6 +1922,16 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
     } catch (err: unknown) {
       logger.warn('POST /api/reply: sync admin notification failed', { commentId, err })
     }
+    try {
+      await syncTelegramAdminCommentNotification({
+        comment: updated,
+        postId,
+        channelChatId: chatId,
+        messageMid: post.message_mid,
+      })
+    } catch (err: unknown) {
+      logger.warn('POST /api/reply: sync TG admin notification failed', { commentId, err })
+    }
 
     await notifyUserAboutMiniappReply(deps.bot, {
       userId: Number(updated.user_id),
@@ -1951,6 +2003,21 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
     if (!removed) {
       res.status(404).json({ error: 'comment not found' })
       return
+    }
+
+    try {
+      await syncTelegramAdminCommentNotification({
+        comment: removed,
+        postId: input.postId,
+        channelChatId: input.chatId,
+        messageMid: access.post.message_mid,
+        deleted: true,
+      })
+    } catch (err: unknown) {
+      logger.warn('adminDeleteComment: sync TG admin notification failed', {
+        commentId: input.commentId,
+        err,
+      })
     }
 
     const newCount = postStore.decrementCommentCount(input.postId)

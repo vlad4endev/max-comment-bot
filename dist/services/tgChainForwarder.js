@@ -4,6 +4,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.setTgChainForwarderBot = setTgChainForwarderBot;
+exports.getTgChainForwarderBot = getTgChainForwarderBot;
 exports.runTgChainsOnce = runTgChainsOnce;
 exports.startTgChainForwarder = startTgChainForwarder;
 const node_crypto_1 = require("node:crypto");
@@ -50,6 +51,9 @@ function maxApi(fn) {
 let botRef = null;
 function setTgChainForwarderBot(bot) {
     botRef = bot;
+}
+function getTgChainForwarderBot() {
+    return botRef;
 }
 function tokenKey(token) {
     return (0, node_crypto_1.createHash)('sha256').update(token).digest('hex').slice(0, 16);
@@ -738,7 +742,7 @@ async function runTgChainsOnce() {
                 .map((u) => u.raw)
                 .filter((u) => !!u);
             if (rawUpdates.length > 0) {
-                await (0, telegramMiniappService_1.processTelegramMiniappBotUpdates)(tgToken, rawUpdates);
+                await (0, telegramMiniappService_1.processTelegramMiniappBotUpdates)(tgToken, rawUpdates, botRef);
             }
         }
         const channelPosts = [];

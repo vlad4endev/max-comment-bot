@@ -28,6 +28,7 @@ const adminPanelState_1 = require("../api/adminPanelState");
 const accountPairingService_1 = require("./accountPairingService");
 const telegramDeeplink_1 = require("../utils/telegramDeeplink");
 const telegramChannelActivation_1 = require("./telegramChannelActivation");
+const telegramCommentModerationService_1 = require("./telegramCommentModerationService");
 const channelLinkAdminTeamSync_1 = require("./channelLinkAdminTeamSync");
 const telegramMiniAppUrl_1 = require("../utils/telegramMiniAppUrl");
 const config_1 = require("../config");
@@ -395,7 +396,7 @@ async function handleTelegramBotStartJoin(telegramUserId, startPayload) {
         `Теперь вы будете получать уведомления о новых комментариях (в Telegram и в связанном MAX-канале).`;
     await sendTelegramBotMessage(token, telegramUserId, text);
 }
-async function processTelegramMiniappBotUpdates(token, updates) {
+async function processTelegramMiniappBotUpdates(token, updates, bot = null) {
     const mainToken = (0, resolveTelegramBotToken_1.resolveTelegramBotToken)();
     if (!mainToken || token.trim() !== mainToken) {
         return;
@@ -419,6 +420,9 @@ async function processTelegramMiniappBotUpdates(token, updates) {
                     logger_1.logger.warn('processTelegramMiniappBotUpdates: answer tg_how_it_works failed', { err });
                 }
                 await sendTelegramHowItWorksMessage(token, cqUserId);
+                continue;
+            }
+            if (bot && (await (0, telegramCommentModerationService_1.handleTelegramCommentModerationCallback)(upd, bot))) {
                 continue;
             }
             await (0, telegramChannelActivation_1.handleTelegramCallbackQuery)(upd);
@@ -460,6 +464,9 @@ async function processTelegramMiniappBotUpdates(token, updates) {
             continue;
         }
         if (text) {
+            if (bot && (await (0, telegramCommentModerationService_1.tryHandleTelegramCommentModerationReply)(bot, from.id, text))) {
+                continue;
+            }
             await (0, telegramChannelActivation_1.handleTelegramPrivateMessage)(from.id, text);
         }
     }
