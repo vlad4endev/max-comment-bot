@@ -16,6 +16,9 @@ class TelegramBotUserStore {
         const lastName = typeof profile.last_name === 'string' ? profile.last_name.trim() : '';
         this.getStatements().upsertStarted.run(profile.id, username || null, firstName || null, lastName || null);
     }
+    hasStarted(userId) {
+        return this.getStartedIds([userId]).has(userId);
+    }
     getStartedIds(userIds) {
         const normalized = [...new Set(userIds.filter((id) => isPositiveInt(id)))];
         if (normalized.length === 0) {

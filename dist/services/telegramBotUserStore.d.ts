@@ -7,6 +7,7 @@ interface TelegramUserProfile {
 export declare class TelegramBotUserStore {
     private statements;
     markStarted(profile: TelegramUserProfile): void;
+    hasStarted(userId: number): boolean;
     getStartedIds(userIds: number[]): Set<number>;
     private getStatements;
 }

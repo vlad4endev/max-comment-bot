@@ -22,6 +22,7 @@ const commentStore_1 = require("../services/commentStore");
 const subscriberStore_1 = require("../services/subscriberStore");
 const notificationService_1 = require("../services/notificationService");
 const telegramAdminNotificationService_1 = require("../services/telegramAdminNotificationService");
+const telegramBotUserStore_1 = require("../services/telegramBotUserStore");
 const telegramMiniappAuth_1 = require("../services/telegramMiniappAuth");
 const telegramMiniappService_1 = require("../services/telegramMiniappService");
 const telegramChannelRegistry_1 = require("../services/telegramChannelRegistry");
@@ -370,6 +371,7 @@ function createCommentApiRouter(deps) {
     router.get('/config', (_req, res) => {
         res.json({
             bot_nickname: config_1.config.botNickname,
+            telegram_bot_username: 'commentvmax_bot',
             mini_app_url: config_1.config.miniAppUrl ?? null,
             /** Bump when join UI changes — helps verify deploy (grep join-heading in /miniapp/index.html). */
             miniapp_join_ui: 'admin-invite-v2',
@@ -412,14 +414,22 @@ function createCommentApiRouter(deps) {
             return;
         }
         const chatId = parseNonZeroInt(req.query.chat_id);
-        const isSubscriber = subscriberStore_1.subscriberStore.hasSubscriber(userId);
-        const isAdmin = chatId !== null ? await (0, channelPostActions_1.isUserChannelAdmin)(deps.bot, chatId, userId) : false;
+        const isTelegram = isTelegramMiniappPlatform(req);
+        const isSubscriber = isTelegram
+            ? telegramBotUserStore_1.telegramBotUserStore.hasStarted(userId)
+            : subscriberStore_1.subscriberStore.hasSubscriber(userId);
+        const isAdmin = isTelegram
+            ? false
+            : chatId !== null
+                ? await (0, channelPostActions_1.isUserChannelAdmin)(deps.bot, chatId, userId)
+                : false;
         const showSubscribeBanner = !isSubscriber && !isAdmin;
         res.json({
             started: isSubscriber,
             is_admin: isAdmin,
             show_subscribe_banner: showSubscribeBanner,
-            bot_nickname: config_1.config.BOT_NICKNAME,
+            bot_nickname: isTelegram ? 'commentvmax_bot' : config_1.config.BOT_NICKNAME,
+            telegram_bot_username: isTelegram ? 'commentvmax_bot' : null,
         });
     });
     router.post('/register-subscriber', (req, res) => {

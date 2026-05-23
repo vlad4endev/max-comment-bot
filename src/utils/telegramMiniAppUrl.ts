@@ -73,6 +73,23 @@ export function normalizeMiniAppUrl(raw: string): string | undefined {
   return trimmed.replace(/\/+$/, '')
 }
 
+/** Ensures Telegram WebView opens in TG mode (BotFather URL, deep links, notifications). */
+export function withTelegramMiniappPlatform(rawUrl: string): string {
+  const trimmed = rawUrl.trim()
+  if (trimmed === '') {
+    return trimmed
+  }
+  try {
+    const url = new URL(trimmed)
+    if (!url.searchParams.has('platform')) {
+      url.searchParams.set('platform', 'telegram')
+    }
+    return url.toString().replace(/\/+$/, '')
+  } catch {
+    return trimmed
+  }
+}
+
 export type TelegramOpenPanelButton =
   | { text: string; web_app: { url: string } }
   | { text: string; url: string }
@@ -85,14 +102,9 @@ export function buildTelegramOpenPanelButton(
   const fallback = `https://t.me/${botUsername.replace(/^@/, '')}`
   const candidate = (homeUrl ?? '').trim()
   if (candidate && isTelegramWebAppUrl(candidate)) {
-    try {
-      const url = new URL(candidate)
-      if (!url.searchParams.has('platform')) {
-        url.searchParams.set('platform', 'telegram')
-      }
-      return { text: '🚀 Открыть панель', web_app: { url: url.toString().replace(/\/+$/, '') } }
-    } catch {
-      return { text: '🚀 Открыть панель', web_app: { url: candidate } }
+    return {
+      text: '🚀 Открыть панель',
+      web_app: { url: withTelegramMiniappPlatform(candidate) },
     }
   }
   const link = candidate && /^https?:\/\//i.test(candidate) ? candidate : fallback

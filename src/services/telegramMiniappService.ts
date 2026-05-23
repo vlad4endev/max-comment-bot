@@ -28,6 +28,7 @@ import {
   buildTelegramOpenPanelButton,
   isTelegramWebAppUrl,
   normalizeMiniAppUrl,
+  withTelegramMiniappPlatform,
 } from '../utils/telegramMiniAppUrl'
 import { config } from '../config'
 import { logger } from '../utils/logger'
@@ -74,11 +75,11 @@ async function answerTelegramCallbackQuery(
 function buildTelegramMiniAppHomeUrl(): string | null {
   const fromConfig = config.miniAppUrl?.trim()
   if (fromConfig && isTelegramWebAppUrl(fromConfig)) {
-    return normalizeMiniAppUrl(fromConfig) ?? null
+    return withTelegramMiniappPlatform(normalizeMiniAppUrl(fromConfig) ?? fromConfig)
   }
   const fromEnv = normalizeMiniAppUrl(process.env.MINI_APP_URL ?? '')
   if (fromEnv && isTelegramWebAppUrl(fromEnv)) {
-    return fromEnv
+    return withTelegramMiniappPlatform(fromEnv)
   }
   return null
 }

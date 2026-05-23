@@ -5,6 +5,7 @@ exports.verifyTelegramMiniappAuth = verifyTelegramMiniappAuth;
 exports.buildTelegramMiniappUrl = buildTelegramMiniappUrl;
 const node_crypto_1 = require("node:crypto");
 const config_1 = require("../config");
+const telegramMiniAppUrl_1 = require("../utils/telegramMiniAppUrl");
 const AUTH_VERSION = 'v1';
 const AUTH_TTL_SEC = 60 * 60 * 24;
 function authSecret() {
@@ -63,6 +64,6 @@ function buildTelegramMiniappUrl(input) {
     url.searchParams.set('tg_uid', auth.tg_uid);
     url.searchParams.set('tg_exp', auth.tg_exp);
     url.searchParams.set('tg_sig', auth.tg_sig);
-    return url.toString();
+    return (0, telegramMiniAppUrl_1.withTelegramMiniappPlatform)(url.toString());
 }
 //# sourceMappingURL=telegramMiniappAuth.js.map

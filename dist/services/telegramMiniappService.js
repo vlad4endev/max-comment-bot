@@ -46,11 +46,11 @@ async function answerTelegramCallbackQuery(token, callbackQueryId) {
 function buildTelegramMiniAppHomeUrl() {
     const fromConfig = config_1.config.miniAppUrl?.trim();
     if (fromConfig && (0, telegramMiniAppUrl_1.isTelegramWebAppUrl)(fromConfig)) {
-        return (0, telegramMiniAppUrl_1.normalizeMiniAppUrl)(fromConfig) ?? null;
+        return (0, telegramMiniAppUrl_1.withTelegramMiniappPlatform)((0, telegramMiniAppUrl_1.normalizeMiniAppUrl)(fromConfig) ?? fromConfig);
     }
     const fromEnv = (0, telegramMiniAppUrl_1.normalizeMiniAppUrl)(process.env.MINI_APP_URL ?? '');
     if (fromEnv && (0, telegramMiniAppUrl_1.isTelegramWebAppUrl)(fromEnv)) {
-        return fromEnv;
+        return (0, telegramMiniAppUrl_1.withTelegramMiniappPlatform)(fromEnv);
     }
     return null;
 }

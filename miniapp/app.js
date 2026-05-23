@@ -244,13 +244,14 @@
       if (!maxApi) return false
       var maxPlatform =
         typeof maxApi.platform === 'string' ? maxApi.platform.trim().toLowerCase() : ''
-      if (
-        maxPlatform === 'ios' ||
-        maxPlatform === 'android' ||
-        maxPlatform === 'desktop' ||
-        maxPlatform === 'web'
-      ) {
+      if (maxPlatform === 'ios' || maxPlatform === 'android' || maxPlatform === 'desktop') {
         return true
+      }
+      if (maxPlatform === 'web') {
+        var maxUnsafeWeb = maxApi.initDataUnsafe || {}
+        var maxUserWeb = normalizeBridgeUser(maxUnsafeWeb.user || {})
+        if (getBridgeNumericUserId(maxUserWeb) != null) return true
+        return typeof maxApi.initData === 'string' && maxApi.initData.trim() !== ''
       }
       var maxUnsafe = maxApi.initDataUnsafe || {}
       var maxUser = normalizeBridgeUser(maxUnsafe.user || {})
@@ -272,16 +273,10 @@
       var tgApi = window.Telegram && window.Telegram.WebApp
       var likelyTg = isLikelyTelegramWebView()
 
-      if (isMiniappTelegramRuntime()) {
+      if (isMiniappTelegramRuntime() || likelyTg) {
         if (tgApi && isActiveTelegramBridge(tgApi)) return tgApi
-        if (isActiveMaxBridge(maxApi)) return maxApi
         if (tgApi) return tgApi
-        return maxApi || null
-      }
-
-      if (likelyTg && tgApi) {
-        if (isActiveTelegramBridge(tgApi)) return tgApi
-        if (!isActiveMaxBridge(maxApi)) return tgApi
+        return null
       }
 
       if (isActiveMaxBridge(maxApi)) return maxApi
@@ -304,10 +299,14 @@
     }
 
     function isTelegramMiniappBridge(bridge) {
-      if (!window.Telegram || !window.Telegram.WebApp) return false
-      if (bridge === window.Telegram.WebApp) return true
-      if (isMiniappTelegramRuntime() && isMaxMiniappBridge(bridge)) return false
-      return isMiniappTelegramRuntime()
+      if (window.Telegram && window.Telegram.WebApp && bridge === window.Telegram.WebApp) {
+        return true
+      }
+      if (!window.Telegram || !window.Telegram.WebApp) {
+        return isMiniappTelegramRuntime() || isLikelyTelegramWebView()
+      }
+      if (bridge && window.WebApp && bridge === window.WebApp) return false
+      return isMiniappTelegramRuntime() || isLikelyTelegramWebView()
     }
 
     function normalizeBridgeUser(rawUser) {
@@ -2163,8 +2162,21 @@
       viewComments.classList.add('hidden');
 
       var gateChannelEl = document.getElementById('gateChannelName');
+      var gateHintEl = document.getElementById('gateLaunchHint');
+      var gateBtnEl = document.getElementById('gateLaunchBtn');
+      if (inTelegram && gateHintEl) {
+        gateHintEl.textContent =
+          'Откроется @commentvmax_bot в Telegram. Нажмите «Запустить» или напишите любое сообщение боту.';
+      }
+
       if (chatId && gateChannelEl) {
-        fetch('/api/channel-info?chat_id=' + encodeURIComponent(chatId))
+        var channelInfoQs = inTelegram ? '?platform=telegram&' : '?';
+        fetch(
+          '/api/channel-info' +
+            channelInfoQs +
+            'chat_id=' +
+            encodeURIComponent(inTelegram ? String(chatId) : chatId)
+        )
           .then(function (r) {
             return r.json();
           })
@@ -2179,12 +2191,20 @@
           return r.json();
         })
         .then(function (cfg) {
-          var nick = String(cfg.bot_nickname || '').replace(/^@/, '');
-          var url = 'https://max.ru/' + nick;
-          var btn = document.getElementById('gateLaunchBtn');
-          if (btn) btn.href = url;
+          var nick = String(
+            (inTelegram && cfg.telegram_bot_username) || cfg.bot_nickname || 'commentvmax_bot'
+          ).replace(/^@/, '');
+          var url = inTelegram ? 'https://t.me/' + nick : 'https://max.ru/' + nick;
+          if (gateBtnEl) {
+            gateBtnEl.href = url;
+            gateBtnEl.textContent = inTelegram ? '💬 Открыть бота в Telegram' : '💬 Написать боту';
+          }
         })
-        .catch(function () {});
+        .catch(function () {
+          if (gateBtnEl) {
+            gateBtnEl.href = inTelegram ? 'https://t.me/commentvmax_bot' : 'https://max.ru/bot';
+          }
+        });
     }
 
     ;(function bindGateManualRegister() {
@@ -2256,6 +2276,7 @@
       var statusUrl =
         '/api/user-status?user_id=' +
         encodeURIComponent(String(uid)) +
+        (inTelegram ? '&platform=telegram' : '') +
         (chatId ? '&chat_id=' + encodeURIComponent(chatId) : '');
 
       fetch(statusUrl)
@@ -3822,6 +3843,7 @@
       function postApiQuery() {
         var ids = resolveLookupIds();
         var parts = [];
+        if (inTelegram) parts.push('platform=telegram');
         if (ids.chatId) parts.push('chat_id=' + encodeURIComponent(ids.chatId));
         if (ids.messageMid) parts.push('message_mid=' + encodeURIComponent(ids.messageMid));
         return parts.length ? '?' + parts.join('&') : '';
@@ -3829,6 +3851,7 @@
 
       function miniappLookupHeaders() {
         var hdr = {};
+        if (inTelegram) hdr['X-Miniapp-Platform'] = 'telegram';
         // Only ASCII-safe values may be used as HTTP header values.
         // X-Miniapp-Start-Param is always ASCII (hex + base64url payload).
         if (startParam) {

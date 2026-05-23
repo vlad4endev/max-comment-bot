@@ -4,6 +4,8 @@ export declare function isPrivateOrLocalMiniAppHost(url: string): boolean;
 /** Собрать `https://домен/miniapp` из `WEBHOOK_URL`, если `MINI_APP_URL` не задан. */
 export declare function deriveMiniAppUrlFromWebhook(webhookUrl: string): string | undefined;
 export declare function normalizeMiniAppUrl(raw: string): string | undefined;
+/** Ensures Telegram WebView opens in TG mode (BotFather URL, deep links, notifications). */
+export declare function withTelegramMiniappPlatform(rawUrl: string): string;
 export type TelegramOpenPanelButton = {
     text: string;
     web_app: {

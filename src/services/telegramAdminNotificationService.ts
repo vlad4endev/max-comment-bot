@@ -5,6 +5,7 @@ import { logger } from '../utils/logger'
 import { integrationsStore } from './integrationsStore'
 import { listTelegramChatAdministrators } from './integrationPlatformClient'
 import { buildTelegramMiniappUrl } from './telegramMiniappAuth'
+import { buildTelegramOpenPanelButton } from '../utils/telegramMiniAppUrl'
 
 const TG_API = 'https://api.telegram.org'
 
@@ -42,17 +43,16 @@ async function tgSendMessage(
   token: string,
   chatId: number,
   text: string,
-  buttonUrl: string,
+  miniAppUrl: string,
 ): Promise<void> {
+  const openBtn = buildTelegramOpenPanelButton(miniAppUrl)
   await axios.post(
     `${TG_API}/bot${token}/sendMessage`,
     {
       chat_id: chatId,
       text,
       reply_markup: {
-        inline_keyboard: [
-          [{ text: '💬 Открыть комментарии', url: buttonUrl }],
-        ],
+        inline_keyboard: [[openBtn]],
       },
     },
     { timeout: 20_000 },

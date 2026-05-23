@@ -10,6 +10,7 @@ const logger_1 = require("../utils/logger");
 const integrationsStore_1 = require("./integrationsStore");
 const integrationPlatformClient_1 = require("./integrationPlatformClient");
 const telegramMiniappAuth_1 = require("./telegramMiniappAuth");
+const telegramMiniAppUrl_1 = require("../utils/telegramMiniAppUrl");
 const TG_API = 'https://api.telegram.org';
 function preview80(text) {
     const t = text.trim().replace(/\s+/g, ' ');
@@ -39,14 +40,13 @@ function resolveTelegramSourceChannelsForMaxChat(maxChatId) {
     }
     return [...out];
 }
-async function tgSendMessage(token, chatId, text, buttonUrl) {
+async function tgSendMessage(token, chatId, text, miniAppUrl) {
+    const openBtn = (0, telegramMiniAppUrl_1.buildTelegramOpenPanelButton)(miniAppUrl);
     await axios_1.default.post(`${TG_API}/bot${token}/sendMessage`, {
         chat_id: chatId,
         text,
         reply_markup: {
-            inline_keyboard: [
-                [{ text: '💬 Открыть комментарии', url: buttonUrl }],
-            ],
+            inline_keyboard: [[openBtn]],
         },
     }, { timeout: 20_000 });
 }

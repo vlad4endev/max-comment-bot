@@ -4,6 +4,7 @@ exports.isTelegramWebAppUrl = isTelegramWebAppUrl;
 exports.isPrivateOrLocalMiniAppHost = isPrivateOrLocalMiniAppHost;
 exports.deriveMiniAppUrlFromWebhook = deriveMiniAppUrlFromWebhook;
 exports.normalizeMiniAppUrl = normalizeMiniAppUrl;
+exports.withTelegramMiniappPlatform = withTelegramMiniappPlatform;
 exports.buildTelegramOpenPanelButton = buildTelegramOpenPanelButton;
 exports.isPublicHttpsMiniAppUrl = isPublicHttpsMiniAppUrl;
 exports.logMiniAppUrlDiagnostics = logMiniAppUrlDiagnostics;
@@ -76,21 +77,32 @@ function normalizeMiniAppUrl(raw) {
     }
     return trimmed.replace(/\/+$/, '');
 }
+/** Ensures Telegram WebView opens in TG mode (BotFather URL, deep links, notifications). */
+function withTelegramMiniappPlatform(rawUrl) {
+    const trimmed = rawUrl.trim();
+    if (trimmed === '') {
+        return trimmed;
+    }
+    try {
+        const url = new URL(trimmed);
+        if (!url.searchParams.has('platform')) {
+            url.searchParams.set('platform', 'telegram');
+        }
+        return url.toString().replace(/\/+$/, '');
+    }
+    catch {
+        return trimmed;
+    }
+}
 /** Кнопка «Открыть панель»: Web App только для валидного HTTPS URL, иначе ссылка на бота. */
 function buildTelegramOpenPanelButton(homeUrl, botUsername = 'commentvmax_bot') {
     const fallback = `https://t.me/${botUsername.replace(/^@/, '')}`;
     const candidate = (homeUrl ?? '').trim();
     if (candidate && isTelegramWebAppUrl(candidate)) {
-        try {
-            const url = new URL(candidate);
-            if (!url.searchParams.has('platform')) {
-                url.searchParams.set('platform', 'telegram');
-            }
-            return { text: '🚀 Открыть панель', web_app: { url: url.toString().replace(/\/+$/, '') } };
-        }
-        catch {
-            return { text: '🚀 Открыть панель', web_app: { url: candidate } };
-        }
+        return {
+            text: '🚀 Открыть панель',
+            web_app: { url: withTelegramMiniappPlatform(candidate) },
+        };
     }
     const link = candidate && /^https?:\/\//i.test(candidate) ? candidate : fallback;
     return { text: '🚀 Открыть панель', url: link };

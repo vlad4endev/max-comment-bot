@@ -53,14 +53,24 @@
       var ua = String(navigator.userAgent || '')
       var hash = String(location.hash || '')
       var search = String(location.search || '')
-      window.__miniappPreferTelegram =
+      var preferTg =
         /Telegram/i.test(ua) ||
         /tgWebApp/i.test(hash) ||
         /[?&]tg_/i.test(search) ||
         /[?&]platform=telegram/i.test(search)
+      window.__miniappPreferTelegram = preferTg
+      var sdkUrl = preferTg
+        ? 'https://telegram.org/js/telegram-web-app.js'
+        : 'https://st.max.ru/js/max-web-app.js'
+      var preload = document.createElement('link')
+      preload.rel = 'preload'
+      preload.as = 'script'
+      preload.href = sdkUrl
+      preload.crossOrigin = 'anonymous'
+      document.head.appendChild(preload)
+      document.write('<script src="' + sdkUrl + '" crossorigin="anonymous"><\/script>')
     })()
   </script>
-  <link rel="preload" href="https://st.max.ru/js/max-web-app.js" as="script" crossorigin="anonymous" />
   <link rel="stylesheet" href="styles.css" />
   <style>
     /* Critical: экран загрузки до styles.css (важно для WebView MAX без gzip) */
@@ -74,7 +84,6 @@
   </style>
 </head>
 <body>
-  <script src="https://st.max.ru/js/max-web-app.js"></script>
   <div id="miniappLoading" aria-live="polite">Загрузка…</div>
   <div id="miniappBootError" class="miniapp-boot-error hidden" role="alert"></div>
   <div class="shell">
@@ -85,7 +94,7 @@
           <span id="themeIcon" class="theme-icon" aria-hidden="true">✨</span>
           <span id="themeLabel" class="theme-label">Авто</span>
         </button>
-        <h1 class="sr-only">CommentBot — комментарии в MAX</h1>
+        <h1 class="sr-only">CommentBot</h1>
         <div class="brand-mark" aria-hidden="true">
           <img
             class="brand-mark-img"

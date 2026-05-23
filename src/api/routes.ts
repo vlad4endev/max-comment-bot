@@ -31,6 +31,7 @@ import {
   syncAdminCommentNotification,
 } from '../services/notificationService'
 import { notifyTelegramAdminsNewMiniappComment } from '../services/telegramAdminNotificationService'
+import { telegramBotUserStore } from '../services/telegramBotUserStore'
 import { verifyTelegramMiniappAuth } from '../services/telegramMiniappAuth'
 import {
   getTelegramChannelAdminsForMiniapp,
@@ -503,6 +504,7 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
   router.get('/config', (_req, res) => {
     res.json({
       bot_nickname: config.botNickname,
+      telegram_bot_username: 'commentvmax_bot',
       mini_app_url: config.miniAppUrl ?? null,
       /** Bump when join UI changes — helps verify deploy (grep join-heading in /miniapp/index.html). */
       miniapp_join_ui: 'admin-invite-v2',
@@ -546,15 +548,22 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
       return
     }
     const chatId = parseNonZeroInt(req.query.chat_id)
-    const isSubscriber = subscriberStore.hasSubscriber(userId)
-    const isAdmin =
-      chatId !== null ? await isUserChannelAdmin(deps.bot, chatId, userId) : false
+    const isTelegram = isTelegramMiniappPlatform(req)
+    const isSubscriber = isTelegram
+      ? telegramBotUserStore.hasStarted(userId)
+      : subscriberStore.hasSubscriber(userId)
+    const isAdmin = isTelegram
+      ? false
+      : chatId !== null
+        ? await isUserChannelAdmin(deps.bot, chatId, userId)
+        : false
     const showSubscribeBanner = !isSubscriber && !isAdmin
     res.json({
       started: isSubscriber,
       is_admin: isAdmin,
       show_subscribe_banner: showSubscribeBanner,
-      bot_nickname: config.BOT_NICKNAME,
+      bot_nickname: isTelegram ? 'commentvmax_bot' : config.BOT_NICKNAME,
+      telegram_bot_username: isTelegram ? 'commentvmax_bot' : null,
     })
   })
 

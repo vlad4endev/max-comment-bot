@@ -1,6 +1,7 @@
 import { createHmac, timingSafeEqual } from 'node:crypto'
 
 import { config } from '../config'
+import { withTelegramMiniappPlatform } from '../utils/telegramMiniAppUrl'
 
 const AUTH_VERSION = 'v1'
 const AUTH_TTL_SEC = 60 * 60 * 24
@@ -79,5 +80,5 @@ export function buildTelegramMiniappUrl(input: {
   url.searchParams.set('tg_uid', auth.tg_uid)
   url.searchParams.set('tg_exp', auth.tg_exp)
   url.searchParams.set('tg_sig', auth.tg_sig)
-  return url.toString()
+  return withTelegramMiniappPlatform(url.toString())
 }

@@ -35,6 +35,10 @@ export class TelegramBotUserStore {
     )
   }
 
+  hasStarted(userId: number): boolean {
+    return this.getStartedIds([userId]).has(userId)
+  }
+
   getStartedIds(userIds: number[]): Set<number> {
     const normalized = [...new Set(userIds.filter((id) => isPositiveInt(id)))]
     if (normalized.length === 0) {
