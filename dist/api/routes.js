@@ -10,10 +10,12 @@ const node_crypto_1 = require("node:crypto");
 const express_1 = __importDefault(require("express"));
 const multer_1 = __importDefault(require("multer"));
 const config_1 = require("../config");
+const database_1 = require("../db/database");
 const integrationPlatformClient_1 = require("../services/integrationPlatformClient");
 const deeplink_1 = require("../utils/deeplink");
 const channelNotifyLinkStore_1 = require("../services/channelNotifyLinkStore");
 const channelRegistry_1 = require("../services/channelRegistry");
+const channelSubscriberSnapshotStore_1 = require("../services/channelSubscriberSnapshotStore");
 const channelSettingsStore_1 = require("../services/channelSettingsStore");
 const disabledAdminStore_1 = require("../services/disabledAdminStore");
 const resolveChannelChatId_1 = require("../services/resolveChannelChatId");
@@ -231,6 +233,64 @@ const MINIAPP_CHANNEL_BRANDING_TTL_SEC = 300;
 async function listChannelChatIdsWhereUserIsAdminCached(bot, userId) {
     return (0, tieredCache_1.cacheGetOrCompute)(`miniapp:admin-channels:${userId}`, MINIAPP_ADMIN_CHANNELS_TTL_SEC, () => listChannelChatIdsWhereUserIsAdmin(bot, userId));
 }
+function userHasAnyComment(userId) {
+    const row = (0, database_1.getDb)()
+        .prepare('SELECT 1 AS ok FROM comments WHERE user_id = ? LIMIT 1')
+        .get(userId);
+    return row !== undefined;
+}
+function userHasCommentsInChannel(userId, channelChatId) {
+    const row = (0, database_1.getDb)()
+        .prepare(`SELECT 1 AS ok FROM comments c
+       INNER JOIN posts p ON p.post_id = c.post_id
+       WHERE c.user_id = ? AND p.chat_id = ?
+       LIMIT 1`)
+        .get(userId, channelChatId);
+    return row !== undefined;
+}
+function isChannelAdminFromSnapshot(userId, channelChatId) {
+    const targetAbs = Math.abs(channelChatId);
+    for (const member of channelSubscriberSnapshotStore_1.channelSubscriberSnapshotStore.listMembersForUser(userId)) {
+        if (Math.abs(member.channel_chat_id) !== targetAbs) {
+            continue;
+        }
+        if (member.is_admin || member.is_owner) {
+            return true;
+        }
+    }
+    return false;
+}
+async function isUserAdminOfChannel(bot, channelChatId, userId) {
+    if (isChannelAdminFromSnapshot(userId, channelChatId)) {
+        return true;
+    }
+    if (await (0, channelPostActions_1.isUserChannelAdmin)(bot, channelChatId, userId)) {
+        return true;
+    }
+    const adminChannels = await listChannelChatIdsWhereUserIsAdminCached(bot, userId);
+    return adminChannels.some((id) => Math.abs(id) === Math.abs(channelChatId));
+}
+function collectGateUserIds(platformUserId, isTelegram) {
+    const ids = [platformUserId];
+    if (isTelegram) {
+        const pairing = (0, channelLinkAdminTeamSync_1.profilePairingForPlatformUser)('telegram', platformUserId);
+        if (pairing.max_user_id != null && !ids.includes(pairing.max_user_id)) {
+            ids.push(pairing.max_user_id);
+        }
+    }
+    return ids;
+}
+function userHasPriorMiniappActivity(userIds, channelChatId) {
+    for (const id of userIds) {
+        if (userHasAnyComment(id)) {
+            return true;
+        }
+        if (channelChatId !== null && userHasCommentsInChannel(id, channelChatId)) {
+            return true;
+        }
+    }
+    return false;
+}
 async function resolveChannelBrandingCached(bot, chatId) {
     return (0, tieredCache_1.cacheGetOrCompute)(`miniapp:channel-branding:${chatId}`, MINIAPP_CHANNEL_BRANDING_TTL_SEC, () => resolveChannelBranding(bot, chatId));
 }
@@ -423,6 +483,8 @@ function createCommentApiRouter(deps) {
         }
         const chatId = parseNonZeroInt(req.query.chat_id);
         const isTelegram = isTelegramMiniappPlatform(req);
+        const gateUserIds = collectGateUserIds(userId, isTelegram);
+        const hasPriorActivity = userHasPriorMiniappActivity(gateUserIds, chatId);
         let isSubscriber = false;
         let isAdmin = false;
         if (isTelegram) {
@@ -430,12 +492,14 @@ function createCommentApiRouter(deps) {
             isSubscriber =
                 telegramBotUserStore_1.telegramBotUserStore.hasStarted(userId) ||
                     subscriberStore_1.subscriberStore.hasSubscriber(userId) ||
-                    (pairing.max_user_id != null && subscriberStore_1.subscriberStore.hasSubscriber(pairing.max_user_id));
+                    (pairing.max_user_id != null && subscriberStore_1.subscriberStore.hasSubscriber(pairing.max_user_id)) ||
+                    hasPriorActivity;
             if (isAdminParamValue(req.query.admin)) {
                 isAdmin = true;
             }
             else if (chatId !== null) {
                 const maxChatId = Math.abs(chatId);
+                const authChatId = (0, resolveChannelChatId_1.resolveCanonicalChannelChatId)(chatId) ?? chatId;
                 if ((0, telegramMiniappAuth_1.verifyTelegramMiniappAuth)({
                     telegramUserId: userId,
                     maxChatId,
@@ -452,12 +516,38 @@ function createCommentApiRouter(deps) {
                     catch {
                         isAdmin = false;
                     }
+                    if (!isAdmin) {
+                        for (const gateUserId of gateUserIds) {
+                            if (await isUserAdminOfChannel(deps.bot, chatId, gateUserId)) {
+                                isAdmin = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+            else {
+                for (const gateUserId of gateUserIds) {
+                    const adminChannels = await listChannelChatIdsWhereUserIsAdminCached(deps.bot, gateUserId);
+                    if (adminChannels.length > 0) {
+                        isAdmin = true;
+                        break;
+                    }
                 }
             }
         }
         else {
-            isSubscriber = subscriberStore_1.subscriberStore.hasSubscriber(userId);
-            isAdmin = chatId !== null ? await (0, channelPostActions_1.isUserChannelAdmin)(deps.bot, chatId, userId) : false;
+            isSubscriber = subscriberStore_1.subscriberStore.hasSubscriber(userId) || hasPriorActivity;
+            if (chatId !== null) {
+                isAdmin = await isUserAdminOfChannel(deps.bot, chatId, userId);
+            }
+            else {
+                const adminChannels = await listChannelChatIdsWhereUserIsAdminCached(deps.bot, userId);
+                isAdmin = adminChannels.length > 0;
+            }
+        }
+        if (isAdmin) {
+            isSubscriber = true;
         }
         const showSubscribeBanner = !isSubscriber && !isAdmin;
         res.json({

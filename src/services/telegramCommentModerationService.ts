@@ -5,6 +5,7 @@ import { getTelegramToken } from '../config'
 import { logger } from '../utils/logger'
 import { profilePairingForPlatformUser } from './channelLinkAdminTeamSync'
 import { isUserChannelAdmin } from './channelPostActions'
+import { resolveCanonicalChannelChatId } from './resolveChannelChatId'
 import { channelRegistry } from './channelRegistry'
 import { commentStore } from './commentStore'
 import { listTelegramChatAdministrators } from './integrationPlatformClient'
@@ -96,9 +97,10 @@ export async function canManageMaxCommentViaTelegram(
   telegramUserId: number,
   maxChatId: number,
 ): Promise<boolean> {
+  const channelChatId = resolveCanonicalChannelChatId(maxChatId) ?? maxChatId
   const pairing = profilePairingForPlatformUser('telegram', telegramUserId)
   if (pairing.max_user_id != null) {
-    const isMaxAdmin = await isUserChannelAdmin(bot, maxChatId, pairing.max_user_id)
+    const isMaxAdmin = await isUserChannelAdmin(bot, channelChatId, pairing.max_user_id)
     if (isMaxAdmin) {
       return true
     }
@@ -107,7 +109,7 @@ export async function canManageMaxCommentViaTelegram(
   if (!token) {
     return false
   }
-  return isTelegramAdminOfLinkedChannel(token, telegramUserId, maxChatId)
+  return isTelegramAdminOfLinkedChannel(token, telegramUserId, channelChatId)
 }
 
 function resolveCommentContext(commentId: string): {

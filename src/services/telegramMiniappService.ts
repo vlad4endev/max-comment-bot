@@ -15,6 +15,7 @@ import { telegramChannelNotifyLinkStore } from './telegramChannelNotifyLinkStore
 import { telegramChannelRegistry } from './telegramChannelRegistry'
 import { commentStore } from './commentStore'
 import { postStore } from './postStore'
+import { subscriberStore } from './subscriberStore'
 import { ensureAdminPanelStateLoaded, listTgChainsSync } from '../api/adminPanelState'
 import { completeAccountPairingFromTelegram } from './accountPairingService'
 import { buildTelegramBotJoinUrl, isTelegramAccountPairStartPayload } from '../utils/telegramDeeplink'
@@ -591,6 +592,7 @@ export async function processTelegramMiniappBotUpdates(
       first_name: typeof from.first_name === 'string' ? from.first_name : undefined,
       last_name: typeof from.last_name === 'string' ? from.last_name : undefined,
     })
+    subscriberStore.addSubscriber(from.id)
 
     if (text.startsWith('/start')) {
       const payload = text.replace(/^\/start\s*/i, '').trim()

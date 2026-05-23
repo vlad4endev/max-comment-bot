@@ -24,6 +24,7 @@ const telegramChannelNotifyLinkStore_1 = require("./telegramChannelNotifyLinkSto
 const telegramChannelRegistry_1 = require("./telegramChannelRegistry");
 const commentStore_1 = require("./commentStore");
 const postStore_1 = require("./postStore");
+const subscriberStore_1 = require("./subscriberStore");
 const adminPanelState_1 = require("../api/adminPanelState");
 const accountPairingService_1 = require("./accountPairingService");
 const telegramDeeplink_1 = require("../utils/telegramDeeplink");
@@ -443,6 +444,7 @@ async function processTelegramMiniappBotUpdates(token, updates, bot = null) {
             first_name: typeof from.first_name === 'string' ? from.first_name : undefined,
             last_name: typeof from.last_name === 'string' ? from.last_name : undefined,
         });
+        subscriberStore_1.subscriberStore.addSubscriber(from.id);
         if (text.startsWith('/start')) {
             const payload = text.replace(/^\/start\s*/i, '').trim();
             if ((0, telegramDeeplink_1.isTelegramAccountPairStartPayload)(payload)) {

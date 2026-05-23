@@ -2307,7 +2307,8 @@
         if (adminParam) statusQs += '&admin=1';
       }
 
-      fetch('/api/user-status' + statusQs)
+      var statusHeaders = inTelegram ? { 'X-Miniapp-Platform': 'telegram' } : {};
+      fetch('/api/user-status' + statusQs, { headers: statusHeaders })
         .then(function (r) {
           return r.json();
         })

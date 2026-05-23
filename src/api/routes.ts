@@ -8,10 +8,12 @@ import express from 'express'
 import multer from 'multer'
 
 import { config, getTelegramToken } from '../config'
+import { getDb } from '../db/database'
 import { listTelegramChatAdministrators } from '../services/integrationPlatformClient'
 import { buildBotJoinUrl } from '../utils/deeplink'
 import { channelNotifyLinkStore } from '../services/channelNotifyLinkStore'
 import { channelRegistry } from '../services/channelRegistry'
+import { channelSubscriberSnapshotStore } from '../services/channelSubscriberSnapshotStore'
 import {
   channelSettingsStore,
   parseManagerUrlInput,
@@ -297,6 +299,76 @@ async function listChannelChatIdsWhereUserIsAdminCached(bot: Bot, userId: number
   )
 }
 
+function userHasAnyComment(userId: number): boolean {
+  const row = getDb()
+    .prepare('SELECT 1 AS ok FROM comments WHERE user_id = ? LIMIT 1')
+    .get(userId) as { ok: number } | undefined
+  return row !== undefined
+}
+
+function userHasCommentsInChannel(userId: number, channelChatId: number): boolean {
+  const row = getDb()
+    .prepare(
+      `SELECT 1 AS ok FROM comments c
+       INNER JOIN posts p ON p.post_id = c.post_id
+       WHERE c.user_id = ? AND p.chat_id = ?
+       LIMIT 1`,
+    )
+    .get(userId, channelChatId) as { ok: number } | undefined
+  return row !== undefined
+}
+
+function isChannelAdminFromSnapshot(userId: number, channelChatId: number): boolean {
+  const targetAbs = Math.abs(channelChatId)
+  for (const member of channelSubscriberSnapshotStore.listMembersForUser(userId)) {
+    if (Math.abs(member.channel_chat_id) !== targetAbs) {
+      continue
+    }
+    if (member.is_admin || member.is_owner) {
+      return true
+    }
+  }
+  return false
+}
+
+async function isUserAdminOfChannel(
+  bot: Bot,
+  channelChatId: number,
+  userId: number,
+): Promise<boolean> {
+  if (isChannelAdminFromSnapshot(userId, channelChatId)) {
+    return true
+  }
+  if (await isUserChannelAdmin(bot, channelChatId, userId)) {
+    return true
+  }
+  const adminChannels = await listChannelChatIdsWhereUserIsAdminCached(bot, userId)
+  return adminChannels.some((id) => Math.abs(id) === Math.abs(channelChatId))
+}
+
+function collectGateUserIds(platformUserId: number, isTelegram: boolean): number[] {
+  const ids = [platformUserId]
+  if (isTelegram) {
+    const pairing = profilePairingForPlatformUser('telegram', platformUserId)
+    if (pairing.max_user_id != null && !ids.includes(pairing.max_user_id)) {
+      ids.push(pairing.max_user_id)
+    }
+  }
+  return ids
+}
+
+function userHasPriorMiniappActivity(userIds: number[], channelChatId: number | null): boolean {
+  for (const id of userIds) {
+    if (userHasAnyComment(id)) {
+      return true
+    }
+    if (channelChatId !== null && userHasCommentsInChannel(id, channelChatId)) {
+      return true
+    }
+  }
+  return false
+}
+
 async function resolveChannelBrandingCached(
   bot: Bot,
   chatId: number,
@@ -558,6 +630,8 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
     }
     const chatId = parseNonZeroInt(req.query.chat_id)
     const isTelegram = isTelegramMiniappPlatform(req)
+    const gateUserIds = collectGateUserIds(userId, isTelegram)
+    const hasPriorActivity = userHasPriorMiniappActivity(gateUserIds, chatId)
 
     let isSubscriber = false
     let isAdmin = false
@@ -567,7 +641,8 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
       isSubscriber =
         telegramBotUserStore.hasStarted(userId) ||
         subscriberStore.hasSubscriber(userId) ||
-        (pairing.max_user_id != null && subscriberStore.hasSubscriber(pairing.max_user_id))
+        (pairing.max_user_id != null && subscriberStore.hasSubscriber(pairing.max_user_id)) ||
+        hasPriorActivity
 
       if (isAdminParamValue(req.query.admin)) {
         isAdmin = true
@@ -589,11 +664,36 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
           } catch {
             isAdmin = false
           }
+          if (!isAdmin) {
+            for (const gateUserId of gateUserIds) {
+              if (await isUserAdminOfChannel(deps.bot, chatId, gateUserId)) {
+                isAdmin = true
+                break
+              }
+            }
+          }
+        }
+      } else {
+        for (const gateUserId of gateUserIds) {
+          const adminChannels = await listChannelChatIdsWhereUserIsAdminCached(deps.bot, gateUserId)
+          if (adminChannels.length > 0) {
+            isAdmin = true
+            break
+          }
         }
       }
     } else {
-      isSubscriber = subscriberStore.hasSubscriber(userId)
-      isAdmin = chatId !== null ? await isUserChannelAdmin(deps.bot, chatId, userId) : false
+      isSubscriber = subscriberStore.hasSubscriber(userId) || hasPriorActivity
+      if (chatId !== null) {
+        isAdmin = await isUserAdminOfChannel(deps.bot, chatId, userId)
+      } else {
+        const adminChannels = await listChannelChatIdsWhereUserIsAdminCached(deps.bot, userId)
+        isAdmin = adminChannels.length > 0
+      }
+    }
+
+    if (isAdmin) {
+      isSubscriber = true
     }
 
     const showSubscribeBanner = !isSubscriber && !isAdmin

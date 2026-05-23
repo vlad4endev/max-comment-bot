@@ -11,6 +11,7 @@ const config_1 = require("../config");
 const logger_1 = require("../utils/logger");
 const channelLinkAdminTeamSync_1 = require("./channelLinkAdminTeamSync");
 const channelPostActions_1 = require("./channelPostActions");
+const resolveChannelChatId_1 = require("./resolveChannelChatId");
 const channelRegistry_1 = require("./channelRegistry");
 const commentStore_1 = require("./commentStore");
 const integrationPlatformClient_1 = require("./integrationPlatformClient");
@@ -60,9 +61,10 @@ async function isTelegramAdminOfLinkedChannel(token, telegramUserId, maxChatId) 
     return false;
 }
 async function canManageMaxCommentViaTelegram(bot, telegramUserId, maxChatId) {
+    const channelChatId = (0, resolveChannelChatId_1.resolveCanonicalChannelChatId)(maxChatId) ?? maxChatId;
     const pairing = (0, channelLinkAdminTeamSync_1.profilePairingForPlatformUser)('telegram', telegramUserId);
     if (pairing.max_user_id != null) {
-        const isMaxAdmin = await (0, channelPostActions_1.isUserChannelAdmin)(bot, maxChatId, pairing.max_user_id);
+        const isMaxAdmin = await (0, channelPostActions_1.isUserChannelAdmin)(bot, channelChatId, pairing.max_user_id);
         if (isMaxAdmin) {
             return true;
         }
@@ -71,7 +73,7 @@ async function canManageMaxCommentViaTelegram(bot, telegramUserId, maxChatId) {
     if (!token) {
         return false;
     }
-    return isTelegramAdminOfLinkedChannel(token, telegramUserId, maxChatId);
+    return isTelegramAdminOfLinkedChannel(token, telegramUserId, channelChatId);
 }
 function resolveCommentContext(commentId) {
     const comment = commentStore_1.commentStore.getComment(commentId);
