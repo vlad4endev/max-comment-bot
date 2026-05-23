@@ -79,7 +79,7 @@
   <div id="miniappBootError" class="miniapp-boot-error hidden" role="alert"></div>
   <div class="shell">
     <div id="view-home" class="view hidden">
-      <div id="adminBanner" class="admin-banner">Режим администратора: вы вошли с параметром <code style="color:var(--teal)">admin=1</code>. Для ответов на комментарии откройте мини-приложение из уведомления по конкретному посту.</div>
+      <div id="adminBanner" class="admin-banner">Режим администратора. Чтобы отвечать на комментарии, откройте приложение из уведомления по конкретному посту.</div>
       <div class="hero">
         <button type="button" id="themeToggle" class="theme-toggle" aria-label="Тема: Авто">
           <span id="themeIcon" class="theme-icon" aria-hidden="true">✨</span>
@@ -103,14 +103,14 @@
         <div class="user-av-home" id="homeUserAv">?</div>
         <div class="user-meta-home">
           <div class="line1" id="homeUserName">Гость</div>
-          <div class="line2" id="homeUserId">user_id: —</div>
+          <div class="line2" id="homeUserId">ID: —</div>
         </div>
         <span class="badge-active">Активен</span>
       </div>
       <div class="account-pair-row" id="accountPairRow" aria-live="polite"></div>
       <div class="home-err" id="homeErr"></div>
       <div id="testUserFallback" class="test-user-fallback" aria-live="polite">
-        <div class="hint" id="testUserFallbackHint">Открыто вне MAX/Telegram (или нет пользователя в Bridge). Для теста укажите <code style="color:var(--teal)">user_id</code> в URL (<code style="color:var(--teal)">?user_id=122099994</code>) или введите ниже.</div>
+        <div class="hint" id="testUserFallbackHint">Откройте приложение из MAX или Telegram. Для проверки в браузере введите ваш числовой ID ниже.</div>
         <div class="test-user-row">
           <input type="text" id="testUserIdInput" inputmode="numeric" placeholder="например 122099994" autocomplete="off" />
           <button type="button" id="testUserIdApply">Применить</button>
@@ -609,14 +609,14 @@
     if (appScript) {
       appScript.onerror = function () {
         showMiniappAssetError(
-          'Не загружен app.js (404). На сервере в папке проекта: git pull && docker compose up -d --build'
+          'Не удалось загрузить приложение. Закройте и откройте снова из бота.'
         )
       }
     }
     window.setTimeout(function () {
       if (!window.__miniappReady) {
         showMiniappAssetError(
-          'Приложение не запустилось. Пересоберите контейнер: docker compose up -d --build'
+          'Приложение не запустилось. Закройте и откройте снова из бота.'
         )
       }
     }, 5000)

@@ -54,10 +54,87 @@
       return (window.__apiBase || '') + p
     }
 
-    function showBootError(message) {
+    var KNOWN_USER_ERRORS = {
+      'missing or invalid user_id': 'Не удалось определить ваш профиль. Откройте приложение из бота.',
+      'missing or invalid chat_id': 'Канал не найден. Откройте комментарии из поста ещё раз.',
+      'missing or invalid user_id or chat_id': 'Не хватает данных для канала. Откройте приложение из бота.',
+      'missing or invalid fields': 'Проверьте, что все поля заполнены.',
+      'invalid body': 'Не удалось отправить данные. Попробуйте ещё раз.',
+      'internal error': 'Сервис временно недоступен. Попробуйте чуть позже.',
+      'channel not connected': 'Канал ещё не подключён к боту.',
+      'post not found': 'Пост не найден или удалён.',
+      post_not_found: 'Пост не найден или удалён.',
+      'comment not found': 'Комментарий не найден.',
+      'Доступ запрещён': 'Недостаточно прав для этого действия.',
+      'Только администраторы могут изменять комментарии': 'Изменять комментарии могут только администраторы.',
+      'owner cannot be disabled': 'Владельца канала нельзя отключить.',
+      'target user is not a channel admin': 'Этот пользователь не администратор канала.',
+      timeout: 'Слишком долго ждём ответ. Проверьте интернет и попробуйте снова.',
+      'Failed to fetch': 'Нет связи с сервером. Проверьте интернет.',
+      'NetworkError': 'Нет связи с сервером. Проверьте интернет.',
+    }
+
+    function logMiniappError(context, raw) {
+      if (raw != null && String(raw).trim() !== '') {
+        console.warn('[miniapp]' + (context ? ' ' + context + ':' : ''), raw)
+      }
+    }
+
+    function isTechnicalErrorMessage(msg) {
+      var s = String(msg || '').trim()
+      if (!s) return true
+      if (/^health |^config |api_html|api_invalid|telegram-web-app|max-web-app/i.test(s)) return true
+      if (/\b(400|401|403|404|500|502|503)\b/.test(s) && /HTTP|status|error/i.test(s)) return true
+      if (/missing or invalid|internal error|invalid body|not found$/i.test(s)) return true
+      if (/\.js:|\/api\/|nginx|docker|git pull|compose|JSON|HTML|прокси|контейнер/i.test(s)) return true
+      if (/user_id|chat_id|post_id|message_mid|Bridge|WebApp|initData/i.test(s) && /нет|missing|invalid/i.test(s)) {
+        return true
+      }
+      if (/^[a-z0-9_.-]+$/i.test(s) && s.indexOf(' ') < 0 && s.length < 40) return true
+      return false
+    }
+
+    function formatUserError(raw, fallback) {
+      var fb = fallback || 'Что-то пошло не так. Попробуйте ещё раз.'
+      var msg = ''
+      if (raw == null) return fb
+      if (typeof raw === 'object') {
+        if (raw.message) msg = String(raw.message)
+        else if (raw.error) msg = String(raw.error)
+        else msg = String(raw)
+      } else {
+        msg = String(raw)
+      }
+      msg = msg.trim()
+      if (!msg || msg === 'pending') return fb
+
+      var lower = msg.toLowerCase()
+      var key
+      for (key in KNOWN_USER_ERRORS) {
+        if (Object.prototype.hasOwnProperty.call(KNOWN_USER_ERRORS, key)) {
+          if (lower === String(key).toLowerCase() || lower.indexOf(String(key).toLowerCase()) >= 0) {
+            return KNOWN_USER_ERRORS[key]
+          }
+        }
+      }
+
+      if (/[а-яё]/i.test(msg) && !isTechnicalErrorMessage(msg)) {
+        return msg.length > 160 ? fb : msg
+      }
+
+      if (isTechnicalErrorMessage(msg)) {
+        logMiniappError('sanitized', msg)
+        return fb
+      }
+
+      return msg.length > 160 ? fb : msg
+    }
+
+    function showBootError(message, fallback) {
       var el = document.getElementById('miniappBootError')
       if (!el) return
-      el.textContent = message
+      logMiniappError('boot', message)
+      el.textContent = formatUserError(message, fallback || 'Не удалось загрузить приложение. Закройте и откройте снова из бота.')
       el.classList.remove('hidden')
     }
 
@@ -439,10 +516,10 @@
       }
     }
 
-    function showToast(msg) {
+    function showToast(msg, fallback) {
       var t = document.getElementById('toast')
       if (!t) return
-      t.textContent = msg || ''
+      t.textContent = formatUserError(msg, fallback || (msg ? String(msg) : 'Что-то пошло не так'))
       t.style.opacity = '1'
       if (t._toastTimer) window.clearTimeout(t._toastTimer)
       t._toastTimer = window.setTimeout(function () {
@@ -692,7 +769,8 @@
             if (status) status.textContent = '✅ Сохранено!'
             setTimeout(closeChannelSettings, 1200)
           } else if (status) {
-            status.textContent = '❌ ' + ((x.data && x.data.error) || 'Ошибка')
+            status.textContent =
+              '❌ ' + formatUserError((x.data && x.data.error) || '', 'Не удалось сохранить настройки')
             status.style.color = 'var(--danger)'
           }
         })
@@ -885,8 +963,8 @@
         return h;
       }
 
-      function setHomeErr(t) {
-        homeErr.textContent = t || '';
+      function setHomeErr(t, fallback) {
+        homeErr.textContent = t ? formatUserError(t, fallback || String(t)) : '';
       }
 
       function initials(name) {
@@ -1067,8 +1145,8 @@
       }
       document.getElementById('homeUserId').textContent =
         uid != null
-          ? 'user_id: ' + uid + (inTelegram ? ' (Telegram)' : '')
-          : 'user_id: — (откройте из MAX/Telegram или задайте в URL)';
+          ? 'ID: ' + uid + (inTelegram ? ' · Telegram' : '')
+          : 'ID: — (откройте из MAX или Telegram)';
 
       var avEl = document.getElementById('homeUserAv');
       var homePhotoUrl = getBridgeUserPhotoUrl(user);
@@ -1088,7 +1166,7 @@
           var raw = testIn && testIn.value ? String(testIn.value).trim() : '';
           var parsed = parseInt(raw, 10);
           if (!Number.isFinite(parsed) || parsed <= 0) {
-            setHomeErr('Введите положительный user_id');
+            setHomeErr('Введите положительное число — ваш ID из бота');
             return;
           }
           var sp = new URLSearchParams(location.search);
@@ -1115,7 +1193,7 @@
             if (disabled || apiUid == null) {
               setHomeErr(
                 apiUid == null
-                  ? 'Нужен user_id из MAX/Telegram для сохранения настроек'
+                  ? 'Откройте приложение из MAX или Telegram, чтобы сохранять настройки'
                   : 'Скоро'
               );
               return;
@@ -1140,7 +1218,7 @@
                 setHomeErr('');
               })
               .catch(function (e) {
-                setHomeErr(e.message || String(e));
+                setHomeErr(e, 'Не удалось сохранить настройку');
                 sw.classList.toggle('on', !next);
                 sw.setAttribute('aria-checked', !next ? 'true' : 'false');
               });
@@ -1151,7 +1229,7 @@
       if (uid == null) {
         if (testFb) testFb.classList.add('show');
         wireTestUserApply();
-        setHomeErr('Откройте мини-приложение из MAX/Telegram или укажите user_id для теста.');
+        setHomeErr('Откройте приложение из MAX или Telegram. Для проверки в браузере введите ID ниже.');
         wireFeatureToggles(null);
         return;
       }
@@ -1228,7 +1306,7 @@
           }
           var actorUserId = uid
           if (!actorUserId) {
-            showToast('Нужен user_id для отключения администратора')
+            showToast('Сначала откройте приложение из бота')
             return
           }
           var displayTarget = targetName || ('ID ' + targetUserId)
@@ -1266,7 +1344,7 @@
               return refreshChannelAdminsCard(channelChatId, actorUserId)
             })
             .catch(function (e) {
-              showToast(e.message || 'Не удалось отключить администратора')
+              showToast(e, 'Не удалось отключить администратора')
             })
             .finally(function () {
               disableBtn.disabled = false
@@ -1761,7 +1839,7 @@
                 showToast('Откройте Telegram и нажмите Start в боте')
               })
               .catch(function (e) {
-                showToast(e.message || 'Не удалось создать ссылку')
+                showToast(e, 'Не удалось создать ссылку')
               })
               .finally(function () {
                 btnTg.disabled = false
@@ -1788,7 +1866,7 @@
                 showToast('Откройте MAX и запустите бота по ссылке')
               })
               .catch(function (e) {
-                showToast(e.message || 'Не удалось создать ссылку')
+                showToast(e, 'Не удалось создать ссылку')
               })
               .finally(function () {
                 btnMax.disabled = false
@@ -1814,7 +1892,7 @@
         btnCreateLink.dataset.bound = '1'
         btnCreateLink.addEventListener('click', function () {
           if (uid == null) {
-            showToast('Не удалось определить user_id')
+            showToast('Не удалось определить ваш профиль')
             return
           }
           if (inTelegram) {
@@ -1878,7 +1956,7 @@
               showChannelLinkOverlay('max', 'code')
             })
             .catch(function (e) {
-              showToast(e.message || 'Не удалось создать код')
+              showToast(e, 'Не удалось создать код')
             })
             .finally(function () {
               linkMaxBtn.disabled = false
@@ -1955,7 +2033,7 @@
               }
             })
             .catch(function (e) {
-              showToast(e.message || 'Не удалось связать')
+              showToast(e, 'Не удалось связать каналы')
             })
             .finally(function () {
               linkTgBtn.disabled = false
@@ -2043,11 +2121,11 @@
         parseInt(mergedParams.get('user_id') || '', 10) ||
         null;
       if (!uid) {
-        showToast('Не удалось определить user_id');
+        showToast('Не удалось определить ваш профиль');
         return;
       }
       if (!chatId) {
-        showToast('Нет chat_id');
+        showToast('Не удалось определить канал');
         return;
       }
       var btn = document.getElementById('gateManualRegisterBtn');
@@ -2072,7 +2150,7 @@
           loadPostAndComments();
         })
         .catch(function (e) {
-          showToast(e.message || 'Не удалось зарегистрироваться');
+          showToast(e, 'Не удалось зарегистрироваться');
         })
         .finally(function () {
           if (btn) btn.disabled = false;
@@ -2416,14 +2494,18 @@
         fetchChannelPostUrl().then(afterUrl);
       }
 
-      function setErr(msg) {
-        errEl.textContent = msg || '';
+      function setErr(msg, fallback) {
+        errEl.textContent = msg ? formatUserError(msg, fallback || 'Не удалось выполнить действие. Попробуйте ещё раз.') : '';
       }
 
       function setPostRecoveryStatus(text, isError) {
         var statusEl = document.getElementById('postRecoveryStatus');
         if (!statusEl) return;
-        statusEl.textContent = text || '';
+        var shown = text || '';
+        if (isError) {
+          shown = formatUserError(text, 'Не удалось восстановить пост. Попробуйте ещё раз.');
+        }
+        statusEl.textContent = shown;
         statusEl.classList.toggle('is-error', !!isError);
       }
 
@@ -2461,7 +2543,7 @@
         var ids = resolveLookupIds();
         if (!ids.postId) {
           setPostRecoveryStatus(
-            'Не вижу post_id в ссылке. Откройте комментарии ещё раз из кнопки под постом.',
+            'Не удалось определить пост. Откройте комментарии ещё раз из кнопки под публикацией.',
             true,
           );
           return Promise.resolve(false);
@@ -2514,7 +2596,7 @@
             });
           })
           .catch(function (e) {
-            setPostRecoveryStatus(e && e.message ? e.message : 'Не удалось восстановить пост', true);
+            setPostRecoveryStatus(e, true);
             return false;
           })
           .finally(function () {
@@ -2547,15 +2629,15 @@
       }
 
       if (!postId) {
-        setErr('Нет post_id');
+        setErr('Не удалось определить пост');
         return;
       }
       if (!chatId) {
-        setErr('Нет chat_id');
+        setErr('Не удалось определить канал');
         return;
       }
       if (!userId || !String(userId).trim()) {
-        setErr('Нет user_id — войдите через MAX/Telegram');
+        setErr('Войдите через MAX или Telegram');
         return;
       }
 
@@ -3411,7 +3493,7 @@
           })
           .then(onSuccess)
           .catch(function (e) {
-            setErr(e.message || String(e));
+            setErr(e, 'Не удалось выполнить действие');
           })
           .finally(function () {
             btn.disabled = false;
@@ -3524,7 +3606,7 @@
                 scrollToBottom();
               })
               .catch(function (e) {
-                setErr(e.message || String(e));
+                setErr(e, 'Не удалось выполнить действие');
               })
               .finally(function () {
                 btn.disabled = false;
@@ -3764,18 +3846,17 @@
         return hdr;
       }
 
-      /** Parses API body; nginx/HTML 404/502 pages become a clear Russian error. */
+      /** Parses API body; HTML error pages are logged and surfaced as a short user message. */
       function parseApiJsonResponse(r) {
         var ct = (r.headers.get('content-type') || '').toLowerCase();
         return r.text().then(function (text) {
           var trimmed = (text || '').trim();
           if (trimmed.charAt(0) === '<' || ct.indexOf('text/html') !== -1) {
+            logMiniappError('api_html_response', { status: r.status, snippet: trimmed.slice(0, 200) });
             var err = new Error(
               r.status === 404
-                ? 'Сервер вернул HTML вместо JSON — часто старая версия бота или неверный прокси. На сервере: cd ~/max-comment-bot && git pull && docker compose up -d --build'
-                : 'Сервер вернул страницу ошибки вместо JSON (HTTP ' +
-                  r.status +
-                  '). Проверьте, что контейнер bot запущен и nginx проксирует /api на бота.',
+                ? 'Сервис временно недоступен. Попробуйте позже.'
+                : 'Сервис временно недоступен. Попробуйте позже.',
             );
             err.code = 'api_html_response';
             err.httpStatus = r.status;
@@ -3787,9 +3868,8 @@
           try {
             return JSON.parse(trimmed);
           } catch (parseErr) {
-            var err2 = new Error(
-              'Ответ API не JSON (HTTP ' + r.status + '). Обновите бота или проверьте прокси.',
-            );
+            logMiniappError('api_invalid_json', { status: r.status, snippet: trimmed.slice(0, 200) });
+            var err2 = new Error('Сервис временно недоступен. Попробуйте позже.');
             err2.code = 'api_invalid_json';
             throw err2;
           }
@@ -3799,7 +3879,7 @@
       function loadPost() {
         var ids = resolveLookupIds();
         if (!ids.postId) {
-          setErr('Нет post_id');
+          setErr('Не удалось определить пост');
           postPreviewTextEl.textContent = '';
           return Promise.resolve(false);
         }
@@ -3867,7 +3947,7 @@
               showPostRecoveryCard();
               return false;
             }
-            setErr(e && e.message ? e.message : String(e));
+            setErr(e, 'Не удалось загрузить комментарии');
             postPreviewTextEl.textContent = '';
             currentPostSnapshot = null;
             setPostPreviewLink(null);
@@ -3939,7 +4019,7 @@
               showPostRecoveryCard();
               return;
             }
-            setErr(e.message || String(e));
+            setErr(e, 'Не удалось отправить комментарий');
           });
       }
 
@@ -3977,15 +4057,15 @@
 
       function submitComment() {
         if (!postId) {
-          setErr('Нет post_id');
+          setErr('Не удалось определить пост');
           return;
         }
         if (!chatId) {
-          setErr('Нет chat_id');
+          setErr('Не удалось определить канал');
           return;
         }
         if (!userId || !String(userId).trim()) {
-          setErr('Нет user_id — войдите через MAX/Telegram');
+          setErr('Войдите через MAX или Telegram');
           return;
         }
         var text = inputEl.value.trim();
@@ -4128,7 +4208,7 @@
                 }
               })
               .catch(function (e) {
-                setErr(e.message || String(e));
+                setErr(e, 'Не удалось выполнить действие');
                 knownIds.delete(tempId);
                 node.remove();
                 bumpCommentCount(-1);
@@ -4138,7 +4218,7 @@
           })
           .catch(function (e) {
             if (e && e.message !== 'pending') {
-              setErr(e.message || String(e));
+              setErr(e, 'Не удалось отправить комментарий');
             }
           })
           .finally(function () {
@@ -4305,13 +4385,11 @@
         .then(function () {
           hideBootError()
         })
-        .catch(function () {
+        .catch(function (e) {
+          logMiniappError('preflight', e)
           showBootError(
-            'Медленная связь с сервером. Если экран пустой — откройте в браузере: ' +
-              healthUrl +
-              ' (должен ответить ok). URL в MAX: ' +
-              (window.__apiBase || '') +
-              '/miniapp/'
+            e,
+            'Медленная связь с сервером. Закройте приложение и откройте снова из бота.'
           )
         })
     }
