@@ -15,9 +15,11 @@
   var maxChannelsRefreshedAt = null;
   var currentRoute = '';
   var dashRefreshTimer = null;
+  var dashLoadSeq = 0;
   var logsRefreshTimer = null;
   var dashPeriodDays = 7;
   var channelsCache = [];
+  var channelsCacheLight = false;
   var selectedChannelId = null;
   var channelDetailTab = 'stats';
   var channelSettingsEditing = false;
@@ -1060,10 +1062,25 @@
     host.appendChild(backdrop);
   }
 
-  function refreshIcons() {
-    if (typeof lucide !== 'undefined' && lucide.createIcons) {
-      lucide.createIcons();
+  var refreshIconsTimer = null;
+  function refreshIcons(root) {
+    if (typeof lucide === 'undefined' || !lucide.createIcons) return;
+    if (refreshIconsTimer) {
+      window.clearTimeout(refreshIconsTimer);
     }
+    refreshIconsTimer = window.setTimeout(function () {
+      refreshIconsTimer = null;
+      var opts = { attrs: { 'stroke-width': 2 } };
+      if (root && root.querySelectorAll) {
+        try {
+          lucide.createIcons(Object.assign({}, opts, { root: root }));
+          return;
+        } catch (_e) {
+          /* fallback below */
+        }
+      }
+      lucide.createIcons(opts);
+    }, 16);
   }
 
   function toggleRow(key, label, hint, on) {
@@ -1181,7 +1198,7 @@
       if (currentRoute === 'dashboard') {
         renderDashboard(false);
       }
-    }, 30000);
+    }, 60000);
   }
 
   function clearChannelImportPoll() {
@@ -1665,100 +1682,136 @@
   function renderDashboard(showLoading) {
     var main = qs('#mainContent');
     if (!main) return;
+    var seq = ++dashLoadSeq;
     if (showLoading !== false) {
       main.innerHTML = '<div class="dash-loading muted">Загрузка дашборда…</div>';
     }
     var periodLabel =
       dashPeriodDays === 0 ? 'всё время' : dashPeriodDays === 30 ? '30 дней' : '7 дней';
-    Promise.all([
-      getJson('/dashboard?days=' + encodeURIComponent(String(dashPeriodDays))),
-      getJson('/dashboard-telegram?days=' + encodeURIComponent(String(dashPeriodDays))),
-      getJson('/activity?limit=20'),
-    ])
+    var dashPath = '/dashboard?days=' + encodeURIComponent(String(dashPeriodDays));
+    var tgPath = '/dashboard-telegram?days=' + encodeURIComponent(String(dashPeriodDays));
+
+    Promise.all([getJson(dashPath), getJson('/activity?limit=20')])
       .then(function (parts) {
+        if (seq !== dashLoadSeq || currentRoute !== 'dashboard') return;
         var d = parts[0];
-        var tgData = parts[1];
-        var act = parts[2];
-        if (currentRoute !== 'dashboard') return;
+        var act = parts[1];
         var html = renderHomeBotLauncher();
         html += renderMaxDashboardSection(d, act, periodLabel);
-        html += renderTelegramDashboardSection(tgData);
+        html +=
+          '<div id="dashTgSlot" class="dash-loading muted" style="padding:1rem 0">Загрузка метрик Telegram…</div>';
         main.innerHTML = html;
-        refreshIcons();
+        refreshIcons(main);
+
+        getJson(tgPath)
+          .then(function (tgData) {
+            if (seq !== dashLoadSeq || currentRoute !== 'dashboard') return;
+            var slot = qs('#dashTgSlot', main);
+            if (!slot) return;
+            slot.outerHTML = renderTelegramDashboardSection(tgData);
+            refreshIcons(main);
+          })
+          .catch(function () {
+            if (seq !== dashLoadSeq || currentRoute !== 'dashboard') return;
+            var slot = qs('#dashTgSlot', main);
+            if (slot) {
+              slot.outerHTML =
+                '<section class="dash-platform-section dash-platform-section--tg"><p class="muted">Метрики Telegram временно недоступны</p></section>';
+            }
+          });
       })
       .catch(function (err) {
         if (err && err.message === 'auth') return;
-        if (currentRoute !== 'dashboard') return;
+        if (seq !== dashLoadSeq || currentRoute !== 'dashboard') return;
         main.innerHTML =
           '<p class="muted">Не удалось загрузить дашборд: ' + esc(err.message || String(err)) + '</p>';
       });
   }
 
-  function renderChannels() {
+  function paintChannelsList(main) {
+    if (!main) main = qs('#mainContent');
+    if (!main) return;
+    var html = '<div class="split-view"><div class="split-list">';
+    if (channelsCache.length === 0) {
+      html += '<p class="muted" style="padding:0.5rem">Каналы не подключены</p>';
+    } else {
+      channelsCache.forEach(function (c) {
+        var active = c.chat_id === selectedChannelId;
+        html +=
+          '<button type="button" class="list-item list-item-channel' +
+          (active ? ' active' : '') +
+          '" data-cid="' +
+          esc(String(c.chat_id)) +
+          '">';
+        var title = c.title || 'Канал ' + c.chat_id;
+        html += '<div class="list-item-row">';
+        html += channelAvatarHtml(c.avatar_url, title, 'list-avatar');
+        html += '<div class="list-item-body">';
+        html += '<div class="list-item-title">' + esc(title) + '</div>';
+        html +=
+          '<div class="list-item-sub">' +
+          esc(c.status === 'pending' ? 'Ожидает прав' : 'Активен') +
+          ' · ' +
+          esc(fmtNum(c.comment_count)) +
+          ' коммент.</div>';
+        html += '</div></div></button>';
+      });
+    }
+    html += '</div><div class="split-detail" id="channelDetail">';
+    if (!selectedChannelId) {
+      html += '<p class="muted">Выберите канал слева</p>';
+    } else {
+      html += '<div class="dash-loading muted">Загрузка…</div>';
+    }
+    html += '</div></div>';
+    main.innerHTML = html;
+    qsa('.list-item', main).forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        selectedChannelId = Number(btn.getAttribute('data-cid'));
+        channelDetailTab = 'stats';
+        channelSettingsEditing = false;
+        channelAntispamEditing = false;
+        qsa('.list-item-channel', main).forEach(function (item) {
+          item.classList.toggle('active', Number(item.getAttribute('data-cid')) === selectedChannelId);
+        });
+        var slot = qs('#channelDetail', main);
+        if (slot) {
+          slot.innerHTML = '<div class="dash-loading muted">Загрузка…</div>';
+        }
+        loadChannelDetail(selectedChannelId);
+      });
+    });
+    if (selectedChannelId) {
+      loadChannelDetail(selectedChannelId);
+    } else {
+      refreshIcons(main);
+    }
+  }
+
+  function renderChannels(forceReload) {
     var main = qs('#mainContent');
     if (!main) return;
-    main.innerHTML = '<div class="dash-loading muted">Загрузка каналов…</div>';
-    getJson('/channels')
-      .then(function (data) {
-        if (currentRoute !== 'channels') return;
-        channelsCache = data.channels || [];
-        if (selectedChannelId && !channelsCache.some(function (c) { return c.chat_id === selectedChannelId; })) {
-          selectedChannelId = null;
-        }
-        var html = '<div class="split-view"><div class="split-list">';
-        if (channelsCache.length === 0) {
-          html += '<p class="muted" style="padding:0.5rem">Каналы не подключены</p>';
-        } else {
-          channelsCache.forEach(function (c) {
-            var active = c.chat_id === selectedChannelId;
-            html +=
-              '<button type="button" class="list-item list-item-channel' +
-              (active ? ' active' : '') +
-              '" data-cid="' +
-              esc(String(c.chat_id)) +
-              '">';
-            var title = c.title || 'Канал ' + c.chat_id;
-            html += '<div class="list-item-row">';
-            html += channelAvatarHtml(c.avatar_url, title, 'list-avatar');
-            html += '<div class="list-item-body">';
-            html += '<div class="list-item-title">' + esc(title) + '</div>';
-            html +=
-              '<div class="list-item-sub">' +
-              esc(c.status === 'pending' ? 'Ожидает прав' : 'Активен') +
-              ' · ' +
-              esc(fmtNum(c.comment_count)) +
-              ' коммент.</div>';
-            html += '</div></div></button>';
-          });
-        }
-        html += '</div><div class="split-detail" id="channelDetail">';
-        if (!selectedChannelId) {
-          html += '<p class="muted">Выберите канал слева</p>';
-        } else {
-          html += '<div class="dash-loading muted">Загрузка…</div>';
-        }
-        html += '</div></div>';
-        main.innerHTML = html;
-        qsa('.list-item', main).forEach(function (btn) {
-          btn.addEventListener('click', function () {
-            selectedChannelId = Number(btn.getAttribute('data-cid'));
-            channelDetailTab = 'stats';
-            channelSettingsEditing = false;
-            channelAntispamEditing = false;
-            renderChannels();
-          });
+    if (forceReload !== false || !channelsCache.length || channelsCacheLight) {
+      main.innerHTML = '<div class="dash-loading muted">Загрузка каналов…</div>';
+      getJson('/channels')
+        .then(function (data) {
+          if (currentRoute !== 'channels') return;
+          channelsCache = data.channels || [];
+          channelsCacheLight = false;
+          if (selectedChannelId && !channelsCache.some(function (c) { return c.chat_id === selectedChannelId; })) {
+            selectedChannelId = null;
+          }
+          paintChannelsList(main);
+        })
+        .catch(function (err) {
+          if (err && err.message === 'auth') return;
+          if (currentRoute !== 'channels') return;
+          main.innerHTML =
+            '<p class="muted">Ошибка: ' + esc(err.message || String(err)) + '</p>';
         });
-        if (selectedChannelId) {
-          return loadChannelDetail(selectedChannelId);
-        }
-        refreshIcons();
-      })
-      .catch(function (err) {
-        if (err && err.message === 'auth') return;
-        if (currentRoute !== 'channels') return;
-        main.innerHTML =
-          '<p class="muted">Ошибка: ' + esc(err.message || String(err)) + '</p>';
-      });
+      return;
+    }
+    paintChannelsList(main);
   }
 
   function loadChannelDetail(chatId) {
@@ -1940,7 +1993,9 @@
                   .then(function () {
                     showToast('Канал отключён', 'success');
                     selectedChannelId = null;
-                    renderChannels();
+                    channelsCache = [];
+                    channelsCacheLight = false;
+                    renderChannels(true);
                   })
                   .catch(function (e) {
                     showToast(e.message || 'Ошибка', 'error');
@@ -4026,10 +4081,19 @@
   function renderComments() {
     var main = qs('#mainContent');
     if (!main) return;
-    getJson('/channels')
+    main.innerHTML =
+      '<div class="search-bar">' +
+      '<select class="select" id="com_chat" style="max-width:280px"><option value="">Загрузка каналов…</option></select>' +
+      '<input class="input" id="com_q" placeholder="Поиск" value="' +
+      esc(commentsQuery) +
+      '"/>' +
+      '<button type="button" class="btn btn-primary" id="com_load">Показать</button></div>' +
+      '<div id="com_list" class="muted">Загрузка…</div>';
+    getJson('/channels?summary=1')
       .then(function (data) {
         if (currentRoute !== 'comments') return;
         channelsCache = data.channels || [];
+        channelsCacheLight = true;
         if (!commentsChatId && channelsCache[0]) commentsChatId = channelsCache[0].chat_id;
         var sel = channelsCache
           .map(function (c) {
@@ -4044,22 +4108,28 @@
             );
           })
           .join('');
-        main.innerHTML =
-          '<div class="search-bar">' +
-          '<select class="select" id="com_chat" style="max-width:280px">' +
-          sel +
-          '</select>' +
-          '<input class="input" id="com_q" placeholder="Поиск" value="' +
-          esc(commentsQuery) +
-          '"/>' +
-          '<button type="button" class="btn btn-primary" id="com_load">Показать</button></div>' +
-          '<div id="com_list" class="muted">Нажмите «Показать»</div>';
+        var chatEl = qs('#com_chat', main);
+        if (chatEl) {
+          chatEl.innerHTML = sel || '<option value="">Нет каналов</option>';
+        }
         qs('#com_load', main).addEventListener('click', function () {
           commentsChatId = Number(qs('#com_chat', main).value);
           commentsQuery = (qs('#com_q', main).value || '').trim();
           loadCommentsList();
         });
-        refreshIcons();
+        if (chatEl) {
+          chatEl.addEventListener('change', function () {
+            commentsChatId = Number(chatEl.value);
+            loadCommentsList();
+          });
+        }
+        if (commentsChatId) {
+          loadCommentsList();
+        } else {
+          var host = qs('#com_list', main);
+          if (host) host.textContent = 'Нет подключённых каналов';
+        }
+        refreshIcons(main);
       })
       .catch(function () {
         main.innerHTML = '<p class="muted">Не удалось загрузить каналы</p>';
@@ -4071,10 +4141,19 @@
     if (!host || !commentsChatId) return;
     host.innerHTML = 'Загрузка…';
     var q = commentsQuery ? '&q=' + encodeURIComponent(commentsQuery) : '';
-    getJson('/comments?chat_id=' + encodeURIComponent(String(commentsChatId)) + q)
+    getJson('/comments?chat_id=' + encodeURIComponent(String(commentsChatId)) + q + '&limit=150')
       .then(function (data) {
         var list = data.comments || [];
-        var html = '<div class="table-wrap"><table><thead><tr>';
+        var html = '';
+        if (data.truncated) {
+          html +=
+            '<p class="text-sm muted" style="margin-bottom:8px">Показаны последние ' +
+            esc(String(data.returned || list.length)) +
+            ' из ' +
+            esc(String(data.total_in_channel || list.length)) +
+            ' комментариев. Уточните поиск, чтобы найти остальные.</p>';
+        }
+        html += '<div class="table-wrap"><table><thead><tr>';
         html += '<th>Пост</th><th>Автор</th><th>Текст</th><th>Время</th><th></th></tr></thead><tbody>';
         list.forEach(function (c) {
           html += '<tr>';
@@ -5126,7 +5205,7 @@
   }
 
   function boot() {
-    getJson('/stats')
+    getJson('/settings')
       .then(function () {
         var app = qs('#app');
         if (app) app.classList.remove('hidden');

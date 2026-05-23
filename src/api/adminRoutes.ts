@@ -4,12 +4,13 @@ import { join } from 'node:path'
 import type { Bot } from '@maxhub/max-bot-api'
 import type { ChatMember } from '@maxhub/max-bot-api/types'
 import express from 'express'
+import pLimit from 'p-limit'
 
 import { config } from '../config'
 import { checkAdminAuth } from '../middleware/adminAuth'
 import {
   fullyDisconnectRegisteredChannel,
-  pruneRegisteredChannelsNotAccessibleByBot,
+  maybePruneRegisteredChannelsNotAccessibleByBot,
   resolveRegisteredChannelAccess,
 } from '../services/channelFullDisconnect'
 import { getRecentAdminActivity } from '../services/adminActivityStore'
@@ -51,6 +52,7 @@ import {
 } from './adminPanelState'
 import { createAutopostRouter } from './autopostRoutes'
 import { buildDashboardAnalytics, parseDashboardPeriodDays } from '../services/analyticsService'
+import { integrationsStore } from '../services/integrationsStore'
 import { parseAdminLogLine, type AdminLogEntry, type AdminLogLevel } from '../utils/adminLogFormat'
 import { findActiveTgChainForPair } from '../utils/tgChainPair'
 import { getAdminLogTail, logger } from '../utils/logger'
@@ -275,8 +277,7 @@ export function createAdminRouter(deps: AdminRouterDeps): express.Router {
     })
   })
 
-  secured.get('/stats', async (_req, res) => {
-    await pruneRegisteredChannelsNotAccessibleByBot(deps.bot)
+  secured.get('/stats', (_req, res) => {
     const channels = channelRegistry.getAllChannels().filter((c) => c.type === 'channel')
     res.json({
       channel_count: channels.length,
@@ -286,70 +287,95 @@ export function createAdminRouter(deps: AdminRouterDeps): express.Router {
     })
   })
 
-  secured.get('/dashboard', async (req, res) => {
-    await pruneRegisteredChannelsNotAccessibleByBot(deps.bot)
+  secured.get('/dashboard', (req, res) => {
     const periodDays = parseDashboardPeriodDays(req.query.days)
     const payload = buildDashboardAnalytics(periodDays)
     res.json(payload)
   })
 
-  secured.get('/channels', async (_req, res) => {
-    await pruneRegisteredChannelsNotAccessibleByBot(deps.bot)
-    const snapshot = [...channelRegistry.getAllChannels()].filter((c) => c.type === 'channel')
-    const rows: {
-      chat_id: number
-      title: string | null
-      type: (typeof snapshot)[0]['type']
-      subscribers: number | null
-      post_count: number
-      comment_count: number
-      date_added: string
-      status: 'pending' | 'active'
-      avatar_url: string | null
-    }[] = []
-    for (const c of snapshot) {
-      if (channelRegistry.getChannel(c.chat_id) === null) {
-        continue
-      }
-      const access = await resolveRegisteredChannelAccess(deps.bot, c.chat_id)
-      if (access === 'chat_unreachable') {
-        await fullyDisconnectRegisteredChannel(deps.bot, c.chat_id, 'registry_stale_removed')
-        continue
-      }
-      if (access === 'bot_not_in_chat') {
-        await fullyDisconnectRegisteredChannel(deps.bot, c.chat_id, 'removed_from_chat')
-        continue
-      }
-      let subscribers: number | null = null
-      let avatar_url: string | null = null
-      try {
-        const chat = await deps.bot.api.getChat(c.chat_id)
-        avatar_url = extractChatAvatarUrl(chat)
-        const raw = (chat as { participants_count?: unknown }).participants_count
-        if (typeof raw === 'number' && Number.isFinite(raw) && raw >= 0) {
-          subscribers = raw
-        }
-      } catch (err: unknown) {
-        logger.warn('admin GET /channels: getChat failed after access check', { chatId: c.chat_id, err })
-        await fullyDisconnectRegisteredChannel(deps.bot, c.chat_id, 'registry_stale_removed')
-        continue
-      }
-      const posts = postStore.getPostsByChatId(c.chat_id)
-      const postIds = new Set(posts.map((p) => p.post_id))
-      const commentCount = commentStore.countForPostIds(postIds)
-      rows.push({
-        chat_id: c.chat_id,
-        title: c.title,
-        type: c.type,
-        subscribers,
-        post_count: posts.length,
-        comment_count: commentCount,
-        date_added: c.date_added,
-        status: access === 'ok' ? 'active' : 'pending',
-        avatar_url,
+  secured.get('/dashboard-telegram', async (_req, res) => {
+    await integrationsStore.load()
+    const integ = integrationsStore.getTelegramIntegration()
+    const channels = integ?.linkedChats ?? []
+    const flows = integrationsStore.getFlows().filter((f) => f.source.platform === 'telegram')
+    const flowsActive = flows.filter((f) => f.enabled).length
+    const forwardedLog = integrationsStore.getForwardedLog(50)
+    const tgForwarded = forwardedLog.filter((e) => e.fromPlatform === 'telegram')
+
+    res.json({
+      totals: {
+        channels: channels.length,
+        channels_admin: channels.filter((c) => c.botIsAdmin === true).length,
+        admins_total: 0,
+        admins_started: 0,
+        flows_active: flowsActive,
+        forwarded_total: tgForwarded.length,
+      },
+      channels: channels.map((ch) => ({
+        id: ch.id,
+        title: ch.title,
+        username: ch.username,
+        type: ch.type,
+        botIsAdmin: ch.botIsAdmin === true,
+        admins: [],
+        admins_total: 0,
+        admins_started: 0,
+      })),
+      recent_forwarded: tgForwarded.slice(0, 15),
+    })
+  })
+
+  secured.get('/channels', async (req, res) => {
+    const summaryOnly = req.query.summary === '1' || req.query.summary === 'true'
+    if (summaryOnly) {
+      const snapshot = channelRegistry.getAllChannels().filter((c) => c.type === 'channel')
+      res.json({
+        channels: snapshot.map((c) => ({
+          chat_id: c.chat_id,
+          title: c.title,
+          status: stateManager.isChannelPendingAdminRights(c.chat_id) ? ('pending' as const) : ('active' as const),
+        })),
       })
+      return
     }
-    res.json({ channels: rows })
+    await maybePruneRegisteredChannelsNotAccessibleByBot(deps.bot)
+    const snapshot = [...channelRegistry.getAllChannels()].filter((c) => c.type === 'channel')
+    const limit = pLimit(4)
+    const rows = await Promise.all(
+      snapshot.map((c) =>
+        limit(async () => {
+          if (channelRegistry.getChannel(c.chat_id) === null) {
+            return null
+          }
+          const pending = stateManager.isChannelPendingAdminRights(c.chat_id)
+          let subscribers: number | null = null
+          let avatar_url: string | null = null
+          try {
+            const chat = await deps.bot.api.getChat(c.chat_id)
+            avatar_url = extractChatAvatarUrl(chat)
+            const raw = (chat as { participants_count?: unknown }).participants_count
+            if (typeof raw === 'number' && Number.isFinite(raw) && raw >= 0) {
+              subscribers = raw
+            }
+          } catch (err: unknown) {
+            logger.warn('admin GET /channels: getChat failed', { chatId: c.chat_id, err })
+            return null
+          }
+          return {
+            chat_id: c.chat_id,
+            title: c.title,
+            type: c.type,
+            subscribers,
+            post_count: postStore.countPostsByChatId(c.chat_id),
+            comment_count: commentStore.countCommentsByChatId(c.chat_id),
+            date_added: c.date_added,
+            status: pending ? ('pending' as const) : ('active' as const),
+            avatar_url,
+          }
+        }),
+      ),
+    )
+    res.json({ channels: rows.filter((row): row is NonNullable<typeof row> => row !== null) })
   })
 
   secured.get('/bot-status', (_req, res) => {
@@ -390,19 +416,10 @@ export function createAdminRouter(deps: AdminRouterDeps): express.Router {
   })
 
   secured.get('/users', async (_req, res) => {
-    await pruneRegisteredChannelsNotAccessibleByBot(deps.bot)
+    await maybePruneRegisteredChannelsNotAccessibleByBot(deps.bot)
     const ownerId = config.ownerUserId
-    const channels = channelRegistry.getAllChannels().filter((ch) => ch.type === 'channel')
-    const comments = commentStore.listAllCommentsNewestFirst()
-    let snapshotMembers = channelSubscriberSnapshotStore.listAllMembers()
-    if (snapshotMembers.length === 0 && channels.length > 0) {
-      try {
-        await channelSubscriberSnapshotStore.syncAllRegisteredChannels(deps.bot)
-        snapshotMembers = channelSubscriberSnapshotStore.listAllMembers()
-      } catch (err: unknown) {
-        logger.warn('admin /users: initial snapshot sync failed', { err })
-      }
-    }
+    const commentStatsByUser = commentStore.aggregateUserCommentStats()
+    const snapshotMembers = channelSubscriberSnapshotStore.listAllMembers()
 
     type Row = {
       user_id: number
@@ -474,48 +491,27 @@ export function createAdminRouter(deps: AdminRouterDeps): express.Router {
       }
       const title = channelRegistry.getChannel(member.channel_chat_id)?.title ?? null
       rowAddLinkRelation(row, member.channel_chat_id, title, REL_CHANNEL_SUBSCRIBER)
-    }
-
-    for (const c of comments) {
-      const row = touch(c.user_id)
-      row.comments_total += 1
-      if (c.reply?.text?.trim()) {
-        row.comments_answered += 1
-      } else {
-        row.comments_unanswered += 1
-      }
-      if (row.last_comment_at === null || c.timestamp.localeCompare(row.last_comment_at) > 0) {
-        row.last_comment_at = c.timestamp
-      }
-      if (!row.avatar_url && c.avatar_url?.trim()) {
-        row.avatar_url = c.avatar_url.trim()
-      }
-      if (!row.name?.trim()) {
-        const fromComment = c.username.trim()
-        if (fromComment) {
-          row.name = fromComment
-        }
-      }
-    }
-
-    for (const ch of channels) {
-      let admins: ChatMember[] = []
-      try {
-        admins = await listChannelAdminsShort(deps.bot, ch.chat_id)
-      } catch (err: unknown) {
-        logger.warn('admin /users: channel admins failed', { chatId: ch.chat_id, err })
-      }
-      for (const m of admins) {
-        const row = touch(m.user_id)
-        if (m.name) {
-          row.name = row.name ?? m.name
-        }
-        rowAddLinkRelation(row, ch.chat_id, ch.title, REL_CHANNEL_ADMIN)
-        if (m.user_id === ownerId) {
+      if (member.is_admin || member.is_owner) {
+        rowAddLinkRelation(row, member.channel_chat_id, title, REL_CHANNEL_ADMIN)
+        if (member.user_id === ownerId) {
           row.role = 'owner'
         } else if (row.role !== 'owner') {
           row.role = 'admin'
         }
+      }
+    }
+
+    for (const [userId, stats] of commentStatsByUser) {
+      const row = touch(userId)
+      row.comments_total = stats.total
+      row.comments_answered = stats.answered
+      row.comments_unanswered = stats.unanswered
+      row.last_comment_at = stats.last_comment_at
+      if (!row.avatar_url && stats.latest_avatar_url) {
+        row.avatar_url = stats.latest_avatar_url
+      }
+      if (!row.name?.trim() && stats.latest_username) {
+        row.name = stats.latest_username
       }
     }
 
@@ -537,31 +533,7 @@ export function createAdminRouter(deps: AdminRouterDeps): express.Router {
       }
     }
 
-    const rows = [...byUser.values()]
-    for (const row of rows) {
-      const chatIdsForName = [...row.linkByChatId.keys()].sort((a, b) => a - b)
-      const existing = row.name?.trim()
-      if (!existing) {
-        const fromMax = await resolveDisplayNameFromMax(deps.bot, row.user_id, chatIdsForName)
-        if (fromMax) {
-          row.name = fromMax
-        }
-      }
-      if (!row.name?.trim()) {
-        const fromComments = latestUsernameFromComments(row.user_id)
-        if (fromComments) {
-          row.name = fromComments
-        }
-      }
-      if (!row.avatar_url) {
-        const fromMax = await resolveAvatarFromMax(deps.bot, row.user_id, chatIdsForName)
-        if (fromMax) {
-          row.avatar_url = fromMax
-        }
-      }
-    }
-
-    const out = rows.map((row) => {
+    const out = [...byUser.values()].map((row) => {
       const channel_links = [...row.linkByChatId.entries()]
         .sort((a, b) => a[0] - b[0])
         .map(([chat_id, v]) => ({
@@ -613,7 +585,7 @@ export function createAdminRouter(deps: AdminRouterDeps): express.Router {
       return
     }
 
-    await pruneRegisteredChannelsNotAccessibleByBot(deps.bot)
+    await maybePruneRegisteredChannelsNotAccessibleByBot(deps.bot)
     const ownerId = config.ownerUserId
     const links = channelNotifyLinkStore.getAllLinks().filter((link) => link.user_id === userId)
     const channelsWithAdminRole = channelRegistry.getAllChannels().filter((channel) => channel.type === 'channel')
@@ -767,7 +739,7 @@ export function createAdminRouter(deps: AdminRouterDeps): express.Router {
 
   secured.post('/users/sync-channel-subscribers', async (_req, res) => {
     try {
-      await pruneRegisteredChannelsNotAccessibleByBot(deps.bot)
+      await maybePruneRegisteredChannelsNotAccessibleByBot(deps.bot, { force: true })
       const result = await channelSubscriberSnapshotStore.syncAllRegisteredChannels(deps.bot)
       res.json({ ok: true, ...result })
     } catch (err: unknown) {
@@ -782,31 +754,28 @@ export function createAdminRouter(deps: AdminRouterDeps): express.Router {
       res.status(400).json({ error: 'missing or invalid chat_id' })
       return
     }
-    const q = typeof req.query.q === 'string' ? req.query.q.trim().toLowerCase() : ''
-    let list = commentStore.listCommentsForChannelChatId(chatId)
-    if (q !== '') {
-      list = list.filter(
-        (c) =>
-          c.text.toLowerCase().includes(q) ||
-          c.username.toLowerCase().includes(q) ||
-          c.post_id.toLowerCase().includes(q),
-      )
-    }
-    const wired = list.map((c) => {
-      const post = postStore.getPost(c.post_id)
-      const postPreview = post?.text?.trim() ?? c.post_id
-      return {
-        comment_id: c.comment_id,
-        post_id: c.post_id,
-        post_preview: postPreview,
-        user_id: c.user_id,
-        username: c.username,
-        text: c.text,
-        reply: c.reply,
-        timestamp: c.timestamp,
-      }
+    const q = typeof req.query.q === 'string' ? req.query.q.trim() : ''
+    const limitRaw =
+      typeof req.query.limit === 'string' ? Number.parseInt(req.query.limit, 10) : 100
+    const limit = Number.isInteger(limitRaw) && limitRaw > 0 ? limitRaw : 100
+    const rows = commentStore.listCommentsForChannelAdminPage(chatId, { limit, q })
+    const totalInChannel = commentStore.countCommentsByChatId(chatId)
+    const wired = rows.map(({ comment: c, post_preview }) => ({
+      comment_id: c.comment_id,
+      post_id: c.post_id,
+      post_preview,
+      user_id: c.user_id,
+      username: c.username,
+      text: c.text,
+      reply: c.reply,
+      timestamp: c.timestamp,
+    }))
+    res.json({
+      comments: wired,
+      total_in_channel: totalInChannel,
+      returned: wired.length,
+      truncated: totalInChannel > wired.length,
     })
-    res.json({ comments: wired })
   })
 
   secured.post('/comments/delete', async (req, res) => {
@@ -935,9 +904,7 @@ export function createAdminRouter(deps: AdminRouterDeps): express.Router {
       res.status(404).json({ error: 'channel not found' })
       return
     }
-    const posts = postStore.getPostsByChatId(chatId)
-    const postIds = new Set(posts.map((p) => p.post_id))
-    const comments = commentStore.listCommentsForChannelChatId(chatId).slice(0, 8).map((c) => {
+    const comments = commentStore.listCommentsForChannelChatId(chatId, 8).map((c) => {
       const post = postStore.getPost(c.post_id)
       const answered = Boolean(c.reply?.text)
       return {
@@ -985,8 +952,8 @@ export function createAdminRouter(deps: AdminRouterDeps): express.Router {
         title: ch.title,
         status: access === 'ok' ? 'active' : 'pending',
         subscribers,
-        post_count: posts.length,
-        comment_count: commentStore.countForPostIds(postIds),
+        post_count: postStore.countPostsByChatId(chatId),
+        comment_count: commentStore.countCommentsByChatId(chatId),
         date_added: ch.date_added,
         avatar_url,
       },

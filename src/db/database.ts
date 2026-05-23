@@ -75,6 +75,7 @@ function initSchema(targetDb: Database.Database): void {
     );
     CREATE INDEX IF NOT EXISTS idx_comments_post_id ON comments(post_id);
     CREATE INDEX IF NOT EXISTS idx_comments_user_id ON comments(user_id);
+    CREATE INDEX IF NOT EXISTS idx_comments_timestamp ON comments(timestamp DESC);
 
     CREATE TABLE IF NOT EXISTS subscribers (
       user_id     INTEGER PRIMARY KEY,

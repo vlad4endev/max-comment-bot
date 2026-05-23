@@ -2,7 +2,8 @@ import type { Bot } from '@maxhub/max-bot-api'
 
 import { channelRegistry } from './channelRegistry'
 import {
-  pruneRegisteredChannelsNotAccessibleByBot,
+  fullyDisconnectRegisteredChannel,
+  maybePruneRegisteredChannelsNotAccessibleByBot,
   resolveRegisteredChannelAccess,
   type RegisteredChannelAccess,
 } from './channelFullDisconnect'
@@ -37,7 +38,7 @@ export async function listMaxBotLinkedChannels(
   options?: { syncRegistry?: boolean; liveCheck?: boolean },
 ): Promise<MaxLinkedChannelInfo[]> {
   if (options?.syncRegistry) {
-    await pruneRegisteredChannelsNotAccessibleByBot(bot)
+    await maybePruneRegisteredChannelsNotAccessibleByBot(bot)
   }
 
   const snapshot = channelRegistry.getAllChannels().filter((c) => c.type === 'channel')

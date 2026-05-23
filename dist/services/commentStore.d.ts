@@ -46,6 +46,10 @@ export interface Comment {
     posted_as_channel?: boolean;
 }
 export declare function replyToNotificationLogEntry(reply: CommentReply, notificationReplierName?: string): CommentNotificationReplyLogEntry;
+export interface AdminCommentListRow {
+    comment: Comment;
+    post_preview: string;
+}
 export declare class CommentStore {
     private statements;
     loadFromDisk(): Promise<void>;
@@ -97,9 +101,26 @@ export declare class CommentStore {
      */
     listAllCommentsNewestFirst(): Comment[];
     /**
-     * Comments for posts in a channel (`postStore` lookup).
+     * Comments for posts in a channel (SQL join — без загрузки всех комментариев).
      */
-    listCommentsForChannelChatId(chatId: number): Comment[];
+    listCommentsForChannelChatId(chatId: number, limit?: number): Comment[];
+    /**
+     * Пагинированный список комментариев канала для админки (JOIN с posts, без N+1).
+     */
+    listCommentsForChannelAdminPage(chatId: number, options?: {
+        limit?: number;
+        q?: string;
+    }): AdminCommentListRow[];
+    /** Агрегаты комментариев по user_id для списка пользователей в админке. */
+    aggregateUserCommentStats(): Map<number, {
+        total: number;
+        answered: number;
+        unanswered: number;
+        last_comment_at: string | null;
+        latest_username: string | null;
+        latest_avatar_url: string | null;
+    }>;
+    countCommentsByChatId(chatId: number): number;
     removeCommentsByPostIds(postIds: Set<string>): number;
     /** Очистка comments.json (опасная зона / сброс постов). */
     clearAllComments(): void;

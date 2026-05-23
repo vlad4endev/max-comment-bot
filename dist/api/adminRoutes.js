@@ -1,37 +1,4 @@
 "use strict";
-var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    var desc = Object.getOwnPropertyDescriptor(m, k);
-    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
-      desc = { enumerable: true, get: function() { return m[k]; } };
-    }
-    Object.defineProperty(o, k2, desc);
-}) : (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    o[k2] = m[k];
-}));
-var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
-    Object.defineProperty(o, "default", { enumerable: true, value: v });
-}) : function(o, v) {
-    o["default"] = v;
-});
-var __importStar = (this && this.__importStar) || (function () {
-    var ownKeys = function(o) {
-        ownKeys = Object.getOwnPropertyNames || function (o) {
-            var ar = [];
-            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
-            return ar;
-        };
-        return ownKeys(o);
-    };
-    return function (mod) {
-        if (mod && mod.__esModule) return mod;
-        var result = {};
-        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
-        __setModuleDefault(result, mod);
-        return result;
-    };
-})();
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
@@ -40,6 +7,7 @@ exports.createAdminRouter = createAdminRouter;
 const promises_1 = require("node:fs/promises");
 const node_path_1 = require("node:path");
 const express_1 = __importDefault(require("express"));
+const p_limit_1 = __importDefault(require("p-limit"));
 const config_1 = require("../config");
 const adminAuth_1 = require("../middleware/adminAuth");
 const channelFullDisconnect_1 = require("../services/channelFullDisconnect");
@@ -63,7 +31,9 @@ const adminPanelSession_1 = require("../utils/adminPanelSession");
 const adminPanelState_1 = require("./adminPanelState");
 const autopostRoutes_1 = require("./autopostRoutes");
 const analyticsService_1 = require("../services/analyticsService");
+const integrationsStore_1 = require("../services/integrationsStore");
 const adminLogFormat_1 = require("../utils/adminLogFormat");
+const tgChainPair_1 = require("../utils/tgChainPair");
 const logger_1 = require("../utils/logger");
 const memberAvatar_1 = require("../utils/memberAvatar");
 const RUNTIME_LOG_PATH = (0, node_path_1.join)(process.cwd(), 'data', 'runtime.log');
@@ -247,8 +217,7 @@ function createAdminRouter(deps) {
             admin_panel_user: config_1.config.adminPanelUser,
         });
     });
-    secured.get('/stats', async (_req, res) => {
-        await (0, channelFullDisconnect_1.pruneRegisteredChannelsNotAccessibleByBot)(deps.bot);
+    secured.get('/stats', (_req, res) => {
         const channels = channelRegistry_1.channelRegistry.getAllChannels().filter((c) => c.type === 'channel');
         res.json({
             channel_count: channels.length,
@@ -257,29 +226,62 @@ function createAdminRouter(deps) {
             post_count: postStore_1.postStore.getTotalPostCount(),
         });
     });
-    secured.get('/dashboard', async (req, res) => {
-        await (0, channelFullDisconnect_1.pruneRegisteredChannelsNotAccessibleByBot)(deps.bot);
+    secured.get('/dashboard', (req, res) => {
         const periodDays = (0, analyticsService_1.parseDashboardPeriodDays)(req.query.days);
         const payload = (0, analyticsService_1.buildDashboardAnalytics)(periodDays);
         res.json(payload);
     });
-    secured.get('/channels', async (_req, res) => {
-        await (0, channelFullDisconnect_1.pruneRegisteredChannelsNotAccessibleByBot)(deps.bot);
+    secured.get('/dashboard-telegram', async (_req, res) => {
+        await integrationsStore_1.integrationsStore.load();
+        const integ = integrationsStore_1.integrationsStore.getTelegramIntegration();
+        const channels = integ?.linkedChats ?? [];
+        const flows = integrationsStore_1.integrationsStore.getFlows().filter((f) => f.source.platform === 'telegram');
+        const flowsActive = flows.filter((f) => f.enabled).length;
+        const forwardedLog = integrationsStore_1.integrationsStore.getForwardedLog(50);
+        const tgForwarded = forwardedLog.filter((e) => e.fromPlatform === 'telegram');
+        res.json({
+            totals: {
+                channels: channels.length,
+                channels_admin: channels.filter((c) => c.botIsAdmin === true).length,
+                admins_total: 0,
+                admins_started: 0,
+                flows_active: flowsActive,
+                forwarded_total: tgForwarded.length,
+            },
+            channels: channels.map((ch) => ({
+                id: ch.id,
+                title: ch.title,
+                username: ch.username,
+                type: ch.type,
+                botIsAdmin: ch.botIsAdmin === true,
+                admins: [],
+                admins_total: 0,
+                admins_started: 0,
+            })),
+            recent_forwarded: tgForwarded.slice(0, 15),
+        });
+    });
+    secured.get('/channels', async (req, res) => {
+        const summaryOnly = req.query.summary === '1' || req.query.summary === 'true';
+        if (summaryOnly) {
+            const snapshot = channelRegistry_1.channelRegistry.getAllChannels().filter((c) => c.type === 'channel');
+            res.json({
+                channels: snapshot.map((c) => ({
+                    chat_id: c.chat_id,
+                    title: c.title,
+                    status: stateManager_1.stateManager.isChannelPendingAdminRights(c.chat_id) ? 'pending' : 'active',
+                })),
+            });
+            return;
+        }
+        await (0, channelFullDisconnect_1.maybePruneRegisteredChannelsNotAccessibleByBot)(deps.bot);
         const snapshot = [...channelRegistry_1.channelRegistry.getAllChannels()].filter((c) => c.type === 'channel');
-        const rows = [];
-        for (const c of snapshot) {
+        const limit = (0, p_limit_1.default)(4);
+        const rows = await Promise.all(snapshot.map((c) => limit(async () => {
             if (channelRegistry_1.channelRegistry.getChannel(c.chat_id) === null) {
-                continue;
+                return null;
             }
-            const access = await (0, channelFullDisconnect_1.resolveRegisteredChannelAccess)(deps.bot, c.chat_id);
-            if (access === 'chat_unreachable') {
-                await (0, channelFullDisconnect_1.fullyDisconnectRegisteredChannel)(deps.bot, c.chat_id, 'registry_stale_removed');
-                continue;
-            }
-            if (access === 'bot_not_in_chat') {
-                await (0, channelFullDisconnect_1.fullyDisconnectRegisteredChannel)(deps.bot, c.chat_id, 'removed_from_chat');
-                continue;
-            }
+            const pending = stateManager_1.stateManager.isChannelPendingAdminRights(c.chat_id);
             let subscribers = null;
             let avatar_url = null;
             try {
@@ -291,26 +293,22 @@ function createAdminRouter(deps) {
                 }
             }
             catch (err) {
-                logger_1.logger.warn('admin GET /channels: getChat failed after access check', { chatId: c.chat_id, err });
-                await (0, channelFullDisconnect_1.fullyDisconnectRegisteredChannel)(deps.bot, c.chat_id, 'registry_stale_removed');
-                continue;
+                logger_1.logger.warn('admin GET /channels: getChat failed', { chatId: c.chat_id, err });
+                return null;
             }
-            const posts = postStore_1.postStore.getPostsByChatId(c.chat_id);
-            const postIds = new Set(posts.map((p) => p.post_id));
-            const commentCount = commentStore_1.commentStore.countForPostIds(postIds);
-            rows.push({
+            return {
                 chat_id: c.chat_id,
                 title: c.title,
                 type: c.type,
                 subscribers,
-                post_count: posts.length,
-                comment_count: commentCount,
+                post_count: postStore_1.postStore.countPostsByChatId(c.chat_id),
+                comment_count: commentStore_1.commentStore.countCommentsByChatId(c.chat_id),
                 date_added: c.date_added,
-                status: access === 'ok' ? 'active' : 'pending',
+                status: pending ? 'pending' : 'active',
                 avatar_url,
-            });
-        }
-        res.json({ channels: rows });
+            };
+        })));
+        res.json({ channels: rows.filter((row) => row !== null) });
     });
     secured.get('/bot-status', (_req, res) => {
         res.json({ active: true, label: 'Бот активен' });
@@ -348,20 +346,10 @@ function createAdminRouter(deps) {
         res.json({ events });
     });
     secured.get('/users', async (_req, res) => {
-        await (0, channelFullDisconnect_1.pruneRegisteredChannelsNotAccessibleByBot)(deps.bot);
+        await (0, channelFullDisconnect_1.maybePruneRegisteredChannelsNotAccessibleByBot)(deps.bot);
         const ownerId = config_1.config.ownerUserId;
-        const channels = channelRegistry_1.channelRegistry.getAllChannels().filter((ch) => ch.type === 'channel');
-        const comments = commentStore_1.commentStore.listAllCommentsNewestFirst();
-        let snapshotMembers = channelSubscriberSnapshotStore_1.channelSubscriberSnapshotStore.listAllMembers();
-        if (snapshotMembers.length === 0 && channels.length > 0) {
-            try {
-                await channelSubscriberSnapshotStore_1.channelSubscriberSnapshotStore.syncAllRegisteredChannels(deps.bot);
-                snapshotMembers = channelSubscriberSnapshotStore_1.channelSubscriberSnapshotStore.listAllMembers();
-            }
-            catch (err) {
-                logger_1.logger.warn('admin /users: initial snapshot sync failed', { err });
-            }
-        }
+        const commentStatsByUser = commentStore_1.commentStore.aggregateUserCommentStats();
+        const snapshotMembers = channelSubscriberSnapshotStore_1.channelSubscriberSnapshotStore.listAllMembers();
         const byUser = new Map();
         function touch(userId) {
             let row = byUser.get(userId);
@@ -412,49 +400,27 @@ function createAdminRouter(deps) {
             }
             const title = channelRegistry_1.channelRegistry.getChannel(member.channel_chat_id)?.title ?? null;
             rowAddLinkRelation(row, member.channel_chat_id, title, REL_CHANNEL_SUBSCRIBER);
-        }
-        for (const c of comments) {
-            const row = touch(c.user_id);
-            row.comments_total += 1;
-            if (c.reply?.text?.trim()) {
-                row.comments_answered += 1;
-            }
-            else {
-                row.comments_unanswered += 1;
-            }
-            if (row.last_comment_at === null || c.timestamp.localeCompare(row.last_comment_at) > 0) {
-                row.last_comment_at = c.timestamp;
-            }
-            if (!row.avatar_url && c.avatar_url?.trim()) {
-                row.avatar_url = c.avatar_url.trim();
-            }
-            if (!row.name?.trim()) {
-                const fromComment = c.username.trim();
-                if (fromComment) {
-                    row.name = fromComment;
-                }
-            }
-        }
-        for (const ch of channels) {
-            let admins = [];
-            try {
-                admins = await listChannelAdminsShort(deps.bot, ch.chat_id);
-            }
-            catch (err) {
-                logger_1.logger.warn('admin /users: channel admins failed', { chatId: ch.chat_id, err });
-            }
-            for (const m of admins) {
-                const row = touch(m.user_id);
-                if (m.name) {
-                    row.name = row.name ?? m.name;
-                }
-                rowAddLinkRelation(row, ch.chat_id, ch.title, REL_CHANNEL_ADMIN);
-                if (m.user_id === ownerId) {
+            if (member.is_admin || member.is_owner) {
+                rowAddLinkRelation(row, member.channel_chat_id, title, REL_CHANNEL_ADMIN);
+                if (member.user_id === ownerId) {
                     row.role = 'owner';
                 }
                 else if (row.role !== 'owner') {
                     row.role = 'admin';
                 }
+            }
+        }
+        for (const [userId, stats] of commentStatsByUser) {
+            const row = touch(userId);
+            row.comments_total = stats.total;
+            row.comments_answered = stats.answered;
+            row.comments_unanswered = stats.unanswered;
+            row.last_comment_at = stats.last_comment_at;
+            if (!row.avatar_url && stats.latest_avatar_url) {
+                row.avatar_url = stats.latest_avatar_url;
+            }
+            if (!row.name?.trim() && stats.latest_username) {
+                row.name = stats.latest_username;
             }
         }
         for (const link of channelNotifyLinkStore_1.channelNotifyLinkStore.getAllLinks()) {
@@ -474,30 +440,7 @@ function createAdminRouter(deps) {
                 row.role = 'owner';
             }
         }
-        const rows = [...byUser.values()];
-        for (const row of rows) {
-            const chatIdsForName = [...row.linkByChatId.keys()].sort((a, b) => a - b);
-            const existing = row.name?.trim();
-            if (!existing) {
-                const fromMax = await resolveDisplayNameFromMax(deps.bot, row.user_id, chatIdsForName);
-                if (fromMax) {
-                    row.name = fromMax;
-                }
-            }
-            if (!row.name?.trim()) {
-                const fromComments = latestUsernameFromComments(row.user_id);
-                if (fromComments) {
-                    row.name = fromComments;
-                }
-            }
-            if (!row.avatar_url) {
-                const fromMax = await resolveAvatarFromMax(deps.bot, row.user_id, chatIdsForName);
-                if (fromMax) {
-                    row.avatar_url = fromMax;
-                }
-            }
-        }
-        const out = rows.map((row) => {
+        const out = [...byUser.values()].map((row) => {
             const channel_links = [...row.linkByChatId.entries()]
                 .sort((a, b) => a[0] - b[0])
                 .map(([chat_id, v]) => ({
@@ -545,7 +488,7 @@ function createAdminRouter(deps) {
             res.status(400).json({ error: 'invalid user_id' });
             return;
         }
-        await (0, channelFullDisconnect_1.pruneRegisteredChannelsNotAccessibleByBot)(deps.bot);
+        await (0, channelFullDisconnect_1.maybePruneRegisteredChannelsNotAccessibleByBot)(deps.bot);
         const ownerId = config_1.config.ownerUserId;
         const links = channelNotifyLinkStore_1.channelNotifyLinkStore.getAllLinks().filter((link) => link.user_id === userId);
         const channelsWithAdminRole = channelRegistry_1.channelRegistry.getAllChannels().filter((channel) => channel.type === 'channel');
@@ -687,7 +630,7 @@ function createAdminRouter(deps) {
     });
     secured.post('/users/sync-channel-subscribers', async (_req, res) => {
         try {
-            await (0, channelFullDisconnect_1.pruneRegisteredChannelsNotAccessibleByBot)(deps.bot);
+            await (0, channelFullDisconnect_1.maybePruneRegisteredChannelsNotAccessibleByBot)(deps.bot, { force: true });
             const result = await channelSubscriberSnapshotStore_1.channelSubscriberSnapshotStore.syncAllRegisteredChannels(deps.bot);
             res.json({ ok: true, ...result });
         }
@@ -702,28 +645,27 @@ function createAdminRouter(deps) {
             res.status(400).json({ error: 'missing or invalid chat_id' });
             return;
         }
-        const q = typeof req.query.q === 'string' ? req.query.q.trim().toLowerCase() : '';
-        let list = commentStore_1.commentStore.listCommentsForChannelChatId(chatId);
-        if (q !== '') {
-            list = list.filter((c) => c.text.toLowerCase().includes(q) ||
-                c.username.toLowerCase().includes(q) ||
-                c.post_id.toLowerCase().includes(q));
-        }
-        const wired = list.map((c) => {
-            const post = postStore_1.postStore.getPost(c.post_id);
-            const postPreview = post?.text?.trim() ?? c.post_id;
-            return {
-                comment_id: c.comment_id,
-                post_id: c.post_id,
-                post_preview: postPreview,
-                user_id: c.user_id,
-                username: c.username,
-                text: c.text,
-                reply: c.reply,
-                timestamp: c.timestamp,
-            };
+        const q = typeof req.query.q === 'string' ? req.query.q.trim() : '';
+        const limitRaw = typeof req.query.limit === 'string' ? Number.parseInt(req.query.limit, 10) : 100;
+        const limit = Number.isInteger(limitRaw) && limitRaw > 0 ? limitRaw : 100;
+        const rows = commentStore_1.commentStore.listCommentsForChannelAdminPage(chatId, { limit, q });
+        const totalInChannel = commentStore_1.commentStore.countCommentsByChatId(chatId);
+        const wired = rows.map(({ comment: c, post_preview }) => ({
+            comment_id: c.comment_id,
+            post_id: c.post_id,
+            post_preview,
+            user_id: c.user_id,
+            username: c.username,
+            text: c.text,
+            reply: c.reply,
+            timestamp: c.timestamp,
+        }));
+        res.json({
+            comments: wired,
+            total_in_channel: totalInChannel,
+            returned: wired.length,
+            truncated: totalInChannel > wired.length,
         });
-        res.json({ comments: wired });
     });
     secured.post('/comments/delete', async (req, res) => {
         const body = req.body;
@@ -844,9 +786,7 @@ function createAdminRouter(deps) {
             res.status(404).json({ error: 'channel not found' });
             return;
         }
-        const posts = postStore_1.postStore.getPostsByChatId(chatId);
-        const postIds = new Set(posts.map((p) => p.post_id));
-        const comments = commentStore_1.commentStore.listCommentsForChannelChatId(chatId).slice(0, 8).map((c) => {
+        const comments = commentStore_1.commentStore.listCommentsForChannelChatId(chatId, 8).map((c) => {
             const post = postStore_1.postStore.getPost(c.post_id);
             const answered = Boolean(c.reply?.text);
             return {
@@ -895,8 +835,8 @@ function createAdminRouter(deps) {
                 title: ch.title,
                 status: access === 'ok' ? 'active' : 'pending',
                 subscribers,
-                post_count: posts.length,
-                comment_count: commentStore_1.commentStore.countForPostIds(postIds),
+                post_count: postStore_1.postStore.countPostsByChatId(chatId),
+                comment_count: commentStore_1.commentStore.countCommentsByChatId(chatId),
                 date_added: ch.date_added,
                 avatar_url,
             },
@@ -1008,8 +948,7 @@ function createAdminRouter(deps) {
             res.status(400).json({ error: 'invalid tg channel' });
             return;
         }
-        const { findActiveTgChainForPair } = await Promise.resolve().then(() => __importStar(require('../utils/tgChainPair')));
-        const existing = findActiveTgChainForPair(await (0, adminPanelState_1.listTgChains)(), maxChatId, tgChannelId ?? '', tgUsername);
+        const existing = (0, tgChainPair_1.findActiveTgChainForPair)(await (0, adminPanelState_1.listTgChains)(), maxChatId, tgChannelId ?? '', tgUsername);
         if (existing) {
             res.status(400).json({ error: 'Активная цепочка для этой пары TG → MAX уже есть' });
             return;

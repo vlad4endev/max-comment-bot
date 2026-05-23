@@ -3,6 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.resolveRegisteredChannelAccess = resolveRegisteredChannelAccess;
 exports.purgeAllChannelData = purgeAllChannelData;
 exports.fullyDisconnectRegisteredChannel = fullyDisconnectRegisteredChannel;
+exports.maybePruneRegisteredChannelsNotAccessibleByBot = maybePruneRegisteredChannelsNotAccessibleByBot;
 exports.pruneRegisteredChannelsNotAccessibleByBot = pruneRegisteredChannelsNotAccessibleByBot;
 const adminPanelState_1 = require("../api/adminPanelState");
 const logger_1 = require("../utils/logger");
@@ -150,6 +151,34 @@ async function fullyDisconnectRegisteredChannel(bot, chatId, reason) {
     }
     logger_1.logger.info('channelFullDisconnect: completed', { chatId, reason, notified: shouldNotify });
     return true;
+}
+const PRUNE_TTL_MS = 90_000;
+let lastPruneAt = 0;
+let pruneInFlight = null;
+/**
+ * Периодическая проверка доступа к каналам (не чаще раза в ~90 с), чтобы админ-панель
+ * не блокировалась на MAX API при каждом запросе.
+ */
+async function maybePruneRegisteredChannelsNotAccessibleByBot(bot, options) {
+    const force = options?.force === true;
+    const now = Date.now();
+    if (!force && now - lastPruneAt < PRUNE_TTL_MS) {
+        return;
+    }
+    if (pruneInFlight) {
+        await pruneInFlight;
+        if (!force && Date.now() - lastPruneAt < PRUNE_TTL_MS) {
+            return;
+        }
+    }
+    pruneInFlight = pruneRegisteredChannelsNotAccessibleByBot(bot)
+        .then(() => {
+        lastPruneAt = Date.now();
+    })
+        .finally(() => {
+        pruneInFlight = null;
+    });
+    await pruneInFlight;
 }
 /**
  * Удаляет из реестра каналы, к которым бот больше не имеет доступа

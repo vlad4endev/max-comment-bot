@@ -20,7 +20,7 @@ function accessLabel(access) {
  */
 async function listMaxBotLinkedChannels(bot, options) {
     if (options?.syncRegistry) {
-        await (0, channelFullDisconnect_1.pruneRegisteredChannelsNotAccessibleByBot)(bot);
+        await (0, channelFullDisconnect_1.maybePruneRegisteredChannelsNotAccessibleByBot)(bot);
     }
     const snapshot = channelRegistry_1.channelRegistry.getAllChannels().filter((c) => c.type === 'channel');
     const out = [];

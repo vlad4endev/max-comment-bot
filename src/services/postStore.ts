@@ -61,6 +61,7 @@ export class PostStore {
     selectIdsByChatId: Database.Statement
     deleteAll: Database.Statement
     countAll: Database.Statement
+    countByChatId: Database.Statement
   } | null = null
 
   async loadFromDisk(): Promise<void> {
@@ -291,6 +292,11 @@ export class PostStore {
     return Number(row.n) || 0
   }
 
+  countPostsByChatId(chatId: number): number {
+    const row = this.getStatements().countByChatId.get(chatId) as { n: number }
+    return Number(row.n) || 0
+  }
+
   /**
    * Updates the channel message inline keyboard to show the current comment count.
    */
@@ -419,6 +425,7 @@ export class PostStore {
       deleteByChatId: db.prepare('DELETE FROM posts WHERE chat_id = ?'),
       deleteAll: db.prepare('DELETE FROM posts'),
       countAll: db.prepare('SELECT COUNT(*) AS n FROM posts'),
+      countByChatId: db.prepare('SELECT COUNT(*) AS n FROM posts WHERE chat_id = ?'),
     }
     return this.statements
   }

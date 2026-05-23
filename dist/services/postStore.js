@@ -204,6 +204,10 @@ class PostStore {
         const row = this.getStatements().countAll.get();
         return Number(row.n) || 0;
     }
+    countPostsByChatId(chatId) {
+        const row = this.getStatements().countByChatId.get(chatId);
+        return Number(row.n) || 0;
+    }
     /**
      * Updates the channel message inline keyboard to show the current comment count.
      */
@@ -316,6 +320,7 @@ class PostStore {
             deleteByChatId: db.prepare('DELETE FROM posts WHERE chat_id = ?'),
             deleteAll: db.prepare('DELETE FROM posts'),
             countAll: db.prepare('SELECT COUNT(*) AS n FROM posts'),
+            countByChatId: db.prepare('SELECT COUNT(*) AS n FROM posts WHERE chat_id = ?'),
         };
         return this.statements;
     }

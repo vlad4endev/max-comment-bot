@@ -259,11 +259,22 @@ export function replyToNotificationLogEntry(
   }
 }
 
+export interface AdminCommentListRow {
+  comment: Comment
+  post_preview: string
+}
+
 export class CommentStore {
   private statements: {
     getById: Database.Statement
     listByPost: Database.Statement
     listAllNewest: Database.Statement
+    listByChannelChatId: Database.Statement
+    listByChannelChatIdLimit: Database.Statement
+    listByChannelChatIdAdmin: Database.Statement
+    listByChannelChatIdAdminSearch: Database.Statement
+    countByChannelChatId: Database.Statement
+    aggregateByUser: Database.Statement
     upsert: Database.Statement
     deleteById: Database.Statement
     deleteAll: Database.Statement
@@ -561,13 +572,116 @@ export class CommentStore {
   }
 
   /**
-   * Comments for posts in a channel (`postStore` lookup).
+   * Comments for posts in a channel (SQL join — без загрузки всех комментариев).
    */
-  listCommentsForChannelChatId(chatId: number): Comment[] {
-    return this.listAllCommentsNewestFirst().filter((c) => {
-      const p = postStore.getPost(c.post_id)
-      return p?.chat_id === chatId
-    })
+  listCommentsForChannelChatId(chatId: number, limit?: number): Comment[] {
+    const rows =
+      limit !== undefined && limit > 0
+        ? (this.getStatements().listByChannelChatIdLimit.all(chatId, limit) as { data: string }[])
+        : (this.getStatements().listByChannelChatId.all(chatId) as { data: string }[])
+    const out: Comment[] = []
+    for (const row of rows) {
+      try {
+        const c = normalizeCommentFromDisk(this.parseRow(row.data))
+        if (c) {
+          out.push(c)
+        }
+      } catch {
+        // skip corrupt rows
+      }
+    }
+    return out
+  }
+
+  /**
+   * Пагинированный список комментариев канала для админки (JOIN с posts, без N+1).
+   */
+  listCommentsForChannelAdminPage(
+    chatId: number,
+    options?: { limit?: number; q?: string },
+  ): AdminCommentListRow[] {
+    const limitRaw = options?.limit ?? 100
+    const limit = Math.min(Math.max(Number.isFinite(limitRaw) ? limitRaw : 100, 1), 500)
+    const q = (options?.q ?? '').trim().toLowerCase()
+    const rows =
+      q === ''
+        ? (this.getStatements().listByChannelChatIdAdmin.all(chatId, limit) as Array<{
+            data: string
+            post_preview: string
+          }>)
+        : (this.getStatements().listByChannelChatIdAdminSearch.all(
+            chatId,
+            `%${q}%`,
+            `%${q}%`,
+            `%${q}%`,
+            limit,
+          ) as Array<{ data: string; post_preview: string }>)
+    const out: AdminCommentListRow[] = []
+    for (const row of rows) {
+      try {
+        const comment = normalizeCommentFromDisk(this.parseRow(row.data))
+        if (comment) {
+          const preview =
+            typeof row.post_preview === 'string' && row.post_preview.trim() !== ''
+              ? row.post_preview.trim()
+              : comment.post_id
+          out.push({ comment, post_preview: preview })
+        }
+      } catch {
+        // skip corrupt rows
+      }
+    }
+    return out
+  }
+
+  /** Агрегаты комментариев по user_id для списка пользователей в админке. */
+  aggregateUserCommentStats(): Map<
+    number,
+    {
+      total: number
+      answered: number
+      unanswered: number
+      last_comment_at: string | null
+      latest_username: string | null
+      latest_avatar_url: string | null
+    }
+  > {
+    const rows = this.getStatements().aggregateByUser.all() as Array<{
+      user_id: number
+      total: number
+      answered: number
+      unanswered: number
+      last_comment_at: string | null
+      latest_username: string | null
+      latest_avatar_url: string | null
+    }>
+    const out = new Map<
+      number,
+      {
+        total: number
+        answered: number
+        unanswered: number
+        last_comment_at: string | null
+        latest_username: string | null
+        latest_avatar_url: string | null
+      }
+    >()
+    for (const row of rows) {
+      out.set(row.user_id, {
+        total: Number(row.total) || 0,
+        answered: Number(row.answered) || 0,
+        unanswered: Number(row.unanswered) || 0,
+        last_comment_at: row.last_comment_at,
+        latest_username: row.latest_username?.trim() || null,
+        latest_avatar_url: row.latest_avatar_url?.trim() || null,
+      })
+    }
+    return out
+  }
+
+  countCommentsByChatId(chatId: number): number {
+    const row = this.getStatements().countByChannelChatId.get(chatId) as { n: number }
+    return Number(row.n) || 0
   }
 
   removeCommentsByPostIds(postIds: Set<string>): number {
@@ -623,6 +737,69 @@ export class CommentStore {
       getById: db.prepare('SELECT data FROM comments WHERE comment_id = ?'),
       listByPost: db.prepare('SELECT data FROM comments WHERE post_id = ? ORDER BY timestamp ASC'),
       listAllNewest: db.prepare('SELECT data FROM comments ORDER BY timestamp DESC'),
+      listByChannelChatId: db.prepare(
+        `SELECT c.data FROM comments c
+         INNER JOIN posts p ON p.post_id = c.post_id
+         WHERE p.chat_id = ?
+         ORDER BY c.timestamp DESC`,
+      ),
+      listByChannelChatIdLimit: db.prepare(
+        `SELECT c.data FROM comments c
+         INNER JOIN posts p ON p.post_id = c.post_id
+         WHERE p.chat_id = ?
+         ORDER BY c.timestamp DESC
+         LIMIT ?`,
+      ),
+      listByChannelChatIdAdmin: db.prepare(
+        `SELECT c.data,
+                COALESCE(NULLIF(TRIM(p.text), ''), c.post_id) AS post_preview
+         FROM comments c
+         INNER JOIN posts p ON p.post_id = c.post_id
+         WHERE p.chat_id = ?
+         ORDER BY c.timestamp DESC
+         LIMIT ?`,
+      ),
+      listByChannelChatIdAdminSearch: db.prepare(
+        `SELECT c.data,
+                COALESCE(NULLIF(TRIM(p.text), ''), c.post_id) AS post_preview
+         FROM comments c
+         INNER JOIN posts p ON p.post_id = c.post_id
+         WHERE p.chat_id = ?
+           AND (
+             LOWER(c.text) LIKE ?
+             OR LOWER(c.username) LIKE ?
+             OR LOWER(c.post_id) LIKE ?
+           )
+         ORDER BY c.timestamp DESC
+         LIMIT ?`,
+      ),
+      countByChannelChatId: db.prepare(
+        `SELECT COUNT(*) AS n FROM comments c
+         INNER JOIN posts p ON p.post_id = c.post_id
+         WHERE p.chat_id = ?`,
+      ),
+      aggregateByUser: db.prepare(
+        `SELECT
+           c.user_id,
+           COUNT(*) AS total,
+           SUM(CASE WHEN c.reply IS NOT NULL AND TRIM(c.reply) != '' THEN 1 ELSE 0 END) AS answered,
+           SUM(CASE WHEN c.reply IS NULL OR TRIM(c.reply) = '' THEN 1 ELSE 0 END) AS unanswered,
+           MAX(c.timestamp) AS last_comment_at,
+           (
+             SELECT c2.username FROM comments c2
+             WHERE c2.user_id = c.user_id
+             ORDER BY c2.timestamp DESC
+             LIMIT 1
+           ) AS latest_username,
+           (
+             SELECT json_extract(c2.data, '$.avatar_url') FROM comments c2
+             WHERE c2.user_id = c.user_id
+             ORDER BY c2.timestamp DESC
+             LIMIT 1
+           ) AS latest_avatar_url
+         FROM comments c
+         GROUP BY c.user_id`,
+      ),
       upsert: db.prepare(
         `INSERT OR REPLACE INTO comments (
           comment_id, post_id, user_id, username, text, timestamp, reply, notification_text, notification_mids, data

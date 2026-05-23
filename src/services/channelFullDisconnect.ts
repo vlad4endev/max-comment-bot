@@ -187,6 +187,39 @@ export async function fullyDisconnectRegisteredChannel(
   return true
 }
 
+const PRUNE_TTL_MS = 90_000
+let lastPruneAt = 0
+let pruneInFlight: Promise<void> | null = null
+
+/**
+ * Периодическая проверка доступа к каналам (не чаще раза в ~90 с), чтобы админ-панель
+ * не блокировалась на MAX API при каждом запросе.
+ */
+export async function maybePruneRegisteredChannelsNotAccessibleByBot(
+  bot: Bot,
+  options?: { force?: boolean },
+): Promise<void> {
+  const force = options?.force === true
+  const now = Date.now()
+  if (!force && now - lastPruneAt < PRUNE_TTL_MS) {
+    return
+  }
+  if (pruneInFlight) {
+    await pruneInFlight
+    if (!force && Date.now() - lastPruneAt < PRUNE_TTL_MS) {
+      return
+    }
+  }
+  pruneInFlight = pruneRegisteredChannelsNotAccessibleByBot(bot)
+    .then(() => {
+      lastPruneAt = Date.now()
+    })
+    .finally(() => {
+      pruneInFlight = null
+    })
+  await pruneInFlight
+}
+
 /**
  * Удаляет из реестра каналы, к которым бот больше не имеет доступа
  * (чат удалён, бот выгнан; без прав админа остаются для статуса «ожидает прав»).

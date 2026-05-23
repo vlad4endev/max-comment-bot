@@ -57,6 +57,7 @@ export declare class PostStore {
     /** Removes a single post row (rollback after failed TG→MAX comment gate). */
     deletePostById(postId: string): void;
     getTotalPostCount(): number;
+    countPostsByChatId(chatId: number): number;
     /**
      * Updates the channel message inline keyboard to show the current comment count.
      */

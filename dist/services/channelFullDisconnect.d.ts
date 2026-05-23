@@ -17,6 +17,13 @@ export declare function purgeAllChannelData(chatId: number): Promise<void>;
  */
 export declare function fullyDisconnectRegisteredChannel(bot: Bot, chatId: number, reason: ChannelFullDisconnectReason): Promise<boolean>;
 /**
+ * Периодическая проверка доступа к каналам (не чаще раза в ~90 с), чтобы админ-панель
+ * не блокировалась на MAX API при каждом запросе.
+ */
+export declare function maybePruneRegisteredChannelsNotAccessibleByBot(bot: Bot, options?: {
+    force?: boolean;
+}): Promise<void>;
+/**
  * Удаляет из реестра каналы, к которым бот больше не имеет доступа
  * (чат удалён, бот выгнан; без прав админа остаются для статуса «ожидает прав»).
  */
