@@ -66,10 +66,16 @@
       if (el) el.classList.add('hidden')
     }
 
+    function isMiniappTelegramRuntime() {
+      return !!window.__miniappPreferTelegram
+    }
+
     /** Telegram WebView (MAX script also defines `window.WebApp`, so UA/URL must be checked). */
     function isLikelyTelegramWebView() {
+      if (isMiniappTelegramRuntime()) return true
       var ua = String(navigator.userAgent || '')
       if (/Telegram/i.test(ua)) return true
+      if (/tgWebApp/i.test(String(location.hash || ''))) return true
       try {
         var sp = new URLSearchParams(location.search)
         if (sp.get('platform') === 'telegram') return true
@@ -81,6 +87,67 @@
       var tgUser = tgUnsafe.user
       if (tgUser && getBridgeNumericUserId(tgUser) != null) return true
       return typeof tgApi.initData === 'string' && tgApi.initData.trim() !== ''
+    }
+
+    function parseTelegramInitDataString(raw) {
+      if (!raw || typeof raw !== 'string') return null
+      try {
+        var p = new URLSearchParams(raw.trim())
+        var userJson = p.get('user')
+        if (!userJson) return null
+        return { user: JSON.parse(userJson) }
+      } catch (e) {
+        return null
+      }
+    }
+
+    function parseTelegramUserFromWebAppHash(hash) {
+      if (!hash) return null
+      try {
+        var h = String(hash).replace(/^#/, '')
+        if (h.indexOf('tgWebApp') < 0) return null
+        var hp = new URLSearchParams(h)
+        var data = hp.get('tgWebAppData')
+        if (!data) return null
+        var inner = new URLSearchParams(data)
+        var userStr = inner.get('user')
+        if (!userStr) return null
+        return JSON.parse(userStr)
+      } catch (e) {
+        return null
+      }
+    }
+
+    function getTelegramUserFromHash() {
+      var hashes = [location.hash]
+      try {
+        var nav = performance.getEntriesByType('navigation')[0]
+        if (nav && nav.name) {
+          var navHash = new URL(nav.name).hash
+          if (navHash) hashes.push(navHash)
+        }
+      } catch (e) {}
+      for (var i = 0; i < hashes.length; i++) {
+        var user = parseTelegramUserFromWebAppHash(hashes[i])
+        if (user) return user
+      }
+      return null
+    }
+
+    function resolveBridgeUser(bridge) {
+      var unsafe = (bridge && bridge.initDataUnsafe) || {}
+      var user = normalizeBridgeUser(unsafe.user || {})
+      if (getBridgeNumericUserId(user) != null) return user
+      if (bridge && typeof bridge.initData === 'string' && bridge.initData.trim() !== '') {
+        var fromInit = parseTelegramInitDataString(bridge.initData)
+        if (fromInit && fromInit.user) {
+          user = normalizeBridgeUser(fromInit.user)
+          if (getBridgeNumericUserId(user) != null) return user
+        }
+      }
+      var fromHash = getTelegramUserFromHash()
+      if (fromHash) return normalizeBridgeUser(fromHash)
+      return user
     }
 
     function isActiveMaxBridge(maxApi) {
@@ -115,6 +182,10 @@
       var tgApi = window.Telegram && window.Telegram.WebApp
       var likelyTg = isLikelyTelegramWebView()
 
+      if (isMiniappTelegramRuntime()) {
+        return tgApi || null
+      }
+
       if (likelyTg && tgApi) {
         if (isActiveTelegramBridge(tgApi)) return tgApi
         if (!isActiveMaxBridge(maxApi)) return tgApi
@@ -130,6 +201,7 @@
     }
 
     function isMaxMiniappBridge(bridge) {
+      if (isMiniappTelegramRuntime()) return false
       return !!(
         bridge &&
         window.WebApp &&
@@ -139,6 +211,7 @@
     }
 
     function isTelegramMiniappBridge(bridge) {
+      if (isMiniappTelegramRuntime()) return true
       if (!bridge || !window.Telegram || !window.Telegram.WebApp) return false
       return bridge === window.Telegram.WebApp
     }
@@ -604,7 +677,11 @@
     function initApp() {
       window.__miniappReady = true
       hideMiniappLoading()
-      var bridge = getWebAppBridge() || {};
+      var bridge = getWebAppBridge()
+      if (!bridge && isMiniappTelegramRuntime() && window.Telegram && window.Telegram.WebApp) {
+        bridge = window.Telegram.WebApp
+      }
+      bridge = bridge || {}
       var inTelegram = isTelegramMiniappBridge(bridge);
       var inMax = isMaxMiniappBridge(bridge);
       try {
@@ -631,7 +708,7 @@
       } catch (e) {}
 
       var unsafe = bridge.initDataUnsafe || {};
-      var user = normalizeBridgeUser(unsafe.user || {});
+      var user = resolveBridgeUser(bridge);
       var startParam = collectStartParam(unsafe, bridge);
       var homeDescEl = document.getElementById('homeBotDesc');
       if (homeDescEl) {
@@ -645,6 +722,8 @@
         startParam: startParam || null,
         userId: getBridgeNumericUserId(user),
         chatId: mergedParams.get('chat_id'),
+        platform: inTelegram ? 'telegram' : inMax ? 'max' : 'unknown',
+        preferTelegram: !!window.__miniappPreferTelegram,
       });
       var postId = mergedParams.get('post_id');
       var chatId = mergedParams.get('chat_id');
@@ -1160,6 +1239,44 @@
         })
       })()
 
+      function patchChannelRowLive(ch) {
+        if (!ch || ch.chat_id == null) return
+        var key = String(ch.chat_id)
+        channelsById[key] = Object.assign({}, channelsById[key] || { chat_id: ch.chat_id }, ch)
+        var block = findChannelBlock(ch.chat_id)
+        if (!block) return
+        var subsEl = block.querySelector('.ch-subs')
+        if (subsEl && typeof ch.subscribers === 'number') {
+          subsEl.textContent = 'подписчики: ' + ch.subscribers
+        }
+        var avUrl =
+          ch.avatar_url && String(ch.avatar_url).trim() ? String(ch.avatar_url).trim() : ''
+        if (!avUrl) return
+        var icon = block.querySelector('.ch-icon')
+        if (!icon) return
+        icon.classList.add('with-photo')
+        icon.innerHTML = '<img src="' + esc(avUrl) + '" alt="" />'
+      }
+
+      function enrichChannelsLive(apiUid) {
+        if (apiUid == null) return
+        fetch(
+          '/api/channels?user_id=' +
+            encodeURIComponent(String(apiUid)) +
+            platformQs +
+            '&live=1',
+          { headers: homeApiHeaders(false) }
+        )
+          .then(function (r) {
+            return r.ok ? r.json() : null
+          })
+          .then(function (data) {
+            if (!data || !Array.isArray(data.channels)) return
+            data.channels.forEach(patchChannelRowLive)
+          })
+          .catch(function () {})
+      }
+
       fetch('/api/settings?user_id=' + encodeURIComponent(String(uid)) + platformQs, {
         headers: homeApiHeaders(false),
       })
@@ -1263,6 +1380,7 @@
               '</div>';
             list.insertAdjacentHTML('beforeend', row);
           });
+          enrichChannelsLive(uid);
           if (pendingOpenChannelLink && inTelegram) {
             fillLinkChannelSelect(
               document.getElementById('linkTgChannelSelect'),
@@ -1644,13 +1762,15 @@
       }
 
       if (uid != null) {
-        fetch('/api/owner-profile/sync', {
-          method: 'POST',
-          headers: homeApiHeaders(true),
-          body: JSON.stringify(ownerProfilePayload(uid)),
-        }).catch(function () {})
-        loadAccountPairingStatus(uid)
-        loadChannelLinks(uid)
+        window.setTimeout(function () {
+          fetch('/api/owner-profile/sync', {
+            method: 'POST',
+            headers: homeApiHeaders(true),
+            body: JSON.stringify(ownerProfilePayload(uid)),
+          }).catch(function () {})
+          loadAccountPairingStatus(uid)
+          loadChannelLinks(uid)
+        }, 0)
       }
 
       var btnCreateLink = document.getElementById('btnCreateChannelLink')
@@ -2034,13 +2154,11 @@
           }
           if (!data.started && !data.is_admin) {
             showGate(uid);
-          } else {
-            loadPostAndComments();
           }
         })
-        .catch(function () {
-          loadPostAndComments();
-        });
+        .catch(function () {});
+
+      loadPostAndComments();
     }
 
     function loadPostAndComments() {
@@ -4092,9 +4210,13 @@
 
       updateSendEnabled();
 
-      loadPost().then(function (ok) {
-        if (!ok) return;
-        return refreshAdminStateFromServer().then(function () {
+      var postLoadPromise = loadPost();
+      var commentsLoadPromise = loadComments(true);
+      postLoadPromise.catch(function () {});
+      commentsLoadPromise.catch(function () {});
+      Promise.all([postLoadPromise, commentsLoadPromise]).then(function () {
+        refreshAdminStateFromServer();
+        if (chatId && userId) {
           fetch(
             '/api/channel-settings?chat_id=' +
               encodeURIComponent(chatId) +
@@ -4112,8 +4234,7 @@
               }
             })
             .catch(function () {});
-          return loadComments(true);
-        });
+        }
       });
 
       setInterval(function () {
@@ -4168,26 +4289,41 @@
         initApp();
         preflightBackendInBackground();
       }
-      var hardDeadline = window.setTimeout(launchApp, 3000);
+      var preferTg = isMiniappTelegramRuntime();
+      var hardDeadlineMs = preferTg ? 10000 : 3000;
+      try {
+        var earlySp = new URLSearchParams(location.search);
+        var earlyStart = String(earlySp.get('startapp') || earlySp.get('start_param') || '');
+        if (
+          !preferTg &&
+          (earlySp.get('post_id') ||
+            /post_id|_mid_/i.test(earlyStart) ||
+            /^\d+$/.test(String(earlySp.get('user_id') || '').trim()))
+        ) {
+          hardDeadlineMs = 1200;
+        }
+      } catch (e) {}
+      var hardDeadline = window.setTimeout(launchApp, hardDeadlineMs);
 
       function run() {
         attempts += 1;
         var bridge = getWebAppBridge();
         var inMax = isMaxMiniappBridge(bridge);
-        var maxAttempts = inMax ? 12 : 8;
+        var likelyTg = isLikelyTelegramWebView();
+        var maxAttempts = inMax ? 12 : likelyTg || preferTg ? 30 : 8;
+        var user = resolveBridgeUser(bridge);
         var unsafe = (bridge && bridge.initDataUnsafe) || {};
-        var user = normalizeBridgeUser(unsafe.user || {});
         var sp = collectStartParam(unsafe, bridge);
         var urlSp = new URLSearchParams(location.search);
         var hasUrlUser =
           /^\d+$/.test(String(urlSp.get('user_id') || '').trim()) ||
           /^\d+$/.test(String(urlSp.get('tg_uid') || '').trim());
         var hasBridgeUser = getBridgeNumericUserId(user) != null;
-        var likelyTg = isLikelyTelegramWebView();
         var needTgScript =
-          (likelyTg || !inMax) &&
+          (likelyTg || preferTg || !inMax) &&
           (!bridge || !hasBridgeUser) &&
           (likelyTg ||
+            preferTg ||
             urlSp.get('platform') === 'telegram' ||
             /[?&]tg_/i.test(location.search || '') ||
             !!(window.Telegram && window.Telegram.WebApp));
@@ -4199,7 +4335,7 @@
             });
           return;
         }
-        if (!sp && !hasUrlUser && !hasBridgeUser && bridge && attempts < maxAttempts) {
+        if (!sp && !hasUrlUser && !hasBridgeUser && (bridge || preferTg) && attempts < maxAttempts) {
           window.setTimeout(run, 150);
           return;
         }

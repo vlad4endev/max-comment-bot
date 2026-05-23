@@ -85,7 +85,15 @@ export function buildTelegramOpenPanelButton(
   const fallback = `https://t.me/${botUsername.replace(/^@/, '')}`
   const candidate = (homeUrl ?? '').trim()
   if (candidate && isTelegramWebAppUrl(candidate)) {
-    return { text: '🚀 Открыть панель', web_app: { url: candidate } }
+    try {
+      const url = new URL(candidate)
+      if (!url.searchParams.has('platform')) {
+        url.searchParams.set('platform', 'telegram')
+      }
+      return { text: '🚀 Открыть панель', web_app: { url: url.toString().replace(/\/+$/, '') } }
+    } catch {
+      return { text: '🚀 Открыть панель', web_app: { url: candidate } }
+    }
   }
   const link = candidate && /^https?:\/\//i.test(candidate) ? candidate : fallback
   return { text: '🚀 Открыть панель', url: link }
