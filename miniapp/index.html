@@ -57,20 +57,10 @@
         /Telegram/i.test(ua) ||
         /tgWebApp/i.test(hash) ||
         /[?&]tg_/i.test(search) ||
-        /[?&]platform=telegram/i.test(search) ||
-        !!(window.Telegram && window.Telegram.WebApp)
-      var sdkUrl = window.__miniappPreferTelegram
-        ? 'https://telegram.org/js/telegram-web-app.js'
-        : 'https://st.max.ru/js/max-web-app.js'
-      var preload = document.createElement('link')
-      preload.rel = 'preload'
-      preload.as = 'script'
-      preload.href = sdkUrl
-      preload.crossOrigin = 'anonymous'
-      document.head.appendChild(preload)
-      document.write('<script src="' + sdkUrl + '" crossorigin="anonymous"><\/script>')
+        /[?&]platform=telegram/i.test(search)
     })()
   </script>
+  <link rel="preload" href="https://st.max.ru/js/max-web-app.js" as="script" crossorigin="anonymous" />
   <link rel="stylesheet" href="styles.css" />
   <style>
     /* Critical: экран загрузки до styles.css (важно для WebView MAX без gzip) */
@@ -84,6 +74,7 @@
   </style>
 </head>
 <body>
+  <script src="https://st.max.ru/js/max-web-app.js"></script>
   <div id="miniappLoading" aria-live="polite">Загрузка…</div>
   <div id="miniappBootError" class="miniapp-boot-error hidden" role="alert"></div>
   <div class="shell">
