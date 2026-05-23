@@ -70,6 +70,19 @@
       return !!window.__miniappPreferTelegram
     }
 
+    function hasPostContextInLocation() {
+      try {
+        var sp = new URLSearchParams(location.search)
+        if (sp.get('post_id') && sp.get('chat_id')) return true
+        var rawStart = String(sp.get('startapp') || sp.get('start_param') || '').trim()
+        if (/^pid_/i.test(rawStart) || /post_id=/i.test(rawStart)) return true
+      } catch (e) {}
+      var hash = String(location.hash || '').replace(/^#/, '').trim()
+      if (/^pid_/i.test(hash)) return true
+      if (hash.indexOf('post_id=') >= 0) return true
+      return false
+    }
+
     /** Telegram WebView (MAX script also defines `window.WebApp`, so UA/URL must be checked). */
     function isLikelyTelegramWebView() {
       if (isMiniappTelegramRuntime()) return true
@@ -183,7 +196,10 @@
       var likelyTg = isLikelyTelegramWebView()
 
       if (isMiniappTelegramRuntime()) {
-        return tgApi || null
+        if (tgApi && isActiveTelegramBridge(tgApi)) return tgApi
+        if (isActiveMaxBridge(maxApi)) return maxApi
+        if (tgApi) return tgApi
+        return maxApi || null
       }
 
       if (likelyTg && tgApi) {
@@ -211,9 +227,10 @@
     }
 
     function isTelegramMiniappBridge(bridge) {
-      if (isMiniappTelegramRuntime()) return true
-      if (!bridge || !window.Telegram || !window.Telegram.WebApp) return false
-      return bridge === window.Telegram.WebApp
+      if (!window.Telegram || !window.Telegram.WebApp) return false
+      if (bridge === window.Telegram.WebApp) return true
+      if (isMiniappTelegramRuntime() && isMaxMiniappBridge(bridge)) return false
+      return isMiniappTelegramRuntime()
     }
 
     function normalizeBridgeUser(rawUser) {
@@ -245,6 +262,23 @@
       window.location.href = url
     }
 
+    function readStartParamFromWebAppHash(hashKey) {
+      try {
+        var outer = new URLSearchParams(String(location.hash || '').replace(/^#/, ''))
+        var packed = outer.get(hashKey)
+        if (!packed) return ''
+        var inner = new URLSearchParams(packed)
+        return (
+          inner.get('start_param') ||
+          inner.get('startapp') ||
+          inner.get('startApp') ||
+          ''
+        )
+      } catch (e) {
+        return ''
+      }
+    }
+
     function collectStartParam(unsafe, webApp) {
       var candidates = []
       if (unsafe && typeof unsafe === 'object') {
@@ -257,6 +291,8 @@
         var sp = new URLSearchParams(location.search)
         candidates.push(sp.get('startapp'), sp.get('start_param'))
       } catch (e) {}
+      candidates.push(readStartParamFromWebAppHash('WebAppData'))
+      candidates.push(readStartParamFromWebAppHash('tgWebAppData'))
       var hash = String(location.hash || '').replace(/^#/, '').trim()
       if (hash) {
         if (hash.indexOf('=') >= 0) {
@@ -744,7 +780,7 @@
       } else if (hasPostContext) {
         viewHome.classList.add('hidden');
         viewJoin.classList.add('hidden');
-        viewComments.classList.add('hidden');
+        viewComments.classList.remove('hidden');
         if (viewGate) viewGate.classList.add('hidden');
       } else {
         viewHome.classList.remove('hidden');
@@ -4290,22 +4326,29 @@
         preflightBackendInBackground();
       }
       var preferTg = isMiniappTelegramRuntime();
-      var hardDeadlineMs = preferTg ? 10000 : 3000;
+      var postContextHint = hasPostContextInLocation();
+      var hardDeadlineMs = preferTg && !postContextHint ? 10000 : 3000;
       try {
         var earlySp = new URLSearchParams(location.search);
         var earlyStart = String(earlySp.get('startapp') || earlySp.get('start_param') || '');
         if (
-          !preferTg &&
-          (earlySp.get('post_id') ||
-            /post_id|_mid_/i.test(earlyStart) ||
-            /^\d+$/.test(String(earlySp.get('user_id') || '').trim()))
+          postContextHint ||
+          (!preferTg &&
+            (earlySp.get('post_id') ||
+              /post_id|_mid_/i.test(earlyStart) ||
+              /^\d+$/.test(String(earlySp.get('user_id') || '').trim())))
         ) {
-          hardDeadlineMs = 1200;
+          hardDeadlineMs = 1500;
         }
       } catch (e) {}
       var hardDeadline = window.setTimeout(launchApp, hardDeadlineMs);
 
       function run() {
+        if (postContextHint || hasPostContextInLocation()) {
+          window.clearTimeout(hardDeadline);
+          launchApp();
+          return;
+        }
         attempts += 1;
         var bridge = getWebAppBridge();
         var inMax = isMaxMiniappBridge(bridge);

@@ -41,12 +41,14 @@ import { ensureAdminPanelStateLoaded } from './api/adminPanelState'
 import { repairLegacyMiniappTgChains } from './services/channelLinkService'
 import { setTgChainForwarderBot, startTgChainForwarder } from './services/tgChainForwarder'
 import { setTelegramTgChainLifecycleBot } from './services/telegramTgChainLifecycle'
+import { initRedis } from './cache/redisClient'
 import { createHttpApp, createWebhookApp } from './webhook/createWebhookApp'
 import { logMiniAppUrlDiagnostics } from './utils/telegramMiniAppUrl'
 
 async function main(): Promise<void> {
   migrateFromJson()
   migrateAutopostsFromJson()
+  const redisStatus = await initRedis()
   const bot = initializeBot()
   await channelRegistry.loadFromDisk()
   await channelSettingsStore.loadFromDisk()
@@ -99,6 +101,7 @@ async function main(): Promise<void> {
     webhookConcurrency: WEBHOOK_CONCURRENCY,
     logRotation: true,
     receiveMode: config.receiveMode,
+    redis: redisStatus,
     telegramConnected: !!tgIntegration,
     flowProcessorEnabledFlows: enabledFlows.length,
     flowPollIntervalMs: getFlowPollIntervalMs(),

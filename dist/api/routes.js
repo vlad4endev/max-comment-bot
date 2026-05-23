@@ -40,6 +40,7 @@ const adminPanelState_1 = require("../api/adminPanelState");
 const integrationsStore_1 = require("../services/integrationsStore");
 const accountPairingService_1 = require("../services/accountPairingService");
 const ownerProfileStore_1 = require("../services/ownerProfileStore");
+const tieredCache_1 = require("../cache/tieredCache");
 const logger_1 = require("../utils/logger");
 function isRecord(value) {
     return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -215,6 +216,14 @@ async function listChannelChatIdsWhereUserIsAdmin(bot, userId) {
         .map((c) => c.chat_id);
     const flags = await Promise.all(registered.map(async (chatId) => (await (0, channelPostActions_1.isUserChannelAdmin)(bot, chatId, userId)) ? chatId : null));
     return flags.filter((x) => x !== null).sort((a, b) => a - b);
+}
+const MINIAPP_ADMIN_CHANNELS_TTL_SEC = 120;
+async function listChannelChatIdsWhereUserIsAdminCached(bot, userId) {
+    return (0, tieredCache_1.cacheGetOrCompute)(`miniapp:admin-channels:${userId}`, MINIAPP_ADMIN_CHANNELS_TTL_SEC, () => listChannelChatIdsWhereUserIsAdmin(bot, userId));
+}
+function resolveChannelBrandingFromRegistry(chatId) {
+    const title = channelRegistry_1.channelRegistry.getChannel(chatId)?.title?.trim() || 'Канал';
+    return { title, avatar_url: null };
 }
 async function resolveChannelBranding(bot, chatId) {
     const title = channelRegistry_1.channelRegistry.getChannel(chatId)?.title?.trim() || 'Канал';
@@ -455,17 +464,13 @@ function createCommentApiRouter(deps) {
             return;
         }
         try {
-            const adminChannelIds = await listChannelChatIdsWhereUserIsAdmin(deps.bot, userId);
+            const adminChannelIds = await listChannelChatIdsWhereUserIsAdminCached(deps.bot, userId);
             let posts = 0;
-            const postIds = new Set();
+            let comments = 0;
             for (const chatId of adminChannelIds) {
-                const list = postStore_1.postStore.getPostsByChatId(chatId);
-                posts += list.length;
-                for (const p of list) {
-                    postIds.add(p.post_id);
-                }
+                posts += postStore_1.postStore.countPostsByChatId(chatId);
+                comments += commentStore_1.commentStore.countCommentsByChatId(chatId);
             }
-            const comments = commentStore_1.commentStore.countForPostIds(postIds);
             res.json({
                 channels: adminChannelIds.length,
                 posts,
@@ -499,28 +504,31 @@ function createCommentApiRouter(deps) {
             return;
         }
         try {
-            const adminChannelIds = await listChannelChatIdsWhereUserIsAdmin(deps.bot, userId);
+            const adminChannelIds = await listChannelChatIdsWhereUserIsAdminCached(deps.bot, userId);
+            const live = req.query.live === '1' || req.query.live === 'true';
             const channels = await Promise.all(adminChannelIds.map(async (chatId) => {
                 const reg = channelRegistry_1.channelRegistry.getChannel(chatId);
                 let subscribers = null;
                 let avatar_url = null;
-                try {
-                    const chat = await deps.bot.api.getChat(chatId);
-                    const raw = chat.participants_count;
-                    if (typeof raw === 'number' && Number.isFinite(raw) && raw >= 0) {
-                        subscribers = raw;
-                    }
-                    const iconRaw = chat.icon?.url;
-                    if (typeof iconRaw === 'string') {
-                        const trimmed = iconRaw.trim();
-                        if (trimmed) {
-                            avatar_url = trimmed;
+                if (live) {
+                    try {
+                        const chat = await deps.bot.api.getChat(chatId);
+                        const raw = chat.participants_count;
+                        if (typeof raw === 'number' && Number.isFinite(raw) && raw >= 0) {
+                            subscribers = raw;
+                        }
+                        const iconRaw = chat.icon?.url;
+                        if (typeof iconRaw === 'string') {
+                            const trimmed = iconRaw.trim();
+                            if (trimmed) {
+                                avatar_url = trimmed;
+                            }
                         }
                     }
-                }
-                catch {
-                    subscribers = null;
-                    avatar_url = null;
+                    catch {
+                        subscribers = null;
+                        avatar_url = null;
+                    }
                 }
                 const pending = stateManager_1.stateManager.isChannelPendingAdminRights(chatId);
                 return {
@@ -1356,34 +1364,12 @@ function createCommentApiRouter(deps) {
             chatId: chatIdRaw,
         });
         const post = await resolvePostForMiniAppOpen(req.params.postId, chatIdRaw, messageMid, startParamHeader);
-        logger_1.logger.info('miniapp: post lookup', {
-            identifier: req.params.postId,
-            receivedPostId: req.params.postId,
-            startParam: startParamHeader,
-            chatId: chatIdRaw,
-            messageMid,
-            found: Boolean(post),
-            foundInDb: Boolean(post),
-            postId: post?.post_id,
-            requestHeaders: req.headers,
-            queryParams: req.query,
-        });
         if (!post) {
             res.status(404).json({ error: 'post not found' });
             return;
         }
-        const channelBranding = await resolveChannelBranding(deps.bot, post.chat_id);
-        const channel_avatar_url = channelBranding.avatar_url;
-        let channel_post_url = null;
-        try {
-            channel_post_url = await (0, postStore_1.resolveChannelPostUrl)(deps.bot, post);
-        }
-        catch (err) {
-            logger_1.logger.warn('GET /post/:postId: resolveChannelPostUrl failed', {
-                postId: post.post_id,
-                err,
-            });
-        }
+        const channelBranding = resolveChannelBrandingFromRegistry(post.chat_id);
+        const channel_post_url = post.channel_post_url?.trim() || null;
         res.json({
             post_id: post.post_id,
             text: post.text,
@@ -1392,8 +1378,8 @@ function createCommentApiRouter(deps) {
             chat_id: post.chat_id,
             message_mid: post.message_mid,
             comment_count: post.comment_count,
-            channel_title: channelRegistry_1.channelRegistry.getChannel(post.chat_id)?.title ?? channelBranding.title,
-            channel_avatar_url,
+            channel_title: channelBranding.title,
+            channel_avatar_url: channelBranding.avatar_url,
         });
     });
     router.post('/post/:postId/refresh', async (req, res) => {
@@ -1451,18 +1437,6 @@ function createCommentApiRouter(deps) {
             chatId: chatIdRaw,
         });
         const post = await resolvePostForMiniAppOpen(postId, chatIdRaw, messageMid, startParamHeader);
-        logger_1.logger.info('miniapp: post lookup', {
-            identifier: postId,
-            receivedPostId: postId,
-            startParam: startParamHeader,
-            chatId: chatIdRaw,
-            messageMid,
-            found: Boolean(post),
-            foundInDb: Boolean(post),
-            postId: post?.post_id,
-            requestHeaders: req.headers,
-            queryParams: req.query,
-        });
         if (!post) {
             res.status(404).json({ error: 'post not found' });
             return;

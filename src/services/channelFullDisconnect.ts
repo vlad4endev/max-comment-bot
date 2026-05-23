@@ -1,5 +1,6 @@
 import type { Bot } from '@maxhub/max-bot-api'
 
+import { cacheTryAcquireLock } from '../cache/tieredCache'
 import { purgeChannelFromAdminState } from '../api/adminPanelState'
 import { logger } from '../utils/logger'
 import { fetchBotChatMember, isBotAdminOrOwner } from './botChannelMembership'
@@ -188,6 +189,7 @@ export async function fullyDisconnectRegisteredChannel(
 }
 
 const PRUNE_TTL_MS = 90_000
+const PRUNE_LOCK_TTL_SEC = 90
 let lastPruneAt = 0
 let pruneInFlight: Promise<void> | null = null
 
@@ -203,6 +205,12 @@ export async function maybePruneRegisteredChannelsNotAccessibleByBot(
   const now = Date.now()
   if (!force && now - lastPruneAt < PRUNE_TTL_MS) {
     return
+  }
+  if (!force) {
+    const lockAcquired = await cacheTryAcquireLock('channels:prune', PRUNE_LOCK_TTL_SEC)
+    if (!lockAcquired && now - lastPruneAt < PRUNE_TTL_MS) {
+      return
+    }
   }
   if (pruneInFlight) {
     await pruneInFlight

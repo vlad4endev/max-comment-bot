@@ -5,6 +5,7 @@ exports.purgeAllChannelData = purgeAllChannelData;
 exports.fullyDisconnectRegisteredChannel = fullyDisconnectRegisteredChannel;
 exports.maybePruneRegisteredChannelsNotAccessibleByBot = maybePruneRegisteredChannelsNotAccessibleByBot;
 exports.pruneRegisteredChannelsNotAccessibleByBot = pruneRegisteredChannelsNotAccessibleByBot;
+const tieredCache_1 = require("../cache/tieredCache");
 const adminPanelState_1 = require("../api/adminPanelState");
 const logger_1 = require("../utils/logger");
 const botChannelMembership_1 = require("./botChannelMembership");
@@ -153,6 +154,7 @@ async function fullyDisconnectRegisteredChannel(bot, chatId, reason) {
     return true;
 }
 const PRUNE_TTL_MS = 90_000;
+const PRUNE_LOCK_TTL_SEC = 90;
 let lastPruneAt = 0;
 let pruneInFlight = null;
 /**
@@ -164,6 +166,12 @@ async function maybePruneRegisteredChannelsNotAccessibleByBot(bot, options) {
     const now = Date.now();
     if (!force && now - lastPruneAt < PRUNE_TTL_MS) {
         return;
+    }
+    if (!force) {
+        const lockAcquired = await (0, tieredCache_1.cacheTryAcquireLock)('channels:prune', PRUNE_LOCK_TTL_SEC);
+        if (!lockAcquired && now - lastPruneAt < PRUNE_TTL_MS) {
+            return;
+        }
     }
     if (pruneInFlight) {
         await pruneInFlight;

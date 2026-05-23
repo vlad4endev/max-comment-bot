@@ -14,6 +14,7 @@ import { stopCommentButtonRetryLoop } from './services/commentButtonRetryQueue'
 import { stopPostLinkAutoRecovery } from './services/postLinkAutoRecovery'
 import { flowProcessor } from './services/flowProcessor'
 import { stateManager } from './services/stateManager'
+import { disconnectRedis } from './cache/redisClient'
 import { logger, stopRuntimeLogRotationScheduler } from './utils/logger'
 
 function initializeBot(): Bot {
@@ -77,6 +78,7 @@ function setupGracefulShutdown(bot: Bot, options: GracefulShutdownOptions): void
           options.httpServer!.close(() => resolve())
         })
       }
+      await disconnectRedis()
       logger.info('🛑 Остановка завершена')
       process.exit(0)
     })()

@@ -7,16 +7,31 @@
 # Сборка и запуск: docker compose up -d --build
 # Логи: docker compose logs -f bot
 services:
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: redis-server --save 60 1000 --appendonly yes
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
   bot:
     build:
       context: .
       dockerfile: Dockerfile
     image: max-comment-bot:latest
     restart: unless-stopped
+    depends_on:
+      - redis
     env_file:
       - .env
     environment:
       NODE_ENV: production
+      REDIS_URL: redis://redis:6379
     volumes:
       - ./data:/app/data
     # Слушает API_PORT или PORT из .env — оба значения в пробросе должны совпадать с портом процесса в контейнере.
@@ -27,3 +42,6 @@ services:
       options:
         max-size: "50m"
         max-file: "3"
+
+volumes:
+  redis-data:

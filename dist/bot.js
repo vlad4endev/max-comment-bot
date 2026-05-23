@@ -13,6 +13,7 @@ const commentButtonRetryQueue_1 = require("./services/commentButtonRetryQueue");
 const postLinkAutoRecovery_1 = require("./services/postLinkAutoRecovery");
 const flowProcessor_1 = require("./services/flowProcessor");
 const stateManager_1 = require("./services/stateManager");
+const redisClient_1 = require("./cache/redisClient");
 const logger_1 = require("./utils/logger");
 function initializeBot() {
     logger_1.logger.info('🤖 Инициализация бота...');
@@ -69,6 +70,7 @@ function setupGracefulShutdown(bot, options) {
                     options.httpServer.close(() => resolve());
                 });
             }
+            await (0, redisClient_1.disconnectRedis)();
             logger_1.logger.info('🛑 Остановка завершена');
             process.exit(0);
         })();

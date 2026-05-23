@@ -1,5 +1,6 @@
 import type { Bot } from '@maxhub/max-bot-api'
 
+import { cacheTryAcquireLock } from '../cache/tieredCache'
 import { ensurePostFromChannelMessage } from './channelPostActions'
 import { resolveCanonicalChannelChatId } from './resolveChannelChatId'
 import { postStore } from './postStore'
@@ -12,6 +13,7 @@ interface RecoveryTask {
 }
 
 const RECOVERY_DEDUP_MS = 2 * 60 * 1000
+const RECOVERY_DEDUP_SEC = Math.ceil(RECOVERY_DEDUP_MS / 1000)
 const recentRecoveries = new Map<string, number>()
 let unsubscribeLogger: (() => void) | null = null
 let queue = Promise.resolve()
@@ -85,8 +87,13 @@ function dedupKey(chatId: number, messageMid: string): string {
   return `${Math.abs(chatId)}|${messageMid}`
 }
 
-function shouldRunRecovery(chatId: number, messageMid: string): boolean {
+async function shouldRunRecovery(chatId: number, messageMid: string): Promise<boolean> {
   const key = dedupKey(chatId, messageMid)
+  const lockAcquired = await cacheTryAcquireLock(`recovery:${key}`, RECOVERY_DEDUP_SEC)
+  if (lockAcquired) {
+    recentRecoveries.set(key, Date.now())
+    return true
+  }
   const now = Date.now()
   const prev = recentRecoveries.get(key) ?? 0
   if (now - prev < RECOVERY_DEDUP_MS) {
@@ -129,16 +136,18 @@ async function runRecoveryTask(task: RecoveryTask): Promise<void> {
 }
 
 function enqueueRecovery(task: RecoveryTask): void {
-  if (!shouldRunRecovery(task.chatId, task.messageMid)) {
-    return
-  }
-  queue = queue
-    .then(async () => {
-      await runRecoveryTask(task)
-    })
-    .catch((err: unknown) => {
-      logger.warn('postLinkAutoRecovery: task failed', { err })
-    })
+  void shouldRunRecovery(task.chatId, task.messageMid).then((ok) => {
+    if (!ok) {
+      return
+    }
+    queue = queue
+      .then(async () => {
+        await runRecoveryTask(task)
+      })
+      .catch((err: unknown) => {
+        logger.warn('postLinkAutoRecovery: task failed', { err })
+      })
+  })
 }
 
 function extractTaskFromLogEvent(event: { message: string; extra?: unknown }): RecoveryTask | null {

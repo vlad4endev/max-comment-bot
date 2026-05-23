@@ -3,11 +3,13 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.startPostLinkAutoRecovery = startPostLinkAutoRecovery;
 exports.stopPostLinkAutoRecovery = stopPostLinkAutoRecovery;
 exports.getPostLinkAutoRecoveryStats = getPostLinkAutoRecoveryStats;
+const tieredCache_1 = require("../cache/tieredCache");
 const channelPostActions_1 = require("./channelPostActions");
 const resolveChannelChatId_1 = require("./resolveChannelChatId");
 const postStore_1 = require("./postStore");
 const logger_1 = require("../utils/logger");
 const RECOVERY_DEDUP_MS = 2 * 60 * 1000;
+const RECOVERY_DEDUP_SEC = Math.ceil(RECOVERY_DEDUP_MS / 1000);
 const recentRecoveries = new Map();
 let unsubscribeLogger = null;
 let queue = Promise.resolve();
@@ -66,8 +68,13 @@ function asNonEmptyString(v) {
 function dedupKey(chatId, messageMid) {
     return `${Math.abs(chatId)}|${messageMid}`;
 }
-function shouldRunRecovery(chatId, messageMid) {
+async function shouldRunRecovery(chatId, messageMid) {
     const key = dedupKey(chatId, messageMid);
+    const lockAcquired = await (0, tieredCache_1.cacheTryAcquireLock)(`recovery:${key}`, RECOVERY_DEDUP_SEC);
+    if (lockAcquired) {
+        recentRecoveries.set(key, Date.now());
+        return true;
+    }
     const now = Date.now();
     const prev = recentRecoveries.get(key) ?? 0;
     if (now - prev < RECOVERY_DEDUP_MS) {
@@ -108,15 +115,17 @@ async function runRecoveryTask(task) {
     });
 }
 function enqueueRecovery(task) {
-    if (!shouldRunRecovery(task.chatId, task.messageMid)) {
-        return;
-    }
-    queue = queue
-        .then(async () => {
-        await runRecoveryTask(task);
-    })
-        .catch((err) => {
-        logger_1.logger.warn('postLinkAutoRecovery: task failed', { err });
+    void shouldRunRecovery(task.chatId, task.messageMid).then((ok) => {
+        if (!ok) {
+            return;
+        }
+        queue = queue
+            .then(async () => {
+            await runRecoveryTask(task);
+        })
+            .catch((err) => {
+            logger_1.logger.warn('postLinkAutoRecovery: task failed', { err });
+        });
     });
 }
 function extractTaskFromLogEvent(event) {

@@ -30,11 +30,13 @@ const adminPanelState_1 = require("./api/adminPanelState");
 const channelLinkService_1 = require("./services/channelLinkService");
 const tgChainForwarder_1 = require("./services/tgChainForwarder");
 const telegramTgChainLifecycle_1 = require("./services/telegramTgChainLifecycle");
+const redisClient_1 = require("./cache/redisClient");
 const createWebhookApp_1 = require("./webhook/createWebhookApp");
 const telegramMiniAppUrl_1 = require("./utils/telegramMiniAppUrl");
 async function main() {
     (0, migrate_1.migrateFromJson)();
     (0, migrateAutopostsFromJson_1.migrateAutopostsFromJson)();
+    const redisStatus = await (0, redisClient_1.initRedis)();
     const bot = (0, bot_1.initializeBot)();
     await channelRegistry_1.channelRegistry.loadFromDisk();
     await channelSettingsStore_1.channelSettingsStore.loadFromDisk();
@@ -86,6 +88,7 @@ async function main() {
         webhookConcurrency: updateQueue_1.WEBHOOK_CONCURRENCY,
         logRotation: true,
         receiveMode: config_1.config.receiveMode,
+        redis: redisStatus,
         telegramConnected: !!tgIntegration,
         flowProcessorEnabledFlows: enabledFlows.length,
         flowPollIntervalMs: (0, config_2.getFlowPollIntervalMs)(),
