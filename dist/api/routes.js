@@ -218,12 +218,12 @@ async function listChannelChatIdsWhereUserIsAdmin(bot, userId) {
     return flags.filter((x) => x !== null).sort((a, b) => a - b);
 }
 const MINIAPP_ADMIN_CHANNELS_TTL_SEC = 120;
+const MINIAPP_CHANNEL_BRANDING_TTL_SEC = 300;
 async function listChannelChatIdsWhereUserIsAdminCached(bot, userId) {
     return (0, tieredCache_1.cacheGetOrCompute)(`miniapp:admin-channels:${userId}`, MINIAPP_ADMIN_CHANNELS_TTL_SEC, () => listChannelChatIdsWhereUserIsAdmin(bot, userId));
 }
-function resolveChannelBrandingFromRegistry(chatId) {
-    const title = channelRegistry_1.channelRegistry.getChannel(chatId)?.title?.trim() || 'Канал';
-    return { title, avatar_url: null };
+async function resolveChannelBrandingCached(bot, chatId) {
+    return (0, tieredCache_1.cacheGetOrCompute)(`miniapp:channel-branding:${chatId}`, MINIAPP_CHANNEL_BRANDING_TTL_SEC, () => resolveChannelBranding(bot, chatId));
 }
 async function resolveChannelBranding(bot, chatId) {
     const title = channelRegistry_1.channelRegistry.getChannel(chatId)?.title?.trim() || 'Канал';
@@ -1368,7 +1368,7 @@ function createCommentApiRouter(deps) {
             res.status(404).json({ error: 'post not found' });
             return;
         }
-        const channelBranding = resolveChannelBrandingFromRegistry(post.chat_id);
+        const channelBranding = await resolveChannelBrandingCached(deps.bot, post.chat_id);
         const channel_post_url = post.channel_post_url?.trim() || null;
         res.json({
             post_id: post.post_id,

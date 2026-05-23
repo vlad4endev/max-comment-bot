@@ -2369,6 +2369,7 @@
       var pendingPhotoFiles = [];
       var postRecoveryUiVisible = false;
       var postRecoveryInFlight = false;
+      var lastCommentsSnapshot = null;
 
       function setPostPreviewLink(url) {
         channelPostUrl = url && String(url).trim() ? String(url).trim() : null;
@@ -3730,6 +3731,7 @@
 
       function renderInitial(list) {
         if (!feedEl) { console.error('renderInitial: feedEl is null'); return; }
+        lastCommentsSnapshot = Array.isArray(list) ? list.slice() : [];
         knownIds.clear();
         feedEl.innerHTML = '';
         if (!list.length) {
@@ -3971,7 +3973,12 @@
           })
           .then(function (data) {
             if (data && data.is_admin) {
-              return promoteAdminMode();
+              var promoted = promoteAdminMode();
+              if (promoted && lastCommentsSnapshot && lastCommentsSnapshot.length) {
+                renderInitial(lastCommentsSnapshot);
+                scrollToBottom();
+              }
+              return promoted;
             }
             return false;
           })
@@ -4327,11 +4334,13 @@
       updateSendEnabled();
 
       var postLoadPromise = loadPost();
-      var commentsLoadPromise = loadComments(true);
       postLoadPromise.catch(function () {});
-      commentsLoadPromise.catch(function () {});
-      Promise.all([postLoadPromise, commentsLoadPromise]).then(function () {
-        refreshAdminStateFromServer();
+      Promise.all([postLoadPromise, refreshAdminStateFromServer()])
+        .then(function () {
+          return loadComments(true);
+        })
+        .catch(function () {})
+        .then(function () {
         if (chatId && userId) {
           fetch(
             '/api/channel-settings?chat_id=' +
@@ -4351,7 +4360,7 @@
             })
             .catch(function () {});
         }
-      });
+        });
 
       setInterval(function () {
         if (postRecoveryUiVisible) return;
