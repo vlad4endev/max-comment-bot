@@ -44,6 +44,7 @@ const adminPanelState_1 = require("../api/adminPanelState");
 const integrationsStore_1 = require("../services/integrationsStore");
 const accountPairingService_1 = require("../services/accountPairingService");
 const ownerProfileStore_1 = require("../services/ownerProfileStore");
+const maxChannelTelegramAdminInvite_1 = require("../services/maxChannelTelegramAdminInvite");
 const tieredCache_1 = require("../cache/tieredCache");
 const logger_1 = require("../utils/logger");
 function isRecord(value) {
@@ -386,7 +387,8 @@ function parseDisableChannelAdminBody(body) {
     if (!actorUserId || !targetUserId || !chatId) {
         return null;
     }
-    return { actorUserId, targetUserId, chatId };
+    const targetPlatform = body.target_platform === 'telegram' ? 'telegram' : 'max';
+    return { actorUserId, targetUserId, chatId, targetPlatform };
 }
 async function resolveAdminCommentAccess(bot, input) {
     const post = postStore_1.postStore.getPost(input.postId);
@@ -499,7 +501,6 @@ function createCommentApiRouter(deps) {
             }
             else if (chatId !== null) {
                 const maxChatId = Math.abs(chatId);
-                const authChatId = (0, resolveChannelChatId_1.resolveCanonicalChannelChatId)(chatId) ?? chatId;
                 if ((0, telegramMiniappAuth_1.verifyTelegramMiniappAuth)({
                     telegramUserId: userId,
                     maxChatId,
@@ -792,16 +793,32 @@ function createCommentApiRouter(deps) {
                     });
                 }
             }
-            admins.sort((a, b) => a.user_id - b.user_id);
+            const maxAdminIds = new Set(admins.map((a) => a.user_id));
+            await integrationsStore_1.integrationsStore.load();
+            const tgToken = (integrationsStore_1.integrationsStore.getTelegramIntegration()?.token?.trim() || (0, config_1.getTelegramToken)()).trim();
+            const supplemental = await (0, maxChannelTelegramAdminInvite_1.listSupplementalTelegramAdminsForMaxChannel)(chatId, maxAdminIds, tgToken);
+            for (const row of supplemental.admins) {
+                if (disabledAdminStore_1.disabledAdminStore.isDisabled(row.user_id)) {
+                    continue;
+                }
+                admins.push(row);
+            }
+            admins.sort((a, b) => a.name.localeCompare(b.name, 'ru'));
             logger_1.logger.info('GET /api/channel-admins', {
                 chatId,
                 chatIdRaw,
                 requestUserId: userId,
                 linkedUserIds: [...linkedIds],
                 adminUserIds: admins.map((a) => a.user_id),
+                tgOnlyCount: supplemental.admins.length,
             });
             const invite_url = (0, deeplink_1.buildBotJoinUrl)(chatId);
-            res.json({ admins, invite_url });
+            const invite_url_telegram = (0, maxChannelTelegramAdminInvite_1.buildTelegramNotifyInviteUrlForMaxChannel)(chatId);
+            res.json({
+                admins,
+                invite_url,
+                ...(invite_url_telegram ? { invite_url_telegram } : {}),
+            });
         }
         catch (err) {
             logger_1.logger.error('GET /api/channel-admins failed', { err });
@@ -865,6 +882,27 @@ function createCommentApiRouter(deps) {
         try {
             if (!(await (0, channelPostActions_1.isUserChannelAdmin)(deps.bot, chatId, input.actorUserId))) {
                 res.status(403).json({ error: 'Доступ запрещён' });
+                return;
+            }
+            if (input.targetPlatform === 'telegram') {
+                await integrationsStore_1.integrationsStore.load();
+                const tgChatId = (0, maxChannelTelegramAdminInvite_1.resolvePrimaryTelegramChannelChatIdForMax)(chatId);
+                if (!tgChatId) {
+                    res.status(400).json({ error: 'telegram channel not linked' });
+                    return;
+                }
+                const tgToken = (integrationsStore_1.integrationsStore.getTelegramIntegration()?.token?.trim() || (0, config_1.getTelegramToken)()).trim();
+                if (!tgToken) {
+                    res.status(400).json({ error: 'telegram not connected' });
+                    return;
+                }
+                const tgAdmins = await (0, integrationPlatformClient_1.listTelegramChatAdministrators)(tgToken, tgChatId);
+                if (!tgAdmins.some((a) => a.userId === input.targetUserId)) {
+                    res.status(400).json({ error: 'target user is not a telegram channel admin' });
+                    return;
+                }
+                telegramChannelNotifyLinkStore_1.telegramChannelNotifyLinkStore.removeUserFromChannel(input.targetUserId, tgChatId);
+                res.json({ ok: true });
                 return;
             }
             if (!(await (0, channelPostActions_1.isUserChannelAdmin)(deps.bot, chatId, input.targetUserId))) {

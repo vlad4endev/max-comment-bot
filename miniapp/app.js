@@ -1031,13 +1031,16 @@
           return
         }
         var inviteRaw = data.invite_url ? String(data.invite_url) : ''
+        var inviteTgRaw = data.invite_url_telegram ? String(data.invite_url_telegram) : ''
         var inviteAttr = inviteRaw ? esc(inviteRaw) : ''
+        var inviteTgAttr = inviteTgRaw ? esc(inviteTgRaw) : ''
         var rows = (data.admins || [])
           .map(function (a) {
             var nm = esc(String(a.name || '—'))
+            var tgOnly = a.admin_platform === 'telegram' && !a.max_user_id
             var peerBadge =
-              a.peer_platform === 'telegram'
-                ? '<span class="admin-peer-badge admin-peer-badge--tg" title="Telegram привязан" aria-label="Telegram">✈</span>'
+              a.peer_platform === 'telegram' || tgOnly
+                ? '<span class="admin-peer-badge admin-peer-badge--tg" title="Telegram" aria-label="Telegram">✈</span>'
                 : a.peer_platform === 'max'
                   ? '<span class="admin-peer-badge admin-peer-badge--max" title="MAX привязан" aria-label="MAX">M</span>'
                   : ''
@@ -1050,16 +1053,23 @@
                 ? 'admin-status-connected'
                 : 'admin-status-pending'
             var dotCls = cross || connected ? 'admin-status-dot teal' : 'admin-status-dot yellow'
-            var label = cross
-              ? 'MAX + Telegram'
-              : connected
-                ? 'подключён'
-                : 'не подключён'
+            var label = tgOnly
+              ? connected
+                ? 'Telegram · подключён'
+                : 'Telegram · не в MAX'
+              : cross
+                ? 'MAX + Telegram'
+                : connected
+                  ? 'подключён'
+                  : 'не подключён'
+            var adminPlatform = tgOnly ? 'telegram' : 'max'
             var removeBtn =
               '<button type="button" class="btn-admin-disable" data-channel-id="' +
               esc(String(ch.chat_id)) +
               '" data-admin-user-id="' +
               esc(String(a.user_id)) +
+              '" data-admin-platform="' +
+              adminPlatform +
               '" data-admin-name="' +
               nm +
               '">Отключить</button>'
@@ -1084,9 +1094,17 @@
             )
           })
           .join('')
-        var inviteBtn =
+        var inviteBtnMax =
           inviteAttr !== ''
-            ? '<button type="button" class="btn-invite">Пригласить администраторов</button>'
+            ? '<button type="button" class="btn-invite">Ссылка для MAX</button>'
+            : ''
+        var inviteBtnTg =
+          inviteTgAttr !== ''
+            ? '<button type="button" class="btn-invite-tg">Ссылка для Telegram</button>'
+            : ''
+        var inviteHint =
+          inviteTgAttr !== ''
+            ? '<div style="font-size:11px;color:var(--muted);margin:8px 0 4px;">Админы только в Telegram — вторая ссылка.</div>'
             : ''
         var bodyRows =
           rows !== ''
@@ -1095,9 +1113,12 @@
         panelEl.innerHTML =
           '<div class="admins-card" role="article"' +
           (inviteAttr !== '' ? ' data-invite-url="' + inviteAttr + '"' : '') +
+          (inviteTgAttr !== '' ? ' data-invite-url-telegram="' + inviteTgAttr + '"' : '') +
           '>' +
           bodyRows +
-          inviteBtn +
+          inviteHint +
+          inviteBtnMax +
+          inviteBtnTg +
           '</div>'
         panelEl.dataset.adminsLoaded = '1'
       }
@@ -1305,10 +1326,13 @@
             toggleChannelAdminsBlock(block, uid)
             return
           }
-          var inviteBtn = ev.target.closest('.btn-invite')
+          var inviteBtn = ev.target.closest('.btn-invite, .btn-invite-tg')
           if (inviteBtn) {
             var cardForInvite = inviteBtn.closest('.admins-card')
-            var url = cardForInvite && cardForInvite.getAttribute('data-invite-url')
+            var url =
+              inviteBtn.classList.contains('btn-invite-tg')
+                ? cardForInvite && cardForInvite.getAttribute('data-invite-url-telegram')
+                : cardForInvite && cardForInvite.getAttribute('data-invite-url')
             if (!url) return
             var p =
               navigator.clipboard && navigator.clipboard.writeText
@@ -1331,7 +1355,11 @@
               }
             })
               .then(function () {
-                showToast('Ссылка скопирована! Отправьте её другим администраторам')
+                showToast(
+                  inviteBtn.classList.contains('btn-invite-tg')
+                    ? 'Ссылка Telegram скопирована! Для админов без MAX'
+                    : 'Ссылка MAX скопирована! Отправьте администраторам канала'
+                )
               })
               .catch(function () {
                 showToast('Не удалось скопировать ссылку')
@@ -1344,6 +1372,7 @@
           if (disableBtn.disabled) return
           var channelChatId = parseInt(disableBtn.getAttribute('data-channel-id') || '', 10)
           var targetUserId = parseInt(disableBtn.getAttribute('data-admin-user-id') || '', 10)
+          var targetPlatform = disableBtn.getAttribute('data-admin-platform') || 'max'
           var targetName = String(disableBtn.getAttribute('data-admin-name') || '').trim()
           if (!Number.isFinite(channelChatId) || !Number.isFinite(targetUserId)) {
             showToast('Некорректные данные администратора')
@@ -1374,6 +1403,7 @@
               user_id: actorUserId,
               target_user_id: targetUserId,
               chat_id: inTelegram ? String(channelChatId) : channelChatId,
+              ...(targetPlatform === 'telegram' ? { target_platform: 'telegram' } : {}),
             }),
           })
             .then(function (r) {

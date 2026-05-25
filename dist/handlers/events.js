@@ -21,6 +21,7 @@ const postStore_1 = require("../services/postStore");
 const settingsStore_1 = require("../services/settingsStore");
 const subscriberStore_1 = require("../services/subscriberStore");
 const stateManager_1 = require("../services/stateManager");
+const maxChannelTelegramAdminInvite_1 = require("../services/maxChannelTelegramAdminInvite");
 const deeplink_1 = require("../utils/deeplink");
 const logger_1 = require("../utils/logger");
 /** Mini App deeplink (`startapp` → `initDataUnsafe.start_param`). */
@@ -766,11 +767,16 @@ function registerEventHandlers(bot) {
                 }
                 const channelTitle = ch.title ?? 'канал';
                 const inviteUrl = (0, deeplink_1.buildBotJoinUrl)(ch.chatId, nick);
-                await bot.api.sendMessageToUser(userId, `Отправьте эту ссылку другим администраторам канала «${channelTitle}»:
-
-${inviteUrl}
-
-Администратор нажмёт на ссылку → откроет чат с ботом → напишет любое сообщение → начнёт получать уведомления.`);
+                const tgInviteUrl = (0, maxChannelTelegramAdminInvite_1.buildTelegramNotifyInviteUrlForMaxChannel)(ch.chatId);
+                let inviteText = `Отправьте ссылку администраторам канала «${channelTitle}».\n\n` +
+                    `В MAX (есть аккаунт в MAX):\n${inviteUrl}\n\n` +
+                    `После перехода человек откроет бота MAX и начнёт получать уведомления о комментариях.`;
+                if (tgInviteUrl) {
+                    inviteText +=
+                        `\n\nТолько Telegram (нет в MAX, но админ TG-канала):\n${tgInviteUrl}\n\n` +
+                            `После Start в Telegram-боте — те же уведомления и ответы из Telegram.`;
+                }
+                await bot.api.sendMessageToUser(userId, inviteText);
             }
         }
         catch (err) {

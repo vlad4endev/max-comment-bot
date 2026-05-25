@@ -79,6 +79,11 @@ import {
   getAccountPairingStatus,
 } from '../services/accountPairingService'
 import { ownerProfileStore } from '../services/ownerProfileStore'
+import {
+  buildTelegramNotifyInviteUrlForMaxChannel,
+  listSupplementalTelegramAdminsForMaxChannel,
+  resolvePrimaryTelegramChannelChatIdForMax,
+} from '../services/maxChannelTelegramAdminInvite'
 import { cacheGetOrCompute } from '../cache/tieredCache'
 import { logger } from '../utils/logger'
 
@@ -498,6 +503,7 @@ interface DisableChannelAdminInput {
   actorUserId: number
   targetUserId: number
   chatId: number
+  targetPlatform: 'max' | 'telegram'
 }
 
 function parseAdminModerationBody(body: unknown): AdminModerationInput | null {
@@ -524,7 +530,8 @@ function parseDisableChannelAdminBody(body: unknown): DisableChannelAdminInput |
   if (!actorUserId || !targetUserId || !chatId) {
     return null
   }
-  return { actorUserId, targetUserId, chatId }
+  const targetPlatform = body.target_platform === 'telegram' ? 'telegram' : 'max'
+  return { actorUserId, targetUserId, chatId, targetPlatform }
 }
 
 async function resolveAdminCommentAccess(
@@ -942,16 +949,32 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
           })
         }
       }
-      admins.sort((a, b) => a.user_id - b.user_id)
+      const maxAdminIds = new Set(admins.map((a) => a.user_id))
+      await integrationsStore.load()
+      const tgToken = (integrationsStore.getTelegramIntegration()?.token?.trim() || getTelegramToken()).trim()
+      const supplemental = await listSupplementalTelegramAdminsForMaxChannel(chatId, maxAdminIds, tgToken)
+      for (const row of supplemental.admins) {
+        if (disabledAdminStore.isDisabled(row.user_id)) {
+          continue
+        }
+        admins.push(row)
+      }
+      admins.sort((a, b) => a.name.localeCompare(b.name, 'ru'))
       logger.info('GET /api/channel-admins', {
         chatId,
         chatIdRaw,
         requestUserId: userId,
         linkedUserIds: [...linkedIds],
         adminUserIds: admins.map((a) => a.user_id),
+        tgOnlyCount: supplemental.admins.length,
       })
       const invite_url = buildBotJoinUrl(chatId)
-      res.json({ admins, invite_url })
+      const invite_url_telegram = buildTelegramNotifyInviteUrlForMaxChannel(chatId)
+      res.json({
+        admins,
+        invite_url,
+        ...(invite_url_telegram ? { invite_url_telegram } : {}),
+      })
     } catch (err: unknown) {
       logger.error('GET /api/channel-admins failed', { err })
       res.status(500).json({ error: 'internal error' })
@@ -1014,6 +1037,27 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
     try {
       if (!(await isUserChannelAdmin(deps.bot, chatId, input.actorUserId))) {
         res.status(403).json({ error: 'Доступ запрещён' })
+        return
+      }
+      if (input.targetPlatform === 'telegram') {
+        await integrationsStore.load()
+        const tgChatId = resolvePrimaryTelegramChannelChatIdForMax(chatId)
+        if (!tgChatId) {
+          res.status(400).json({ error: 'telegram channel not linked' })
+          return
+        }
+        const tgToken = (integrationsStore.getTelegramIntegration()?.token?.trim() || getTelegramToken()).trim()
+        if (!tgToken) {
+          res.status(400).json({ error: 'telegram not connected' })
+          return
+        }
+        const tgAdmins = await listTelegramChatAdministrators(tgToken, tgChatId)
+        if (!tgAdmins.some((a) => a.userId === input.targetUserId)) {
+          res.status(400).json({ error: 'target user is not a telegram channel admin' })
+          return
+        }
+        telegramChannelNotifyLinkStore.removeUserFromChannel(input.targetUserId, tgChatId)
+        res.json({ ok: true })
         return
       }
       if (!(await isUserChannelAdmin(deps.bot, chatId, input.targetUserId))) {

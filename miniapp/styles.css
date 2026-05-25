@@ -946,7 +946,8 @@
     }
     .admin-status-dot.teal { background: var(--teal); }
     .admin-status-dot.yellow { background: var(--yellow); }
-    .btn-invite {
+    .btn-invite,
+    .btn-invite-tg {
       width: 100%;
       margin-top: 10px;
       padding: 10px;
@@ -961,6 +962,10 @@
       align-items: center;
       justify-content: center;
       gap: 6px;
+    }
+    .btn-invite-tg {
+      border-color: rgba(42, 171, 238, 0.45);
+      color: #2aabee;
     }
     .admin-row-controls {
       display: flex;

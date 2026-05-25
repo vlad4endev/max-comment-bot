@@ -34,6 +34,7 @@ import { postStore } from '../services/postStore'
 import { settingsStore } from '../services/settingsStore'
 import { subscriberStore } from '../services/subscriberStore'
 import { stateManager } from '../services/stateManager'
+import { buildTelegramNotifyInviteUrlForMaxChannel } from '../services/maxChannelTelegramAdminInvite'
 import { buildBotJoinUrl } from '../utils/deeplink'
 import { logger } from '../utils/logger'
 
@@ -917,14 +918,17 @@ export function registerEventHandlers(bot: Bot): void {
         }
         const channelTitle = ch.title ?? 'канал'
         const inviteUrl = buildBotJoinUrl(ch.chatId, nick)
-        await bot.api.sendMessageToUser(
-          userId,
-          `Отправьте эту ссылку другим администраторам канала «${channelTitle}»:
-
-${inviteUrl}
-
-Администратор нажмёт на ссылку → откроет чат с ботом → напишет любое сообщение → начнёт получать уведомления.`,
-        )
+        const tgInviteUrl = buildTelegramNotifyInviteUrlForMaxChannel(ch.chatId)
+        let inviteText =
+          `Отправьте ссылку администраторам канала «${channelTitle}».\n\n` +
+          `В MAX (есть аккаунт в MAX):\n${inviteUrl}\n\n` +
+          `После перехода человек откроет бота MAX и начнёт получать уведомления о комментариях.`
+        if (tgInviteUrl) {
+          inviteText +=
+            `\n\nТолько Telegram (нет в MAX, но админ TG-канала):\n${tgInviteUrl}\n\n` +
+            `После Start в Telegram-боте — те же уведомления и ответы из Telegram.`
+        }
+        await bot.api.sendMessageToUser(userId, inviteText)
       }
     } catch (err: unknown) {
       logger.error('message_callback: handler error', err)
