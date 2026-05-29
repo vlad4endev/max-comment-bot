@@ -2187,53 +2187,7 @@
       });
     }
 
-    var gateUid = null;
-
-    function selfRegister() {
-      var uid =
-        gateUid ||
-        getBridgeNumericUserId(user) ||
-        parseInt(mergedParams.get('user_id') || '', 10) ||
-        null;
-      if (!uid) {
-        showToast('Не удалось определить ваш профиль');
-        return;
-      }
-      if (!chatId) {
-        showToast('Не удалось определить канал');
-        return;
-      }
-      var btn = document.getElementById('gateManualRegisterBtn');
-      if (btn) btn.disabled = true;
-      fetch('/api/register-subscriber', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          user_id: uid,
-          chat_id: Number(chatId),
-          source: 'manual_gate',
-        }),
-      })
-        .then(function (r) {
-          return r.json().then(function (j) {
-            if (!r.ok) throw new Error(j.error || String(r.status));
-            return j;
-          });
-        })
-        .then(function () {
-          if (viewGate) viewGate.classList.add('hidden');
-          loadPostAndComments();
-        })
-        .catch(function (e) {
-          showToast(e, 'Не удалось зарегистрироваться');
-        })
-        .finally(function () {
-          if (btn) btn.disabled = false;
-        });
-    }
-
-    function showGate(uid) {
-      gateUid = uid;
+    function showGate() {
       if (viewGate) viewGate.classList.remove('hidden');
       viewComments.classList.add('hidden');
 
@@ -2282,13 +2236,6 @@
           }
         });
     }
-
-    ;(function bindGateManualRegister() {
-      var gateBtn = document.getElementById('gateManualRegisterBtn');
-      if (!gateBtn || gateBtn.dataset.bound === '1') return;
-      gateBtn.dataset.bound = '1';
-      gateBtn.addEventListener('click', selfRegister);
-    })();
 
     function bootComments() {
       if (!hasPostContext || joinChannelId) return;
@@ -2345,7 +2292,7 @@
         null;
 
       if (!uid) {
-        showGate(null);
+        showGate();
         return;
       }
 
@@ -2395,7 +2342,7 @@
           if (data && (data.started || data.is_admin)) {
             openCommentsAfterStatusCheck();
           } else {
-            showGate(uid);
+            showGate();
           }
         })
         .catch(function () {
