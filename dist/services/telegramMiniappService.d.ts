@@ -38,7 +38,7 @@ export declare function resolveTelegramChannelInviteAccess(telegramUserId: numbe
     title: string | null;
 } | {
     ok: false;
-    status: 400 | 404;
+    status: 400 | 403 | 404;
     error: string;
 }>;
 export declare function registerTelegramChannelNotifyLink(telegramUserId: number, channelChatId: string): Promise<{

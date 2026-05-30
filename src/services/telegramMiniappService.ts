@@ -24,6 +24,7 @@ import {
   handleTelegramMyChatMemberUpdate,
   handleTelegramPrivateMessage,
   reconcileTelegramChannelForMiniappUser,
+  tryActivateTelegramChannelRegistration,
 } from './telegramChannelActivation'
 import {
   handleTelegramCommentModerationCallback,
@@ -380,21 +381,55 @@ export async function getTelegramChannelAdminsForMiniapp(
   }
 }
 
+function telegramChannelInviteFailureMessage(error: string): string {
+  if (error === 'bot is not channel administrator') {
+    return (
+      'Не удалось подключить канал. Убедитесь, что @commentvmax_bot добавлен в Telegram-канал ' +
+      'как администратор, затем нажмите «Подтвердить подключение» в личке с ботом или отправьте /connect.'
+    )
+  }
+  if (error === 'channel is not connected to this bot') {
+    return (
+      'Не удалось подключить канал. Сначала добавьте @commentvmax_bot в связанный Telegram-канал ' +
+      'как администратора — после этого снова откройте ссылку из MAX.'
+    )
+  }
+  return 'Не удалось подключить канал. Проверьте, что бот добавлен в канал как администратор.'
+}
+
 export async function resolveTelegramChannelInviteAccess(
   telegramUserId: number,
   joinChannelIdRaw: string,
 ): Promise<
   | { ok: true; channelChatId: string; title: string | null }
-  | { ok: false; status: 400 | 404; error: string }
+  | { ok: false; status: 400 | 403 | 404; error: string }
 > {
   const chatId = String(joinChannelIdRaw).trim()
   if (!/^-?\d+$/.test(chatId)) {
     return { ok: false, status: 400, error: 'missing or invalid join_channel_id' }
   }
-  const reg = telegramChannelRegistry.getChannel(chatId)
+
+  let reg = telegramChannelRegistry.getChannel(chatId)
+  if (!reg || !reg.bot_is_admin) {
+    await tryActivateTelegramChannelRegistration(chatId, telegramUserId)
+    reg = telegramChannelRegistry.getChannel(chatId)
+  }
+
   if (!reg) {
+    logger.warn('resolveTelegramChannelInviteAccess: channel unknown after activation', {
+      chatId,
+      telegramUserId,
+    })
     return { ok: false, status: 404, error: 'channel is not connected to this bot' }
   }
+  if (!reg.bot_is_admin) {
+    logger.warn('resolveTelegramChannelInviteAccess: bot not channel admin', {
+      chatId,
+      telegramUserId,
+    })
+    return { ok: false, status: 403, error: 'bot is not channel administrator' }
+  }
+
   return { ok: true, channelChatId: chatId, title: reg.title }
 }
 
@@ -526,10 +561,16 @@ export async function handleTelegramBotStartJoin(
   }
   const access = await resolveTelegramChannelInviteAccess(telegramUserId, channelChatId)
   if (!access.ok) {
+    logger.info('handleTelegramBotStartJoin: access denied', {
+      telegramUserId,
+      channelChatId,
+      error: access.error,
+      status: access.status,
+    })
     await sendTelegramBotMessage(
       token,
       telegramUserId,
-      'Не удалось подключить канал. Убедитесь, что бот добавлен в канал как администратор.',
+      telegramChannelInviteFailureMessage(access.error),
     )
     return
   }

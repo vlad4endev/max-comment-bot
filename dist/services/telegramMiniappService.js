@@ -277,14 +277,40 @@ async function getTelegramChannelAdminsForMiniapp(telegramUserId, channelChatId)
         invite_url: (0, telegramDeeplink_1.buildTelegramBotJoinUrl)(chatId),
     };
 }
+function telegramChannelInviteFailureMessage(error) {
+    if (error === 'bot is not channel administrator') {
+        return ('Не удалось подключить канал. Убедитесь, что @commentvmax_bot добавлен в Telegram-канал ' +
+            'как администратор, затем нажмите «Подтвердить подключение» в личке с ботом или отправьте /connect.');
+    }
+    if (error === 'channel is not connected to this bot') {
+        return ('Не удалось подключить канал. Сначала добавьте @commentvmax_bot в связанный Telegram-канал ' +
+            'как администратора — после этого снова откройте ссылку из MAX.');
+    }
+    return 'Не удалось подключить канал. Проверьте, что бот добавлен в канал как администратор.';
+}
 async function resolveTelegramChannelInviteAccess(telegramUserId, joinChannelIdRaw) {
     const chatId = String(joinChannelIdRaw).trim();
     if (!/^-?\d+$/.test(chatId)) {
         return { ok: false, status: 400, error: 'missing or invalid join_channel_id' };
     }
-    const reg = telegramChannelRegistry_1.telegramChannelRegistry.getChannel(chatId);
+    let reg = telegramChannelRegistry_1.telegramChannelRegistry.getChannel(chatId);
+    if (!reg || !reg.bot_is_admin) {
+        await (0, telegramChannelActivation_1.tryActivateTelegramChannelRegistration)(chatId, telegramUserId);
+        reg = telegramChannelRegistry_1.telegramChannelRegistry.getChannel(chatId);
+    }
     if (!reg) {
+        logger_1.logger.warn('resolveTelegramChannelInviteAccess: channel unknown after activation', {
+            chatId,
+            telegramUserId,
+        });
         return { ok: false, status: 404, error: 'channel is not connected to this bot' };
+    }
+    if (!reg.bot_is_admin) {
+        logger_1.logger.warn('resolveTelegramChannelInviteAccess: bot not channel admin', {
+            chatId,
+            telegramUserId,
+        });
+        return { ok: false, status: 403, error: 'bot is not channel administrator' };
     }
     return { ok: true, channelChatId: chatId, title: reg.title };
 }
@@ -388,7 +414,13 @@ async function handleTelegramBotStartJoin(telegramUserId, startPayload) {
     }
     const access = await resolveTelegramChannelInviteAccess(telegramUserId, channelChatId);
     if (!access.ok) {
-        await sendTelegramBotMessage(token, telegramUserId, 'Не удалось подключить канал. Убедитесь, что бот добавлен в канал как администратор.');
+        logger_1.logger.info('handleTelegramBotStartJoin: access denied', {
+            telegramUserId,
+            channelChatId,
+            error: access.error,
+            status: access.status,
+        });
+        await sendTelegramBotMessage(token, telegramUserId, telegramChannelInviteFailureMessage(access.error));
         return;
     }
     await registerTelegramChannelNotifyLink(telegramUserId, channelChatId);
