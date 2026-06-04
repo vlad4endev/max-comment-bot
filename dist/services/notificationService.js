@@ -178,8 +178,8 @@ async function collectAdminNotifyRecipientIds(bot, channelChatId) {
  * Уведомляет всех админов канала личными сообщениями; для `ADMIN_CHAT_ID` используется `sendMessageToChat` (супер-админ / группа).
  * Возвращает пары `admin_id` / `message_mid` только для успешно отправленных сообщений.
  */
-async function notifyAllAdmins(bot, chatId, message, extra) {
-    const recipients = await collectAdminNotifyRecipientIds(bot, chatId);
+async function notifyAllAdmins(bot, chatId, message, extra, skipUserIds) {
+    const recipients = (await collectAdminNotifyRecipientIds(bot, chatId)).filter((id) => !skipUserIds?.has(id));
     return deliverAdminNotifications(bot, chatId, recipients, message, extra);
 }
 /**

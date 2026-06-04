@@ -266,6 +266,20 @@ function initSchema(targetDb) {
     migrateTgChainForwardedSchema(targetDb);
     migrateChannelLinkDraftsSchema(targetDb);
     migrateAccountPairingTokensSchema(targetDb);
+    migrateChannelJoinNotifiedSchema(targetDb);
+}
+/** Флаг «уведомление о подключении уже отправлено» — переживает рестарт процесса. */
+function migrateChannelJoinNotifiedSchema(database) {
+    const tgCols = database.prepare('PRAGMA table_info(tg_channels)').all();
+    if (!tgCols.some((c) => c.name === 'admin_join_notified')) {
+        database.exec('ALTER TABLE tg_channels ADD COLUMN admin_join_notified INTEGER NOT NULL DEFAULT 0');
+        database.exec('UPDATE tg_channels SET admin_join_notified = 1 WHERE bot_is_admin = 1');
+    }
+    const maxCols = database.prepare('PRAGMA table_info(channels)').all();
+    if (!maxCols.some((c) => c.name === 'admin_join_notified')) {
+        database.exec('ALTER TABLE channels ADD COLUMN admin_join_notified INTEGER NOT NULL DEFAULT 0');
+        database.exec('UPDATE channels SET admin_join_notified = 1 WHERE active = 1');
+    }
 }
 function migrateAccountPairingTokensSchema(database) {
     database.exec(`

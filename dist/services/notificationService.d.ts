@@ -20,7 +20,7 @@ export declare function collectAdminNotifyRecipientIds(bot: Bot, channelChatId: 
  * Уведомляет всех админов канала личными сообщениями; для `ADMIN_CHAT_ID` используется `sendMessageToChat` (супер-админ / группа).
  * Возвращает пары `admin_id` / `message_mid` только для успешно отправленных сообщений.
  */
-export declare function notifyAllAdmins(bot: Bot, chatId: number, message: string, extra?: SendMessageExtra): Promise<AdminNotificationSendResult[]>;
+export declare function notifyAllAdmins(bot: Bot, chatId: number, message: string, extra?: SendMessageExtra, skipUserIds?: ReadonlySet<number>): Promise<AdminNotificationSendResult[]>;
 /**
  * Уведомляет админов канала о новом комментарии из Mini App (текст + ссылка на приложение с admin=1).
  */

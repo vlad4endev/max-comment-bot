@@ -239,12 +239,26 @@ function parseConfirmChannelPayload(raw) {
  * Повторная проверка прав и финализация подключения (как `/connect`).
  * Возвращает строки для ответа пользователю.
  */
+function resolveContextActorUserId(ctx) {
+    const fromCtx = ctx.user?.user_id;
+    if (typeof fromCtx === 'number' && Number.isInteger(fromCtx) && fromCtx > 0) {
+        return fromCtx;
+    }
+    const fromCallback = ctx.callback?.user?.user_id;
+    if (typeof fromCallback === 'number' && Number.isInteger(fromCallback) && fromCallback > 0) {
+        return fromCallback;
+    }
+    return undefined;
+}
 async function runChannelConnectAttempt(ctx, bot, channelChatIds) {
     const lines = [];
+    const actorUserId = resolveContextActorUserId(ctx);
     for (const channelChatId of channelChatIds) {
         const chatType = await fetchChatType(bot, channelChatId);
         const isChannelFlag = chatType === null ? true : chatType === 'channel';
-        const outcome = await tryActivateChannelRegistration(ctx, bot, channelChatId, isChannelFlag);
+        const outcome = await tryActivateChannelRegistration(ctx, bot, channelChatId, isChannelFlag, {
+            skipNotifyUserIds: actorUserId != null ? [actorUserId] : undefined,
+        });
         const regTitle = channelRegistry_1.channelRegistry.getChannel(channelChatId)?.title ?? null;
         const display = regTitle ? `«${regTitle}»` : `канал (номер чата: ${channelChatId})`;
         if (outcome.status === 'registered') {
@@ -300,7 +314,7 @@ async function ensureChannelPersisted(ctx, chatId, isChannel) {
         logger_1.logger.info('DEBUG: saveChannel done, file should exist now');
     }
 }
-async function notifyAdminsChannelJoined(bot, channelChatId) {
+async function notifyAdminsChannelJoined(bot, channelChatId, skipUserIds) {
     const reg = channelRegistry_1.channelRegistry.getChannel(channelChatId);
     const title = reg?.title ?? 'канал';
     const homeUrl = buildMiniAppHomeUrl();
@@ -308,7 +322,7 @@ async function notifyAdminsChannelJoined(bot, channelChatId) {
         `«${title}» успешно связан с CommentBot.\n\n` +
         `Под постами может появиться кнопка «Комментарии». Ответы на комментарии и настройки — в мини-приложении.`;
     const kb = max_bot_api_1.Keyboard.inlineKeyboard([[max_bot_api_1.Keyboard.button.link('💬 Открыть панель управления', homeUrl)]]);
-    await (0, notificationService_1.notifyAllAdmins)(bot, channelChatId, message, { attachments: [kb] });
+    await (0, notificationService_1.notifyAllAdmins)(bot, channelChatId, message, { attachments: [kb] }, skipUserIds);
 }
 /**
  * Публичное сообщение в канал с deep link для админов, подписывающихся на уведомления о комментариях.
@@ -341,7 +355,7 @@ async function postChannelAdminInviteToChannel(bot, channelChatId) {
 /**
  * Verifies admin/owner rights, persists channel metadata up front, sends admin join notify once when admin is OK.
  */
-async function tryActivateChannelRegistration(ctx, bot, channelChatId, isChannel) {
+async function tryActivateChannelRegistration(ctx, bot, channelChatId, isChannel, options) {
     await ensureChannelPersisted(ctx, channelChatId, isChannel);
     const member = await (0, botChannelMembership_1.fetchBotChatMemberWithRetry)(bot, channelChatId);
     if (!member) {
@@ -357,7 +371,8 @@ async function tryActivateChannelRegistration(ctx, bot, channelChatId, isChannel
     stateManager_1.stateManager.clearChannelPendingAdminRights(channelChatId);
     const wasConnectedBefore = (0, channelAdminJoinNotified_1.hasChannelAdminJoinNotified)(channelChatId);
     if (!wasConnectedBefore) {
-        await notifyAdminsChannelJoined(bot, channelChatId);
+        const skipNotify = new Set(options?.skipNotifyUserIds ?? []);
+        await notifyAdminsChannelJoined(bot, channelChatId, skipNotify);
         (0, channelAdminJoinNotified_1.markChannelAdminJoinNotified)(channelChatId);
         void (0, channelPoller_1.runChannelPollerForChat)(bot, channelChatId);
         return { status: 'registered' };

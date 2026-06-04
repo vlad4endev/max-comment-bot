@@ -211,8 +211,11 @@ export async function notifyAllAdmins(
   chatId: number,
   message: string,
   extra?: SendMessageExtra,
+  skipUserIds?: ReadonlySet<number>,
 ): Promise<AdminNotificationSendResult[]> {
-  const recipients = await collectAdminNotifyRecipientIds(bot, chatId)
+  const recipients = (await collectAdminNotifyRecipientIds(bot, chatId)).filter(
+    (id) => !skipUserIds?.has(id),
+  )
   return deliverAdminNotifications(bot, chatId, recipients, message, extra)
 }
 

@@ -107,7 +107,7 @@ async function postTelegramChannelAdminInvite(channelChatId) {
         logger_1.logger.warn('postTelegramChannelAdminInvite: send failed', { channelChatId, err });
     }
 }
-async function notifyTelegramChannelJoined(channelChatId) {
+async function notifyTelegramChannelJoined(channelChatId, skipUserIds) {
     const token = (0, resolveTelegramBotToken_1.resolveTelegramBotToken)();
     if (!token) {
         return;
@@ -124,6 +124,9 @@ async function notifyTelegramChannelJoined(channelChatId) {
     };
     for (const admin of admins) {
         if (!admin.startedBot) {
+            continue;
+        }
+        if (skipUserIds?.has(admin.userId)) {
             continue;
         }
         try {
@@ -239,7 +242,7 @@ function linkInviterAsAdmin(inviterUserId, channelChatId) {
     telegramBotUserStore_1.telegramBotUserStore.markStarted({ id: inviterUserId });
     telegramChannelNotifyLinkStore_1.telegramChannelNotifyLinkStore.register(inviterUserId, channelChatId);
 }
-async function tryActivateTelegramChannelRegistration(channelChatId, inviterUserId) {
+async function tryActivateTelegramChannelRegistration(channelChatId, inviterUserId, options) {
     const token = (0, resolveTelegramBotToken_1.resolveTelegramBotToken)();
     if (!token) {
         return { status: 'pending', shouldNotifyMissingAdmin: false };
@@ -269,11 +272,19 @@ async function tryActivateTelegramChannelRegistration(channelChatId, inviterUser
     });
     const wasConnectedBefore = (0, telegramChannelAdminJoinNotified_1.hasTelegramAdminJoinNotified)(channelChatId);
     if (!wasConnectedBefore) {
-        await notifyTelegramChannelJoined(channelChatId);
-        await postTelegramChannelAdminInvite(channelChatId);
-        (0, telegramChannelAdminJoinNotified_1.markTelegramAdminJoinNotified)(channelChatId);
-        logger_1.logger.info('telegramChannelActivation: channel registered', { channelChatId, inviterUserId });
-        return { status: 'registered' };
+        if (options?.notify !== false) {
+            const skipNotify = new Set(options?.skipNotifyUserIds ?? []);
+            await notifyTelegramChannelJoined(channelChatId, skipNotify);
+            await postTelegramChannelAdminInvite(channelChatId);
+            (0, telegramChannelAdminJoinNotified_1.markTelegramAdminJoinNotified)(channelChatId);
+            logger_1.logger.info('telegramChannelActivation: channel registered', { channelChatId, inviterUserId });
+            return { status: 'registered' };
+        }
+        logger_1.logger.info('telegramChannelActivation: channel active (silent reconcile)', {
+            channelChatId,
+            inviterUserId,
+        });
+        return { status: 'reconnected' };
     }
     logger_1.logger.info('telegramChannelActivation: channel reconnected', { channelChatId });
     return { status: 'reconnected' };
@@ -281,7 +292,9 @@ async function tryActivateTelegramChannelRegistration(channelChatId, inviterUser
 async function runTelegramChannelConnectAttempt(channelChatIds, actorUserId) {
     const lines = [];
     for (const channelChatId of channelChatIds) {
-        const outcome = await tryActivateTelegramChannelRegistration(channelChatId, actorUserId);
+        const outcome = await tryActivateTelegramChannelRegistration(channelChatId, actorUserId, {
+            skipNotifyUserIds: actorUserId != null ? [actorUserId] : undefined,
+        });
         const reg = telegramChannelRegistry_1.telegramChannelRegistry.getChannel(channelChatId);
         const display = reg?.title ? `«${reg.title}»` : `канал ${channelChatId}`;
         if (outcome.status === 'registered') {
@@ -393,7 +406,9 @@ async function reconcileTelegramChannelForMiniappUser(channelChatId, telegramUse
     if (!admins.some((a) => a.userId === telegramUserId)) {
         return;
     }
-    const outcome = await tryActivateTelegramChannelRegistration(channelChatId, telegramUserId);
+    const outcome = await tryActivateTelegramChannelRegistration(channelChatId, telegramUserId, {
+        notify: false,
+    });
     if (outcome.status === 'pending' && outcome.shouldNotifyMissingAdmin) {
         await notifyTelegramAdminsChannelNeedsAdminRights(channelChatId, reg.title, telegramUserId);
     }

@@ -295,16 +295,31 @@ function parseConfirmChannelPayload(raw: string): number | null {
  * Повторная проверка прав и финализация подключения (как `/connect`).
  * Возвращает строки для ответа пользователю.
  */
+function resolveContextActorUserId(ctx: Context): number | undefined {
+  const fromCtx = ctx.user?.user_id
+  if (typeof fromCtx === 'number' && Number.isInteger(fromCtx) && fromCtx > 0) {
+    return fromCtx
+  }
+  const fromCallback = ctx.callback?.user?.user_id
+  if (typeof fromCallback === 'number' && Number.isInteger(fromCallback) && fromCallback > 0) {
+    return fromCallback
+  }
+  return undefined
+}
+
 async function runChannelConnectAttempt(
   ctx: Context,
   bot: Bot,
   channelChatIds: number[],
 ): Promise<string[]> {
   const lines: string[] = []
+  const actorUserId = resolveContextActorUserId(ctx)
   for (const channelChatId of channelChatIds) {
     const chatType = await fetchChatType(bot, channelChatId)
     const isChannelFlag = chatType === null ? true : chatType === 'channel'
-    const outcome = await tryActivateChannelRegistration(ctx, bot, channelChatId, isChannelFlag)
+    const outcome = await tryActivateChannelRegistration(ctx, bot, channelChatId, isChannelFlag, {
+      skipNotifyUserIds: actorUserId != null ? [actorUserId] : undefined,
+    })
     const regTitle = channelRegistry.getChannel(channelChatId)?.title ?? null
     const display = regTitle ? `«${regTitle}»` : `канал (номер чата: ${channelChatId})`
     if (outcome.status === 'registered') {
@@ -351,6 +366,10 @@ type ChannelActivationOutcome =
   | { status: 'reconnected' }
   | { status: 'pending'; shouldNotifyMissingAdmin: boolean }
 
+type ChannelActivationOptions = {
+  skipNotifyUserIds?: number[]
+}
+
 /**
  * Persists channel metadata to the registry as soon as the bot is in the chat.
  * Admin rights only gate processing/notifications elsewhere, not whether the row exists on disk.
@@ -371,7 +390,11 @@ async function ensureChannelPersisted(ctx: Context, chatId: number, isChannel: b
   }
 }
 
-async function notifyAdminsChannelJoined(bot: Bot, channelChatId: number): Promise<void> {
+async function notifyAdminsChannelJoined(
+  bot: Bot,
+  channelChatId: number,
+  skipUserIds?: ReadonlySet<number>,
+): Promise<void> {
   const reg = channelRegistry.getChannel(channelChatId)
   const title = reg?.title ?? 'канал'
   const homeUrl = buildMiniAppHomeUrl()
@@ -380,7 +403,7 @@ async function notifyAdminsChannelJoined(bot: Bot, channelChatId: number): Promi
     `«${title}» успешно связан с CommentBot.\n\n` +
     `Под постами может появиться кнопка «Комментарии». Ответы на комментарии и настройки — в мини-приложении.`
   const kb = Keyboard.inlineKeyboard([[Keyboard.button.link('💬 Открыть панель управления', homeUrl)]])
-  await notifyAllAdmins(bot, channelChatId, message, { attachments: [kb] })
+  await notifyAllAdmins(bot, channelChatId, message, { attachments: [kb] }, skipUserIds)
 }
 
 /**
@@ -420,6 +443,7 @@ async function tryActivateChannelRegistration(
   bot: Bot,
   channelChatId: number,
   isChannel: boolean,
+  options?: ChannelActivationOptions,
 ): Promise<ChannelActivationOutcome> {
   await ensureChannelPersisted(ctx, channelChatId, isChannel)
 
@@ -439,7 +463,8 @@ async function tryActivateChannelRegistration(
 
   const wasConnectedBefore = hasChannelAdminJoinNotified(channelChatId)
   if (!wasConnectedBefore) {
-    await notifyAdminsChannelJoined(bot, channelChatId)
+    const skipNotify = new Set(options?.skipNotifyUserIds ?? [])
+    await notifyAdminsChannelJoined(bot, channelChatId, skipNotify)
     markChannelAdminJoinNotified(channelChatId)
     void runChannelPollerForChat(bot, channelChatId)
     return { status: 'registered' }

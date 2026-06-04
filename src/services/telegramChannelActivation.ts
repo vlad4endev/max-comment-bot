@@ -34,6 +34,13 @@ type TelegramActivationOutcome =
   | { status: 'reconnected' }
   | { status: 'pending'; shouldNotifyMissingAdmin: boolean }
 
+export type TelegramChannelActivationOptions = {
+  /** false — только синхронизация статуса без постов/уведомлений (листинг каналов в mini app). */
+  notify?: boolean
+  /** Не слать DM этим user id (ответ на /connect или callback уйдёт отдельным сообщением). */
+  skipNotifyUserIds?: number[]
+}
+
 const missingAdminRightsNotifiedChannels = new Set<string>()
 
 async function sendTelegramBotMessage(
@@ -152,7 +159,10 @@ async function postTelegramChannelAdminInvite(channelChatId: string): Promise<vo
   }
 }
 
-async function notifyTelegramChannelJoined(channelChatId: string): Promise<void> {
+async function notifyTelegramChannelJoined(
+  channelChatId: string,
+  skipUserIds?: ReadonlySet<number>,
+): Promise<void> {
   const token = resolveTelegramBotToken()
   if (!token) {
     return
@@ -170,6 +180,9 @@ async function notifyTelegramChannelJoined(channelChatId: string): Promise<void>
   }
   for (const admin of admins) {
     if (!admin.startedBot) {
+      continue
+    }
+    if (skipUserIds?.has(admin.userId)) {
       continue
     }
     try {
@@ -295,6 +308,7 @@ function linkInviterAsAdmin(inviterUserId: number | undefined, channelChatId: st
 export async function tryActivateTelegramChannelRegistration(
   channelChatId: string,
   inviterUserId?: number,
+  options?: TelegramChannelActivationOptions,
 ): Promise<TelegramActivationOutcome> {
   const token = resolveTelegramBotToken()
   if (!token) {
@@ -331,11 +345,19 @@ export async function tryActivateTelegramChannelRegistration(
 
   const wasConnectedBefore = hasTelegramAdminJoinNotified(channelChatId)
   if (!wasConnectedBefore) {
-    await notifyTelegramChannelJoined(channelChatId)
-    await postTelegramChannelAdminInvite(channelChatId)
-    markTelegramAdminJoinNotified(channelChatId)
-    logger.info('telegramChannelActivation: channel registered', { channelChatId, inviterUserId })
-    return { status: 'registered' }
+    if (options?.notify !== false) {
+      const skipNotify = new Set(options?.skipNotifyUserIds ?? [])
+      await notifyTelegramChannelJoined(channelChatId, skipNotify)
+      await postTelegramChannelAdminInvite(channelChatId)
+      markTelegramAdminJoinNotified(channelChatId)
+      logger.info('telegramChannelActivation: channel registered', { channelChatId, inviterUserId })
+      return { status: 'registered' }
+    }
+    logger.info('telegramChannelActivation: channel active (silent reconcile)', {
+      channelChatId,
+      inviterUserId,
+    })
+    return { status: 'reconnected' }
   }
 
   logger.info('telegramChannelActivation: channel reconnected', { channelChatId })
@@ -348,7 +370,9 @@ export async function runTelegramChannelConnectAttempt(
 ): Promise<string[]> {
   const lines: string[] = []
   for (const channelChatId of channelChatIds) {
-    const outcome = await tryActivateTelegramChannelRegistration(channelChatId, actorUserId)
+    const outcome = await tryActivateTelegramChannelRegistration(channelChatId, actorUserId, {
+      skipNotifyUserIds: actorUserId != null ? [actorUserId] : undefined,
+    })
     const reg = telegramChannelRegistry.getChannel(channelChatId)
     const display = reg?.title ? `«${reg.title}»` : `канал ${channelChatId}`
     if (outcome.status === 'registered') {
@@ -477,7 +501,9 @@ export async function reconcileTelegramChannelForMiniappUser(
   if (!admins.some((a) => a.userId === telegramUserId)) {
     return
   }
-  const outcome = await tryActivateTelegramChannelRegistration(channelChatId, telegramUserId)
+  const outcome = await tryActivateTelegramChannelRegistration(channelChatId, telegramUserId, {
+    notify: false,
+  })
   if (outcome.status === 'pending' && outcome.shouldNotifyMissingAdmin) {
     await notifyTelegramAdminsChannelNeedsAdminRights(
       channelChatId,
