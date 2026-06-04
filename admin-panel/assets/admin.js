@@ -3511,15 +3511,13 @@
           if (panel) {
             mountTelegramChatsPanel(panel, tgRec.id, tgLinkedChatsCache);
             bindTelegramChatsPanel(panel);
-            if (!tgLinkedChatsCache.length) {
-              fetchTelegramLinkedChats(true)
-                .then(function (data) {
-                  mountTelegramChatsPanel(panel, tgRec.id, data.channels || []);
-                  bindTelegramChatsPanel(panel);
-                  refreshIcons();
-                })
-                .catch(function () {});
-            }
+            fetchTelegramLinkedChats(true)
+              .then(function (data) {
+                mountTelegramChatsPanel(panel, tgRec.id, data.channels || []);
+                bindTelegramChatsPanel(panel);
+                refreshIcons();
+              })
+              .catch(function () {});
           }
         }
         var maxPanel = qs('[data-max-chats-panel]', main);

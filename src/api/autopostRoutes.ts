@@ -7,11 +7,7 @@ import multer from 'multer'
 
 import { getTelegramToken } from '../config'
 import { logger } from '../utils/logger'
-import {
-  enrichTelegramChatsWithBotAdmin,
-  listTelegramBotChats,
-  mergePlatformChannels,
-} from '../services/integrationPlatformClient'
+import { buildTelegramLinkedChatsList } from '../services/integrationPlatformClient'
 import { integrationsStore } from '../services/integrationsStore'
 import {
   computeNextRecurringAt,
@@ -115,12 +111,12 @@ async function listTelegramChannelsForAutopost(): Promise<
   if (!token) {
     return []
   }
-  let channels = integ.linkedChats ?? []
-  if (channels.length === 0) {
-    const discovered = await listTelegramBotChats(token, integ.id)
-    channels = mergePlatformChannels(integ.linkedChats, discovered)
-    channels = await enrichTelegramChatsWithBotAdmin(token, channels)
-  }
+  const channels = await buildTelegramLinkedChatsList({
+    integrationId: integ.id,
+    token,
+    existingLinkedChats: integ.linkedChats,
+    refresh: false,
+  })
   return channels
     .filter((c) => c.type === 'channel' || c.type === 'supergroup')
     .filter((c) => c.botIsAdmin === true)

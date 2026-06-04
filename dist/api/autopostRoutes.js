@@ -93,12 +93,12 @@ async function listTelegramChannelsForAutopost() {
     if (!token) {
         return [];
     }
-    let channels = integ.linkedChats ?? [];
-    if (channels.length === 0) {
-        const discovered = await (0, integrationPlatformClient_1.listTelegramBotChats)(token, integ.id);
-        channels = (0, integrationPlatformClient_1.mergePlatformChannels)(integ.linkedChats, discovered);
-        channels = await (0, integrationPlatformClient_1.enrichTelegramChatsWithBotAdmin)(token, channels);
-    }
+    const channels = await (0, integrationPlatformClient_1.buildTelegramLinkedChatsList)({
+        integrationId: integ.id,
+        token,
+        existingLinkedChats: integ.linkedChats,
+        refresh: false,
+    });
     return channels
         .filter((c) => c.type === 'channel' || c.type === 'supergroup')
         .filter((c) => c.botIsAdmin === true)

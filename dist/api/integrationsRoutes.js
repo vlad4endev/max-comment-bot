@@ -79,19 +79,18 @@ async function resolveTelegramLinkedChats(refresh) {
         return { integrationId: null, channels: [], linkedChatsUpdatedAt: null };
     }
     const token = telegramIntegrationToken(integ);
-    if (!refresh && integ.linkedChats && integ.linkedChats.length > 0) {
-        return {
-            integrationId: integ.id,
-            channels: integ.linkedChats,
-            linkedChatsUpdatedAt: integ.linkedChatsUpdatedAt ?? null,
-        };
-    }
-    const discovered = await (0, integrationPlatformClient_1.listTelegramBotChats)(token, integ.id);
-    let channels = (0, integrationPlatformClient_1.mergePlatformChannels)(integ.linkedChats, discovered);
-    channels = await (0, integrationPlatformClient_1.enrichTelegramChatsWithBotAdmin)(token, channels);
-    await integrationsStore_1.integrationsStore.setLinkedChats(integ.id, channels, {
-        keepExistingIfEmpty: refresh && channels.length === 0,
+    const channels = await (0, integrationPlatformClient_1.buildTelegramLinkedChatsList)({
+        integrationId: integ.id,
+        token,
+        existingLinkedChats: integ.linkedChats,
+        refresh,
     });
+    const shouldPersist = refresh || (0, integrationPlatformClient_1.telegramLinkedChatsSnapshotChanged)(integ.linkedChats, channels);
+    if (shouldPersist) {
+        await integrationsStore_1.integrationsStore.setLinkedChats(integ.id, channels, {
+            keepExistingIfEmpty: refresh && channels.length === 0,
+        });
+    }
     const updated = integrationsStore_1.integrationsStore.getIntegration(integ.id);
     return {
         integrationId: integ.id,
@@ -279,9 +278,12 @@ function createIntegrationsRouter(deps) {
         }
         let channels = [];
         if (platform === 'telegram') {
-            const discovered = await (0, integrationPlatformClient_1.listTelegramBotChats)(token, record.id);
-            channels = (0, integrationPlatformClient_1.mergePlatformChannels)(record.linkedChats, discovered);
-            channels = await (0, integrationPlatformClient_1.enrichTelegramChatsWithBotAdmin)(token, channels);
+            channels = await (0, integrationPlatformClient_1.buildTelegramLinkedChatsList)({
+                integrationId: record.id,
+                token,
+                existingLinkedChats: record.linkedChats,
+                refresh: true,
+            });
             await integrationsStore_1.integrationsStore.setLinkedChats(record.id, channels);
         }
         const updated = integrationsStore_1.integrationsStore.getIntegration(record.id) ?? record;
@@ -334,16 +336,18 @@ function createIntegrationsRouter(deps) {
         const refresh = wantsRefresh(req.query);
         const token = integ.platform === 'telegram' ? telegramIntegrationToken(integ) : integ.token;
         if (integ.platform === 'telegram') {
-            if (!refresh && integ.linkedChats && integ.linkedChats.length > 0) {
-                res.json({ channels: integ.linkedChats });
-                return;
-            }
-            const discovered = await (0, integrationPlatformClient_1.listTelegramBotChats)(token, integ.id);
-            let channels = (0, integrationPlatformClient_1.mergePlatformChannels)(integ.linkedChats, discovered);
-            channels = await (0, integrationPlatformClient_1.enrichTelegramChatsWithBotAdmin)(token, channels);
-            await integrationsStore_1.integrationsStore.setLinkedChats(integ.id, channels, {
-                keepExistingIfEmpty: refresh && channels.length === 0,
+            const channels = await (0, integrationPlatformClient_1.buildTelegramLinkedChatsList)({
+                integrationId: integ.id,
+                token,
+                existingLinkedChats: integ.linkedChats,
+                refresh,
             });
+            const shouldPersist = refresh || (0, integrationPlatformClient_1.telegramLinkedChatsSnapshotChanged)(integ.linkedChats, channels);
+            if (shouldPersist) {
+                await integrationsStore_1.integrationsStore.setLinkedChats(integ.id, channels, {
+                    keepExistingIfEmpty: refresh && channels.length === 0,
+                });
+            }
             const updated = integrationsStore_1.integrationsStore.getIntegration(integ.id);
             const channelsForResponse = updated?.linkedChats ?? channels;
             const channelsWithAdmins = await attachTelegramChatAdmins(token, channelsForResponse);

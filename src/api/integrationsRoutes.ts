@@ -15,11 +15,10 @@ import {
 import { flowStateStore } from '../services/flowStateStore'
 import { buildIntegrationsAnalytics, flowProcessor } from '../services/flowProcessor'
 import {
-  enrichTelegramChatsWithBotAdmin,
+  buildTelegramLinkedChatsList,
   listTelegramChatAdministrators,
-  listTelegramBotChats,
   listVkGroups,
-  mergePlatformChannels,
+  telegramLinkedChatsSnapshotChanged,
   testIntegration,
 } from '../services/integrationPlatformClient'
 import {
@@ -99,7 +98,7 @@ async function resolveTelegramLinkedChats(
   refresh: boolean,
 ): Promise<{
   integrationId: string | null
-  channels: Awaited<ReturnType<typeof listTelegramBotChats>>
+  channels: Awaited<ReturnType<typeof buildTelegramLinkedChatsList>>
   linkedChatsUpdatedAt: string | null
 }> {
   await integrationsStore.load()
@@ -108,19 +107,19 @@ async function resolveTelegramLinkedChats(
     return { integrationId: null, channels: [], linkedChatsUpdatedAt: null }
   }
   const token = telegramIntegrationToken(integ)
-  if (!refresh && integ.linkedChats && integ.linkedChats.length > 0) {
-    return {
-      integrationId: integ.id,
-      channels: integ.linkedChats,
-      linkedChatsUpdatedAt: integ.linkedChatsUpdatedAt ?? null,
-    }
-  }
-  const discovered = await listTelegramBotChats(token, integ.id)
-  let channels = mergePlatformChannels(integ.linkedChats, discovered)
-  channels = await enrichTelegramChatsWithBotAdmin(token, channels)
-  await integrationsStore.setLinkedChats(integ.id, channels, {
-    keepExistingIfEmpty: refresh && channels.length === 0,
+  const channels = await buildTelegramLinkedChatsList({
+    integrationId: integ.id,
+    token,
+    existingLinkedChats: integ.linkedChats,
+    refresh,
   })
+  const shouldPersist =
+    refresh || telegramLinkedChatsSnapshotChanged(integ.linkedChats, channels)
+  if (shouldPersist) {
+    await integrationsStore.setLinkedChats(integ.id, channels, {
+      keepExistingIfEmpty: refresh && channels.length === 0,
+    })
+  }
   const updated = integrationsStore.getIntegration(integ.id)
   return {
     integrationId: integ.id,
@@ -131,7 +130,7 @@ async function resolveTelegramLinkedChats(
 
 async function attachTelegramChatAdmins(
   token: string,
-  channels: Awaited<ReturnType<typeof listTelegramBotChats>>,
+  channels: Awaited<ReturnType<typeof buildTelegramLinkedChatsList>>,
 ): Promise<
   Array<
     (typeof channels)[number] & {
@@ -347,11 +346,14 @@ export function createIntegrationsRouter(deps: IntegrationsRouterDeps): express.
       }
     }
 
-    let channels: Awaited<ReturnType<typeof listTelegramBotChats>> = []
+    let channels: Awaited<ReturnType<typeof buildTelegramLinkedChatsList>> = []
     if (platform === 'telegram') {
-      const discovered = await listTelegramBotChats(token, record.id)
-      channels = mergePlatformChannels(record.linkedChats, discovered)
-      channels = await enrichTelegramChatsWithBotAdmin(token, channels)
+      channels = await buildTelegramLinkedChatsList({
+        integrationId: record.id,
+        token,
+        existingLinkedChats: record.linkedChats,
+        refresh: true,
+      })
       await integrationsStore.setLinkedChats(record.id, channels)
     }
 
@@ -409,16 +411,19 @@ export function createIntegrationsRouter(deps: IntegrationsRouterDeps): express.
     const token = integ.platform === 'telegram' ? telegramIntegrationToken(integ) : integ.token
 
     if (integ.platform === 'telegram') {
-      if (!refresh && integ.linkedChats && integ.linkedChats.length > 0) {
-        res.json({ channels: integ.linkedChats })
-        return
-      }
-      const discovered = await listTelegramBotChats(token, integ.id)
-      let channels = mergePlatformChannels(integ.linkedChats, discovered)
-      channels = await enrichTelegramChatsWithBotAdmin(token, channels)
-      await integrationsStore.setLinkedChats(integ.id, channels, {
-        keepExistingIfEmpty: refresh && channels.length === 0,
+      const channels = await buildTelegramLinkedChatsList({
+        integrationId: integ.id,
+        token,
+        existingLinkedChats: integ.linkedChats,
+        refresh,
       })
+      const shouldPersist =
+        refresh || telegramLinkedChatsSnapshotChanged(integ.linkedChats, channels)
+      if (shouldPersist) {
+        await integrationsStore.setLinkedChats(integ.id, channels, {
+          keepExistingIfEmpty: refresh && channels.length === 0,
+        })
+      }
       const updated = integrationsStore.getIntegration(integ.id)
       const channelsForResponse = updated?.linkedChats ?? channels
       const channelsWithAdmins = await attachTelegramChatAdmins(token, channelsForResponse)

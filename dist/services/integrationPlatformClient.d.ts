@@ -27,6 +27,16 @@ export type TelegramLinkedChat = PlatformChannelInfo & {
 };
 /** Webhook блокирует getUpdates — для опроса и обнаружения чатов нужен polling. */
 export declare function ensureTelegramPollingMode(token: string): Promise<void>;
+/** Каналы из SQLite (my_chat_member / активация), которые могут отсутствовать в getUpdates. */
+export declare function listTelegramChannelsFromRegistry(): PlatformChannelInfo[];
+export declare function telegramLinkedChatsSnapshotChanged(before: PlatformChannelInfo[] | undefined, after: PlatformChannelInfo[]): boolean;
+/** Список чатов для интеграции: кэш, getUpdates и реестр tg_channels. */
+export declare function buildTelegramLinkedChatsList(options: {
+    integrationId: string;
+    token: string;
+    existingLinkedChats?: PlatformChannelInfo[];
+    refresh: boolean;
+}): Promise<PlatformChannelInfo[]>;
 export declare function mergePlatformChannels(existing: PlatformChannelInfo[] | undefined, discovered: PlatformChannelInfo[]): PlatformChannelInfo[];
 export declare function getTelegramBotUserId(token: string): Promise<number | null>;
 /** Проверяет через getChatMember/getChat, где бот администратор (в т.ч. уже сохранённые чаты). */

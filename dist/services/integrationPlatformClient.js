@@ -1,9 +1,45 @@
 "use strict";
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.ensureTelegramPollingMode = ensureTelegramPollingMode;
+exports.listTelegramChannelsFromRegistry = listTelegramChannelsFromRegistry;
+exports.telegramLinkedChatsSnapshotChanged = telegramLinkedChatsSnapshotChanged;
+exports.buildTelegramLinkedChatsList = buildTelegramLinkedChatsList;
 exports.mergePlatformChannels = mergePlatformChannels;
 exports.getTelegramBotUserId = getTelegramBotUserId;
 exports.enrichTelegramChatsWithBotAdmin = enrichTelegramChatsWithBotAdmin;
@@ -26,6 +62,7 @@ const resolveTelegramBotToken_1 = require("./resolveTelegramBotToken");
 const flowStateStore_1 = require("./flowStateStore");
 const telegramMainBotOffsetStore_1 = require("./telegramMainBotOffsetStore");
 const tgChannelMatch_1 = require("../utils/tgChannelMatch");
+const telegramChannelRegistry_1 = require("./telegramChannelRegistry");
 const TG_API = 'https://api.telegram.org';
 const TELEGRAM_DISCOVERY_UPDATES = [
     'message',
@@ -51,6 +88,84 @@ async function ensureTelegramPollingMode(token) {
     catch (err) {
         logger_1.logger.warn('ensureTelegramPollingMode failed', err);
     }
+}
+/** Каналы из SQLite (my_chat_member / активация), которые могут отсутствовать в getUpdates. */
+function listTelegramChannelsFromRegistry() {
+    return telegramChannelRegistry_1.telegramChannelRegistry.getAllChannels().map((row) => {
+        const rawType = row.type?.trim() ?? 'channel';
+        const type = rawType === 'channel' ||
+            rawType === 'supergroup' ||
+            rawType === 'group' ||
+            rawType === 'private'
+            ? rawType
+            : 'channel';
+        const username = row.username && row.username.trim() !== ''
+            ? row.username.startsWith('@')
+                ? row.username
+                : `@${row.username.replace(/^@/, '')}`
+            : undefined;
+        return {
+            id: row.chat_id,
+            title: row.title?.trim() || row.chat_id,
+            username,
+            type,
+            botIsAdmin: row.bot_is_admin,
+        };
+    });
+}
+function telegramLinkedChatsSnapshotChanged(before, after) {
+    const prev = before ?? [];
+    if (prev.length !== after.length) {
+        return true;
+    }
+    const nextById = new Map(after.map((c) => [c.id, c]));
+    for (const ch of prev) {
+        const n = nextById.get(ch.id);
+        if (!n) {
+            return true;
+        }
+        if ((ch.botIsAdmin === true) !== (n.botIsAdmin === true)) {
+            return true;
+        }
+        if (ch.title !== n.title || ch.username !== n.username) {
+            return true;
+        }
+    }
+    return false;
+}
+async function syncTelegramDiscoveryBeforeList(token) {
+    if (!(0, resolveTelegramBotToken_1.isMainTelegramBotToken)(token)) {
+        return;
+    }
+    try {
+        const { syncMainTelegramBotDiscoveryUpdates } = await Promise.resolve().then(() => __importStar(require('./tgChainForwarder')));
+        await syncMainTelegramBotDiscoveryUpdates(token, { timeoutSec: 0, maxPages: 8 });
+    }
+    catch (err) {
+        logger_1.logger.warn('syncTelegramDiscoveryBeforeList failed', err);
+    }
+}
+/** Список чатов для интеграции: кэш, getUpdates и реестр tg_channels. */
+async function buildTelegramLinkedChatsList(options) {
+    const { integrationId, token, existingLinkedChats, refresh } = options;
+    const trimmed = token.trim();
+    const registryChannels = listTelegramChannelsFromRegistry();
+    if (!refresh && (existingLinkedChats?.length ?? 0) > 0) {
+        let channels = mergePlatformChannels(existingLinkedChats, registryChannels);
+        if (trimmed !== '') {
+            channels = await enrichTelegramChatsWithBotAdmin(trimmed, channels);
+        }
+        return channels;
+    }
+    if (refresh && trimmed !== '') {
+        await syncTelegramDiscoveryBeforeList(trimmed);
+    }
+    const discovered = trimmed !== '' ? await listTelegramBotChats(trimmed, integrationId) : [];
+    let channels = mergePlatformChannels(mergePlatformChannels(existingLinkedChats, discovered), registryChannels);
+    if (trimmed !== '') {
+        channels = await enrichTelegramChatsWithBotAdmin(trimmed, channels);
+    }
+    return channels;
 }
 function mergePlatformChannels(existing, discovered) {
     const seen = new Map();

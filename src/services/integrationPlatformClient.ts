@@ -11,6 +11,7 @@ import {
   setTelegramBotUpdatesOffset,
 } from './telegramMainBotOffsetStore'
 import { normalizeTelegramChannelKey } from '../utils/tgChannelMatch'
+import { telegramChannelRegistry } from './telegramChannelRegistry'
 
 export interface PlatformTestResult {
   ok: boolean
@@ -72,6 +73,104 @@ export async function ensureTelegramPollingMode(token: string): Promise<void> {
   } catch (err: unknown) {
     logger.warn('ensureTelegramPollingMode failed', err)
   }
+}
+
+/** Каналы из SQLite (my_chat_member / активация), которые могут отсутствовать в getUpdates. */
+export function listTelegramChannelsFromRegistry(): PlatformChannelInfo[] {
+  return telegramChannelRegistry.getAllChannels().map((row) => {
+    const rawType = row.type?.trim() ?? 'channel'
+    const type: TelegramChatType =
+      rawType === 'channel' ||
+      rawType === 'supergroup' ||
+      rawType === 'group' ||
+      rawType === 'private'
+        ? rawType
+        : 'channel'
+    const username =
+      row.username && row.username.trim() !== ''
+        ? row.username.startsWith('@')
+          ? row.username
+          : `@${row.username.replace(/^@/, '')}`
+        : undefined
+    return {
+      id: row.chat_id,
+      title: row.title?.trim() || row.chat_id,
+      username,
+      type,
+      botIsAdmin: row.bot_is_admin,
+    }
+  })
+}
+
+export function telegramLinkedChatsSnapshotChanged(
+  before: PlatformChannelInfo[] | undefined,
+  after: PlatformChannelInfo[],
+): boolean {
+  const prev = before ?? []
+  if (prev.length !== after.length) {
+    return true
+  }
+  const nextById = new Map(after.map((c) => [c.id, c]))
+  for (const ch of prev) {
+    const n = nextById.get(ch.id)
+    if (!n) {
+      return true
+    }
+    if ((ch.botIsAdmin === true) !== (n.botIsAdmin === true)) {
+      return true
+    }
+    if (ch.title !== n.title || ch.username !== n.username) {
+      return true
+    }
+  }
+  return false
+}
+
+async function syncTelegramDiscoveryBeforeList(token: string): Promise<void> {
+  if (!isMainTelegramBotToken(token)) {
+    return
+  }
+  try {
+    const { syncMainTelegramBotDiscoveryUpdates } = await import('./tgChainForwarder')
+    await syncMainTelegramBotDiscoveryUpdates(token, { timeoutSec: 0, maxPages: 8 })
+  } catch (err: unknown) {
+    logger.warn('syncTelegramDiscoveryBeforeList failed', err)
+  }
+}
+
+/** Список чатов для интеграции: кэш, getUpdates и реестр tg_channels. */
+export async function buildTelegramLinkedChatsList(options: {
+  integrationId: string
+  token: string
+  existingLinkedChats?: PlatformChannelInfo[]
+  refresh: boolean
+}): Promise<PlatformChannelInfo[]> {
+  const { integrationId, token, existingLinkedChats, refresh } = options
+  const trimmed = token.trim()
+  const registryChannels = listTelegramChannelsFromRegistry()
+
+  if (!refresh && (existingLinkedChats?.length ?? 0) > 0) {
+    let channels = mergePlatformChannels(existingLinkedChats, registryChannels)
+    if (trimmed !== '') {
+      channels = await enrichTelegramChatsWithBotAdmin(trimmed, channels)
+    }
+    return channels
+  }
+
+  if (refresh && trimmed !== '') {
+    await syncTelegramDiscoveryBeforeList(trimmed)
+  }
+
+  const discovered =
+    trimmed !== '' ? await listTelegramBotChats(trimmed, integrationId) : []
+  let channels = mergePlatformChannels(
+    mergePlatformChannels(existingLinkedChats, discovered),
+    registryChannels,
+  )
+  if (trimmed !== '') {
+    channels = await enrichTelegramChatsWithBotAdmin(trimmed, channels)
+  }
+  return channels
 }
 
 export function mergePlatformChannels(
