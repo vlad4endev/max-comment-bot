@@ -141,6 +141,16 @@
         <div>
           <div class="section-title">Мои каналы</div>
           <div class="channel-list" id="homeChannelList"></div>
+          <div class="tg-channel-manual hidden" id="tgChannelManual">
+            <input
+              type="text"
+              class="tg-channel-manual-input"
+              id="tgChannelManualInput"
+              placeholder="@username канала или t.me/…"
+              autocomplete="off"
+            />
+            <button type="button" class="btn-secondary" id="tgChannelManualBtn">Найти канал</button>
+          </div>
           <button type="button" class="btn-dashed" id="btnConnect">Подключить канал</button>
           <div class="connect-hint" id="connectHint"></div>
         </div>
@@ -547,6 +557,16 @@
         <div class="link-step-label">Канал Telegram — откуда пересылать</div>
         <select class="link-channel-select" id="linkTgChannelSelect"></select>
         <p class="muted text-sm hidden" id="linkTgNoChannelsHint" style="margin:8px 0 0"></p>
+        <div class="tg-channel-manual" id="linkTgChannelManual" style="margin-top:8px">
+          <input
+            type="text"
+            class="tg-channel-manual-input"
+            id="linkTgChannelManualInput"
+            placeholder="@username канала"
+            autocomplete="off"
+          />
+          <button type="button" class="btn-secondary" id="linkTgChannelManualBtn">Добавить канал</button>
+        </div>
         <div class="link-step-label">Код из MAX (6 символов)</div>
         <input type="text" class="link-code-input" id="linkCodeInput" maxlength="6" placeholder="YR5G99" autocomplete="off" />
         <p class="muted text-sm" id="linkTgPreview" style="margin-top:6px"></p>

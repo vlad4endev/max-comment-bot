@@ -34,6 +34,13 @@ export declare function enrichTelegramChatsWithBotAdmin(token: string, chats: Pl
 export declare function validateTelegramToken(token: string): Promise<PlatformTestResult>;
 export declare function validateVkToken(token: string, groupId?: string): Promise<PlatformTestResult>;
 export declare function testIntegration(platform: IntegrationPlatform, token: string, groupId?: string): Promise<PlatformTestResult>;
+/** Разрешает @username / t.me/… / -100… в числовой chat_id через getChat. */
+export declare function resolveTelegramChannelChatIdFromKey(token: string, channelKeyRaw: string): Promise<{
+    chatId: string;
+    title: string | null;
+    username: string | null;
+    type: TelegramChatType;
+} | null>;
 /** Чаты/каналы, с которыми бот взаимодействовал (из getUpdates + my_chat_member). */
 export declare function listTelegramBotChats(token: string, integrationId?: string): Promise<PlatformChannelInfo[]>;
 export declare function listTelegramAdminChannels(token: string): Promise<PlatformChannelInfo[]>;

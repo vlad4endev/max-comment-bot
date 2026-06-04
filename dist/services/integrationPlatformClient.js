@@ -10,6 +10,7 @@ exports.enrichTelegramChatsWithBotAdmin = enrichTelegramChatsWithBotAdmin;
 exports.validateTelegramToken = validateTelegramToken;
 exports.validateVkToken = validateVkToken;
 exports.testIntegration = testIntegration;
+exports.resolveTelegramChannelChatIdFromKey = resolveTelegramChannelChatIdFromKey;
 exports.listTelegramBotChats = listTelegramBotChats;
 exports.listTelegramAdminChannels = listTelegramAdminChannels;
 exports.listTelegramChatAdministrators = listTelegramChatAdministrators;
@@ -21,7 +22,10 @@ const axios_1 = __importDefault(require("axios"));
 const logger_1 = require("../utils/logger");
 const telegramBotUserStore_1 = require("./telegramBotUserStore");
 const telegramMainBotUpdates_1 = require("./telegramMainBotUpdates");
+const resolveTelegramBotToken_1 = require("./resolveTelegramBotToken");
 const flowStateStore_1 = require("./flowStateStore");
+const telegramMainBotOffsetStore_1 = require("./telegramMainBotOffsetStore");
+const tgChannelMatch_1 = require("../utils/tgChannelMatch");
 const TG_API = 'https://api.telegram.org';
 const TELEGRAM_DISCOVERY_UPDATES = [
     'message',
@@ -304,6 +308,56 @@ function rememberTelegramStartedUserFromUpdate(upd) {
         }
     }
 }
+/** Разрешает @username / t.me/… / -100… в числовой chat_id через getChat. */
+async function resolveTelegramChannelChatIdFromKey(token, channelKeyRaw) {
+    const trimmed = channelKeyRaw.trim();
+    if (!trimmed) {
+        return null;
+    }
+    let lookup = trimmed;
+    const tmeMatch = /(?:https?:\/\/)?t\.me\/([a-zA-Z0-9_]+)/i.exec(trimmed);
+    if (tmeMatch) {
+        lookup = `@${tmeMatch[1]}`;
+    }
+    else if (/^t\.me\//i.test(trimmed)) {
+        lookup = `@${trimmed.replace(/^t\.me\//i, '')}`;
+    }
+    else if (!lookup.startsWith('@') && !/^-?\d+$/.test(lookup)) {
+        lookup = `@${lookup.replace(/^@/, '')}`;
+    }
+    const tgToken = token.trim();
+    if (!tgToken) {
+        return null;
+    }
+    try {
+        const { data } = await axios_1.default.get(`${TG_API}/bot${tgToken}/getChat`, {
+            params: { chat_id: /^-?\d+$/.test(lookup) ? lookup : (0, tgChannelMatch_1.normalizeTelegramChannelKey)(lookup) },
+            timeout: 15_000,
+        });
+        if (!data.ok || !data.result) {
+            return null;
+        }
+        const chat = data.result;
+        const id = typeof chat.id === 'number' || typeof chat.id === 'string' ? String(chat.id) : null;
+        if (!id || !/^-?\d+$/.test(id)) {
+            return null;
+        }
+        const chatType = normalizeTelegramChatType(chat.type);
+        const username = typeof chat.username === 'string' && chat.username.trim() !== ''
+            ? `@${chat.username.replace(/^@/, '')}`
+            : null;
+        return {
+            chatId: id,
+            title: chatTitleFromTelegramChat(chat, id),
+            username,
+            type: chatType,
+        };
+    }
+    catch (err) {
+        logger_1.logger.warn('resolveTelegramChannelChatIdFromKey: getChat failed', { lookup, err });
+        return null;
+    }
+}
 /** Чаты/каналы, с которыми бот взаимодействовал (из getUpdates + my_chat_member). */
 async function listTelegramBotChats(token, integrationId) {
     const trimmed = token.trim();
@@ -313,9 +367,12 @@ async function listTelegramBotChats(token, integrationId) {
     await ensureTelegramPollingMode(trimmed);
     const seen = new Map();
     await flowStateStore_1.flowStateStore.load();
-    let offset = integrationId !== undefined
-        ? flowStateStore_1.flowStateStore.getTelegramUpdateOffset(integrationId)
-        : undefined;
+    const useMainBotOffset = (0, resolveTelegramBotToken_1.isMainTelegramBotToken)(trimmed);
+    let offset = useMainBotOffset
+        ? (0, telegramMainBotOffsetStore_1.getTelegramBotUpdatesOffset)(trimmed)
+        : integrationId !== undefined
+            ? flowStateStore_1.flowStateStore.getTelegramUpdateOffset(integrationId)
+            : undefined;
     try {
         for (let page = 0; page < 8; page++) {
             const params = {
@@ -343,8 +400,13 @@ async function listTelegramBotChats(token, integrationId) {
                 break;
             }
         }
-        if (integrationId !== undefined && offset !== undefined) {
-            await flowStateStore_1.flowStateStore.setTelegramUpdateOffset(integrationId, offset);
+        if (offset !== undefined) {
+            if (useMainBotOffset) {
+                (0, telegramMainBotOffsetStore_1.setTelegramBotUpdatesOffset)(trimmed, offset);
+            }
+            else if (integrationId !== undefined) {
+                await flowStateStore_1.flowStateStore.setTelegramUpdateOffset(integrationId, offset);
+            }
         }
     }
     catch (err) {

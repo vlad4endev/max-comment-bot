@@ -8,6 +8,8 @@ import {
   listTelegramBotChats,
   getTelegramBotUserId,
   listTelegramChatAdministrators,
+  resolveTelegramChannelChatIdFromKey,
+  type PlatformChannelInfo,
 } from './integrationPlatformClient'
 import { ownerProfileStore } from './ownerProfileStore'
 import { telegramBotUserStore } from './telegramBotUserStore'
@@ -228,10 +230,58 @@ async function isTelegramChannelAdmin(
   return admins.some((a) => a.userId === telegramUserId)
 }
 
-async function refreshTelegramChannelsCache(token: string): Promise<void> {
-  const integration = integrationsStore.getTelegramIntegration()
-  const discovered = await listTelegramBotChats(token, integration?.id)
-  const enriched = await enrichTelegramChatsWithBotAdmin(token, discovered)
+function isNumericTelegramChatId(raw: string): boolean {
+  return /^-?\d+$/.test(String(raw).trim())
+}
+
+/** Каналы из реестра, integrations, связок TG↔MAX и персональных notify-link. */
+function collectTelegramMiniappChannelCandidateIds(telegramUserId?: number): string[] {
+  const ids = new Set<string>()
+  for (const row of telegramChannelRegistry.getAllChannels()) {
+    if (row.type === 'channel' || row.type === 'supergroup') {
+      ids.add(row.chat_id)
+    }
+  }
+  const integ = integrationsStore.getTelegramIntegration()
+  for (const ch of integ?.linkedChats ?? []) {
+    const id = String(ch.id ?? '').trim()
+    if (isNumericTelegramChatId(id)) {
+      ids.add(id)
+    }
+  }
+  for (const chain of listTgChainsSync()) {
+    const id = chain.tg_channel_id?.trim() ?? ''
+    if (isNumericTelegramChatId(id)) {
+      ids.add(id)
+    }
+  }
+  if (telegramUserId != null) {
+    for (const chId of telegramChannelNotifyLinkStore.getLinkedChannels(telegramUserId)) {
+      if (isNumericTelegramChatId(chId)) {
+        ids.add(chId)
+      }
+    }
+  }
+  return [...ids]
+}
+
+async function persistEnrichedTelegramChannels(
+  token: string,
+  chatIds: string[],
+): Promise<void> {
+  if (chatIds.length === 0) {
+    return
+  }
+  const stubs: PlatformChannelInfo[] = chatIds.map((id) => {
+    const reg = telegramChannelRegistry.getChannel(id)
+    return {
+      id,
+      title: reg?.title?.trim() || id,
+      username: reg?.username ?? undefined,
+      type: reg?.type === 'supergroup' ? 'supergroup' : 'channel',
+    }
+  })
+  const enriched = await enrichTelegramChatsWithBotAdmin(token, stubs)
   for (const ch of enriched) {
     if (ch.type !== 'channel' && ch.type !== 'supergroup') {
       continue
@@ -246,6 +296,100 @@ async function refreshTelegramChannelsCache(token: string): Promise<void> {
   }
 }
 
+function saveDiscoveredTelegramChannels(channels: PlatformChannelInfo[]): void {
+  for (const ch of channels) {
+    if (ch.type !== 'channel' && ch.type !== 'supergroup') {
+      continue
+    }
+    telegramChannelRegistry.saveChannel({
+      chatId: ch.id,
+      title: ch.title,
+      username: ch.username,
+      type: ch.type,
+      botIsAdmin: ch.botIsAdmin === true,
+    })
+  }
+}
+
+async function refreshTelegramChannelsCache(
+  token: string,
+  telegramUserId?: number,
+): Promise<void> {
+  await integrationsStore.load()
+  await ensureAdminPanelStateLoaded()
+
+  try {
+    const { syncMainTelegramBotDiscoveryUpdates } = await import('./tgChainForwarder')
+    await syncMainTelegramBotDiscoveryUpdates(token, { timeoutSec: 0, maxPages: 8 })
+  } catch (err: unknown) {
+    logger.warn('refreshTelegramChannelsCache: sync main bot updates failed', { err })
+  }
+
+  const integration = integrationsStore.getTelegramIntegration()
+  const discovered = await enrichTelegramChatsWithBotAdmin(
+    token,
+    await listTelegramBotChats(token, integration?.id),
+  )
+  saveDiscoveredTelegramChannels(discovered)
+
+  const knownIds = collectTelegramMiniappChannelCandidateIds(telegramUserId)
+  await persistEnrichedTelegramChannels(token, knownIds)
+}
+
+/** Ручное добавление канала по @username или -100… (если бот уже админ, но канал не в списке). */
+export async function registerTelegramChannelByKeyForMiniappUser(
+  telegramUserId: number,
+  channelKeyRaw: string,
+): Promise<TelegramMiniappChannelWire> {
+  const token = resolveTelegramBotToken()
+  if (!token) {
+    throw new Error('telegram not configured')
+  }
+  const resolved = await resolveTelegramChannelChatIdFromKey(token, channelKeyRaw)
+  if (!resolved) {
+    throw new Error('channel not found')
+  }
+  if (resolved.type !== 'channel' && resolved.type !== 'supergroup') {
+    throw new Error('not a channel')
+  }
+
+  telegramChannelRegistry.saveChannel({
+    chatId: resolved.chatId,
+    title: resolved.title,
+    username: resolved.username,
+    type: resolved.type,
+    botIsAdmin: false,
+  })
+
+  const enriched = await enrichTelegramChatsWithBotAdmin(token, [
+    {
+      id: resolved.chatId,
+      title: resolved.title ?? resolved.chatId,
+      username: resolved.username ?? undefined,
+      type: resolved.type,
+    },
+  ])
+  saveDiscoveredTelegramChannels(enriched)
+
+  if (!(await isTelegramChannelAdmin(token, resolved.chatId, telegramUserId))) {
+    throw new Error('forbidden')
+  }
+
+  await tryActivateTelegramChannelRegistration(resolved.chatId, telegramUserId, {
+    notify: false,
+  })
+
+  const fresh = telegramChannelRegistry.getChannel(resolved.chatId)
+  return {
+    chat_id: resolved.chatId,
+    title: fresh?.title ?? resolved.title,
+    subscribers: null,
+    avatar_url: null,
+    status: fresh?.bot_is_admin ? 'active' : 'pending',
+    platform: 'telegram',
+  }
+}
+
 export async function listTelegramMiniappChannelsForUser(
   telegramUserId: number,
 ): Promise<{ channels: TelegramMiniappChannelWire[]; bot_username: string }> {
@@ -253,24 +397,29 @@ export async function listTelegramMiniappChannelsForUser(
   if (!token) {
     return { channels: [], bot_username: 'commentvmax_bot' }
   }
-  await integrationsStore.load()
-  await refreshTelegramChannelsCache(token)
+  await refreshTelegramChannelsCache(token, telegramUserId)
 
-  const registryRows = telegramChannelRegistry.getAllChannels()
   const channels: TelegramMiniappChannelWire[] = []
+  const seen = new Set<string>()
 
-  for (const row of registryRows) {
-    if (row.type !== 'channel' && row.type !== 'supergroup') {
+  for (const chatId of collectTelegramMiniappChannelCandidateIds(telegramUserId)) {
+    if (seen.has(chatId)) {
       continue
     }
-    if (!(await isTelegramChannelAdmin(token, row.chat_id, telegramUserId))) {
+    seen.add(chatId)
+    const row = telegramChannelRegistry.getChannel(chatId)
+    const type = row?.type ?? 'channel'
+    if (type !== 'channel' && type !== 'supergroup') {
       continue
     }
-    await reconcileTelegramChannelForMiniappUser(row.chat_id, telegramUserId)
-    const fresh = telegramChannelRegistry.getChannel(row.chat_id)
+    if (!(await isTelegramChannelAdmin(token, chatId, telegramUserId))) {
+      continue
+    }
+    await reconcileTelegramChannelForMiniappUser(chatId, telegramUserId)
+    const fresh = telegramChannelRegistry.getChannel(chatId)
     channels.push({
-      chat_id: row.chat_id,
-      title: fresh?.title ?? row.title,
+      chat_id: chatId,
+      title: fresh?.title ?? row?.title ?? null,
       subscribers: null,
       avatar_url: null,
       status: fresh?.bot_is_admin ? 'active' : 'pending',

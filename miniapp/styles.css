@@ -878,6 +878,27 @@
       background: var(--bg-surface);
     }
     .connect-hint.show { display: block; }
+    .tg-channel-manual {
+      display: flex;
+      gap: 8px;
+      margin-top: 8px;
+      align-items: stretch;
+    }
+    .tg-channel-manual.hidden { display: none; }
+    .tg-channel-manual-input {
+      flex: 1;
+      min-width: 0;
+      padding: 10px 12px;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      background: var(--bg-surface);
+      color: var(--text);
+      font-size: 14px;
+    }
+    .tg-channel-manual .btn-secondary {
+      flex-shrink: 0;
+      white-space: nowrap;
+    }
     .section-label {
       font-size: 13px;
       font-weight: 700;

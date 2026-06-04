@@ -5,9 +5,9 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.setTgChainForwarderBot = setTgChainForwarderBot;
 exports.getTgChainForwarderBot = getTgChainForwarderBot;
+exports.syncMainTelegramBotDiscoveryUpdates = syncMainTelegramBotDiscoveryUpdates;
 exports.runTgChainsOnce = runTgChainsOnce;
 exports.startTgChainForwarder = startTgChainForwarder;
-const node_crypto_1 = require("node:crypto");
 const axios_1 = __importDefault(require("axios"));
 const resolveTelegramBotToken_1 = require("./resolveTelegramBotToken");
 const database_1 = require("../db/database");
@@ -21,6 +21,7 @@ const resolveChannelChatId_1 = require("./resolveChannelChatId");
 const tgChannelMatch_1 = require("../utils/tgChannelMatch");
 const logger_1 = require("../utils/logger");
 const maxApiRetry_1 = require("../utils/maxApiRetry");
+const telegramMainBotOffsetStore_1 = require("./telegramMainBotOffsetStore");
 const telegramMiniappService_1 = require("./telegramMiniappService");
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 /** Long-poll Telegram for new channel_post (сек). */
@@ -55,20 +56,62 @@ function setTgChainForwarderBot(bot) {
 function getTgChainForwarderBot() {
     return botRef;
 }
-function tokenKey(token) {
-    return (0, node_crypto_1.createHash)('sha256').update(token).digest('hex').slice(0, 16);
-}
 function getReaderOffset(tgToken) {
-    const row = (0, database_1.getDb)()
-        .prepare('SELECT scan_next_offset FROM tg_chain_reader_offsets WHERE token_key = ?')
-        .get(tokenKey(tgToken));
-    return row?.scan_next_offset ?? 0;
+    return (0, telegramMainBotOffsetStore_1.getTelegramBotUpdatesOffset)(tgToken);
 }
 function setReaderOffset(tgToken, offset) {
-    (0, database_1.getDb)()
-        .prepare(`INSERT INTO tg_chain_reader_offsets (token_key, scan_next_offset) VALUES (?, ?)
-       ON CONFLICT(token_key) DO UPDATE SET scan_next_offset = excluded.scan_next_offset`)
-        .run(tokenKey(tgToken), offset);
+    (0, telegramMainBotOffsetStore_1.setTelegramBotUpdatesOffset)(tgToken, offset);
+}
+/** Long-poll / drain TG updates for main CommentBot (my_chat_member, /start, callbacks). */
+async function syncMainTelegramBotDiscoveryUpdates(tgToken, options) {
+    if (!(0, resolveTelegramBotToken_1.isMainTelegramBotToken)(tgToken)) {
+        return 0;
+    }
+    await (0, integrationPlatformClient_1.ensureTelegramPollingMode)(tgToken);
+    const pollErr = await (0, channelImportService_1.assertTelegramPollingReady)(tgToken);
+    if (pollErr) {
+        logger_1.logger.warn('[tgChain] main bot discovery poll skipped', { err: pollErr });
+        return 0;
+    }
+    let offset = getReaderOffset(tgToken);
+    const timeoutSec = options?.timeoutSec ?? 0;
+    const maxPages = options?.maxPages ?? 8;
+    let processed = 0;
+    for (let page = 0; page < maxPages; page++) {
+        let batch;
+        try {
+            batch = await (0, telegramReader_1.getTelegramUpdatesWithIds)(tgToken, offset, timeoutSec, {
+                includeMiniappBotUpdates: true,
+            });
+        }
+        catch (err) {
+            if (err instanceof telegramReader_1.TelegramGetUpdatesConflictError) {
+                logger_1.logger.warn('[tgChain] main bot discovery 409 conflict');
+                break;
+            }
+            throw err;
+        }
+        if (batch.length === 0) {
+            break;
+        }
+        const rawUpdates = batch
+            .map((u) => u.raw)
+            .filter((u) => !!u);
+        if (rawUpdates.length > 0) {
+            await (0, telegramMiniappService_1.processTelegramMiniappBotUpdates)(tgToken, rawUpdates, botRef);
+        }
+        for (const u of batch) {
+            offset = Math.max(offset, u.update_id + 1);
+            processed += 1;
+        }
+        if (batch.length < 100) {
+            break;
+        }
+    }
+    if (offset > getReaderOffset(tgToken)) {
+        setReaderOffset(tgToken, offset);
+    }
+    return processed;
 }
 function chainSourceKey(chain) {
     if (chain.tg_channel_id && chain.tg_channel_id.trim() !== '') {
@@ -684,6 +727,15 @@ async function runTgChainsOnce() {
     }
     const chains = (await (0, adminPanelState_1.listTgChains)()).filter((c) => c.active && c.forward_posts && chainSourceKey(c) !== '');
     if (chains.length === 0) {
+        const mainToken = (0, resolveTelegramBotToken_1.resolveTelegramBotToken)();
+        if (mainToken && (0, resolveTelegramBotToken_1.isMainTelegramBotToken)(mainToken)) {
+            const n = await syncMainTelegramBotDiscoveryUpdates(mainToken, {
+                timeoutSec: TG_CHAIN_LONG_POLL_SEC,
+            });
+            if (n > 0) {
+                receivedAny = true;
+            }
+        }
         return receivedAny;
     }
     const tokenByChain = new Map();
@@ -763,7 +815,17 @@ async function runTgChainsOnce() {
         }
         for (const chain of group) {
             const sourceKey = chainSourceKey(chain);
-            const forChain = channelPosts.filter((m) => (0, tgChannelMatch_1.telegramChannelMatchesTarget)(m.chat, sourceKey));
+            const forChain = channelPosts.filter((m) => (0, tgChannelMatch_1.telegramMessageMatchesTgChain)(m.chat, chain));
+            if (channelPosts.length > 0 && forChain.length === 0) {
+                logger_1.logger.debug('[tgChain] channel_post batch did not match chain', {
+                    chainId: chain.id,
+                    sourceKey,
+                    tg_channel_id: chain.tg_channel_id ?? null,
+                    tg_username: chain.tg_username ?? null,
+                    sampleChatId: channelPosts[0]?.chat?.id,
+                    sampleUsername: channelPosts[0]?.chat?.username ?? null,
+                });
+            }
             const chainGroups = groupChannelPostsForForward(forChain);
             for (const msgs of chainGroups) {
                 const isMediaGroup = msgs.length > 1 || Boolean(msgs[0]?.media_group_id);
@@ -775,11 +837,11 @@ async function runTgChainsOnce() {
                 }
                 await processChainMessageGroup(chain, msgs, tgToken);
             }
-            const editedForChain = editedChannelPosts.filter((m) => (0, tgChannelMatch_1.telegramChannelMatchesTarget)(m.chat, sourceKey));
+            const editedForChain = editedChannelPosts.filter((m) => (0, tgChannelMatch_1.telegramMessageMatchesTgChain)(m.chat, chain));
             for (const edited of editedForChain) {
                 await processEditedChainMessage(chain, edited, tgToken);
             }
-            const editedMessagesForChain = editedMessages.filter((m) => (0, tgChannelMatch_1.telegramChannelMatchesTarget)(m.chat, sourceKey));
+            const editedMessagesForChain = editedMessages.filter((m) => (0, tgChannelMatch_1.telegramMessageMatchesTgChain)(m.chat, chain));
             for (const edited of editedMessagesForChain) {
                 await processEditedChainMessage(chain, edited, tgToken);
             }

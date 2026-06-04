@@ -609,7 +609,7 @@
   }
 
   function telegramChannelPickValue(ch) {
-    return ch.username || ch.id;
+    return ch.id || ch.username || '';
   }
 
   function renderTelegramChatItemHtml(ch, opts) {

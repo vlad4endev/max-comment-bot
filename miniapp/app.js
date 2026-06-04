@@ -62,6 +62,9 @@
       'invalid body': 'Не удалось отправить данные. Попробуйте ещё раз.',
       'internal error': 'Сервис временно недоступен. Попробуйте чуть позже.',
       'channel not connected': 'Канал ещё не подключён к боту.',
+      'channel not found': 'Канал не найден. Проверьте @username и что бот добавлен в канал.',
+      'not a channel': 'Укажите канал, а не чат или бота.',
+      forbidden: 'Вы не администратор этого канала.',
       'post not found': 'Пост не найден или удалён.',
       post_not_found: 'Пост не найден или удалён.',
       'comment not found': 'Комментарий не найден.',
@@ -1466,6 +1469,158 @@
           .catch(function () {})
       }
 
+      function applyHomeChannelsData(data) {
+        var list = document.getElementById('homeChannelList')
+        if (!list) return
+        list.innerHTML = ''
+        channelsById = {}
+        channelsCache = []
+        if (data.bot_nickname) botNick = '@' + String(data.bot_nickname).replace(/^@/, '')
+        var arr = data.channels || []
+        if (!arr.length) {
+          list.innerHTML =
+            '<div style="color:var(--muted);font-size:13px;padding:8px 4px;">' +
+            (inTelegram
+              ? 'Каналов пока нет. Добавьте @commentvmax_bot администратором в канал или укажите @username ниже.'
+              : 'Каналов пока нет. Подключите бота в свой канал.') +
+            '</div>'
+          return
+        }
+        arr.forEach(function (ch) {
+          channelsById[String(ch.chat_id)] = ch
+          channelsCache.push(ch)
+          var title = (ch.title && String(ch.title).trim()) || 'Канал ' + ch.chat_id
+          var subs =
+            typeof ch.subscribers === 'number'
+              ? 'подписчики: ' + ch.subscribers
+              : 'подписчики: —'
+          var dotClass = ch.status === 'pending' ? 'pending' : 'active'
+          var avUrl =
+            ch.avatar_url && String(ch.avatar_url).trim()
+              ? String(ch.avatar_url).trim()
+              : ''
+          var iconHtml = avUrl
+            ? '<div class="ch-icon with-photo"><img src="' +
+              esc(avUrl) +
+              '" alt="" /></div>'
+            : '<div class="ch-icon">' + esc(initials(title)) + '</div>'
+          var gearBtn = inTelegram
+            ? ''
+            : '<button type="button" class="ch-gear-btn" ' +
+              'onclick="openChannelSettings(' +
+              JSON.stringify(ch.chat_id) +
+              ')" ' +
+              'aria-label="Настройки канала">⚙️</button>'
+          var row =
+            '<div class="channel-block" data-channel-id="' +
+            esc(String(ch.chat_id)) +
+            '">' +
+            '<div class="channel-item">' +
+            iconHtml +
+            '<div class="ch-body"><div class="ch-name">' +
+            esc(title) +
+            '</div><div class="ch-subs">' +
+            esc(subs) +
+            '</div></div>' +
+            '<span class="status-dot ' +
+            dotClass +
+            '" title="' +
+            (ch.status === 'pending' ? 'Ожидает прав бота' : 'Активен') +
+            '"></span>' +
+            '<button type="button" class="ch-admins-toggle" aria-expanded="false" aria-label="Администраторы канала">▼</button>' +
+            gearBtn +
+            '</div>' +
+            '<div class="channel-admins-panel" data-admins-loaded="0"></div>' +
+            '</div>'
+          list.insertAdjacentHTML('beforeend', row)
+        })
+      }
+
+      function reloadHomeChannels(apiUid) {
+        if (apiUid == null) return Promise.resolve()
+        return fetch(
+          '/api/channels?user_id=' + encodeURIComponent(String(apiUid)) + platformQs,
+          { headers: homeApiHeaders(false) }
+        )
+          .then(function (r) {
+            if (!r.ok) throw new Error('ch')
+            return r.json()
+          })
+          .then(function (data) {
+            applyHomeChannelsData(data)
+            enrichChannelsLive(apiUid)
+            var sel = document.getElementById('linkTgChannelSelect')
+            if (sel) {
+              fillLinkChannelSelect(sel, channelsCache, 'TG')
+            }
+            return data
+          })
+      }
+
+      function registerTelegramChannelByKey(apiUid, channelRaw) {
+        var raw = String(channelRaw || '').trim()
+        if (!raw) {
+          showToast('Введите @username канала')
+          return Promise.resolve()
+        }
+        return fetch('/api/telegram/channels/register', {
+          method: 'POST',
+          headers: homeApiHeaders(true),
+          body: JSON.stringify({ user_id: apiUid, channel: raw }),
+        })
+          .then(function (r) {
+            return r.json().then(function (j) {
+              return { ok: r.ok, body: j }
+            })
+          })
+          .then(function (x) {
+            if (!x.ok) throw new Error((x.body && x.body.error) || 'Ошибка')
+            return reloadHomeChannels(apiUid)
+          })
+          .then(function () {
+            showToast('Канал добавлен')
+            setHomeErr('')
+          })
+          .catch(function (e) {
+            showToast(e, 'Не удалось найти канал')
+          })
+      }
+
+      function wireTelegramChannelManualRegister(apiUid) {
+        if (!inTelegram || apiUid == null) return
+        var block = document.getElementById('tgChannelManual')
+        if (block) block.classList.remove('hidden')
+        var homeIn = document.getElementById('tgChannelManualInput')
+        var homeBtn = document.getElementById('tgChannelManualBtn')
+        if (homeBtn && homeBtn.dataset.bound !== '1') {
+          homeBtn.dataset.bound = '1'
+          homeBtn.addEventListener('click', function () {
+            homeBtn.disabled = true
+            registerTelegramChannelByKey(apiUid, homeIn ? homeIn.value : '').finally(function () {
+              homeBtn.disabled = false
+            })
+          })
+        }
+        var linkBtn = document.getElementById('linkTgChannelManualBtn')
+        var linkIn = document.getElementById('linkTgChannelManualInput')
+        if (linkBtn && linkBtn.dataset.bound !== '1') {
+          linkBtn.dataset.bound = '1'
+          linkBtn.addEventListener('click', function () {
+            linkBtn.disabled = true
+            registerTelegramChannelByKey(apiUid, linkIn ? linkIn.value : '')
+              .then(function () {
+                var sel = document.getElementById('linkTgChannelSelect')
+                if (sel && channelsCache.length) {
+                  sel.value = String(channelsCache[0].chat_id)
+                }
+              })
+              .finally(function () {
+                linkBtn.disabled = false
+              })
+          })
+        }
+      }
+
       fetch('/api/settings?user_id=' + encodeURIComponent(String(uid)) + platformQs, {
         headers: homeApiHeaders(false),
       })
@@ -1498,88 +1653,22 @@
           setHomeErr('Не удалось загрузить статистику');
         });
 
-      fetch('/api/channels?user_id=' + encodeURIComponent(String(uid)) + platformQs, {
-        headers: homeApiHeaders(false),
-      })
-        .then(function (r) {
-          if (!r.ok) throw new Error('ch');
-          return r.json();
-        })
-        .then(function (data) {
-          var list = document.getElementById('homeChannelList');
-          list.innerHTML = '';
-          channelsById = {}
-          channelsCache = []
-          if (data.bot_nickname) botNick = '@' + String(data.bot_nickname).replace(/^@/, '');
-          var arr = data.channels || [];
-          if (!arr.length) {
-            list.innerHTML =
-              '<div style="color:var(--muted);font-size:13px;padding:8px 4px;">' +
-              (inTelegram
-                ? 'Каналов пока нет. Добавьте @commentvmax_bot администратором в Telegram-канал, затем обновите мини-приложение.'
-                : 'Каналов пока нет. Подключите бота в свой канал.') +
-              '</div>';
-            return;
-          }
-          arr.forEach(function (ch) {
-            channelsById[String(ch.chat_id)] = ch
-            channelsCache.push(ch)
-            var title = (ch.title && String(ch.title).trim()) || 'Канал ' + ch.chat_id;
-            var subs =
-              typeof ch.subscribers === 'number'
-                ? 'подписчики: ' + ch.subscribers
-                : 'подписчики: —';
-            var dotClass = ch.status === 'pending' ? 'pending' : 'active';
-            var avUrl =
-              ch.avatar_url && String(ch.avatar_url).trim()
-                ? String(ch.avatar_url).trim()
-                : '';
-            var iconHtml = avUrl
-              ? '<div class="ch-icon with-photo"><img src="' +
-                esc(avUrl) +
-                '" alt="" /></div>'
-              : '<div class="ch-icon">' + esc(initials(title)) + '</div>';
-            var gearBtn = inTelegram
-              ? ''
-              : '<button type="button" class="ch-gear-btn" ' +
-                'onclick="openChannelSettings(' +
-                JSON.stringify(ch.chat_id) +
-                ')" ' +
-                'aria-label="Настройки канала">⚙️</button>';
-            var row =
-              '<div class="channel-block" data-channel-id="' +
-              esc(String(ch.chat_id)) +
-              '">' +
-              '<div class="channel-item">' +
-              iconHtml +
-              '<div class="ch-body"><div class="ch-name">' +
-              esc(title) +
-              '</div><div class="ch-subs">' +
-              esc(subs) +
-              '</div></div>' +
-              '<span class="status-dot ' +
-              dotClass +
-              '" title="' +
-              (ch.status === 'pending' ? 'Ожидает прав' : 'Активен') +
-              '"></span>' +
-              '<button type="button" class="ch-admins-toggle" aria-expanded="false" aria-label="Администраторы канала">▼</button>' +
-              gearBtn +
-              '</div>' +
-              '<div class="channel-admins-panel" data-admins-loaded="0"></div>' +
-              '</div>';
-            list.insertAdjacentHTML('beforeend', row);
-          });
-          enrichChannelsLive(uid);
+      reloadHomeChannels(uid)
+        .then(function () {
           if (pendingOpenChannelLink && inTelegram) {
             fillLinkChannelSelect(
               document.getElementById('linkTgChannelSelect'),
               channelsCache,
               'TG'
-            );
-            showChannelLinkOverlay('tg');
+            )
+            showChannelLinkOverlay('tg')
           }
         })
-        .catch(function () {});
+        .catch(function () {
+          setHomeErr('Не удалось загрузить список каналов')
+        })
+
+      wireTelegramChannelManualRegister(uid)
 
       var hint = document.getElementById('connectHint');
       document.getElementById('btnConnect').addEventListener('click', function () {
@@ -1705,7 +1794,12 @@
               )
             })
           })
-          .catch(function () {})
+          .catch(function () {
+            if (host) {
+              host.innerHTML =
+                '<div style="color:var(--muted);font-size:13px;padding:8px 4px;">Не удалось загрузить связки. Обновите мини-приложение.</div>'
+            }
+          })
       }
 
       function setLinkWizardProgress(step) {
@@ -4469,8 +4563,9 @@
           window.clearInterval(homeUserRetryTimer);
           var homeErrEl = document.getElementById('homeErr');
           if (homeErrEl) {
-            homeErrEl.textContent =
-              'Не удалось определить профиль. Закройте приложение и откройте снова из бота MAX.';
+            homeErrEl.textContent = inTelegram
+              ? 'Не удалось определить профиль. Закройте мини-приложение и откройте снова из @commentvmax_bot.'
+              : 'Не удалось определить профиль. Закройте приложение и откройте снова из бота MAX.';
           }
           syncHomeUserBadge(null);
         }

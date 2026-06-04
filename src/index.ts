@@ -39,6 +39,7 @@ import { startAutopostScheduler } from './services/autopostScheduler'
 import { startChannelImportWorker } from './services/channelImportService'
 import { ensureAdminPanelStateLoaded } from './api/adminPanelState'
 import { repairLegacyMiniappTgChains } from './services/channelLinkService'
+import { repairTgChainsForForwarding } from './services/tgChainChannelRef'
 import { setTgChainForwarderBot, startTgChainForwarder } from './services/tgChainForwarder'
 import { setTelegramTgChainLifecycleBot } from './services/telegramTgChainLifecycle'
 import { initRedis } from './cache/redisClient'
@@ -63,6 +64,7 @@ async function main(): Promise<void> {
   await integrationsStore.load()
   await ensureAdminPanelStateLoaded()
   await repairLegacyMiniappTgChains()
+  await repairTgChainsForForwarding()
   const tgIntegration = integrationsStore
     .getIntegrations()
     .find((i) => i.platform === 'telegram' && i.status === 'connected')

@@ -1,5 +1,3 @@
-import { createHash } from 'node:crypto'
-
 import axios from 'axios'
 import type { Bot } from '@maxhub/max-bot-api'
 import type { AttachmentRequest, ImageAttachmentRequest } from '@maxhub/max-bot-api/types'
@@ -19,9 +17,13 @@ import { ensureTelegramPollingMode } from './integrationPlatformClient'
 import { attachAndVerifyCommentsForForwardedPost } from './channelPostPublishGate'
 import { postStore } from './postStore'
 import { resolveCanonicalChannelChatId } from './resolveChannelChatId'
-import { telegramChannelMatchesTarget } from '../utils/tgChannelMatch'
+import { telegramChannelMatchesTarget, telegramMessageMatchesTgChain } from '../utils/tgChannelMatch'
 import { logger } from '../utils/logger'
 import { apiCallWithRetry } from '../utils/maxApiRetry'
+import {
+  getTelegramBotUpdatesOffset,
+  setTelegramBotUpdatesOffset,
+} from './telegramMainBotOffsetStore'
 import { processTelegramMiniappBotUpdates } from './telegramMiniappService'
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
@@ -71,24 +73,71 @@ export function getTgChainForwarderBot(): Bot | null {
   return botRef
 }
 
-function tokenKey(token: string): string {
-  return createHash('sha256').update(token).digest('hex').slice(0, 16)
-}
-
 function getReaderOffset(tgToken: string): number {
-  const row = getDb()
-    .prepare('SELECT scan_next_offset FROM tg_chain_reader_offsets WHERE token_key = ?')
-    .get(tokenKey(tgToken)) as { scan_next_offset: number } | undefined
-  return row?.scan_next_offset ?? 0
+  return getTelegramBotUpdatesOffset(tgToken)
 }
 
 function setReaderOffset(tgToken: string, offset: number): void {
-  getDb()
-    .prepare(
-      `INSERT INTO tg_chain_reader_offsets (token_key, scan_next_offset) VALUES (?, ?)
-       ON CONFLICT(token_key) DO UPDATE SET scan_next_offset = excluded.scan_next_offset`,
-    )
-    .run(tokenKey(tgToken), offset)
+  setTelegramBotUpdatesOffset(tgToken, offset)
+}
+
+/** Long-poll / drain TG updates for main CommentBot (my_chat_member, /start, callbacks). */
+export async function syncMainTelegramBotDiscoveryUpdates(
+  tgToken: string,
+  options?: { timeoutSec?: number; maxPages?: number },
+): Promise<number> {
+  if (!isMainTelegramBotToken(tgToken)) {
+    return 0
+  }
+  await ensureTelegramPollingMode(tgToken)
+  const pollErr = await assertTelegramPollingReady(tgToken)
+  if (pollErr) {
+    logger.warn('[tgChain] main bot discovery poll skipped', { err: pollErr })
+    return 0
+  }
+
+  let offset = getReaderOffset(tgToken)
+  const timeoutSec = options?.timeoutSec ?? 0
+  const maxPages = options?.maxPages ?? 8
+  let processed = 0
+
+  for (let page = 0; page < maxPages; page++) {
+    let batch: TgChannelUpdate[]
+    try {
+      batch = await getTelegramUpdatesWithIds(tgToken, offset, timeoutSec, {
+        includeMiniappBotUpdates: true,
+      })
+    } catch (err: unknown) {
+      if (err instanceof TelegramGetUpdatesConflictError) {
+        logger.warn('[tgChain] main bot discovery 409 conflict')
+        break
+      }
+      throw err
+    }
+    if (batch.length === 0) {
+      break
+    }
+
+    const rawUpdates = batch
+      .map((u) => u.raw)
+      .filter((u): u is Record<string, unknown> => !!u)
+    if (rawUpdates.length > 0) {
+      await processTelegramMiniappBotUpdates(tgToken, rawUpdates, botRef)
+    }
+
+    for (const u of batch) {
+      offset = Math.max(offset, u.update_id + 1)
+      processed += 1
+    }
+    if (batch.length < 100) {
+      break
+    }
+  }
+
+  if (offset > getReaderOffset(tgToken)) {
+    setReaderOffset(tgToken, offset)
+  }
+  return processed
 }
 
 function chainSourceKey(chain: TgChainRecord): string {
@@ -825,6 +874,15 @@ export async function runTgChainsOnce(): Promise<boolean> {
     (c) => c.active && c.forward_posts && chainSourceKey(c) !== '',
   )
   if (chains.length === 0) {
+    const mainToken = resolveTelegramBotToken()
+    if (mainToken && isMainTelegramBotToken(mainToken)) {
+      const n = await syncMainTelegramBotDiscoveryUpdates(mainToken, {
+        timeoutSec: TG_CHAIN_LONG_POLL_SEC,
+      })
+      if (n > 0) {
+        receivedAny = true
+      }
+    }
     return receivedAny
   }
 
@@ -910,7 +968,17 @@ export async function runTgChainsOnce(): Promise<boolean> {
 
     for (const chain of group) {
       const sourceKey = chainSourceKey(chain)
-      const forChain = channelPosts.filter((m) => telegramChannelMatchesTarget(m.chat, sourceKey))
+      const forChain = channelPosts.filter((m) => telegramMessageMatchesTgChain(m.chat, chain))
+      if (channelPosts.length > 0 && forChain.length === 0) {
+        logger.debug('[tgChain] channel_post batch did not match chain', {
+          chainId: chain.id,
+          sourceKey,
+          tg_channel_id: chain.tg_channel_id ?? null,
+          tg_username: chain.tg_username ?? null,
+          sampleChatId: channelPosts[0]?.chat?.id,
+          sampleUsername: channelPosts[0]?.chat?.username ?? null,
+        })
+      }
       const chainGroups = groupChannelPostsForForward(forChain)
       for (const msgs of chainGroups) {
         const isMediaGroup = msgs.length > 1 || Boolean(msgs[0]?.media_group_id)
@@ -924,13 +992,13 @@ export async function runTgChainsOnce(): Promise<boolean> {
       }
 
       const editedForChain = editedChannelPosts.filter((m) =>
-        telegramChannelMatchesTarget(m.chat, sourceKey),
+        telegramMessageMatchesTgChain(m.chat, chain),
       )
       for (const edited of editedForChain) {
         await processEditedChainMessage(chain, edited, tgToken)
       }
       const editedMessagesForChain = editedMessages.filter((m) =>
-        telegramChannelMatchesTarget(m.chat, sourceKey),
+        telegramMessageMatchesTgChain(m.chat, chain),
       )
       for (const edited of editedMessagesForChain) {
         await processEditedChainMessage(chain, edited, tgToken)

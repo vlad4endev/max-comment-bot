@@ -9,6 +9,8 @@ export interface TelegramMiniappChannelWire {
 }
 export declare function sendTelegramHowItWorksMessage(token: string, telegramUserId: number): Promise<void>;
 export declare function handleTelegramBotStartWelcome(telegramUserId: number, from?: Record<string, unknown>): Promise<void>;
+/** Ручное добавление канала по @username или -100… (если бот уже админ, но канал не в списке). */
+export declare function registerTelegramChannelByKeyForMiniappUser(telegramUserId: number, channelKeyRaw: string): Promise<TelegramMiniappChannelWire>;
 export declare function listTelegramMiniappChannelsForUser(telegramUserId: number): Promise<{
     channels: TelegramMiniappChannelWire[];
     bot_username: string;

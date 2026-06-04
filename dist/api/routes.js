@@ -686,6 +686,48 @@ function createCommentApiRouter(deps) {
             res.status(500).json({ error: 'internal error' });
         }
     });
+    router.post('/telegram/channels/register', async (req, res) => {
+        if (!isTelegramMiniappPlatform(req)) {
+            res.status(400).json({ error: 'telegram miniapp only' });
+            return;
+        }
+        const body = req.body;
+        if (!isRecord(body)) {
+            res.status(400).json({ error: 'invalid body' });
+            return;
+        }
+        const userId = parsePositiveInt(body.user_id);
+        const channelKey = parseNonEmptyString(body.channel);
+        if (!userId || !channelKey) {
+            res.status(400).json({ error: 'missing user_id or channel' });
+            return;
+        }
+        try {
+            const channel = await (0, telegramMiniappService_1.registerTelegramChannelByKeyForMiniappUser)(userId, channelKey);
+            res.json({ ok: true, channel });
+        }
+        catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            if (msg === 'channel not found') {
+                res.status(404).json({ error: 'channel not found' });
+                return;
+            }
+            if (msg === 'forbidden') {
+                res.status(403).json({ error: 'forbidden' });
+                return;
+            }
+            if (msg === 'not a channel') {
+                res.status(400).json({ error: 'not a channel' });
+                return;
+            }
+            if (msg === 'telegram not configured') {
+                res.status(503).json({ error: 'telegram not configured' });
+                return;
+            }
+            logger_1.logger.error('POST /api/telegram/channels/register failed', { err });
+            res.status(500).json({ error: 'internal error' });
+        }
+    });
     router.get('/channel-admins', async (req, res) => {
         const userId = parsePositiveInt(req.query.user_id);
         if (!userId) {

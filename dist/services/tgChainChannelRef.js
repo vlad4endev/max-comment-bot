@@ -1,0 +1,75 @@
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.resolveTgChainChannelFields = resolveTgChainChannelFields;
+exports.repairTgChainsForForwarding = repairTgChainsForForwarding;
+const adminPanelState_1 = require("../api/adminPanelState");
+const integrationPlatformClient_1 = require("./integrationPlatformClient");
+const resolveTelegramBotToken_1 = require("./resolveTelegramBotToken");
+const logger_1 = require("../utils/logger");
+/** Нормализует @username / -100… / t.me/… в канонический chat_id для пересылки постов. */
+async function resolveTgChainChannelFields(token, tgRaw) {
+    const trimmed = tgRaw.trim();
+    if (!trimmed) {
+        return null;
+    }
+    const fromApi = await (0, integrationPlatformClient_1.resolveTelegramChannelChatIdFromKey)(token, trimmed);
+    if (fromApi) {
+        return {
+            tg_channel_id: fromApi.chatId,
+            tg_username: fromApi.username?.replace(/^@/, '') ?? '',
+        };
+    }
+    const numeric = trimmed.replace(/^@/, '');
+    if (/^-100\d+$/.test(numeric)) {
+        return { tg_channel_id: numeric, tg_username: '' };
+    }
+    const asUname = trimmed.replace(/^@/, '');
+    if (asUname && !/^-?\d+$/.test(asUname)) {
+        return { tg_channel_id: '', tg_username: asUname };
+    }
+    return null;
+}
+function chainNeedsChannelIdRepair(chain) {
+    const id = chain.tg_channel_id?.trim() ?? '';
+    return id === '' || !/^-100\d+$/.test(id);
+}
+/** Починка связок из админки: tg_channel_id, пустой bot_token. */
+async function repairTgChainsForForwarding() {
+    await (0, adminPanelState_1.ensureAdminPanelStateLoaded)();
+    const token = (0, resolveTelegramBotToken_1.resolveTelegramBotToken)();
+    if (!token) {
+        return { tokenRepaired: 0, channelIdRepaired: 0 };
+    }
+    const chains = await (0, adminPanelState_1.listTgChains)();
+    let tokenRepaired = 0;
+    let channelIdRepaired = 0;
+    for (const chain of chains) {
+        const patch = {};
+        if (!chain.bot_token?.trim()) {
+            patch.bot_token = token;
+            tokenRepaired += 1;
+        }
+        if (chainNeedsChannelIdRepair(chain)) {
+            const raw = chain.tg_channel_id?.trim() ||
+                (chain.tg_username?.trim() ? `@${chain.tg_username.trim().replace(/^@/, '')}` : '');
+            if (raw) {
+                const resolved = await resolveTgChainChannelFields(token, raw);
+                if (resolved?.tg_channel_id && /^-100\d+$/.test(resolved.tg_channel_id)) {
+                    patch.tg_channel_id = resolved.tg_channel_id;
+                    if (resolved.tg_username) {
+                        patch.tg_username = resolved.tg_username;
+                    }
+                    channelIdRepaired += 1;
+                }
+            }
+        }
+        if (Object.keys(patch).length > 0) {
+            await (0, adminPanelState_1.updateTgChain)(chain.id, patch);
+        }
+    }
+    if (tokenRepaired > 0 || channelIdRepaired > 0) {
+        logger_1.logger.info('repairTgChainsForForwarding: done', { tokenRepaired, channelIdRepaired });
+    }
+    return { tokenRepaired, channelIdRepaired };
+}
+//# sourceMappingURL=tgChainChannelRef.js.map

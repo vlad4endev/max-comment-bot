@@ -6,7 +6,7 @@ import type { ChatMember } from '@maxhub/max-bot-api/types'
 import express from 'express'
 import pLimit from 'p-limit'
 
-import { config } from '../config'
+import { config, getTelegramToken } from '../config'
 import { checkAdminAuth } from '../middleware/adminAuth'
 import {
   fullyDisconnectRegisteredChannel,
@@ -54,6 +54,7 @@ import { createAutopostRouter } from './autopostRoutes'
 import { buildDashboardAnalytics, parseDashboardPeriodDays } from '../services/analyticsService'
 import { integrationsStore } from '../services/integrationsStore'
 import { parseAdminLogLine, type AdminLogEntry, type AdminLogLevel } from '../utils/adminLogFormat'
+import { resolveTgChainChannelFields } from '../services/tgChainChannelRef'
 import { findActiveTgChainForPair } from '../utils/tgChainPair'
 import { getAdminLogTail, logger } from '../utils/logger'
 import { extractMemberAvatarUrl } from '../utils/memberAvatar'
@@ -1058,19 +1059,35 @@ export function createAdminRouter(deps: AdminRouterDeps): express.Router {
       return
     }
     const tgKey = tgRaw.trim()
-    const isNumericTg = /^-?\d+$/.test(tgKey.replace(/^@/, ''))
-    const tgChannelId = isNumericTg ? tgKey.replace(/^@/, '') : undefined
-    const tgUsername = isNumericTg
-      ? (parseNonEmptyString(req.body.tg_username)?.replace(/^@/, '') ?? '')
-      : tgKey.replace(/^@/, '')
-    if (!tgChannelId && !tgUsername) {
-      res.status(400).json({ error: 'invalid tg channel' })
+    await integrationsStore.load()
+    const integ = integrationsStore.getTelegramIntegration()
+    const tgToken = (
+      parseNonEmptyString(req.body.bot_token) ??
+      integ?.token?.trim() ??
+      getTelegramToken()
+    ).trim()
+    if (!tgToken) {
+      res.status(400).json({ error: 'Не задан токен Telegram-бота (интеграция или TG_TOKEN)' })
       return
     }
+    const resolved = await resolveTgChainChannelFields(tgToken, tgKey)
+    if (!resolved?.tg_channel_id || !/^-100\d+$/.test(resolved.tg_channel_id)) {
+      res.status(400).json({
+        error:
+          'Не удалось определить Telegram-канал. Укажите @username или -100… id; бот должен быть админом канала.',
+      })
+      return
+    }
+    const tgChannelId = resolved.tg_channel_id
+    const tgUsername =
+      resolved.tg_username ||
+      (tgKey.startsWith('@') ? tgKey.replace(/^@/, '') : '') ||
+      parseNonEmptyString(req.body.tg_username)?.replace(/^@/, '') ||
+      ''
     const existing = findActiveTgChainForPair(
       await listTgChains(),
       maxChatId,
-      tgChannelId ?? '',
+      tgChannelId,
       tgUsername,
     )
     if (existing) {
@@ -1083,7 +1100,7 @@ export function createAdminRouter(deps: AdminRouterDeps): express.Router {
       max_title: ch?.title ?? null,
       tg_username: tgUsername,
       tg_channel_id: tgChannelId,
-      bot_token: parseNonEmptyString(req.body.bot_token) ?? '',
+      bot_token: parseNonEmptyString(req.body.bot_token)?.trim() || tgToken,
       forward_posts: req.body.forward_posts !== false,
       forward_comments: Boolean(req.body.forward_comments),
       add_comments_button: req.body.add_comments_button !== false,

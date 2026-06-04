@@ -33,6 +33,7 @@ const autopostRoutes_1 = require("./autopostRoutes");
 const analyticsService_1 = require("../services/analyticsService");
 const integrationsStore_1 = require("../services/integrationsStore");
 const adminLogFormat_1 = require("../utils/adminLogFormat");
+const tgChainChannelRef_1 = require("../services/tgChainChannelRef");
 const tgChainPair_1 = require("../utils/tgChainPair");
 const logger_1 = require("../utils/logger");
 const memberAvatar_1 = require("../utils/memberAvatar");
@@ -939,16 +940,28 @@ function createAdminRouter(deps) {
             return;
         }
         const tgKey = tgRaw.trim();
-        const isNumericTg = /^-?\d+$/.test(tgKey.replace(/^@/, ''));
-        const tgChannelId = isNumericTg ? tgKey.replace(/^@/, '') : undefined;
-        const tgUsername = isNumericTg
-            ? (parseNonEmptyString(req.body.tg_username)?.replace(/^@/, '') ?? '')
-            : tgKey.replace(/^@/, '');
-        if (!tgChannelId && !tgUsername) {
-            res.status(400).json({ error: 'invalid tg channel' });
+        await integrationsStore_1.integrationsStore.load();
+        const integ = integrationsStore_1.integrationsStore.getTelegramIntegration();
+        const tgToken = (parseNonEmptyString(req.body.bot_token) ??
+            integ?.token?.trim() ??
+            (0, config_1.getTelegramToken)()).trim();
+        if (!tgToken) {
+            res.status(400).json({ error: 'Не задан токен Telegram-бота (интеграция или TG_TOKEN)' });
             return;
         }
-        const existing = (0, tgChainPair_1.findActiveTgChainForPair)(await (0, adminPanelState_1.listTgChains)(), maxChatId, tgChannelId ?? '', tgUsername);
+        const resolved = await (0, tgChainChannelRef_1.resolveTgChainChannelFields)(tgToken, tgKey);
+        if (!resolved?.tg_channel_id || !/^-100\d+$/.test(resolved.tg_channel_id)) {
+            res.status(400).json({
+                error: 'Не удалось определить Telegram-канал. Укажите @username или -100… id; бот должен быть админом канала.',
+            });
+            return;
+        }
+        const tgChannelId = resolved.tg_channel_id;
+        const tgUsername = resolved.tg_username ||
+            (tgKey.startsWith('@') ? tgKey.replace(/^@/, '') : '') ||
+            parseNonEmptyString(req.body.tg_username)?.replace(/^@/, '') ||
+            '';
+        const existing = (0, tgChainPair_1.findActiveTgChainForPair)(await (0, adminPanelState_1.listTgChains)(), maxChatId, tgChannelId, tgUsername);
         if (existing) {
             res.status(400).json({ error: 'Активная цепочка для этой пары TG → MAX уже есть' });
             return;
@@ -959,7 +972,7 @@ function createAdminRouter(deps) {
             max_title: ch?.title ?? null,
             tg_username: tgUsername,
             tg_channel_id: tgChannelId,
-            bot_token: parseNonEmptyString(req.body.bot_token) ?? '',
+            bot_token: parseNonEmptyString(req.body.bot_token)?.trim() || tgToken,
             forward_posts: req.body.forward_posts !== false,
             forward_comments: Boolean(req.body.forward_comments),
             add_comments_button: req.body.add_comments_button !== false,

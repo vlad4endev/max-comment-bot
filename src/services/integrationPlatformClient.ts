@@ -4,7 +4,13 @@ import { logger } from '../utils/logger'
 import { telegramBotUserStore } from './telegramBotUserStore'
 import { processMainTelegramBotMyChatMemberUpdate } from './telegramMainBotUpdates'
 import type { IntegrationPlatform } from './integrationsStore'
+import { isMainTelegramBotToken } from './resolveTelegramBotToken'
 import { flowStateStore } from './flowStateStore'
+import {
+  getTelegramBotUpdatesOffset,
+  setTelegramBotUpdatesOffset,
+} from './telegramMainBotOffsetStore'
+import { normalizeTelegramChannelKey } from '../utils/tgChannelMatch'
 
 export interface PlatformTestResult {
   ok: boolean
@@ -379,6 +385,69 @@ function rememberTelegramStartedUserFromUpdate(upd: Record<string, unknown>): vo
   }
 }
 
+/** Разрешает @username / t.me/… / -100… в числовой chat_id через getChat. */
+export async function resolveTelegramChannelChatIdFromKey(
+  token: string,
+  channelKeyRaw: string,
+): Promise<{
+  chatId: string
+  title: string | null
+  username: string | null
+  type: TelegramChatType
+} | null> {
+  const trimmed = channelKeyRaw.trim()
+  if (!trimmed) {
+    return null
+  }
+  let lookup = trimmed
+  const tmeMatch = /(?:https?:\/\/)?t\.me\/([a-zA-Z0-9_]+)/i.exec(trimmed)
+  if (tmeMatch) {
+    lookup = `@${tmeMatch[1]}`
+  } else if (/^t\.me\//i.test(trimmed)) {
+    lookup = `@${trimmed.replace(/^t\.me\//i, '')}`
+  } else if (!lookup.startsWith('@') && !/^-?\d+$/.test(lookup)) {
+    lookup = `@${lookup.replace(/^@/, '')}`
+  }
+
+  const tgToken = token.trim()
+  if (!tgToken) {
+    return null
+  }
+
+  try {
+    const { data } = await axios.get<{
+      ok: boolean
+      result?: Record<string, unknown>
+    }>(`${TG_API}/bot${tgToken}/getChat`, {
+      params: { chat_id: /^-?\d+$/.test(lookup) ? lookup : normalizeTelegramChannelKey(lookup) },
+      timeout: 15_000,
+    })
+    if (!data.ok || !data.result) {
+      return null
+    }
+    const chat = data.result
+    const id =
+      typeof chat.id === 'number' || typeof chat.id === 'string' ? String(chat.id) : null
+    if (!id || !/^-?\d+$/.test(id)) {
+      return null
+    }
+    const chatType = normalizeTelegramChatType(chat.type)
+    const username =
+      typeof chat.username === 'string' && chat.username.trim() !== ''
+        ? `@${chat.username.replace(/^@/, '')}`
+        : null
+    return {
+      chatId: id,
+      title: chatTitleFromTelegramChat(chat, id),
+      username,
+      type: chatType,
+    }
+  } catch (err: unknown) {
+    logger.warn('resolveTelegramChannelChatIdFromKey: getChat failed', { lookup, err })
+    return null
+  }
+}
+
 /** Чаты/каналы, с которыми бот взаимодействовал (из getUpdates + my_chat_member). */
 export async function listTelegramBotChats(
   token: string,
@@ -393,8 +462,10 @@ export async function listTelegramBotChats(
 
   const seen = new Map<string, PlatformChannelInfo>()
   await flowStateStore.load()
-  let offset =
-    integrationId !== undefined
+  const useMainBotOffset = isMainTelegramBotToken(trimmed)
+  let offset: number | undefined = useMainBotOffset
+    ? getTelegramBotUpdatesOffset(trimmed)
+    : integrationId !== undefined
       ? flowStateStore.getTelegramUpdateOffset(integrationId)
       : undefined
 
@@ -431,8 +502,12 @@ export async function listTelegramBotChats(
         break
       }
     }
-    if (integrationId !== undefined && offset !== undefined) {
-      await flowStateStore.setTelegramUpdateOffset(integrationId, offset)
+    if (offset !== undefined) {
+      if (useMainBotOffset) {
+        setTelegramBotUpdatesOffset(trimmed, offset)
+      } else if (integrationId !== undefined) {
+        await flowStateStore.setTelegramUpdateOffset(integrationId, offset)
+      }
     }
   } catch (err: unknown) {
     logger.warn('listTelegramBotChats: getUpdates failed', err)
