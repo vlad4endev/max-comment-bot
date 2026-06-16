@@ -1004,7 +1004,11 @@
       html +=
         '<input class="input mt-sm mono" id="' +
         esc(extraManualId) +
-        '" placeholder="или введите @username / -100..."/>';
+        '" placeholder="или введите @username / -100..."';
+      if (options.manualValue) {
+        html += ' value="' + esc(String(options.manualValue)) + '"';
+      }
+      html += '/>';
     }
     return html;
   }
@@ -2211,6 +2215,105 @@
     block.classList.toggle('hidden', !on);
   }
 
+  function tgChainDomId(chainId) {
+    return String(chainId || '').replace(/-/g, '').slice(0, 10);
+  }
+
+  function updateChainCardCommentSyncVisibility(card) {
+    var sw = qs('[data-chain-comment-forward]', card);
+    var fields = qs('[data-chain-comment-fields]', card);
+    if (!sw || !fields) return;
+    fields.classList.toggle('hidden', !sw.classList.contains('on'));
+  }
+
+  function renderTgChainCommentSettingsHtml(c, tgChats) {
+    var sid = tgChainDomId(c.id);
+    var kw = Array.isArray(c.comment_sync_keywords) ? c.comment_sync_keywords : [];
+    var discVal = c.tg_discussion_chat_id ? String(c.tg_discussion_chat_id) : '';
+    var html = '<details class="tg-chain-comment-settings">';
+    html += '<summary>Комментарии TG → MAX';
+    if (c.forward_comments) {
+      html += ' · вкл';
+      if (discVal) html += ' · чат ' + esc(discVal);
+      if (kw.length) html += ' · ' + esc(String(kw.length)) + ' сл.';
+      else html += ' · только админ';
+    } else {
+      html += ' · выкл';
+    }
+    html += '</summary>';
+    html += '<div class="tg-chain-comment-sync">';
+    html +=
+      '<p class="muted text-sm" style="margin:0 0 10px;line-height:1.45">Обычные комментарии переносятся только при совпадении со словами. Комментарии админа — всегда, если он отвечает пользователю или если в MAX ещё нет комментариев.</p>';
+    html +=
+      '<label class="tg-chain-mini-toggle" style="margin-bottom:10px"><span>Синхронизировать комментарии</span><span class="switch' +
+      (c.forward_comments ? ' on' : '') +
+      '" data-chain-comment-forward role="switch" tabindex="0"></span></label>';
+    html +=
+      '<div data-chain-comment-fields' +
+      (c.forward_comments ? '' : ' class="hidden"') +
+      '>';
+    html +=
+      '<div class="form-group"><label>Чат комментариев</label><p class="muted text-sm" style="margin:0 0 6px">Группа обсуждений. Пусто — linked chat канала.</p>';
+    html +=
+      buildTelegramChannelSelect('tc_disc_' + sid + '_select', tgChats, 'tc_disc_' + sid + '_manual', {
+        adminOnly: true,
+        groupsOnly: true,
+        manualValue: discVal,
+      });
+    html += '</div>';
+    html +=
+      '<div class="form-group"><label>Слова для переноса</label><p class="muted text-sm" style="margin:0 0 6px">Enter — добавить. Без слов обычные комментарии не переносятся.</p>';
+    html += '<div class="tags-input-wrap" id="tc_disc_' + esc(sid) + '_kw"></div></div>';
+    html += '</div>';
+    html +=
+      '<button type="button" class="btn btn-primary btn-sm mt-sm" data-chain-comment-save>Сохранить комментарии</button>';
+    html += '</div></details>';
+    return html;
+  }
+
+  function bindTgChainCommentSettings(card, chain) {
+    var sid = tgChainDomId(chain.id);
+    var kwWrap = qs('#tc_disc_' + sid + '_kw', card);
+    if (kwWrap && kwWrap.getAttribute('data-bound-tags') !== '1') {
+      bindTagsInput(kwWrap, chain.comment_sync_keywords || [], function () {});
+      kwWrap.setAttribute('data-bound-tags', '1');
+    }
+    var fwdSw = qs('[data-chain-comment-forward]', card);
+    if (fwdSw && fwdSw.getAttribute('data-bound-click') !== '1') {
+      fwdSw.addEventListener('click', function (e) {
+        e.stopPropagation();
+        fwdSw.classList.toggle('on');
+        updateChainCardCommentSyncVisibility(card);
+      });
+      fwdSw.setAttribute('data-bound-click', '1');
+    }
+    var saveBtn = qs('[data-chain-comment-save]', card);
+    if (saveBtn && saveBtn.getAttribute('data-bound-click') !== '1') {
+      saveBtn.addEventListener('click', function () {
+        var patch = {
+          forward_comments: !!(fwdSw && fwdSw.classList.contains('on')),
+          tg_discussion_chat_id: null,
+          comment_sync_keywords: readTagsFromWrap(kwWrap),
+        };
+        var discRaw = readTelegramChannelPick('tc_disc_' + sid + '_select', 'tc_disc_' + sid + '_manual', card);
+        if (discRaw) patch.tg_discussion_chat_id = discRaw.replace(/^@/, '');
+        saveBtn.disabled = true;
+        patchJson('/tg-chains/' + encodeURIComponent(chain.id), patch)
+          .then(function () {
+            showToast('Настройки комментариев сохранены', 'success');
+            renderTgChains();
+          })
+          .catch(function (err) {
+            showToast(err.message || 'Ошибка', 'error');
+          })
+          .finally(function () {
+            saveBtn.disabled = false;
+          });
+      });
+      saveBtn.setAttribute('data-bound-click', '1');
+    }
+  }
+
   function submitTgChainFromForm(root, onDone) {
     var chatId = Number(qs('#tc_max', root).value);
     var tgRaw = readTelegramChannelPick('tc_tg_select', 'tc_tg_manual', root);
@@ -2254,7 +2357,8 @@
       });
   }
 
-  function bindTgChainCard(card, chainId) {
+  function bindTgChainCard(card, chain) {
+    var chainId = chain.id;
     var activeSw = qs('[data-chain-field="active"]', card);
     if (activeSw) {
       activeSw.addEventListener('click', function (e) {
@@ -2303,9 +2407,10 @@
         });
       });
     }
+    bindTgChainCommentSettings(card, chain);
   }
 
-  function renderTgChainCardHtml(c) {
+  function renderTgChainCardHtml(c, tgChats) {
     var tg = tgChainTgDisplayName(c);
     var mx = tgChainMaxDisplayName(c);
     var html =
@@ -2330,20 +2435,9 @@
     if (c.errors_today) {
       html += '<span style="color:var(--danger,#e11)"> · ошибок: ' + esc(fmtNum(c.errors_today)) + '</span>';
     }
-    if (c.forward_comments) {
-      var kw = Array.isArray(c.comment_sync_keywords) ? c.comment_sync_keywords : [];
-      html += '<span class="muted text-sm"> · комментарии TG';
-      if (c.tg_discussion_chat_id) {
-        html += ' · чат ' + esc(c.tg_discussion_chat_id);
-      }
-      if (kw.length) {
-        html += ' · слова: ' + esc(kw.slice(0, 4).join(', ')) + (kw.length > 4 ? '…' : '');
-      } else {
-        html += ' · только админ';
-      }
-      html += '</span>';
-    }
-    html += '</div><div class="tg-chain-card-actions">';
+    html += '</div>';
+    html += renderTgChainCommentSettingsHtml(c, tgChats || []);
+    html += '<div class="tg-chain-card-actions">';
     html +=
       '<label class="tg-chain-mini-toggle"><span>Пересылка</span><span class="switch' +
       (c.active ? ' on' : '') +
@@ -2564,7 +2658,7 @@
         html += '<h3 class="tg-chain-list-title">Настроенные пары</h3>';
         if (chains.length) {
           chains.forEach(function (c) {
-            html += renderTgChainCardHtml(c);
+            html += renderTgChainCardHtml(c, tgChats);
           });
         } else {
           html +=
@@ -2573,7 +2667,11 @@
         html += '</div>';
         main.innerHTML = html;
         qsa('.tg-chain-card', main).forEach(function (card) {
-          bindTgChainCard(card, card.getAttribute('data-chain-id'));
+          var chainId = card.getAttribute('data-chain-id');
+          var chain = chains.find(function (c) {
+            return c.id === chainId;
+          });
+          if (chain) bindTgChainCard(card, chain);
         });
         bindTgChainSetupPage(main);
         refreshIcons();

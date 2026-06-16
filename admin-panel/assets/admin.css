@@ -2703,6 +2703,15 @@ tbody tr:hover td {
   border-radius: 10px;
   background: var(--bg-elevated, #f8fafc);
 }
+.tg-chain-comment-settings {
+  margin: 10px 0 4px;
+}
+.tg-chain-comment-settings summary {
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--text-secondary);
+  user-select: none;
+}
 .tg-chain-list-title {
   margin: 20px 0 10px;
   font-size: 16px;
