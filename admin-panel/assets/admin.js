@@ -42,19 +42,24 @@
       items: [{ id: 'dashboard', label: 'Дашборд', icon: 'layout-dashboard' }],
     },
     {
-      group: 'Контент',
+      group: 'MAX-каналы',
       items: [
         { id: 'channels', label: 'Каналы', icon: 'radio' },
-        { id: 'tgchains', label: 'TG → MAX', icon: 'link-2' },
-        { id: 'channelimport', label: 'Импорт TG→MAX', icon: 'upload-cloud' },
-        { id: 'autoposts', label: 'Автопосты', icon: 'calendar-clock' },
         { id: 'comments', label: 'Комментарии', icon: 'message-square' },
+        { id: 'autoposts', label: 'Автопосты', icon: 'calendar-clock' },
+      ],
+    },
+    {
+      group: 'Telegram → MAX',
+      items: [
+        { id: 'tgchains', label: 'Цепочки TG→MAX', icon: 'link-2' },
+        { id: 'channelimport', label: 'Импорт архива', icon: 'upload-cloud' },
+        { id: 'integrations', label: 'Интеграции', icon: 'plug' },
       ],
     },
     {
       group: 'Модерация',
       items: [
-        { id: 'integrations', label: 'Интеграции', icon: 'plug', badge: 'NEW' },
         { id: 'antispam', label: 'Антиспам', icon: 'shield' },
         { id: 'users', label: 'Пользователи', icon: 'users' },
       ],
@@ -68,11 +73,69 @@
     },
   ];
 
+  var PAGE_META = {
+    dashboard: {
+      title: 'Дашборд',
+      group: 'Обзор',
+      desc: 'Сводка по MAX и Telegram: каналы, комментарии, активность и эффективность.',
+    },
+    channels: {
+      title: 'Каналы',
+      group: 'MAX-каналы',
+      desc: 'Подключённые MAX-каналы, статистика, настройки комментариев и антиспам.',
+    },
+    comments: {
+      title: 'Комментарии',
+      group: 'MAX-каналы',
+      desc: 'Просмотр и удаление комментариев по каналам.',
+    },
+    autoposts: {
+      title: 'Автопосты',
+      group: 'MAX-каналы',
+      desc: 'Расписание публикаций с медиа и повторениями.',
+    },
+    tgchains: {
+      title: 'Цепочки TG→MAX',
+      group: 'Telegram → MAX',
+      desc: 'Пересылка постов из Telegram в MAX и синхронизация комментариев.',
+    },
+    channelimport: {
+      title: 'Импорт архива',
+      group: 'Telegram → MAX',
+      desc: 'Перенос истории канала из Telegram в MAX через MTProto.',
+    },
+    integrations: {
+      title: 'Интеграции',
+      group: 'Telegram → MAX',
+      desc: 'Подключения Telegram, VK и MAX, потоки данных и аналитика.',
+    },
+    antispam: {
+      title: 'Антиспам',
+      group: 'Модерация',
+      desc: 'Глобальные стоп-слова, правила фильтрации и журнал блокировок.',
+    },
+    users: {
+      title: 'Пользователи',
+      group: 'Модерация',
+      desc: 'Список пользователей, ограничения, уведомления и история комментариев.',
+    },
+    logs: {
+      title: 'Логи',
+      group: 'Система',
+      desc: 'Журнал работы бота и статистика базы данных.',
+    },
+    settings: {
+      title: 'Настройки',
+      group: 'Система',
+      desc: 'Интервал опроса каналов и опасные операции сброса данных.',
+    },
+  };
+
   var PAGE_TITLES = {
     dashboard: 'Дашборд',
     channels: 'Каналы',
-    tgchains: 'TG → MAX',
-    channelimport: 'Импорт TG→MAX',
+    tgchains: 'Цепочки TG→MAX',
+    channelimport: 'Импорт архива',
     autoposts: 'Автопосты',
     integrations: 'Интеграции',
     antispam: 'Антиспам',
@@ -1276,14 +1339,94 @@
     qsa('.nav-item', nav).forEach(function (btn) {
       btn.addEventListener('click', function () {
         navigate(btn.getAttribute('data-route') || 'dashboard');
+        closeSidebarMobile();
       });
     });
     refreshIcons();
   }
 
   function setPageTitle() {
+    var meta = PAGE_META[currentRoute] || { title: PAGE_TITLES[currentRoute] || 'Панель', group: '', desc: '' };
     var t = qs('#pageTitle');
-    if (t) t.textContent = PAGE_TITLES[currentRoute] || 'Панель';
+    if (t) t.textContent = meta.title;
+    var sub = qs('#pageSubtitle');
+    if (sub) sub.textContent = meta.desc || '';
+    var bc = qs('#pageBreadcrumb');
+    if (bc) {
+      if (meta.group && meta.group !== meta.title) {
+        bc.innerHTML =
+          '<span class="breadcrumb-group">' +
+          esc(meta.group) +
+          '</span><span class="breadcrumb-sep">/</span><span class="breadcrumb-current">' +
+          esc(meta.title) +
+          '</span>';
+      } else {
+        bc.innerHTML = '<span class="breadcrumb-current">' + esc(meta.title) + '</span>';
+      }
+    }
+    document.title = meta.title + ' — CommentBot';
+  }
+
+  function closeSidebarMobile() {
+    var sidebar = qs('#sidebar');
+    var overlay = qs('#sidebarOverlay');
+    if (sidebar) sidebar.classList.remove('open');
+    if (overlay) overlay.classList.remove('visible');
+  }
+
+  function openSidebarMobile() {
+    var sidebar = qs('#sidebar');
+    var overlay = qs('#sidebarOverlay');
+    if (sidebar) sidebar.classList.add('open');
+    if (overlay) overlay.classList.add('visible');
+  }
+
+  function renderQuickNav() {
+    var items = [
+      { route: 'channels', icon: 'radio', label: 'Каналы', desc: 'MAX-каналы' },
+      { route: 'comments', icon: 'message-square', label: 'Комментарии', desc: 'Модерация' },
+      { route: 'tgchains', icon: 'link-2', label: 'TG→MAX', desc: 'Пересылка' },
+      { route: 'autoposts', icon: 'calendar-clock', label: 'Автопосты', desc: 'Расписание' },
+      { route: 'antispam', icon: 'shield', label: 'Антиспам', desc: 'Фильтры' },
+      { route: 'users', icon: 'users', label: 'Пользователи', desc: 'Ограничения' },
+    ];
+    var html = '<section class="quick-nav"><div class="quick-nav-head">';
+    html += '<h2 class="quick-nav-title">Быстрый доступ</h2>';
+    html += '</div><div class="quick-nav-grid">';
+    items.forEach(function (it) {
+      html +=
+        '<button type="button" class="quick-nav-card" data-route="' +
+        esc(it.route) +
+        '"><i data-lucide="' +
+        esc(it.icon) +
+        '"></i><span class="quick-nav-card-label">' +
+        esc(it.label) +
+        '</span><span class="quick-nav-card-desc">' +
+        esc(it.desc) +
+        '</span></button>';
+    });
+    html += '</div></section>';
+    return html;
+  }
+
+  function bindQuickNav(root) {
+    if (!root) return;
+    qsa('.quick-nav-card', root).forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        navigate(btn.getAttribute('data-route') || 'dashboard');
+        closeSidebarMobile();
+      });
+    });
+  }
+
+  function sectionHead(title, desc) {
+    return (
+      '<div class="content-block-head"><div><h3>' +
+      esc(title) +
+      '</h3>' +
+      (desc ? '<p class="block-desc">' + esc(desc) + '</p>' : '') +
+      '</div></div>'
+    );
   }
 
   function setTopbarActions(html) {
@@ -1484,7 +1627,7 @@
           esc(fmtNum(totals.admin_replies_in_period)) +
           '</div><div class="sub">за выбранный период</div></div>';
         html += '</div>';
-        html += '<h3>Воронка аудитории</h3>';
+        html += sectionHead('Воронка аудитории', 'Путь от подписки на бота до активности в мини-приложении');
         html += '<div class="funnel">';
         html +=
           '<div class="funnel-step"><div class="num">' +
@@ -1503,7 +1646,7 @@
           esc(fmtNum(funnel.miniapp_users)) +
           '</div><div class="lbl">Мини-приложение</div></div>';
         html += '</div>';
-        html += '<h3>Активность по дням (комментарии)</h3>';
+        html += sectionHead('Активность по дням', 'Количество комментариев за каждый день периода');
         html += '<div class="chart-wrap">';
         var maxC = 1;
         ts.forEach(function (pt) {
@@ -1522,7 +1665,8 @@
           html += '</div>';
         });
         html += '</div>';
-        html += '<h3>Каналы</h3><div class="channel-cards">';
+        html += sectionHead('Каналы', 'Нажмите на канал, чтобы открыть настройки');
+        html += '<div class="channel-cards">';
         chans.forEach(function (c) {
           var initials = (c.title || 'CH').slice(0, 2).toUpperCase();
           var stBadge =
@@ -1552,12 +1696,14 @@
           html += '<p class="muted">Нет подключённых каналов</p>';
         }
         html += '</div>';
-        html += '<h3 class="mt-md">Инсайты</h3><ul class="insights-list">';
+        html += sectionHead('Инсайты', 'Автоматические рекомендации по данным периода');
+        html += '<ul class="insights-list">';
         insights.forEach(function (line) {
           html += '<li>' + esc(line) + '</li>';
         });
         html += '</ul>';
-        html += '<h3 class="mt-md">Лента активности</h3><div class="activity-feed">';
+        html += sectionHead('Лента активности', 'Последние события в системе');
+        html += '<div class="activity-feed">';
         events.forEach(function (ev) {
           var label = ACTIVITY_LABELS[ev.type] || ev.type;
           var ic = activityIconName(ev.type);
@@ -1705,11 +1851,13 @@
         if (seq !== dashLoadSeq || currentRoute !== 'dashboard') return;
         var d = parts[0];
         var act = parts[1];
-        var html = renderHomeBotLauncher();
+        var html = renderQuickNav();
         html += renderMaxDashboardSection(d, act, periodLabel);
+        html += renderHomeBotLauncher();
         html +=
           '<div id="dashTgSlot" class="dash-loading muted" style="padding:1rem 0">Загрузка метрик Telegram…</div>';
         main.innerHTML = html;
+        bindQuickNav(main);
         refreshIcons(main);
 
         getJson(tgPath)
@@ -4197,7 +4345,9 @@
         var w = pair[0];
         var log = pair[1].entries || [];
         var rules = w.rules || {};
-        var html = '<h2>Глобальный антиспам</h2>';
+        var html = '<div class="panel">';
+        html += '<div class="content-block-head"><div><h2 style="margin:0;font-size:1rem">Глобальные правила</h2>';
+        html += '<p class="block-desc">Стоп-слова и фильтры применяются ко всем каналам, если не переопределены локально</p></div></div>';
         html += '<p class="text-sm muted">Заблокировано сегодня: <strong>' + esc(String(w.blocked_today || 0)) + '</strong></p>';
         html += '<div class="form-group"><label>Глобальные стоп-слова</label><div class="tags-input-wrap" id="g_stop"></div></div>';
         html += '<div id="gRules">';
@@ -4207,7 +4357,7 @@
         html += toggleRow('emoji_spam', 'Спам эмодзи', '', !!rules.emoji_spam);
         html += '</div>';
         html += '<button type="button" class="btn btn-primary mt-sm" id="btnSaveGlobalAs">Сохранить слова и правила</button>';
-        html += '<h3 class="mt-md">Журнал блокировок</h3>';
+        html += sectionHead('Журнал блокировок', 'Последние срабатывания антиспама');
         html += '<div class="table-wrap"><table><thead><tr>';
         html += '<th>Время</th><th>Канал</th><th>Пользователь</th><th>Причина</th><th>Текст</th>';
         html += '</tr></thead><tbody>';
@@ -4221,7 +4371,7 @@
           html += '</tr>';
         });
         if (!log.length) html += '<tr><td colspan="5" class="muted">Пусто</td></tr>';
-        html += '</tbody></table></div>';
+        html += '</tbody></table></div></div>';
         main.innerHTML = html;
         var wrap = qs('#g_stop', main);
         if (wrap) bindTagsInput(wrap, w.global || [], function () {});
@@ -5366,11 +5516,7 @@
         var el = qs('#botStatus');
         if (!el) return;
         var dot = qs('.status-dot', el);
-        var labelEl = null;
-        var ch = el.children;
-        for (var i = 0; i < ch.length; i++) {
-          if (ch[i] !== dot && ch[i].tagName === 'SPAN') labelEl = ch[i];
-        }
+        var labelEl = qs('.bot-status-label', el);
         if (s.active) {
           if (labelEl) labelEl.textContent = s.label || 'Бот активен';
           if (dot) dot.style.background = 'var(--success)';
@@ -5380,7 +5526,10 @@
         }
       })
       .catch(function () {
-        /* ignore */
+        var el = qs('#botStatus');
+        if (!el) return;
+        var labelEl = qs('.bot-status-label', el);
+        if (labelEl) labelEl.textContent = 'Статус неизвестен';
       });
   }
 
@@ -5402,6 +5551,18 @@
           });
         }
         loadBotStatus();
+        var sidebarToggle = qs('#sidebarToggle');
+        var sidebarOverlay = qs('#sidebarOverlay');
+        if (sidebarToggle) {
+          sidebarToggle.addEventListener('click', function () {
+            var sidebar = qs('#sidebar');
+            if (sidebar && sidebar.classList.contains('open')) closeSidebarMobile();
+            else openSidebarMobile();
+          });
+        }
+        if (sidebarOverlay) {
+          sidebarOverlay.addEventListener('click', closeSidebarMobile);
+        }
         var mainEl = qs('#mainContent');
         if (mainEl && mainEl.dataset.channelNavBound !== '1') {
           mainEl.dataset.channelNavBound = '1';
@@ -5415,6 +5576,7 @@
         }
         window.addEventListener('hashchange', handleRoute);
         handleRoute();
+        refreshIcons();
       })
       .catch(function () {
         /* handleAuth redirects */

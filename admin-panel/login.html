@@ -3,52 +3,52 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Вход — CommentBot SuperAdmin</title>
+  <title>Вход — CommentBot</title>
   <link rel="icon" href="/admin/assets/favicon.svg" type="image/svg+xml" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/admin/assets/admin.css" />
-  <style>
-    body { display: flex; align-items: center; justify-content: center; min-height: 100vh; padding: 1.5rem; }
-    .login-wrap { width: 100%; max-width: 400px; }
-    .login-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius); padding: 2rem; }
-    .login-card h1 { margin: 0 0 0.35rem; font-size: 1.35rem; }
-    .login-card p { color: var(--text-secondary); margin: 0 0 1.25rem; font-size: 0.92rem; line-height: 1.45; }
-    .login-error { color: var(--danger); font-size: 0.85rem; min-height: 1.2em; margin-top: 0.75rem; }
-    label { display: block; font-size: 0.78rem; color: var(--text-secondary); margin-bottom: 0.35rem; }
-    input { width: 100%; margin-bottom: 0.85rem; }
-    .brand-row { display: flex; align-items: center; gap: 0.65rem; margin-bottom: 1.25rem; }
-    .brand-row span { font-size: 1.75rem; }
-  </style>
 </head>
-<body>
+<body class="login-page">
   <div class="login-wrap">
     <div class="login-card">
-      <div class="brand-row">
-        <span>💬</span>
+      <div class="login-brand">
+        <span class="login-brand-icon" aria-hidden="true">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </span>
         <div>
-          <strong style="display:block;font-size:1.1rem;">CommentBot</strong>
-          <span class="muted" style="font-size:0.8rem;">SuperAdmin</span>
+          <span class="login-brand-title">CommentBot</span>
+          <span class="login-brand-sub">Панель управления</span>
         </div>
       </div>
-      <h1>Вход в панель</h1>
-      <p>Учётные данные из переменных <span class="mono">ADMIN_PANEL_USER</span> и <span class="mono">ADMIN_PANEL_PASSWORD</span>.</p>
+      <h1>Вход в систему</h1>
+      <p class="login-lead">Авторизуйтесь для управления каналами, комментариями и интеграциями Telegram → MAX.</p>
       <form id="loginForm">
-        <label for="username">Логин</label>
-        <input type="text" id="username" name="username" autocomplete="username" required />
-        <label for="password">Пароль</label>
-        <input type="password" id="password" name="password" autocomplete="current-password" required />
-        <button type="submit" class="btn btn-primary" style="width:100%;margin-top:0.5rem;">Войти</button>
+        <div class="login-field">
+          <label for="username">Логин</label>
+          <input type="text" id="username" name="username" autocomplete="username" required placeholder="admin" />
+        </div>
+        <div class="login-field">
+          <label for="password">Пароль</label>
+          <input type="password" id="password" name="password" autocomplete="current-password" required placeholder="••••••••" />
+        </div>
+        <button type="submit" class="btn btn-primary btn-block" style="margin-top:0.25rem;">Войти в панель</button>
       </form>
       <p id="loginError" class="login-error" role="alert"></p>
+      <p class="login-hint">Учётные данные задаются переменными окружения <span class="mono">ADMIN_PANEL_USER</span> и <span class="mono">ADMIN_PANEL_PASSWORD</span>.</p>
     </div>
   </div>
   <script>
     document.getElementById('loginForm').addEventListener('submit', function (e) {
       e.preventDefault();
       var err = document.getElementById('loginError');
+      var btn = e.target.querySelector('button[type="submit"]');
       err.textContent = '';
+      btn.disabled = true;
+      btn.textContent = 'Вход…';
       fetch('/api/admin/panel-login', {
         method: 'POST',
         credentials: 'same-origin',
@@ -64,6 +64,8 @@
         })
         .catch(function (ex) {
           err.textContent = ex.message || 'Ошибка входа';
+          btn.disabled = false;
+          btn.textContent = 'Войти в панель';
         });
     });
   </script>
