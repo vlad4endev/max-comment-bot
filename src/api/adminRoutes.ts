@@ -1157,8 +1157,8 @@ export function createAdminRouter(deps: AdminRouterDeps): express.Router {
     const discussionChatId = parseTgDiscussionChatId(req.body.tg_discussion_chat_id)
     if (discussionChatId !== undefined) patch.tg_discussion_chat_id = discussionChatId
     const commentSyncKeywords = parseCommentSyncKeywords(req.body.comment_sync_keywords)
-    if (commentSyncKeywords !== undefined) {
-      patch.comment_sync_keywords = normalizeCommentSyncKeywords(commentSyncKeywords)
+    if ('comment_sync_keywords' in req.body) {
+      patch.comment_sync_keywords = normalizeCommentSyncKeywords(commentSyncKeywords ?? [])
     }
     if (typeof req.body.add_comments_button === 'boolean') {
       patch.add_comments_button = req.body.add_comments_button

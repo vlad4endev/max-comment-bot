@@ -1213,6 +1213,16 @@
 
   function bindTagsInput(wrap, initialTags, onChange) {
     var tags = (initialTags || []).slice();
+    function getTags(includePending) {
+      var out = tags.slice();
+      if (includePending !== false) {
+        var inp = wrap.querySelector('.tags-input');
+        var pending = inp ? String(inp.value || '').trim() : '';
+        if (pending && out.indexOf(pending) === -1) out.push(pending);
+      }
+      return out;
+    }
+    wrap.__tagsGet = getTags;
     function render() {
       wrap.textContent = '';
       tags.forEach(function (t, idx) {
@@ -2345,12 +2355,26 @@
   }
 
   function readTagsFromWrap(wrap) {
+    if (!wrap) return [];
+    if (typeof wrap.__tagsGet === 'function') {
+      return wrap.__tagsGet(true);
+    }
     var tags = [];
-    if (!wrap) return tags;
     qsa('.tag', wrap).forEach(function (tg) {
-      var txt = tg.firstChild;
-      if (txt && txt.nodeType === 3) tags.push(String(txt.textContent || '').trim());
+      var text = '';
+      for (var i = 0; i < tg.childNodes.length; i++) {
+        var n = tg.childNodes[i];
+        if (n.nodeType === 3) text += n.textContent || '';
+        else if (n.nodeType === 1 && String(n.tagName || '').toUpperCase() !== 'BUTTON') {
+          text += n.textContent || '';
+        }
+      }
+      text = text.trim();
+      if (text) tags.push(text);
     });
+    var inp = qs('.tags-input', wrap);
+    var pending = inp ? String(inp.value || '').trim() : '';
+    if (pending && tags.indexOf(pending) === -1) tags.push(pending);
     return tags;
   }
 
@@ -2364,7 +2388,7 @@
   }
 
   function tgChainDomId(chainId) {
-    return String(chainId || '').replace(/-/g, '').slice(0, 10);
+    return String(chainId || '').replace(/-/g, '');
   }
 
   function updateChainCardCommentSyncVisibility(card) {
@@ -2410,7 +2434,7 @@
       });
     html += '</div>';
     html +=
-      '<div class="form-group"><label>Слова для переноса</label><p class="muted text-sm" style="margin:0 0 6px">Enter — добавить. Без слов обычные комментарии не переносятся.</p>';
+      '<div class="form-group"><label>Слова для переноса</label><p class="muted text-sm" style="margin:0 0 6px">Enter — добавить тег или просто нажмите «Сохранить». Без слов обычные комментарии не переносятся.</p>';
     html += '<div class="tags-input-wrap" id="tc_disc_' + esc(sid) + '_kw"></div></div>';
     html += '</div>';
     html +=
@@ -2440,11 +2464,16 @@
       saveBtn.addEventListener('click', function () {
         var patch = {
           forward_comments: !!(fwdSw && fwdSw.classList.contains('on')),
-          tg_discussion_chat_id: null,
           comment_sync_keywords: readTagsFromWrap(kwWrap),
         };
         var discRaw = readTelegramChannelPick('tc_disc_' + sid + '_select', 'tc_disc_' + sid + '_manual', card);
-        if (discRaw) patch.tg_discussion_chat_id = discRaw.replace(/^@/, '');
+        if (discRaw) {
+          patch.tg_discussion_chat_id = discRaw.replace(/^@/, '');
+        } else if (chain.tg_discussion_chat_id) {
+          patch.tg_discussion_chat_id = String(chain.tg_discussion_chat_id);
+        } else {
+          patch.tg_discussion_chat_id = null;
+        }
         saveBtn.disabled = true;
         patchJson('/tg-chains/' + encodeURIComponent(chain.id), patch)
           .then(function () {
@@ -2489,6 +2518,8 @@
       if (discRaw) payload.tg_discussion_chat_id = discRaw.replace(/^@/, '');
       var kwWrap = qs('#tc_comment_keywords', root);
       payload.comment_sync_keywords = readTagsFromWrap(kwWrap);
+    } else {
+      payload.comment_sync_keywords = [];
     }
     if (!isNumeric) payload.tg_username = tgKey.replace(/^@/, '');
     if (token) payload.bot_token = token;
@@ -2786,7 +2817,7 @@
             groupsOnly: true,
           }) + '</div>';
         html +=
-          '<div class="form-group"><label>Слова для переноса</label><p class="muted text-sm" style="margin:0 0 6px">Enter — добавить слово или фразу. Без слов обычные комментарии не переносятся.</p>';
+          '<div class="form-group"><label>Слова для переноса</label><p class="muted text-sm" style="margin:0 0 6px">Enter — добавить тег или просто нажмите «Включить пересылку». Без слов обычные комментарии не переносятся.</p>';
         html += '<div class="tags-input-wrap" id="tc_comment_keywords"></div></div>';
         html += '</div>';
         if (!tgInt) {
