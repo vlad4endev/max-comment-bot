@@ -1,7 +1,17 @@
 import type { TgChainRecord } from '../api/adminPanelState';
 import type { TgMessage } from '../forwarder/telegramReader';
+/** Режим сопоставления слов для переноса комментариев TG → MAX. */
+export type CommentSyncMatchMode = 'contains' | 'equals' | 'word' | 'starts_with' | 'ends_with';
+export declare function normalizeCommentSyncMatchMode(mode: string | undefined | null): CommentSyncMatchMode;
 export declare function normalizeCommentSyncKeywords(words: string[] | undefined): string[];
-export declare function matchesCommentSyncKeyword(text: string, keywords: string[]): boolean;
+export interface ParsedCommentSyncKeyword {
+    pattern: string;
+    mode: CommentSyncMatchMode;
+}
+/** Разбирает тег: префикс `= ^ $ # ~` переопределяет режим для одного слова. */
+export declare function parseCommentSyncKeyword(raw: string, defaultMode: CommentSyncMatchMode): ParsedCommentSyncKeyword | null;
+export declare function matchesCommentSyncPattern(text: string, pattern: string, mode: CommentSyncMatchMode): boolean;
+export declare function matchesCommentSyncKeyword(text: string, keywords: string[], defaultMode?: CommentSyncMatchMode): boolean;
 export declare function isTgCommentFromAdmin(message: TgMessage, token: string, chain: TgChainRecord, discussionChatId: number): Promise<boolean>;
 /** Поднимается по цепочке reply_to_message к корню треда (авто-репост канала). */
 export declare function resolveThreadRootMessage(message: TgMessage): TgMessage['reply_to_message'] | null;

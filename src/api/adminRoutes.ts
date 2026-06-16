@@ -8,7 +8,11 @@ import pLimit from 'p-limit'
 
 import { config, getTelegramToken } from '../config'
 import { checkAdminAuth } from '../middleware/adminAuth'
-import { normalizeCommentSyncKeywords } from '../utils/commentSyncFilter'
+import {
+  normalizeCommentSyncKeywords,
+  normalizeCommentSyncMatchMode,
+  type CommentSyncMatchMode,
+} from '../utils/commentSyncFilter'
 import {
   fullyDisconnectRegisteredChannel,
   maybePruneRegisteredChannelsNotAccessibleByBot,
@@ -141,6 +145,13 @@ function parseCommentSyncKeywords(value: unknown): string[] | undefined {
     .filter((w): w is string => typeof w === 'string')
     .map((w) => w.trim())
     .filter(Boolean)
+}
+
+function parseCommentSyncMatchMode(value: unknown): CommentSyncMatchMode | undefined {
+  if (typeof value !== 'string') {
+    return undefined
+  }
+  return normalizeCommentSyncMatchMode(value)
 }
 
 function extractChatAvatarUrl(chat: { icon?: { url?: unknown } | null | undefined }): string | null {
@@ -1132,6 +1143,7 @@ export function createAdminRouter(deps: AdminRouterDeps): express.Router {
     const discussionChatId = parseTgDiscussionChatId(req.body.tg_discussion_chat_id)
     const discussionSendAs = parseDiscussionSendAs(req.body.tg_discussion_send_as)
     const commentSyncKeywords = parseCommentSyncKeywords(req.body.comment_sync_keywords)
+    const commentSyncMatchMode = parseCommentSyncMatchMode(req.body.comment_sync_match_mode)
     const row = await createTgChain({
       max_chat_id: maxChatId,
       max_title: ch?.title ?? null,
@@ -1143,6 +1155,7 @@ export function createAdminRouter(deps: AdminRouterDeps): express.Router {
       tg_discussion_chat_id: discussionChatId === undefined ? null : discussionChatId,
       ...(discussionSendAs ? { tg_discussion_send_as: discussionSendAs } : {}),
       comment_sync_keywords: normalizeCommentSyncKeywords(commentSyncKeywords ?? []),
+      ...(commentSyncMatchMode ? { comment_sync_match_mode: commentSyncMatchMode } : {}),
       add_comments_button: req.body.add_comments_button !== false,
       add_signature: Boolean(req.body.add_signature),
       active: true,
@@ -1171,6 +1184,10 @@ export function createAdminRouter(deps: AdminRouterDeps): express.Router {
     const commentSyncKeywords = parseCommentSyncKeywords(req.body.comment_sync_keywords)
     if ('comment_sync_keywords' in req.body) {
       patch.comment_sync_keywords = normalizeCommentSyncKeywords(commentSyncKeywords ?? [])
+    }
+    const commentSyncMatchMode = parseCommentSyncMatchMode(req.body.comment_sync_match_mode)
+    if ('comment_sync_match_mode' in req.body) {
+      patch.comment_sync_match_mode = commentSyncMatchMode ?? 'contains'
     }
     if (typeof req.body.add_comments_button === 'boolean') {
       patch.add_comments_button = req.body.add_comments_button

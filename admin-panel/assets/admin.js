@@ -2394,6 +2394,52 @@
     return String(chainId || '').replace(/-/g, '');
   }
 
+  function buildCommentSyncMatchModeSelect(selectedMode, attrs) {
+    var mode = selectedMode || 'contains';
+    var attrStr = attrs ? ' ' + attrs : '';
+    var modes = [
+      { value: 'contains', label: 'Содержит фразу' },
+      { value: 'equals', label: 'Точное совпадение (весь текст)' },
+      { value: 'word', label: 'Отдельное слово' },
+      { value: 'starts_with', label: 'Начинается с' },
+      { value: 'ends_with', label: 'Заканчивается на' },
+    ];
+    var html =
+      '<select class="input" data-chain-comment-match-mode' +
+      attrStr +
+      ' style="width:100%">';
+    modes.forEach(function (m) {
+      html +=
+        '<option value="' +
+        esc(m.value) +
+        '"' +
+        (mode === m.value ? ' selected' : '') +
+        '>' +
+        esc(m.label) +
+        '</option>';
+    });
+    html += '</select>';
+    return html;
+  }
+
+  function readCommentSyncMatchMode(root, selector) {
+    var el = qs(selector || '[data-chain-comment-match-mode]', root);
+    var value = el ? String(el.value || '').trim() : '';
+    if (
+      value === 'contains' ||
+      value === 'equals' ||
+      value === 'word' ||
+      value === 'starts_with' ||
+      value === 'ends_with'
+    ) {
+      return value;
+    }
+    return 'contains';
+  }
+
+  var commentSyncKeywordHelp =
+    'Enter — добавить тег. Для одного слова можно задать свой режим префиксом: <code>=да</code> (точно), <code>#вопрос</code> (отдельное слово), <code>^привет</code> (начало), <code>$!</code> (конец), <code>~help</code> (содержит). Без слов обычные комментарии не переносятся.';
+
   function updateChainCardCommentSyncVisibility(card) {
     var sw = qs('[data-chain-comment-forward]', card);
     var fields = qs('[data-chain-comment-fields]', card);
@@ -2446,7 +2492,13 @@
       });
     html += '</div>';
     html +=
-      '<div class="form-group"><label>Слова для переноса</label><p class="muted text-sm" style="margin:0 0 6px">Enter — добавить тег или просто нажмите «Сохранить». Без слов обычные комментарии не переносятся.</p>';
+      '<div class="form-group"><label>Условие для слов</label><p class="muted text-sm" style="margin:0 0 6px">Как сравнивать каждое слово с текстом комментария. Префиксы в тегах переопределяют это для отдельных слов.</p>';
+    html += buildCommentSyncMatchModeSelect(c.comment_sync_match_mode || 'contains');
+    html += '</div>';
+    html +=
+      '<div class="form-group"><label>Слова для переноса</label><p class="muted text-sm" style="margin:0 0 6px">' +
+      commentSyncKeywordHelp +
+      '</p>';
     html += '<div class="tags-input-wrap" id="tc_disc_' + esc(sid) + '_kw"></div></div>';
     html += '</div>';
     html +=
@@ -2477,6 +2529,7 @@
         var patch = {
           forward_comments: !!(fwdSw && fwdSw.classList.contains('on')),
           comment_sync_keywords: readTagsFromWrap(kwWrap),
+          comment_sync_match_mode: readCommentSyncMatchMode(card),
         };
         var discRaw = readTelegramChannelPick('tc_disc_' + sid + '_select', 'tc_disc_' + sid + '_manual', card);
         var sendAsEl = qs('[data-chain-discussion-send-as]', card);
@@ -2534,6 +2587,7 @@
       if (discRaw) payload.tg_discussion_chat_id = discRaw.replace(/^@/, '');
       var kwWrap = qs('#tc_comment_keywords', root);
       payload.comment_sync_keywords = readTagsFromWrap(kwWrap);
+      payload.comment_sync_match_mode = readCommentSyncMatchMode(root);
     } else {
       payload.comment_sync_keywords = [];
     }
@@ -2833,7 +2887,13 @@
             groupsOnly: true,
           }) + '</div>';
         html +=
-          '<div class="form-group"><label>Слова для переноса</label><p class="muted text-sm" style="margin:0 0 6px">Enter — добавить тег или просто нажмите «Включить пересылку». Без слов обычные комментарии не переносятся.</p>';
+          '<div class="form-group"><label>Условие для слов</label><p class="muted text-sm" style="margin:0 0 6px">Как сравнивать слова с текстом комментария. Префиксы в тегах переопределяют режим для отдельных слов.</p>';
+        html += buildCommentSyncMatchModeSelect('contains');
+        html += '</div>';
+        html +=
+          '<div class="form-group"><label>Слова для переноса</label><p class="muted text-sm" style="margin:0 0 6px">' +
+          commentSyncKeywordHelp +
+          '</p>';
         html += '<div class="tags-input-wrap" id="tc_comment_keywords"></div></div>';
         html += '</div>';
         if (!tgInt) {

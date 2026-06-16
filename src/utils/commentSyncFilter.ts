@@ -2,16 +2,112 @@ import type { TgChainRecord } from '../api/adminPanelState'
 import type { TgMessage } from '../forwarder/telegramReader'
 import { listTelegramChatAdministrators } from '../services/integrationPlatformClient'
 
+/** Режим сопоставления слов для переноса комментариев TG → MAX. */
+export type CommentSyncMatchMode = 'contains' | 'equals' | 'word' | 'starts_with' | 'ends_with'
+
+const COMMENT_SYNC_MATCH_MODES: CommentSyncMatchMode[] = [
+  'contains',
+  'equals',
+  'word',
+  'starts_with',
+  'ends_with',
+]
+
+const KEYWORD_PREFIX_MODES: Record<string, CommentSyncMatchMode> = {
+  '~': 'contains',
+  '=': 'equals',
+  '#': 'word',
+  '^': 'starts_with',
+  $: 'ends_with',
+}
+
+export function normalizeCommentSyncMatchMode(
+  mode: string | undefined | null,
+): CommentSyncMatchMode {
+  if (mode && COMMENT_SYNC_MATCH_MODES.includes(mode as CommentSyncMatchMode)) {
+    return mode as CommentSyncMatchMode
+  }
+  return 'contains'
+}
+
 export function normalizeCommentSyncKeywords(words: string[] | undefined): string[] {
   return (words ?? []).map((w) => w.trim().toLowerCase()).filter(Boolean)
 }
 
-export function matchesCommentSyncKeyword(text: string, keywords: string[]): boolean {
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+export interface ParsedCommentSyncKeyword {
+  pattern: string
+  mode: CommentSyncMatchMode
+}
+
+/** Разбирает тег: префикс `= ^ $ # ~` переопределяет режим для одного слова. */
+export function parseCommentSyncKeyword(
+  raw: string,
+  defaultMode: CommentSyncMatchMode,
+): ParsedCommentSyncKeyword | null {
+  const trimmed = raw.trim().toLowerCase()
+  if (!trimmed) {
+    return null
+  }
+  const prefix = trimmed[0]
+  const modeFromPrefix = prefix ? KEYWORD_PREFIX_MODES[prefix] : undefined
+  if (modeFromPrefix && trimmed.length > 1) {
+    const pattern = trimmed.slice(1).trim()
+    return pattern ? { pattern, mode: modeFromPrefix } : null
+  }
+  return { pattern: trimmed, mode: defaultMode }
+}
+
+export function matchesCommentSyncPattern(
+  text: string,
+  pattern: string,
+  mode: CommentSyncMatchMode,
+): boolean {
+  const hay = text.trim().toLowerCase()
+  const needle = pattern.trim().toLowerCase()
+  if (!hay || !needle) {
+    return false
+  }
+
+  switch (mode) {
+    case 'equals':
+      return hay === needle
+    case 'starts_with':
+      return hay.startsWith(needle)
+    case 'ends_with':
+      return hay.endsWith(needle)
+    case 'word': {
+      if (hay === needle) {
+        return true
+      }
+      const re = new RegExp(
+        `(?:^|[^\\p{L}\\p{N}_])${escapeRegExp(needle)}(?:[^\\p{L}\\p{N}_]|$)`,
+        'iu',
+      )
+      return re.test(hay)
+    }
+    case 'contains':
+    default:
+      return hay.includes(needle)
+  }
+}
+
+export function matchesCommentSyncKeyword(
+  text: string,
+  keywords: string[],
+  defaultMode: CommentSyncMatchMode = 'contains',
+): boolean {
   if (keywords.length === 0) {
     return false
   }
-  const hay = text.toLowerCase()
-  return keywords.some((kw) => hay.includes(kw))
+  const mode = normalizeCommentSyncMatchMode(defaultMode)
+  return keywords.some((kw) => {
+    const parsed = parseCommentSyncKeyword(kw, mode)
+    return parsed ? matchesCommentSyncPattern(text, parsed.pattern, parsed.mode) : false
+  })
 }
 
 const adminUserCache = new Map<string, { userIds: Set<number>; expiresAt: number }>()
@@ -228,5 +324,6 @@ export async function shouldSyncTgCommentToMax(params: {
     return false
   }
 
-  return matchesCommentSyncKeyword(text, keywords)
+  const matchMode = normalizeCommentSyncMatchMode(params.chain.comment_sync_match_mode)
+  return matchesCommentSyncKeyword(text, keywords, matchMode)
 }

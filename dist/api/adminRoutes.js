@@ -108,6 +108,12 @@ function parseCommentSyncKeywords(value) {
         .map((w) => w.trim())
         .filter(Boolean);
 }
+function parseCommentSyncMatchMode(value) {
+    if (typeof value !== 'string') {
+        return undefined;
+    }
+    return (0, commentSyncFilter_1.normalizeCommentSyncMatchMode)(value);
+}
 function extractChatAvatarUrl(chat) {
     const icon = chat.icon;
     const iconRaw = icon && typeof icon === 'object' ? icon.url : undefined;
@@ -1001,6 +1007,7 @@ function createAdminRouter(deps) {
         const discussionChatId = parseTgDiscussionChatId(req.body.tg_discussion_chat_id);
         const discussionSendAs = parseDiscussionSendAs(req.body.tg_discussion_send_as);
         const commentSyncKeywords = parseCommentSyncKeywords(req.body.comment_sync_keywords);
+        const commentSyncMatchMode = parseCommentSyncMatchMode(req.body.comment_sync_match_mode);
         const row = await (0, adminPanelState_1.createTgChain)({
             max_chat_id: maxChatId,
             max_title: ch?.title ?? null,
@@ -1012,6 +1019,7 @@ function createAdminRouter(deps) {
             tg_discussion_chat_id: discussionChatId === undefined ? null : discussionChatId,
             ...(discussionSendAs ? { tg_discussion_send_as: discussionSendAs } : {}),
             comment_sync_keywords: (0, commentSyncFilter_1.normalizeCommentSyncKeywords)(commentSyncKeywords ?? []),
+            ...(commentSyncMatchMode ? { comment_sync_match_mode: commentSyncMatchMode } : {}),
             add_comments_button: req.body.add_comments_button !== false,
             add_signature: Boolean(req.body.add_signature),
             active: true,
@@ -1044,6 +1052,10 @@ function createAdminRouter(deps) {
         const commentSyncKeywords = parseCommentSyncKeywords(req.body.comment_sync_keywords);
         if ('comment_sync_keywords' in req.body) {
             patch.comment_sync_keywords = (0, commentSyncFilter_1.normalizeCommentSyncKeywords)(commentSyncKeywords ?? []);
+        }
+        const commentSyncMatchMode = parseCommentSyncMatchMode(req.body.comment_sync_match_mode);
+        if ('comment_sync_match_mode' in req.body) {
+            patch.comment_sync_match_mode = commentSyncMatchMode ?? 'contains';
         }
         if (typeof req.body.add_comments_button === 'boolean') {
             patch.add_comments_button = req.body.add_comments_button;

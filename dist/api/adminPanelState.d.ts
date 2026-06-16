@@ -31,6 +31,8 @@ export interface TgChainRecord {
     tg_discussion_send_as?: 'channel' | 'chat';
     /** Ключевые слова/фразы: обычные комментарии TG синхронизируются только при совпадении. */
     comment_sync_keywords?: string[];
+    /** Режим сопоставления слов: contains | equals | word | starts_with | ends_with. */
+    comment_sync_match_mode?: 'contains' | 'equals' | 'word' | 'starts_with' | 'ends_with';
     /** Кнопка «Комментарии» под постом в MAX после пересылки */
     add_comments_button: boolean;
     add_signature: boolean;

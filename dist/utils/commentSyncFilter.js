@@ -1,7 +1,10 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.MAX_COMMENT_TG_PREFIX = exports.MAX_REPLY_TG_PREFIX = exports.MAX_ANSWERED_IN_TELEGRAM_LABEL = exports.MAX_ANSWERED_IN_MAX_MARKER = void 0;
+exports.normalizeCommentSyncMatchMode = normalizeCommentSyncMatchMode;
 exports.normalizeCommentSyncKeywords = normalizeCommentSyncKeywords;
+exports.parseCommentSyncKeyword = parseCommentSyncKeyword;
+exports.matchesCommentSyncPattern = matchesCommentSyncPattern;
 exports.matchesCommentSyncKeyword = matchesCommentSyncKeyword;
 exports.isTgCommentFromAdmin = isTgCommentFromAdmin;
 exports.resolveThreadRootMessage = resolveThreadRootMessage;
@@ -14,15 +17,80 @@ exports.isMaxCommentInTelegram = isMaxCommentInTelegram;
 exports.formatMaxCommentForTelegram = formatMaxCommentForTelegram;
 exports.shouldSyncTgCommentToMax = shouldSyncTgCommentToMax;
 const integrationPlatformClient_1 = require("../services/integrationPlatformClient");
+const COMMENT_SYNC_MATCH_MODES = [
+    'contains',
+    'equals',
+    'word',
+    'starts_with',
+    'ends_with',
+];
+const KEYWORD_PREFIX_MODES = {
+    '~': 'contains',
+    '=': 'equals',
+    '#': 'word',
+    '^': 'starts_with',
+    $: 'ends_with',
+};
+function normalizeCommentSyncMatchMode(mode) {
+    if (mode && COMMENT_SYNC_MATCH_MODES.includes(mode)) {
+        return mode;
+    }
+    return 'contains';
+}
 function normalizeCommentSyncKeywords(words) {
     return (words ?? []).map((w) => w.trim().toLowerCase()).filter(Boolean);
 }
-function matchesCommentSyncKeyword(text, keywords) {
+function escapeRegExp(value) {
+    return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+/** Разбирает тег: префикс `= ^ $ # ~` переопределяет режим для одного слова. */
+function parseCommentSyncKeyword(raw, defaultMode) {
+    const trimmed = raw.trim().toLowerCase();
+    if (!trimmed) {
+        return null;
+    }
+    const prefix = trimmed[0];
+    const modeFromPrefix = prefix ? KEYWORD_PREFIX_MODES[prefix] : undefined;
+    if (modeFromPrefix && trimmed.length > 1) {
+        const pattern = trimmed.slice(1).trim();
+        return pattern ? { pattern, mode: modeFromPrefix } : null;
+    }
+    return { pattern: trimmed, mode: defaultMode };
+}
+function matchesCommentSyncPattern(text, pattern, mode) {
+    const hay = text.trim().toLowerCase();
+    const needle = pattern.trim().toLowerCase();
+    if (!hay || !needle) {
+        return false;
+    }
+    switch (mode) {
+        case 'equals':
+            return hay === needle;
+        case 'starts_with':
+            return hay.startsWith(needle);
+        case 'ends_with':
+            return hay.endsWith(needle);
+        case 'word': {
+            if (hay === needle) {
+                return true;
+            }
+            const re = new RegExp(`(?:^|[^\\p{L}\\p{N}_])${escapeRegExp(needle)}(?:[^\\p{L}\\p{N}_]|$)`, 'iu');
+            return re.test(hay);
+        }
+        case 'contains':
+        default:
+            return hay.includes(needle);
+    }
+}
+function matchesCommentSyncKeyword(text, keywords, defaultMode = 'contains') {
     if (keywords.length === 0) {
         return false;
     }
-    const hay = text.toLowerCase();
-    return keywords.some((kw) => hay.includes(kw));
+    const mode = normalizeCommentSyncMatchMode(defaultMode);
+    return keywords.some((kw) => {
+        const parsed = parseCommentSyncKeyword(kw, mode);
+        return parsed ? matchesCommentSyncPattern(text, parsed.pattern, parsed.mode) : false;
+    });
 }
 const adminUserCache = new Map();
 const ADMIN_CACHE_TTL_MS = 5 * 60_000;
@@ -184,6 +252,7 @@ async function shouldSyncTgCommentToMax(params) {
         }
         return false;
     }
-    return matchesCommentSyncKeyword(text, keywords);
+    const matchMode = normalizeCommentSyncMatchMode(params.chain.comment_sync_match_mode);
+    return matchesCommentSyncKeyword(text, keywords, matchMode);
 }
 //# sourceMappingURL=commentSyncFilter.js.map
