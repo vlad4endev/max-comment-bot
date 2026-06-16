@@ -13,21 +13,14 @@ import { findMappingByMaxMid } from './postCommentMappingStore'
 import type { Post } from './postStore'
 import { resolveTelegramBotToken } from './resolveTelegramBotToken'
 import { isCommentSynced, markCommentSynced } from '../utils/commentSyncGuard'
-import { MAX_REPLY_TG_PREFIX } from '../utils/commentSyncFilter'
+import {
+  MAX_ANSWERED_IN_MAX_MARKER,
+  MAX_REPLY_TG_PREFIX,
+  isTelegramCommentMarkedAnsweredInMax,
+} from '../utils/commentSyncFilter'
 import { logger } from '../utils/logger'
 
 const TG_API = 'https://api.telegram.org'
-
-function latestAdminReplyText(comment: Comment): string | null {
-  if (Array.isArray(comment.replies) && comment.replies.length > 0) {
-    const last = comment.replies[comment.replies.length - 1]!
-    return last.text.trim() || null
-  }
-  if (comment.reply?.text?.trim()) {
-    return comment.reply.text.trim()
-  }
-  return null
-}
 
 async function sendTelegramThreadMessage(
   token: string,
@@ -55,6 +48,119 @@ async function sendTelegramThreadMessage(
   return typeof messageId === 'number' ? messageId : null
 }
 
+async function tryEditTelegramMessageText(
+  token: string,
+  chatId: number,
+  messageId: number,
+  text: string,
+): Promise<boolean> {
+  const { data } = await axios.post<{ ok: boolean; description?: string }>(
+    `${TG_API}/bot${token}/editMessageText`,
+    {
+      chat_id: chatId,
+      message_id: messageId,
+      text,
+    },
+    { timeout: 20_000 },
+  )
+  return data.ok === true
+}
+
+async function tryEditTelegramMessageCaption(
+  token: string,
+  chatId: number,
+  messageId: number,
+  caption: string,
+): Promise<boolean> {
+  const { data } = await axios.post<{ ok: boolean; description?: string }>(
+    `${TG_API}/bot${token}/editMessageCaption`,
+    {
+      chat_id: chatId,
+      message_id: messageId,
+      caption,
+    },
+    { timeout: 20_000 },
+  )
+  return data.ok === true
+}
+
+async function trySetTelegramMessageReaction(
+  token: string,
+  chatId: number,
+  messageId: number,
+): Promise<boolean> {
+  const { data } = await axios.post<{ ok: boolean; description?: string }>(
+    `${TG_API}/bot${token}/setMessageReaction`,
+    {
+      chat_id: chatId,
+      message_id: messageId,
+      reaction: [{ type: 'emoji', emoji: '✅' }],
+    },
+    { timeout: 20_000 },
+  )
+  return data.ok === true
+}
+
+/**
+ * Помечает исходный комментарий в TG-треде как отвеченный в MAX.
+ */
+export async function markTelegramCommentAnsweredInMax(
+  token: string,
+  chatId: number,
+  tgCommentId: number,
+  commentText: string,
+): Promise<void> {
+  const guardKey = `tg-marked-max:${tgCommentId}`
+  if (isCommentSynced(guardKey)) {
+    return
+  }
+
+  const baseText = commentText.trim()
+  if (!baseText || isTelegramCommentMarkedAnsweredInMax(baseText)) {
+    markCommentSynced(guardKey)
+    return
+  }
+
+  const markedText = `${baseText}\n\n${MAX_ANSWERED_IN_MAX_MARKER}`
+
+  try {
+    const edited =
+      (await tryEditTelegramMessageText(token, chatId, tgCommentId, markedText)) ||
+      (await tryEditTelegramMessageCaption(token, chatId, tgCommentId, markedText))
+    if (edited) {
+      markCommentSynced(guardKey)
+      logger.info('[telegramThreadReplySync] marked TG comment as answered in MAX (edit)', {
+        tgCommentId,
+        chatId,
+      })
+      return
+    }
+  } catch (err: unknown) {
+    logger.debug('[telegramThreadReplySync] edit TG comment for MAX answered mark failed', {
+      tgCommentId,
+      err,
+    })
+  }
+
+  try {
+    const reacted = await trySetTelegramMessageReaction(token, chatId, tgCommentId)
+    if (reacted) {
+      markCommentSynced(guardKey)
+      logger.info('[telegramThreadReplySync] marked TG comment as answered in MAX (reaction)', {
+        tgCommentId,
+        chatId,
+      })
+      return
+    }
+  } catch (err: unknown) {
+    logger.warn('[telegramThreadReplySync] setMessageReaction failed', {
+      tgCommentId,
+      chatId,
+      err,
+    })
+  }
+}
+
 /**
  * Отправляет последний ответ администратора в TG-тред, если есть маппинг поста.
  */
@@ -63,20 +169,13 @@ export async function syncAdminReplyToTelegramThread(
   comment: Comment,
   post: Post,
 ): Promise<void> {
-  if (comment.source === 'telegram') {
-    return
-  }
-  if (comment.tg_thread_reply_id) {
+  const maxReply = commentStore.latestMaxAdminReply(comment)
+  if (!maxReply) {
     return
   }
 
-  const replyText = latestAdminReplyText(comment)
+  const replyText = maxReply.text.trim()
   if (!replyText) {
-    return
-  }
-
-  const guardKey = `max-reply:${comment.comment_id}:${replyText}`
-  if (isCommentSynced(guardKey)) {
     return
   }
 
@@ -94,6 +193,21 @@ export async function syncAdminReplyToTelegramThread(
     return
   }
 
+  const threadChatId = mapping.tg_thread_chat_id
+
+  if (comment.tg_comment_id) {
+    await markTelegramCommentAnsweredInMax(token, threadChatId, comment.tg_comment_id, comment.text)
+  }
+
+  if (comment.tg_thread_reply_id) {
+    return
+  }
+
+  const guardKey = `max-reply:${comment.comment_id}:${replyText}`
+  if (isCommentSynced(guardKey)) {
+    return
+  }
+
   let replyToId = mapping.tg_thread_msg_id
   if (comment.tg_comment_id) {
     replyToId = comment.tg_comment_id
@@ -102,7 +216,7 @@ export async function syncAdminReplyToTelegramThread(
   try {
     const tgMsgId = await sendTelegramThreadMessage(
       token,
-      mapping.tg_thread_chat_id,
+      threadChatId,
       `${MAX_REPLY_TG_PREFIX} ${replyText}`,
       replyToId,
     )
@@ -117,7 +231,7 @@ export async function syncAdminReplyToTelegramThread(
     logger.info('[telegramThreadReplySync] delivered admin reply to TG thread', {
       commentId: comment.comment_id,
       tgMsgId,
-      threadChatId: mapping.tg_thread_chat_id,
+      threadChatId,
     })
   } catch (err: unknown) {
     logger.warn('[telegramThreadReplySync] sendMessage failed', {

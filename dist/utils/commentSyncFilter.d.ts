@@ -12,6 +12,9 @@ export declare function resolveTgCommentAuthor(message: TgMessage, chain: TgChai
     userId: number;
     username: string;
 };
+/** Маркер на исходном комментарии в TG после ответа из MAX. */
+export declare const MAX_ANSWERED_IN_MAX_MARKER = "\u2705 \u041E\u0442\u0432\u0435\u0447\u0435\u043D\u043E \u0432 MAX";
+export declare function isTelegramCommentMarkedAnsweredInMax(text: string): boolean;
 /** Префикс ответа админа из MAX в TG-треде (не синхронизировать обратно в miniapp). */
 export declare const MAX_REPLY_TG_PREFIX = "MAX \u043E\u0442\u0432\u0435\u0442:";
 export declare function isMaxAdminReplyInTelegram(text: string): boolean;

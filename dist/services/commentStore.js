@@ -657,6 +657,19 @@ class CommentStore {
         return c;
     }
     /**
+     * Последний ответ администратора из MAX (не импортированный из TG-треда).
+     */
+    latestMaxAdminReply(comment) {
+        const thread = existingRepliesList(comment);
+        for (let i = thread.length - 1; i >= 0; i--) {
+            const reply = thread[i];
+            if (!reply.from_telegram && reply.text.trim()) {
+                return reply;
+            }
+        }
+        return null;
+    }
+    /**
      * Комментарии с ответом админа, ещё не отправленным в TG-тред.
      */
     listCommentsPendingTelegramThreadReply(limit = 20) {
@@ -665,7 +678,7 @@ class CommentStore {
         for (const row of rows) {
             try {
                 const c = normalizeCommentFromDisk(this.parseRow(row.data));
-                if (c) {
+                if (c && this.latestMaxAdminReply(c)) {
                     out.push(c);
                 }
             }
@@ -745,7 +758,6 @@ class CommentStore {
             listPendingThreadReply: db.prepare(`SELECT data FROM comments
          WHERE reply IS NOT NULL AND TRIM(reply) != ''
            AND (tg_thread_reply_id IS NULL OR tg_thread_reply_id = 0)
-           AND (source IS NULL OR source != 'telegram')
          ORDER BY timestamp DESC
          LIMIT ?`),
             deleteById: db.prepare('DELETE FROM comments WHERE comment_id = ?'),

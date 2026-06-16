@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.MAX_REPLY_TG_PREFIX = void 0;
+exports.MAX_REPLY_TG_PREFIX = exports.MAX_ANSWERED_IN_MAX_MARKER = void 0;
 exports.normalizeCommentSyncKeywords = normalizeCommentSyncKeywords;
 exports.matchesCommentSyncKeyword = matchesCommentSyncKeyword;
 exports.isTgCommentFromAdmin = isTgCommentFromAdmin;
@@ -8,6 +8,7 @@ exports.resolveThreadRootMessage = resolveThreadRootMessage;
 exports.resolveDiscussionThreadRootMsgId = resolveDiscussionThreadRootMsgId;
 exports.resolveChannelMsgIdFromThreadRoot = resolveChannelMsgIdFromThreadRoot;
 exports.resolveTgCommentAuthor = resolveTgCommentAuthor;
+exports.isTelegramCommentMarkedAnsweredInMax = isTelegramCommentMarkedAnsweredInMax;
 exports.isMaxAdminReplyInTelegram = isMaxAdminReplyInTelegram;
 exports.shouldSyncTgCommentToMax = shouldSyncTgCommentToMax;
 const integrationPlatformClient_1 = require("../services/integrationPlatformClient");
@@ -129,6 +130,11 @@ function resolveTgCommentAuthor(message, chain, discussionChatId) {
     }
     return { userId: fromId || 1, username: 'Аноним' };
 }
+/** Маркер на исходном комментарии в TG после ответа из MAX. */
+exports.MAX_ANSWERED_IN_MAX_MARKER = '✅ Отвечено в MAX';
+function isTelegramCommentMarkedAnsweredInMax(text) {
+    return text.includes(exports.MAX_ANSWERED_IN_MAX_MARKER);
+}
 /** Префикс ответа админа из MAX в TG-треде (не синхронизировать обратно в miniapp). */
 exports.MAX_REPLY_TG_PREFIX = 'MAX ответ:';
 /** Старый префикс — игнорируем при обратной синхронизации. */
@@ -139,7 +145,9 @@ function isMaxAdminReplyInTelegram(text) {
 }
 async function shouldSyncTgCommentToMax(params) {
     const text = (params.message.text || params.message.caption || '').trim();
-    if (!text || isMaxAdminReplyInTelegram(text)) {
+    if (!text ||
+        isMaxAdminReplyInTelegram(text) ||
+        isTelegramCommentMarkedAnsweredInMax(text)) {
         return false;
     }
     const keywords = normalizeCommentSyncKeywords(params.chain.comment_sync_keywords);

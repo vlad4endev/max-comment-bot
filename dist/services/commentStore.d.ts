@@ -161,6 +161,10 @@ export declare class CommentStore {
     saveTelegramThreadComment(input: Omit<Comment, 'comment_id' | 'timestamp' | 'source' | 'synced'>, tgCommentId: number): Comment;
     setTgThreadReplyId(commentId: string, tgMessageId: number): Comment | null;
     /**
+     * Последний ответ администратора из MAX (не импортированный из TG-треда).
+     */
+    latestMaxAdminReply(comment: Comment): CommentReply | null;
+    /**
      * Комментарии с ответом админа, ещё не отправленным в TG-тред.
      */
     listCommentsPendingTelegramThreadReply(limit?: number): Comment[];

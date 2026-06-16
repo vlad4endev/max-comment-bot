@@ -873,6 +873,20 @@ export class CommentStore {
   }
 
   /**
+   * Последний ответ администратора из MAX (не импортированный из TG-треда).
+   */
+  latestMaxAdminReply(comment: Comment): CommentReply | null {
+    const thread = existingRepliesList(comment)
+    for (let i = thread.length - 1; i >= 0; i--) {
+      const reply = thread[i]!
+      if (!reply.from_telegram && reply.text.trim()) {
+        return reply
+      }
+    }
+    return null
+  }
+
+  /**
    * Комментарии с ответом админа, ещё не отправленным в TG-тред.
    */
   listCommentsPendingTelegramThreadReply(limit = 20): Comment[] {
@@ -881,7 +895,7 @@ export class CommentStore {
     for (const row of rows) {
       try {
         const c = normalizeCommentFromDisk(this.parseRow(row.data))
-        if (c) {
+        if (c && this.latestMaxAdminReply(c)) {
           out.push(c)
         }
       } catch {
@@ -978,7 +992,6 @@ export class CommentStore {
         `SELECT data FROM comments
          WHERE reply IS NOT NULL AND TRIM(reply) != ''
            AND (tg_thread_reply_id IS NULL OR tg_thread_reply_id = 0)
-           AND (source IS NULL OR source != 'telegram')
          ORDER BY timestamp DESC
          LIMIT ?`,
       ),

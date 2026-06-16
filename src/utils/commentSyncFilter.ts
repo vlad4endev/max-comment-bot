@@ -148,6 +148,13 @@ export function resolveTgCommentAuthor(
   return { userId: fromId || 1, username: 'Аноним' }
 }
 
+/** Маркер на исходном комментарии в TG после ответа из MAX. */
+export const MAX_ANSWERED_IN_MAX_MARKER = '✅ Отвечено в MAX'
+
+export function isTelegramCommentMarkedAnsweredInMax(text: string): boolean {
+  return text.includes(MAX_ANSWERED_IN_MAX_MARKER)
+}
+
 /** Префикс ответа админа из MAX в TG-треде (не синхронизировать обратно в miniapp). */
 export const MAX_REPLY_TG_PREFIX = 'MAX ответ:'
 
@@ -170,7 +177,11 @@ export async function shouldSyncTgCommentToMax(params: {
   threadRootMsgId: number
 }): Promise<boolean> {
   const text = (params.message.text || params.message.caption || '').trim()
-  if (!text || isMaxAdminReplyInTelegram(text)) {
+  if (
+    !text ||
+    isMaxAdminReplyInTelegram(text) ||
+    isTelegramCommentMarkedAnsweredInMax(text)
+  ) {
     return false
   }
 
