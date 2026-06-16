@@ -1,6 +1,8 @@
 import type { Bot } from '@maxhub/max-bot-api'
 
+import { listTgChainsSync } from '../api/adminPanelState'
 import { config, getFlowPollIntervalMs, getTelegramToken } from '../config'
+import { findActiveTgChainForPair } from '../utils/tgChainPair'
 import { channelRegistry } from './channelRegistry'
 import {
   fetchTelegramChannelPosts,
@@ -41,6 +43,8 @@ export class FlowProcessor {
   private pollers = new Map<string, NodeJS.Timeout>()
   private started = false
   private emptyTickCount = new Map<string, number>()
+  /** Однократное предупреждение: поток TG→MAX дублирует активную связку. */
+  private supersededByTgChainLogged = new Set<string>()
 
   setBot(bot: Bot): void {
     this.bot = bot
@@ -89,12 +93,42 @@ export class FlowProcessor {
   private async processFlowSafe(flowId: string): Promise<void> {
     const flow = integrationsStore.getFlow(flowId)
     if (!flow || !flow.enabled) return
+    if (this.isFlowSupersededByTgChain(flow)) {
+      if (!this.supersededByTgChainLogged.has(flow.id)) {
+        this.supersededByTgChainLogged.add(flow.id)
+        logger.warn(
+          'flowProcessor: поток TG→MAX пропущен — та же пара уже обслуживается tgChainForwarder (связка в админке). Отключите поток в Интеграциях или связку, чтобы не дублировать.',
+          {
+            flowId: flow.id,
+            flowName: flow.name,
+            source: flow.source.channelUsername ?? flow.source.channelId,
+            destination: flow.destination.channelId,
+          },
+        )
+      }
+      return
+    }
     try {
       await this.processFlow(flow)
     } catch (err: unknown) {
       logger.error('flowProcessor: error', { flowId: flow.id, err })
       await integrationsStore.updateFlowStats(flow.id, { incrementErrors: 1 })
     }
+  }
+
+  /** Активная связка TG→MAX с forward_posts покрывает тот же маршрут, что и legacy-поток. */
+  private isFlowSupersededByTgChain(flow: FlowRecord): boolean {
+    if (flow.source.platform !== 'telegram' || flow.destination.platform !== 'max') {
+      return false
+    }
+    const maxChatId = Number(flow.destination.channelId)
+    if (!Number.isFinite(maxChatId)) {
+      return false
+    }
+    const tgChannelId = flow.source.channelId ?? ''
+    const tgUsername = flow.source.channelUsername ?? ''
+    const chains = listTgChainsSync().filter((c) => c.active !== false && c.forward_posts)
+    return findActiveTgChainForPair(chains, maxChatId, tgChannelId, tgUsername) !== null
   }
 
   stopFlowPoller(flowId: string): void {

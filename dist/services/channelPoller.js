@@ -14,6 +14,7 @@ const adminRuntimeSettingsStore_1 = require("./adminRuntimeSettingsStore");
 const channelAdminJoinNotified_1 = require("./channelAdminJoinNotified");
 const channelRegistry_1 = require("./channelRegistry");
 const commentButtonRetryQueue_1 = require("./commentButtonRetryQueue");
+const notificationService_1 = require("./notificationService");
 const resolveChannelChatId_1 = require("./resolveChannelChatId");
 const logger_1 = require("../utils/logger");
 const maxApiRetry_1 = require("../utils/maxApiRetry");
@@ -84,11 +85,22 @@ async function pollChannelSafe(bot, channel, botUid) {
         errorCount.set(channel.chat_id, count);
         logger_1.logger.error(`channelPoller: error for ${channel.chat_id} (${count}/${DISABLE_AFTER_ERRORS})`, err);
         if (count >= DISABLE_AFTER_ERRORS) {
+            const removed = channelRegistry_1.channelRegistry.getChannel(channel.chat_id);
+            const title = removed?.title ?? `ID ${channel.chat_id}`;
             logger_1.logger.warn(`channelPoller: disabling channel ${channel.chat_id} after ${count} errors`);
             (0, channelAdminJoinNotified_1.clearAdminJoinNotifiedForChannel)(channel.chat_id);
             channelRegistry_1.channelRegistry.deactivate(channel.chat_id);
             errorCount.delete(channel.chat_id);
             stopChannelTimer(channel.chat_id);
+            const notifyText = `⚠️ CommentBot приостановил опрос канала «${title}» после ${count} ошибок MAX API.\n\n` +
+                `Кнопки «Комментарии» могут не появляться на новых постах. Проверьте, что бот — администратор канала, ` +
+                `и нажмите «Обновить кнопки» в админ-панели или добавьте бота в канал заново.`;
+            void (0, notificationService_1.notifyAllAdmins)(bot, channel.chat_id, notifyText).catch((notifyErr) => {
+                logger_1.logger.warn('channelPoller: notify admins on disable failed', {
+                    chatId: channel.chat_id,
+                    err: notifyErr,
+                });
+            });
         }
     }
 }

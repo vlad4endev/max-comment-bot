@@ -2,7 +2,9 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.flowProcessor = exports.FlowProcessor = void 0;
 exports.buildIntegrationsAnalytics = buildIntegrationsAnalytics;
+const adminPanelState_1 = require("../api/adminPanelState");
 const config_1 = require("../config");
+const tgChainPair_1 = require("../utils/tgChainPair");
 const channelRegistry_1 = require("./channelRegistry");
 const integrationPlatformClient_1 = require("./integrationPlatformClient");
 const flowStateStore_1 = require("./flowStateStore");
@@ -16,6 +18,8 @@ class FlowProcessor {
     pollers = new Map();
     started = false;
     emptyTickCount = new Map();
+    /** Однократное предупреждение: поток TG→MAX дублирует активную связку. */
+    supersededByTgChainLogged = new Set();
     setBot(bot) {
         this.bot = bot;
     }
@@ -60,6 +64,18 @@ class FlowProcessor {
         const flow = integrationsStore_1.integrationsStore.getFlow(flowId);
         if (!flow || !flow.enabled)
             return;
+        if (this.isFlowSupersededByTgChain(flow)) {
+            if (!this.supersededByTgChainLogged.has(flow.id)) {
+                this.supersededByTgChainLogged.add(flow.id);
+                logger_1.logger.warn('flowProcessor: поток TG→MAX пропущен — та же пара уже обслуживается tgChainForwarder (связка в админке). Отключите поток в Интеграциях или связку, чтобы не дублировать.', {
+                    flowId: flow.id,
+                    flowName: flow.name,
+                    source: flow.source.channelUsername ?? flow.source.channelId,
+                    destination: flow.destination.channelId,
+                });
+            }
+            return;
+        }
         try {
             await this.processFlow(flow);
         }
@@ -67,6 +83,20 @@ class FlowProcessor {
             logger_1.logger.error('flowProcessor: error', { flowId: flow.id, err });
             await integrationsStore_1.integrationsStore.updateFlowStats(flow.id, { incrementErrors: 1 });
         }
+    }
+    /** Активная связка TG→MAX с forward_posts покрывает тот же маршрут, что и legacy-поток. */
+    isFlowSupersededByTgChain(flow) {
+        if (flow.source.platform !== 'telegram' || flow.destination.platform !== 'max') {
+            return false;
+        }
+        const maxChatId = Number(flow.destination.channelId);
+        if (!Number.isFinite(maxChatId)) {
+            return false;
+        }
+        const tgChannelId = flow.source.channelId ?? '';
+        const tgUsername = flow.source.channelUsername ?? '';
+        const chains = (0, adminPanelState_1.listTgChainsSync)().filter((c) => c.active !== false && c.forward_posts);
+        return (0, tgChainPair_1.findActiveTgChainForPair)(chains, maxChatId, tgChannelId, tgUsername) !== null;
     }
     stopFlowPoller(flowId) {
         const t = this.pollers.get(flowId);

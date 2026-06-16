@@ -865,24 +865,28 @@ export async function fetchTelegramChannelPosts(
 ): Promise<{ posts: ExternalPost[]; lastMessageId: number; discoveredChats: PlatformChannelInfo[] }> {
   return withTelegramIntegrationLock(integrationId, async () => {
     await flowStateStore.load()
-    await ensureTelegramPollingMode(token.trim())
+    const trimmedToken = token.trim()
+    await ensureTelegramPollingMode(trimmedToken)
+    const useMainBotOffset = isMainTelegramBotToken(trimmedToken)
+    const readOffset = useMainBotOffset
+      ? getTelegramBotUpdatesOffset(trimmedToken)
+      : flowStateStore.getTelegramUpdateOffset(integrationId)
     try {
-      const storedOffset = flowStateStore.getTelegramUpdateOffset(integrationId)
       const params: Record<string, string | number> = {
         limit: 100,
         timeout: 0,
       }
-      if (storedOffset !== undefined) {
-        params.offset = storedOffset
+      if (readOffset !== undefined) {
+        params.offset = readOffset
       }
 
       const { data } = await axios.get<{
         ok: boolean
         result?: Array<Record<string, unknown>>
-      }>(`${TG_API}/bot${token}/getUpdates`, { params, timeout: 20_000 })
+      }>(`${TG_API}/bot${trimmedToken}/getUpdates`, { params, timeout: 20_000 })
 
       if (!data.ok || !data.result?.length) {
-        if (storedOffset === undefined) {
+        if (readOffset === undefined) {
           await warnIfTelegramWebhookActive(token)
         }
         return { posts: [], lastMessageId: afterMessageId, discoveredChats: [] }
@@ -891,7 +895,7 @@ export async function fetchTelegramChannelPosts(
       const posts: ExternalPost[] = []
       const newAdminChats = new Map<string, PlatformChannelInfo>()
       let maxMessageId = afterMessageId
-      let maxUpdateId = storedOffset ?? 0
+      let maxUpdateId = readOffset ?? 0
       let matchedInBatch = 0
       let seenForTarget = 0
 
@@ -901,7 +905,7 @@ export async function fetchTelegramChannelPosts(
           maxUpdateId = updateId + 1
         }
         rememberTelegramStartedUserFromUpdate(upd)
-        await processMainTelegramBotMyChatMemberUpdate(token.trim(), upd)
+        await processMainTelegramBotMyChatMemberUpdate(trimmedToken, upd)
 
         // Capture bot becoming admin in a channel/group so the caller can update linkedChats
         // immediately — without this, the event would be consumed by this loop and lost
@@ -936,8 +940,13 @@ export async function fetchTelegramChannelPosts(
         posts.push(mapTelegramChannelPost(msg))
       }
 
-      if (maxUpdateId > (storedOffset ?? 0)) {
-        await flowStateStore.setTelegramUpdateOffset(integrationId, maxUpdateId)
+      const offsetBefore = readOffset ?? 0
+      if (maxUpdateId > offsetBefore) {
+        if (useMainBotOffset) {
+          setTelegramBotUpdatesOffset(trimmedToken, maxUpdateId)
+        } else {
+          await flowStateStore.setTelegramUpdateOffset(integrationId, maxUpdateId)
+        }
       }
 
       const discoveredChats = [...newAdminChats.values()]
@@ -950,6 +959,7 @@ export async function fetchTelegramChannelPosts(
         afterMessageId,
         lastMessageId: maxMessageId,
         newAdminChats: discoveredChats.length,
+        offsetStore: useMainBotOffset ? 'tg_chain_reader_offsets' : 'flow-state.json',
       })
 
       if (posts.length === 0 && afterMessageId > 0 && seenForTarget === 0) {
@@ -958,7 +968,14 @@ export async function fetchTelegramChannelPosts(
 
       return { posts, lastMessageId: maxMessageId, discoveredChats }
     } catch (err: unknown) {
-      logger.warn('fetchTelegramChannelPosts failed', err)
+      if (axios.isAxiosError(err) && err.response?.status === 409) {
+        logger.warn(
+          'fetchTelegramChannelPosts: 409 conflict — другой процесс уже опрашивает getUpdates (tgChainForwarder?)',
+          { integrationId, channelId },
+        )
+      } else {
+        logger.warn('fetchTelegramChannelPosts failed', err)
+      }
       return { posts: [], lastMessageId: afterMessageId, discoveredChats: [] }
     }
   })

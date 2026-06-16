@@ -6,6 +6,7 @@ import { clearAdminJoinNotifiedForChannel } from './channelAdminJoinNotified'
 import type { ChannelRecord } from './channelRegistry'
 import { channelRegistry } from './channelRegistry'
 import { scheduleCommentButtonRetry } from './commentButtonRetryQueue'
+import { notifyAllAdmins } from './notificationService'
 import { resolveCanonicalChannelChatId } from './resolveChannelChatId'
 import { logger } from '../utils/logger'
 import { apiCallWithRetry } from '../utils/maxApiRetry'
@@ -95,6 +96,8 @@ async function pollChannelSafe(bot: Bot, channel: ChannelRecord, botUid: number 
     )
 
     if (count >= DISABLE_AFTER_ERRORS) {
+      const removed = channelRegistry.getChannel(channel.chat_id)
+      const title = removed?.title ?? `ID ${channel.chat_id}`
       logger.warn(
         `channelPoller: disabling channel ${channel.chat_id} after ${count} errors`,
       )
@@ -102,6 +105,16 @@ async function pollChannelSafe(bot: Bot, channel: ChannelRecord, botUid: number 
       channelRegistry.deactivate(channel.chat_id)
       errorCount.delete(channel.chat_id)
       stopChannelTimer(channel.chat_id)
+      const notifyText =
+        `⚠️ CommentBot приостановил опрос канала «${title}» после ${count} ошибок MAX API.\n\n` +
+        `Кнопки «Комментарии» могут не появляться на новых постах. Проверьте, что бот — администратор канала, ` +
+        `и нажмите «Обновить кнопки» в админ-панели или добавьте бота в канал заново.`
+      void notifyAllAdmins(bot, channel.chat_id, notifyText).catch((notifyErr: unknown) => {
+        logger.warn('channelPoller: notify admins on disable failed', {
+          chatId: channel.chat_id,
+          err: notifyErr,
+        })
+      })
     }
   }
 }

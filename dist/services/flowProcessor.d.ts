@@ -12,11 +12,15 @@ export declare class FlowProcessor {
     private pollers;
     private started;
     private emptyTickCount;
+    /** Однократное предупреждение: поток TG→MAX дублирует активную связку. */
+    private supersededByTgChainLogged;
     setBot(bot: Bot): void;
     start(): Promise<void>;
     reload(): Promise<void>;
     startFlowPoller(flow: FlowRecord): void;
     private processFlowSafe;
+    /** Активная связка TG→MAX с forward_posts покрывает тот же маршрут, что и legacy-поток. */
+    private isFlowSupersededByTgChain;
     stopFlowPoller(flowId: string): void;
     stop(): void;
     private stopPollers;
