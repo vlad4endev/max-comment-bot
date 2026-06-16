@@ -940,6 +940,7 @@ export function createAdminRouter(deps: AdminRouterDeps): express.Router {
         username: c.username,
         text: c.text,
         timestamp: c.timestamp,
+        ...(c.source === 'telegram' ? { source: 'telegram' as const } : {}),
         reply_status: answered ? ('answered' as const) : ('unanswered' as const),
         reply: answered
           ? {

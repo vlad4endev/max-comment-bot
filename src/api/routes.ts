@@ -418,12 +418,14 @@ function toWireComment(c: Comment): {
   avatar_url?: string
   photo_urls?: string[]
   posted_as_channel?: boolean
+  source?: 'telegram' | 'max'
   reply?: {
     reply_id?: string
     text: string
     timestamp: string
     admin_name?: string
     photo_urls?: string[]
+    from_telegram?: boolean
   }
   replies?: {
     reply_id?: string
@@ -431,6 +433,7 @@ function toWireComment(c: Comment): {
     timestamp: string
     admin_name?: string
     photo_urls?: string[]
+    from_telegram?: boolean
   }[]
 } {
   const replies =
@@ -451,6 +454,7 @@ function toWireComment(c: Comment): {
       ? { photo_urls: c.photo_urls }
       : {}),
     ...(c.posted_as_channel ? { posted_as_channel: true } : {}),
+    ...(c.source === 'telegram' ? { source: 'telegram' as const } : {}),
     ...(c.reply ? { reply: c.reply } : {}),
     ...(replies ? { replies } : {}),
   }

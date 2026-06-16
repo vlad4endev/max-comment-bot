@@ -3396,9 +3396,15 @@
         var isOwnComment =
           c.user_id != null && String(c.user_id) === String(userId);
         var userMsgCls = 'feed-msg msg-user ' + (isOwnComment ? 'msg-out' : 'msg-in');
+        var userNameLabel = c.username || 'Пользователь';
+        if (c.source === 'telegram') {
+          userNameLabel = userNameLabel + ' · TG';
+        }
         var nameHtml = isOwnComment
-          ? ''
-          : '<div class="tg-name">' + escDisplay(c.username) + '</div>';
+          ? (c.source === 'telegram'
+              ? '<div class="tg-name tg-source-tag">' + escDisplay('TG') + '</div>'
+              : '')
+          : '<div class="tg-name">' + escDisplay(userNameLabel) + '</div>';
         return (
           '<div class="comment-group' +
           groupExtraCls +

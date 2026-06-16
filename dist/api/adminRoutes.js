@@ -10,6 +10,7 @@ const express_1 = __importDefault(require("express"));
 const p_limit_1 = __importDefault(require("p-limit"));
 const config_1 = require("../config");
 const adminAuth_1 = require("../middleware/adminAuth");
+const commentSyncFilter_1 = require("../utils/commentSyncFilter");
 const channelFullDisconnect_1 = require("../services/channelFullDisconnect");
 const adminActivityStore_1 = require("../services/adminActivityStore");
 const adminRuntimeSettingsStore_1 = require("../services/adminRuntimeSettingsStore");
@@ -77,6 +78,29 @@ function parseBoolean(value) {
         return value;
     }
     return null;
+}
+function parseTgDiscussionChatId(value) {
+    if (value === null || value === '') {
+        return null;
+    }
+    const raw = parseNonEmptyString(value);
+    if (!raw) {
+        return undefined;
+    }
+    const normalized = raw.replace(/^@/, '');
+    if (!/^-?\d+$/.test(normalized)) {
+        return undefined;
+    }
+    return normalized;
+}
+function parseCommentSyncKeywords(value) {
+    if (!Array.isArray(value)) {
+        return undefined;
+    }
+    return value
+        .filter((w) => typeof w === 'string')
+        .map((w) => w.trim())
+        .filter(Boolean);
 }
 function extractChatAvatarUrl(chat) {
     const icon = chat.icon;
@@ -796,6 +820,7 @@ function createAdminRouter(deps) {
                 username: c.username,
                 text: c.text,
                 timestamp: c.timestamp,
+                ...(c.source === 'telegram' ? { source: 'telegram' } : {}),
                 reply_status: answered ? 'answered' : 'unanswered',
                 reply: answered
                     ? {
@@ -967,6 +992,8 @@ function createAdminRouter(deps) {
             return;
         }
         const ch = channelRegistry_1.channelRegistry.getChannel(maxChatId);
+        const discussionChatId = parseTgDiscussionChatId(req.body.tg_discussion_chat_id);
+        const commentSyncKeywords = parseCommentSyncKeywords(req.body.comment_sync_keywords);
         const row = await (0, adminPanelState_1.createTgChain)({
             max_chat_id: maxChatId,
             max_title: ch?.title ?? null,
@@ -975,6 +1002,8 @@ function createAdminRouter(deps) {
             bot_token: parseNonEmptyString(req.body.bot_token)?.trim() || tgToken,
             forward_posts: req.body.forward_posts !== false,
             forward_comments: Boolean(req.body.forward_comments),
+            tg_discussion_chat_id: discussionChatId === undefined ? null : discussionChatId,
+            comment_sync_keywords: (0, commentSyncFilter_1.normalizeCommentSyncKeywords)(commentSyncKeywords ?? []),
             add_comments_button: req.body.add_comments_button !== false,
             add_signature: Boolean(req.body.add_signature),
             active: true,
@@ -998,6 +1027,13 @@ function createAdminRouter(deps) {
             patch.forward_posts = req.body.forward_posts;
         if (typeof req.body.forward_comments === 'boolean')
             patch.forward_comments = req.body.forward_comments;
+        const discussionChatId = parseTgDiscussionChatId(req.body.tg_discussion_chat_id);
+        if (discussionChatId !== undefined)
+            patch.tg_discussion_chat_id = discussionChatId;
+        const commentSyncKeywords = parseCommentSyncKeywords(req.body.comment_sync_keywords);
+        if ('comment_sync_keywords' in req.body) {
+            patch.comment_sync_keywords = (0, commentSyncFilter_1.normalizeCommentSyncKeywords)(commentSyncKeywords ?? []);
+        }
         if (typeof req.body.add_comments_button === 'boolean') {
             patch.add_comments_button = req.body.add_comments_button;
         }

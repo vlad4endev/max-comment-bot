@@ -223,6 +223,25 @@ function normalizeCommentFromDisk(raw: unknown): Comment | null {
   if (o.posted_as_channel !== undefined && typeof o.posted_as_channel !== 'boolean') {
     return null
   }
+  if (
+    o.source !== undefined &&
+    o.source !== 'telegram' &&
+    o.source !== 'max'
+  ) {
+    return null
+  }
+  if (o.tg_comment_id !== undefined && typeof o.tg_comment_id !== 'number') {
+    return null
+  }
+  if (o.synced !== undefined && typeof o.synced !== 'boolean') {
+    return null
+  }
+  if (o.tg_thread_reply_id !== undefined && typeof o.tg_thread_reply_id !== 'number') {
+    return null
+  }
+  if (o.max_comment_id !== undefined && typeof o.max_comment_id !== 'string') {
+    return null
+  }
   const comment: Comment = {
     comment_id: o.comment_id,
     post_id: o.post_id,
@@ -259,9 +278,60 @@ function normalizeCommentFromDisk(raw: unknown): Comment | null {
         }
       : {}),
     ...(o.posted_as_channel === true ? { posted_as_channel: true } : {}),
+    ...(o.source === 'telegram' || o.source === 'max' ? { source: o.source } : {}),
+    ...(typeof o.tg_comment_id === 'number' && o.tg_comment_id > 0
+      ? { tg_comment_id: o.tg_comment_id }
+      : {}),
+    ...(typeof o.max_comment_id === 'string' && o.max_comment_id.trim()
+      ? { max_comment_id: o.max_comment_id.trim() }
+      : {}),
+    ...(o.synced === true ? { synced: true } : {}),
+    ...(typeof o.tg_thread_reply_id === 'number' && o.tg_thread_reply_id > 0
+      ? { tg_thread_reply_id: o.tg_thread_reply_id }
+      : {}),
   }
   ensureCommentReplyIds(comment)
   return comment
+}
+
+interface CommentStorageRow {
+  data: string
+  tg_comment_id?: number | null
+  source?: string | null
+  synced?: number | null
+  tg_thread_reply_id?: number | null
+  max_comment_id?: string | null
+}
+
+function mergeCommentSyncMeta(comment: Comment, row: CommentStorageRow): Comment {
+  if (row.source === 'telegram' || row.source === 'max') {
+    comment.source = row.source
+  }
+  if (typeof row.tg_comment_id === 'number' && row.tg_comment_id > 0) {
+    comment.tg_comment_id = row.tg_comment_id
+  }
+  if (typeof row.max_comment_id === 'string' && row.max_comment_id.trim()) {
+    comment.max_comment_id = row.max_comment_id.trim()
+  }
+  if (row.synced === 1) {
+    comment.synced = true
+  }
+  if (typeof row.tg_thread_reply_id === 'number' && row.tg_thread_reply_id > 0) {
+    comment.tg_thread_reply_id = row.tg_thread_reply_id
+  }
+  return comment
+}
+
+function commentFromStorageRow(row: CommentStorageRow): Comment | null {
+  try {
+    const comment = normalizeCommentFromDisk(JSON.parse(row.data) as unknown)
+    if (!comment) {
+      return null
+    }
+    return mergeCommentSyncMeta(comment, row)
+  } catch {
+    return null
+  }
 }
 
 function isNotificationReplyLogEntry(value: unknown): value is CommentNotificationReplyLogEntry {
@@ -358,12 +428,11 @@ export class CommentStore {
   }
 
   getComments(postId: string): Comment[] {
-    const rows = this.getStatements().listByPost.all(postId) as { data: string }[]
+    const rows = this.getStatements().listByPost.all(postId) as CommentStorageRow[]
     const out: Comment[] = []
     for (const row of rows) {
       try {
-        const c = this.parseRow(row.data)
-        const normalized = normalizeCommentFromDisk(c)
+        const normalized = commentFromStorageRow(row)
         if (normalized) {
           out.push(normalized)
         } else {
@@ -547,16 +616,11 @@ export class CommentStore {
    * Returns a single comment or `null`.
    */
   getComment(commentId: string): Comment | null {
-    const row = this.getStatements().getById.get(commentId) as { data: string } | undefined
+    const row = this.getStatements().getById.get(commentId) as CommentStorageRow | undefined
     if (!row) {
       return null
     }
-    try {
-      return normalizeCommentFromDisk(this.parseRow(row.data))
-    } catch (err: unknown) {
-      logger.warn('commentStore: getComment parse failed', { commentId, err })
-      return null
-    }
+    return commentFromStorageRow(row)
   }
 
   /**
@@ -639,16 +703,12 @@ export class CommentStore {
    * All comments, newest first (admin list).
    */
   listAllCommentsNewestFirst(): Comment[] {
-    const rows = this.getStatements().listAllNewest.all() as { data: string }[]
+    const rows = this.getStatements().listAllNewest.all() as CommentStorageRow[]
     const out: Comment[] = []
     for (const row of rows) {
-      try {
-        const c = normalizeCommentFromDisk(this.parseRow(row.data))
-        if (c) {
-          out.push(c)
-        }
-      } catch {
-        // skip corrupt rows
+      const c = commentFromStorageRow(row)
+      if (c) {
+        out.push(c)
       }
     }
     return out
@@ -660,17 +720,13 @@ export class CommentStore {
   listCommentsForChannelChatId(chatId: number, limit?: number): Comment[] {
     const rows =
       limit !== undefined && limit > 0
-        ? (this.getStatements().listByChannelChatIdLimit.all(chatId, limit) as { data: string }[])
-        : (this.getStatements().listByChannelChatId.all(chatId) as { data: string }[])
+        ? (this.getStatements().listByChannelChatIdLimit.all(chatId, limit) as CommentStorageRow[])
+        : (this.getStatements().listByChannelChatId.all(chatId) as CommentStorageRow[])
     const out: Comment[] = []
     for (const row of rows) {
-      try {
-        const c = normalizeCommentFromDisk(this.parseRow(row.data))
-        if (c) {
-          out.push(c)
-        }
-      } catch {
-        // skip corrupt rows
+      const c = commentFromStorageRow(row)
+      if (c) {
+        out.push(c)
       }
     }
     return out
@@ -688,30 +744,25 @@ export class CommentStore {
     const q = (options?.q ?? '').trim().toLowerCase()
     const rows =
       q === ''
-        ? (this.getStatements().listByChannelChatIdAdmin.all(chatId, limit) as Array<{
-            data: string
-            post_preview: string
-          }>)
+        ? (this.getStatements().listByChannelChatIdAdmin.all(chatId, limit) as Array<
+            CommentStorageRow & { post_preview: string }
+          >)
         : (this.getStatements().listByChannelChatIdAdminSearch.all(
             chatId,
             `%${q}%`,
             `%${q}%`,
             `%${q}%`,
             limit,
-          ) as Array<{ data: string; post_preview: string }>)
+          ) as Array<CommentStorageRow & { post_preview: string }>)
     const out: AdminCommentListRow[] = []
     for (const row of rows) {
-      try {
-        const comment = normalizeCommentFromDisk(this.parseRow(row.data))
-        if (comment) {
-          const preview =
-            typeof row.post_preview === 'string' && row.post_preview.trim() !== ''
-              ? row.post_preview.trim()
-              : comment.post_id
-          out.push({ comment, post_preview: preview })
-        }
-      } catch {
-        // skip corrupt rows
+      const comment = commentFromStorageRow(row)
+      if (comment) {
+        const preview =
+          typeof row.post_preview === 'string' && row.post_preview.trim() !== ''
+            ? row.post_preview.trim()
+            : comment.post_id
+        out.push({ comment, post_preview: preview })
       }
     }
     return out
@@ -834,15 +885,11 @@ export class CommentStore {
   }
 
   findCommentByTgMessageId(tgCommentId: number): Comment | null {
-    const row = this.getStatements().findByTgCommentId.get(tgCommentId) as { data: string } | undefined
+    const row = this.getStatements().findByTgCommentId.get(tgCommentId) as CommentStorageRow | undefined
     if (!row) {
       return null
     }
-    try {
-      return normalizeCommentFromDisk(this.parseRow(row.data))
-    } catch {
-      return null
-    }
+    return commentFromStorageRow(row)
   }
 
   /**
@@ -890,16 +937,12 @@ export class CommentStore {
    * Комментарии с ответом админа, ещё не отправленным в TG-тред.
    */
   listCommentsPendingTelegramThreadReply(limit = 20): Comment[] {
-    const rows = this.getStatements().listPendingThreadReply.all(limit) as { data: string }[]
+    const rows = this.getStatements().listPendingThreadReply.all(limit) as CommentStorageRow[]
     const out: Comment[] = []
     for (const row of rows) {
-      try {
-        const c = normalizeCommentFromDisk(this.parseRow(row.data))
-        if (c && this.latestMaxAdminReply(c)) {
-          out.push(c)
-        }
-      } catch {
-        // skip
+      const c = commentFromStorageRow(row)
+      if (c && this.latestMaxAdminReply(c)) {
+        out.push(c)
       }
     }
     return out
@@ -910,25 +953,30 @@ export class CommentStore {
       return this.statements
     }
     const db = getDb()
+    const storageFields = 'data, tg_comment_id, source, synced, tg_thread_reply_id, max_comment_id'
+    const storageFieldsAliased =
+      'c.data, c.tg_comment_id, c.source, c.synced, c.tg_thread_reply_id, c.max_comment_id'
     this.statements = {
-      getById: db.prepare('SELECT data FROM comments WHERE comment_id = ?'),
-      listByPost: db.prepare('SELECT data FROM comments WHERE post_id = ? ORDER BY timestamp ASC'),
-      listAllNewest: db.prepare('SELECT data FROM comments ORDER BY timestamp DESC'),
+      getById: db.prepare(`SELECT ${storageFields} FROM comments WHERE comment_id = ?`),
+      listByPost: db.prepare(
+        `SELECT ${storageFields} FROM comments WHERE post_id = ? ORDER BY timestamp ASC`,
+      ),
+      listAllNewest: db.prepare(`SELECT ${storageFields} FROM comments ORDER BY timestamp DESC`),
       listByChannelChatId: db.prepare(
-        `SELECT c.data FROM comments c
+        `SELECT ${storageFieldsAliased} FROM comments c
          INNER JOIN posts p ON p.post_id = c.post_id
          WHERE p.chat_id = ?
          ORDER BY c.timestamp DESC`,
       ),
       listByChannelChatIdLimit: db.prepare(
-        `SELECT c.data FROM comments c
+        `SELECT ${storageFieldsAliased} FROM comments c
          INNER JOIN posts p ON p.post_id = c.post_id
          WHERE p.chat_id = ?
          ORDER BY c.timestamp DESC
          LIMIT ?`,
       ),
       listByChannelChatIdAdmin: db.prepare(
-        `SELECT c.data,
+        `SELECT ${storageFieldsAliased},
                 COALESCE(NULLIF(TRIM(p.text), ''), c.post_id) AS post_preview
          FROM comments c
          INNER JOIN posts p ON p.post_id = c.post_id
@@ -937,7 +985,7 @@ export class CommentStore {
          LIMIT ?`,
       ),
       listByChannelChatIdAdminSearch: db.prepare(
-        `SELECT c.data,
+        `SELECT ${storageFieldsAliased},
                 COALESCE(NULLIF(TRIM(p.text), ''), c.post_id) AS post_preview
          FROM comments c
          INNER JOIN posts p ON p.post_id = c.post_id
@@ -987,9 +1035,9 @@ export class CommentStore {
         `SELECT tg_comment_id, max_comment_id, source, synced, tg_thread_reply_id
          FROM comments WHERE comment_id = ?`,
       ),
-      findByTgCommentId: db.prepare('SELECT data FROM comments WHERE tg_comment_id = ?'),
+      findByTgCommentId: db.prepare(`SELECT ${storageFields} FROM comments WHERE tg_comment_id = ?`),
       listPendingThreadReply: db.prepare(
-        `SELECT data FROM comments
+        `SELECT ${storageFields} FROM comments
          WHERE reply IS NOT NULL AND TRIM(reply) != ''
            AND (tg_thread_reply_id IS NULL OR tg_thread_reply_id = 0)
          ORDER BY timestamp DESC

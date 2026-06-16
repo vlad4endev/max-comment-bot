@@ -24,6 +24,7 @@ const commentStore_1 = require("../services/commentStore");
 const subscriberStore_1 = require("../services/subscriberStore");
 const notificationService_1 = require("../services/notificationService");
 const telegramAdminNotificationService_1 = require("../services/telegramAdminNotificationService");
+const telegramThreadReplySync_1 = require("../services/telegramThreadReplySync");
 const telegramCommentModerationService_1 = require("../services/telegramCommentModerationService");
 const telegramBotUserStore_1 = require("../services/telegramBotUserStore");
 const telegramMiniappAuth_1 = require("../services/telegramMiniappAuth");
@@ -331,6 +332,7 @@ function toWireComment(c) {
             ? { photo_urls: c.photo_urls }
             : {}),
         ...(c.posted_as_channel ? { posted_as_channel: true } : {}),
+        ...(c.source === 'telegram' ? { source: 'telegram' } : {}),
         ...(c.reply ? { reply: c.reply } : {}),
         ...(replies ? { replies } : {}),
     };
@@ -1853,6 +1855,12 @@ function createCommentApiRouter(deps) {
         if (!updated) {
             res.status(404).json({ error: 'comment not found' });
             return;
+        }
+        try {
+            await (0, telegramThreadReplySync_1.syncAdminReplyToTelegramThread)(deps.bot, updated, post);
+        }
+        catch (err) {
+            logger_1.logger.warn('POST /api/reply: sync TG thread failed', { commentId, err });
         }
         try {
             await (0, notificationService_1.syncAdminCommentNotification)(deps.bot, updated, postId, chatId);

@@ -297,6 +297,9 @@
       html += '<article class="comment-card">';
       html += '<div class="comment-card-head">';
       html += '<div class="comment-card-user"><strong>' + esc(c.username || 'Пользователь') + '</strong>';
+      if (c.source === 'telegram') {
+        html += '<span class="comment-source-tag">TG</span>';
+      }
       html += '<span class="comment-card-time">' + esc(formatRelativeTime(c.timestamp)) + '</span></div>';
       html +=
         '<span class="comment-status ' +

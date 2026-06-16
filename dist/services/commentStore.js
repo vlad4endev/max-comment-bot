@@ -139,6 +139,23 @@ function normalizeCommentFromDisk(raw) {
     if (o.posted_as_channel !== undefined && typeof o.posted_as_channel !== 'boolean') {
         return null;
     }
+    if (o.source !== undefined &&
+        o.source !== 'telegram' &&
+        o.source !== 'max') {
+        return null;
+    }
+    if (o.tg_comment_id !== undefined && typeof o.tg_comment_id !== 'number') {
+        return null;
+    }
+    if (o.synced !== undefined && typeof o.synced !== 'boolean') {
+        return null;
+    }
+    if (o.tg_thread_reply_id !== undefined && typeof o.tg_thread_reply_id !== 'number') {
+        return null;
+    }
+    if (o.max_comment_id !== undefined && typeof o.max_comment_id !== 'string') {
+        return null;
+    }
     const comment = {
         comment_id: o.comment_id,
         post_id: o.post_id,
@@ -175,9 +192,50 @@ function normalizeCommentFromDisk(raw) {
             }
             : {}),
         ...(o.posted_as_channel === true ? { posted_as_channel: true } : {}),
+        ...(o.source === 'telegram' || o.source === 'max' ? { source: o.source } : {}),
+        ...(typeof o.tg_comment_id === 'number' && o.tg_comment_id > 0
+            ? { tg_comment_id: o.tg_comment_id }
+            : {}),
+        ...(typeof o.max_comment_id === 'string' && o.max_comment_id.trim()
+            ? { max_comment_id: o.max_comment_id.trim() }
+            : {}),
+        ...(o.synced === true ? { synced: true } : {}),
+        ...(typeof o.tg_thread_reply_id === 'number' && o.tg_thread_reply_id > 0
+            ? { tg_thread_reply_id: o.tg_thread_reply_id }
+            : {}),
     };
     ensureCommentReplyIds(comment);
     return comment;
+}
+function mergeCommentSyncMeta(comment, row) {
+    if (row.source === 'telegram' || row.source === 'max') {
+        comment.source = row.source;
+    }
+    if (typeof row.tg_comment_id === 'number' && row.tg_comment_id > 0) {
+        comment.tg_comment_id = row.tg_comment_id;
+    }
+    if (typeof row.max_comment_id === 'string' && row.max_comment_id.trim()) {
+        comment.max_comment_id = row.max_comment_id.trim();
+    }
+    if (row.synced === 1) {
+        comment.synced = true;
+    }
+    if (typeof row.tg_thread_reply_id === 'number' && row.tg_thread_reply_id > 0) {
+        comment.tg_thread_reply_id = row.tg_thread_reply_id;
+    }
+    return comment;
+}
+function commentFromStorageRow(row) {
+    try {
+        const comment = normalizeCommentFromDisk(JSON.parse(row.data));
+        if (!comment) {
+            return null;
+        }
+        return mergeCommentSyncMeta(comment, row);
+    }
+    catch {
+        return null;
+    }
 }
 function isNotificationReplyLogEntry(value) {
     if (typeof value !== 'object' || value === null) {
@@ -244,8 +302,7 @@ class CommentStore {
         const out = [];
         for (const row of rows) {
             try {
-                const c = this.parseRow(row.data);
-                const normalized = normalizeCommentFromDisk(c);
+                const normalized = commentFromStorageRow(row);
                 if (normalized) {
                     out.push(normalized);
                 }
@@ -421,13 +478,7 @@ class CommentStore {
         if (!row) {
             return null;
         }
-        try {
-            return normalizeCommentFromDisk(this.parseRow(row.data));
-        }
-        catch (err) {
-            logger_1.logger.warn('commentStore: getComment parse failed', { commentId, err });
-            return null;
-        }
+        return commentFromStorageRow(row);
     }
     /**
      * Persists the admin DM template text for this comment (used when editing notifications after reply).
@@ -508,14 +559,9 @@ class CommentStore {
         const rows = this.getStatements().listAllNewest.all();
         const out = [];
         for (const row of rows) {
-            try {
-                const c = normalizeCommentFromDisk(this.parseRow(row.data));
-                if (c) {
-                    out.push(c);
-                }
-            }
-            catch {
-                // skip corrupt rows
+            const c = commentFromStorageRow(row);
+            if (c) {
+                out.push(c);
             }
         }
         return out;
@@ -529,14 +575,9 @@ class CommentStore {
             : this.getStatements().listByChannelChatId.all(chatId);
         const out = [];
         for (const row of rows) {
-            try {
-                const c = normalizeCommentFromDisk(this.parseRow(row.data));
-                if (c) {
-                    out.push(c);
-                }
-            }
-            catch {
-                // skip corrupt rows
+            const c = commentFromStorageRow(row);
+            if (c) {
+                out.push(c);
             }
         }
         return out;
@@ -553,17 +594,12 @@ class CommentStore {
             : this.getStatements().listByChannelChatIdAdminSearch.all(chatId, `%${q}%`, `%${q}%`, `%${q}%`, limit);
         const out = [];
         for (const row of rows) {
-            try {
-                const comment = normalizeCommentFromDisk(this.parseRow(row.data));
-                if (comment) {
-                    const preview = typeof row.post_preview === 'string' && row.post_preview.trim() !== ''
-                        ? row.post_preview.trim()
-                        : comment.post_id;
-                    out.push({ comment, post_preview: preview });
-                }
-            }
-            catch {
-                // skip corrupt rows
+            const comment = commentFromStorageRow(row);
+            if (comment) {
+                const preview = typeof row.post_preview === 'string' && row.post_preview.trim() !== ''
+                    ? row.post_preview.trim()
+                    : comment.post_id;
+                out.push({ comment, post_preview: preview });
             }
         }
         return out;
@@ -627,12 +663,7 @@ class CommentStore {
         if (!row) {
             return null;
         }
-        try {
-            return normalizeCommentFromDisk(this.parseRow(row.data));
-        }
-        catch {
-            return null;
-        }
+        return commentFromStorageRow(row);
     }
     /**
      * Сохраняет комментарий из TG-треда в miniapp БД с метаданными синхронизации.
@@ -676,14 +707,9 @@ class CommentStore {
         const rows = this.getStatements().listPendingThreadReply.all(limit);
         const out = [];
         for (const row of rows) {
-            try {
-                const c = normalizeCommentFromDisk(this.parseRow(row.data));
-                if (c && this.latestMaxAdminReply(c)) {
-                    out.push(c);
-                }
-            }
-            catch {
-                // skip
+            const c = commentFromStorageRow(row);
+            if (c && this.latestMaxAdminReply(c)) {
+                out.push(c);
             }
         }
         return out;
@@ -693,27 +719,29 @@ class CommentStore {
             return this.statements;
         }
         const db = (0, database_1.getDb)();
+        const storageFields = 'data, tg_comment_id, source, synced, tg_thread_reply_id, max_comment_id';
+        const storageFieldsAliased = 'c.data, c.tg_comment_id, c.source, c.synced, c.tg_thread_reply_id, c.max_comment_id';
         this.statements = {
-            getById: db.prepare('SELECT data FROM comments WHERE comment_id = ?'),
-            listByPost: db.prepare('SELECT data FROM comments WHERE post_id = ? ORDER BY timestamp ASC'),
-            listAllNewest: db.prepare('SELECT data FROM comments ORDER BY timestamp DESC'),
-            listByChannelChatId: db.prepare(`SELECT c.data FROM comments c
+            getById: db.prepare(`SELECT ${storageFields} FROM comments WHERE comment_id = ?`),
+            listByPost: db.prepare(`SELECT ${storageFields} FROM comments WHERE post_id = ? ORDER BY timestamp ASC`),
+            listAllNewest: db.prepare(`SELECT ${storageFields} FROM comments ORDER BY timestamp DESC`),
+            listByChannelChatId: db.prepare(`SELECT ${storageFieldsAliased} FROM comments c
          INNER JOIN posts p ON p.post_id = c.post_id
          WHERE p.chat_id = ?
          ORDER BY c.timestamp DESC`),
-            listByChannelChatIdLimit: db.prepare(`SELECT c.data FROM comments c
+            listByChannelChatIdLimit: db.prepare(`SELECT ${storageFieldsAliased} FROM comments c
          INNER JOIN posts p ON p.post_id = c.post_id
          WHERE p.chat_id = ?
          ORDER BY c.timestamp DESC
          LIMIT ?`),
-            listByChannelChatIdAdmin: db.prepare(`SELECT c.data,
+            listByChannelChatIdAdmin: db.prepare(`SELECT ${storageFieldsAliased},
                 COALESCE(NULLIF(TRIM(p.text), ''), c.post_id) AS post_preview
          FROM comments c
          INNER JOIN posts p ON p.post_id = c.post_id
          WHERE p.chat_id = ?
          ORDER BY c.timestamp DESC
          LIMIT ?`),
-            listByChannelChatIdAdminSearch: db.prepare(`SELECT c.data,
+            listByChannelChatIdAdminSearch: db.prepare(`SELECT ${storageFieldsAliased},
                 COALESCE(NULLIF(TRIM(p.text), ''), c.post_id) AS post_preview
          FROM comments c
          INNER JOIN posts p ON p.post_id = c.post_id
@@ -754,8 +782,8 @@ class CommentStore {
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
             getSyncMeta: db.prepare(`SELECT tg_comment_id, max_comment_id, source, synced, tg_thread_reply_id
          FROM comments WHERE comment_id = ?`),
-            findByTgCommentId: db.prepare('SELECT data FROM comments WHERE tg_comment_id = ?'),
-            listPendingThreadReply: db.prepare(`SELECT data FROM comments
+            findByTgCommentId: db.prepare(`SELECT ${storageFields} FROM comments WHERE tg_comment_id = ?`),
+            listPendingThreadReply: db.prepare(`SELECT ${storageFields} FROM comments
          WHERE reply IS NOT NULL AND TRIM(reply) != ''
            AND (tg_thread_reply_id IS NULL OR tg_thread_reply_id = 0)
          ORDER BY timestamp DESC
