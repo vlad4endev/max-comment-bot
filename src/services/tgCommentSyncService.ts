@@ -11,18 +11,31 @@ import type { Bot } from '@maxhub/max-bot-api'
 
 import type { TgChainRecord } from '../api/adminPanelState'
 import type { TgMessage } from '../forwarder/telegramReader'
+import type { Comment } from './commentStore'
 import { commentStore } from './commentStore'
-import { notifyAdminsNewMiniappComment } from './notificationService'
+import {
+  notifyAdminsNewMiniappComment,
+  notifyUserAboutMiniappReply,
+  syncAdminCommentNotification,
+} from './notificationService'
+import { syncTelegramAdminCommentNotification } from './telegramAdminNotificationService'
 import { channelRegistry } from './channelRegistry'
 import {
+  findMappingByTgMsgId,
   findMappingByThreadMsgId,
   linkThreadMessageToChannelPost,
 } from './postCommentMappingStore'
 import { postStore } from './postStore'
+import type { Post } from './postStore'
 import { resolveCanonicalChannelChatId } from './resolveChannelChatId'
 import { isCommentSynced, markCommentSynced } from '../utils/commentSyncGuard'
 import {
+  isMaxAdminReplyInTelegram,
+  isTgCommentFromAdmin,
+  resolveChannelMsgIdFromThreadRoot,
   resolveDiscussionThreadRootMsgId,
+  resolveTgCommentAuthor,
+  resolveThreadRootMessage,
   shouldSyncTgCommentToMax,
 } from '../utils/commentSyncFilter'
 import { logger } from '../utils/logger'
@@ -50,6 +63,102 @@ export function handleDiscussionAutoForward(message: TgMessage, chainId: string)
     channelMsgId,
     threadMsgId: message.message_id,
     threadChatId: message.chat.id,
+  })
+}
+
+function listExistingReplyTexts(comment: Comment): string[] {
+  const thread =
+    Array.isArray(comment.replies) && comment.replies.length > 0
+      ? comment.replies
+      : comment.reply?.text?.trim()
+        ? [comment.reply]
+        : []
+  return thread.map((r) => r.text.trim()).filter(Boolean)
+}
+
+/**
+ * Ответ администратора в TG-треде → reply на существующий комментарий в MAX.
+ */
+async function handleTgAdminReplyToComment(
+  message: TgMessage,
+  parentComment: Comment,
+  chain: TgChainRecord,
+  bot: Bot,
+  maxChatId: number,
+  post: Post,
+  tgCommentId: number,
+): Promise<void> {
+  const text = (message.text || message.caption || '').trim()
+  if (!text || isMaxAdminReplyInTelegram(text)) {
+    return
+  }
+
+  if (listExistingReplyTexts(parentComment).includes(text)) {
+    markCommentSynced(`tg:${tgCommentId}`)
+    return
+  }
+
+  const channelTitle =
+    channelRegistry.getChannel(maxChatId)?.title?.trim() || chain.max_title?.trim() || 'Канал'
+
+  const updated = commentStore.addReply(
+    parentComment.comment_id,
+    text,
+    channelTitle,
+    [],
+    'Telegram',
+    true,
+  )
+  if (!updated) {
+    return
+  }
+
+  markCommentSynced(`tg:${tgCommentId}`)
+  markCommentSynced(`max-reply:${updated.comment_id}:${text}`)
+
+  try {
+    await syncAdminCommentNotification(bot, updated, post.post_id, maxChatId)
+  } catch (err: unknown) {
+    logger.warn('[tgCommentSync] sync MAX admin notification failed', {
+      commentId: updated.comment_id,
+      err,
+    })
+  }
+  try {
+    await syncTelegramAdminCommentNotification({
+      comment: updated,
+      postId: post.post_id,
+      channelChatId: maxChatId,
+      messageMid: post.message_mid,
+    })
+  } catch (err: unknown) {
+    logger.warn('[tgCommentSync] sync TG admin notification failed', {
+      commentId: updated.comment_id,
+      err,
+    })
+  }
+  try {
+    await notifyUserAboutMiniappReply(bot, {
+      userId: Number(updated.user_id),
+      commentId: updated.comment_id,
+      postText: post.text,
+      userCommentText: updated.text,
+      adminReplyText: text,
+      postId: post.post_id,
+      channelChatId: maxChatId,
+    })
+  } catch (err: unknown) {
+    logger.warn('[tgCommentSync] notify user about TG admin reply failed', {
+      commentId: updated.comment_id,
+      err,
+    })
+  }
+
+  logger.info('[tgCommentSync] synced TG admin reply to MAX comment', {
+    chainId: chain.id,
+    tgCommentId,
+    parentCommentId: parentComment.comment_id,
+    postId: post.post_id,
   })
 }
 
@@ -85,8 +194,34 @@ export async function handleTgComment(
       return
     }
 
-    const mapping = findMappingByThreadMsgId(chain.id, threadRootMsgId)
+    let mapping = findMappingByThreadMsgId(chain.id, threadRootMsgId)
     if (!mapping?.max_mid) {
+      const threadRoot = resolveThreadRootMessage(message)
+      const channelMsgId =
+        threadRoot != null ? resolveChannelMsgIdFromThreadRoot(threadRoot) : null
+      if (channelMsgId != null) {
+        mapping = findMappingByTgMsgId(chain.id, channelMsgId)
+        if (mapping?.max_mid) {
+          linkThreadMessageToChannelPost(
+            chain.id,
+            channelMsgId,
+            message.chat.id,
+            threadRootMsgId,
+          )
+          logger.info('[tgCommentSync] linked thread via channel msg fallback', {
+            chainId: chain.id,
+            channelMsgId,
+            threadMsgId: threadRootMsgId,
+          })
+        }
+      }
+    }
+    if (!mapping?.max_mid) {
+      logger.debug('[tgCommentSync] no post mapping for thread', {
+        chainId: chain.id,
+        threadRootMsgId,
+        tgCommentId,
+      })
       return
     }
 
@@ -111,6 +246,31 @@ export async function handleTgComment(
       return
     }
 
+    const isAdmin = await isTgCommentFromAdmin(message, tgToken, chain, discussionChatId)
+    const directReplyId = message.reply_to_message.message_id
+
+    if (isAdmin && directReplyId !== threadRootMsgId) {
+      const parentComment = commentStore.findCommentByTgMessageId(directReplyId)
+      if (parentComment) {
+        await handleTgAdminReplyToComment(
+          message,
+          parentComment,
+          chain,
+          bot,
+          maxChatId,
+          post,
+          tgCommentId,
+        )
+        return
+      }
+      logger.debug('[tgCommentSync] admin reply without linked MAX comment', {
+        chainId: chain.id,
+        tgCommentId,
+        directReplyId,
+      })
+      return
+    }
+
     const shouldSync = await shouldSyncTgCommentToMax({
       message,
       chain,
@@ -128,16 +288,15 @@ export async function handleTgComment(
       return
     }
 
-    const authorName =
-      [message.from?.first_name, message.from?.last_name].filter(Boolean).join(' ') ||
-      message.sender_chat?.title ||
-      message.from?.username ||
-      'Аноним'
-    const userId = typeof message.from?.id === 'number' ? message.from.id : 0
+    const { userId, username: authorName } = resolveTgCommentAuthor(
+      message,
+      chain,
+      discussionChatId,
+    )
     const saved = commentStore.saveTelegramThreadComment(
       {
         post_id: post.post_id,
-        user_id: userId > 0 ? userId : 1,
+        user_id: userId,
         username: authorName,
         text,
       },

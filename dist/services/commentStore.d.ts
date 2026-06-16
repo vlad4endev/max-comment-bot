@@ -6,6 +6,8 @@ export interface CommentReply {
     admin_name?: string;
     /** Attached image URLs (served by backend). */
     photo_urls?: string[];
+    /** Ответ пришёл из TG-треда (не из MAX miniapp). */
+    from_telegram?: boolean;
 }
 /** DM to an admin: message id for later edits when the channel replies. */
 export interface CommentAdminNotificationMid {
@@ -51,6 +53,16 @@ export interface Comment {
     notification_reply_log?: CommentNotificationReplyLogEntry[];
     /** Mini App: admin posted from composer without «Ответить» — show as channel, not personal profile. */
     posted_as_channel?: boolean;
+    /** ID сообщения-комментария в TG discussion group. */
+    tg_comment_id?: number;
+    /** Дублирует comment_id для индекса max_comment_id в SQLite. */
+    max_comment_id?: string;
+    /** Источник комментария: miniapp/max или telegram thread. */
+    source?: 'telegram' | 'max';
+    /** Синхронизирован с другой платформой. */
+    synced?: boolean;
+    /** ID ответа администратора, отправленного в TG-тред. */
+    tg_thread_reply_id?: number;
 }
 export declare function replyToNotificationLogEntry(reply: CommentReply, notificationReplierName?: string): CommentNotificationReplyLogEntry;
 export interface AdminCommentListRow {
@@ -66,7 +78,7 @@ export declare class CommentStore {
      * Attaches a channel reply to a comment. Returns updated comment or `null`.
      * @param replyAdminName optional display name of the replying admin (non-empty trimmed string is stored).
      */
-    addReply(commentId: string, replyText: string, replyAdminName?: string, replyPhotoUrls?: string[], notificationReplierName?: string): Comment | null;
+    addReply(commentId: string, replyText: string, replyAdminName?: string, replyPhotoUrls?: string[], notificationReplierName?: string, fromTelegram?: boolean): Comment | null;
     /**
      * Updates comment body text. Returns updated comment or `null`.
      */
@@ -142,6 +154,16 @@ export declare class CommentStore {
     get totalCount(): number;
     private parseRow;
     private saveRow;
+    findCommentByTgMessageId(tgCommentId: number): Comment | null;
+    /**
+     * Сохраняет комментарий из TG-треда в miniapp БД с метаданными синхронизации.
+     */
+    saveTelegramThreadComment(input: Omit<Comment, 'comment_id' | 'timestamp' | 'source' | 'synced'>, tgCommentId: number): Comment;
+    setTgThreadReplyId(commentId: string, tgMessageId: number): Comment | null;
+    /**
+     * Комментарии с ответом админа, ещё не отправленным в TG-тред.
+     */
+    listCommentsPendingTelegramThreadReply(limit?: number): Comment[];
     private getStatements;
 }
 export declare const commentStore: CommentStore;

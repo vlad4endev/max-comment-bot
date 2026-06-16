@@ -73,7 +73,7 @@ export async function isTgCommentFromAdmin(
 }
 
 /** Поднимается по цепочке reply_to_message к корню треда (авто-репост канала). */
-export function resolveDiscussionThreadRootMsgId(message: TgMessage): number | null {
+export function resolveThreadRootMessage(message: TgMessage): TgMessage['reply_to_message'] | null {
   let reply = message.reply_to_message
   if (!reply) {
     return null
@@ -83,7 +83,82 @@ export function resolveDiscussionThreadRootMsgId(message: TgMessage): number | n
     reply = reply.reply_to_message
     depth += 1
   }
-  return typeof reply.message_id === 'number' ? reply.message_id : null
+  return reply
+}
+
+export function resolveDiscussionThreadRootMsgId(message: TgMessage): number | null {
+  const root = resolveThreadRootMessage(message)
+  return typeof root?.message_id === 'number' ? root.message_id : null
+}
+
+/** ID поста в TG-канале из авто-репоста в discussion group. */
+export function resolveChannelMsgIdFromThreadRoot(
+  root: NonNullable<TgMessage['reply_to_message']>,
+): number | null {
+  const fromOrigin = root.forward_origin?.message_id
+  if (typeof fromOrigin === 'number' && fromOrigin > 0) {
+    return fromOrigin
+  }
+  const fromForward = root.forward_from_message_id
+  if (typeof fromForward === 'number' && fromForward > 0) {
+    return fromForward
+  }
+  return null
+}
+
+export function resolveTgCommentAuthor(
+  message: TgMessage,
+  chain: TgChainRecord,
+  discussionChatId: number,
+): { userId: number; username: string } {
+  const from = message.from
+  const fromId = typeof from?.id === 'number' && from.id > 0 ? from.id : 0
+
+  const fullName = [from?.first_name, from?.last_name].filter(Boolean).join(' ').trim()
+  const rawUsername = from?.username?.trim().replace(/^@/, '')
+  const atUsername = rawUsername ? `@${rawUsername}` : ''
+
+  if (fullName) {
+    return { userId: fromId || 1, username: fullName }
+  }
+  if (atUsername) {
+    return { userId: fromId || 1, username: atUsername }
+  }
+
+  const senderChat = message.sender_chat
+  if (senderChat) {
+    const channelId = channelChatNumericId(chain)
+    if (channelId != null && senderChat.id === channelId) {
+      const channelLabel =
+        senderChat.title?.trim() ||
+        (senderChat.username ? `@${senderChat.username.replace(/^@/, '')}` : '') ||
+        'Канал'
+      return { userId: fromId || 1, username: channelLabel }
+    }
+    if (senderChat.id !== discussionChatId) {
+      const chatLabel =
+        senderChat.title?.trim() ||
+        (senderChat.username ? `@${senderChat.username.replace(/^@/, '')}` : '')
+      if (chatLabel) {
+        return { userId: fromId || 1, username: chatLabel }
+      }
+    }
+  }
+
+  return { userId: fromId || 1, username: 'Аноним' }
+}
+
+/** Префикс ответа админа из MAX в TG-треде (не синхронизировать обратно в miniapp). */
+export const MAX_REPLY_TG_PREFIX = 'MAX ответ:'
+
+/** Старый префикс — игнорируем при обратной синхронизации. */
+const LEGACY_ADMIN_REPLY_TG_PREFIX = '👤 Администратор:'
+
+export function isMaxAdminReplyInTelegram(text: string): boolean {
+  const trimmed = text.trim()
+  return (
+    trimmed.startsWith(MAX_REPLY_TG_PREFIX) || trimmed.startsWith(LEGACY_ADMIN_REPLY_TG_PREFIX)
+  )
 }
 
 export async function shouldSyncTgCommentToMax(params: {
@@ -95,7 +170,7 @@ export async function shouldSyncTgCommentToMax(params: {
   threadRootMsgId: number
 }): Promise<boolean> {
   const text = (params.message.text || params.message.caption || '').trim()
-  if (!text || text.startsWith('👤 Администратор:')) {
+  if (!text || isMaxAdminReplyInTelegram(text)) {
     return false
   }
 

@@ -61,6 +61,9 @@ async function getTelegramUpdatesWithIds(token, offset, timeoutSec = 0, options)
     if (options?.includeMiniappBotUpdates) {
         allowed.push('message', 'my_chat_member', 'callback_query');
     }
+    else if (options?.includeDiscussionMessages) {
+        allowed.push('message');
+    }
     for (let attempt = 0; attempt < 5; attempt++) {
         try {
             const res = await axios_1.default.get(`${TG_API}${token}/getUpdates`, {

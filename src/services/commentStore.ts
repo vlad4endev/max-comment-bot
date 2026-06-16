@@ -15,6 +15,8 @@ export interface CommentReply {
   admin_name?: string
   /** Attached image URLs (served by backend). */
   photo_urls?: string[]
+  /** Ответ пришёл из TG-треда (не из MAX miniapp). */
+  from_telegram?: boolean
 }
 
 /** DM to an admin: message id for later edits when the channel replies. */
@@ -93,6 +95,9 @@ function isCommentReply(value: unknown): value is CommentReply {
     }
   }
   if (o.reply_id !== undefined && typeof o.reply_id !== 'string') {
+    return false
+  }
+  if (o.from_telegram !== undefined && typeof o.from_telegram !== 'boolean') {
     return false
   }
   return typeof o.text === 'string' && typeof o.timestamp === 'string'
@@ -381,6 +386,7 @@ export class CommentStore {
     replyAdminName?: string,
     replyPhotoUrls?: string[],
     notificationReplierName?: string,
+    fromTelegram?: boolean,
   ): Comment | null {
     const c = this.getComment(commentId)
     if (!c) {
@@ -397,6 +403,9 @@ export class CommentStore {
     }
     if (Array.isArray(replyPhotoUrls) && replyPhotoUrls.length > 0) {
       reply.photo_urls = replyPhotoUrls.map((u) => u.trim()).filter(Boolean)
+    }
+    if (fromTelegram) {
+      reply.from_telegram = true
     }
     const thread = existingRepliesList(c)
     thread.push(reply)

@@ -3266,6 +3266,9 @@
         var adminTrim =
           reply && typeof reply.admin_name === 'string' ? reply.admin_name.trim() : '';
         var replyNameRaw = adminTrim || channelDisplayName();
+        if (reply && reply.from_telegram) {
+          replyNameRaw = replyNameRaw + ' · TG';
+        }
         var replyLabel = escDisplay(replyNameRaw);
         var menuKind = adminMenuKind || 'reply';
         var adminReplyActs = isLastReply ? buildAdminActionsHtml(commentId, menuKind) : '';

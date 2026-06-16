@@ -63,6 +63,22 @@ export function findMappingByThreadMsgId(
   return row ?? null
 }
 
+export function findMappingByTgMsgId(
+  chainId: string,
+  tgMsgId: number,
+): PostCommentMappingRow | null {
+  const row = getDb()
+    .prepare(
+      `SELECT chain_id, tg_msg_id, max_mid, tg_chat_id, tg_thread_chat_id, tg_thread_msg_id
+       FROM post_comment_mapping
+       WHERE chain_id = ? AND tg_msg_id = ?
+       ORDER BY id DESC
+       LIMIT 1`,
+    )
+    .get(chainId, tgMsgId) as PostCommentMappingRow | undefined
+  return row ?? null
+}
+
 export function findMappingByMaxMid(maxMid: string): PostCommentMappingRow | null {
   const row = getDb()
     .prepare(

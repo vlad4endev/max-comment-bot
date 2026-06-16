@@ -13,6 +13,7 @@ import { findMappingByMaxMid } from './postCommentMappingStore'
 import type { Post } from './postStore'
 import { resolveTelegramBotToken } from './resolveTelegramBotToken'
 import { isCommentSynced, markCommentSynced } from '../utils/commentSyncGuard'
+import { MAX_REPLY_TG_PREFIX } from '../utils/commentSyncFilter'
 import { logger } from '../utils/logger'
 
 const TG_API = 'https://api.telegram.org'
@@ -102,7 +103,7 @@ export async function syncAdminReplyToTelegramThread(
     const tgMsgId = await sendTelegramThreadMessage(
       token,
       mapping.tg_thread_chat_id,
-      `👤 Администратор: ${replyText}`,
+      `${MAX_REPLY_TG_PREFIX} ${replyText}`,
       replyToId,
     )
     if (tgMsgId == null) {

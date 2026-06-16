@@ -13,6 +13,14 @@ export class TelegramGetUpdatesConflictError extends Error {
 export interface TgReplyToMessage {
   message_id: number
   reply_to_message?: TgReplyToMessage
+  forward_from_message_id?: number
+  is_automatic_forward?: boolean
+  forward_origin?: {
+    type?: string
+    chat?: { id: number }
+    message_id?: number
+  }
+  sender_chat?: { id: number; title?: string; username?: string }
 }
 
 export interface TgMessage {

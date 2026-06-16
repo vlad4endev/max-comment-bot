@@ -885,7 +885,7 @@ export async function runTgChainsOnce(): Promise<boolean> {
   }
 
   const chains = (await listTgChains()).filter(
-    (c) => c.active && c.forward_posts && chainSourceKey(c) !== '',
+    (c) => c.active && (c.forward_posts || c.forward_comments) && chainSourceKey(c) !== '',
   )
   if (chains.length === 0) {
     const mainToken = resolveTelegramBotToken()

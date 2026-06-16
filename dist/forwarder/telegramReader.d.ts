@@ -1,6 +1,24 @@
 export declare class TelegramGetUpdatesConflictError extends Error {
     constructor(message: string);
 }
+export interface TgReplyToMessage {
+    message_id: number;
+    reply_to_message?: TgReplyToMessage;
+    forward_from_message_id?: number;
+    is_automatic_forward?: boolean;
+    forward_origin?: {
+        type?: string;
+        chat?: {
+            id: number;
+        };
+        message_id?: number;
+    };
+    sender_chat?: {
+        id: number;
+        title?: string;
+        username?: string;
+    };
+}
 export interface TgMessage {
     message_id: number;
     text?: string;
@@ -23,6 +41,31 @@ export interface TgMessage {
     chat: {
         id: number;
         username?: string;
+        type?: string;
+    };
+    from?: {
+        id?: number;
+        first_name?: string;
+        last_name?: string;
+        username?: string;
+    };
+    reply_to_message?: TgReplyToMessage;
+    sender_chat?: {
+        id: number;
+        title?: string;
+        username?: string;
+    };
+    forward_from_message_id?: number;
+    forward_from_chat?: {
+        id: number;
+    };
+    is_automatic_forward?: boolean;
+    forward_origin?: {
+        type?: string;
+        chat?: {
+            id: number;
+        };
+        message_id?: number;
     };
 }
 export interface TgChannelUpdate {
@@ -30,7 +73,7 @@ export interface TgChannelUpdate {
     channel_post?: TgMessage;
     edited_channel_post?: TgMessage;
     edited_message?: TgMessage;
-    message?: Record<string, unknown>;
+    message?: TgMessage;
     my_chat_member?: Record<string, unknown>;
     callback_query?: Record<string, unknown>;
     raw?: Record<string, unknown>;
@@ -40,4 +83,5 @@ export declare function getTgFileUrl(token: string, fileId: string): Promise<str
 /** Сырые апдейты с `update_id` — для корректного offset при опросе. */
 export declare function getTelegramUpdatesWithIds(token: string, offset: number, timeoutSec?: number, options?: {
     includeMiniappBotUpdates?: boolean;
+    includeDiscussionMessages?: boolean;
 }): Promise<TgChannelUpdate[]>;

@@ -23,6 +23,8 @@ const logger_1 = require("../utils/logger");
 const maxApiRetry_1 = require("../utils/maxApiRetry");
 const telegramMainBotOffsetStore_1 = require("./telegramMainBotOffsetStore");
 const telegramMiniappService_1 = require("./telegramMiniappService");
+const postCommentMappingStore_1 = require("./postCommentMappingStore");
+const tgCommentSyncService_1 = require("./tgCommentSyncService");
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 /** Long-poll Telegram for new channel_post (сек). */
 const TG_CHAIN_LONG_POLL_SEC = 25;
@@ -155,6 +157,10 @@ function markForwarded(chainId, message, maxMid, chunkIndex) {
          album_chunk_index = excluded.album_chunk_index,
          tg_payload = excluded.tg_payload`)
         .run(chainId, message.message_id, maxMid, mediaGroupId, chunkIndex, payload);
+    // Синхронизация комментариев: дублируем маппинг в post_comment_mapping
+    if (maxMid) {
+        (0, postCommentMappingStore_1.upsertPostCommentMapping)(chainId, message.message_id, maxMid, message.chat?.id ?? null);
+    }
 }
 /** Токен TG-бота для опроса channel_post. Пустой bot_token в связке = основной CommentBot (как в miniapp), не reader. */
 function resolveTgToken(chain) {
@@ -679,6 +685,9 @@ async function processChainMessageGroup(chain, messages, tgToken) {
             const forwardedToday = chain.forwarded_today + published;
             chain.forwarded_today = forwardedToday;
             await (0, adminPanelState_1.updateTgChain)(chain.id, { forwarded_today: forwardedToday });
+            if (chain.forward_comments) {
+                void (0, postCommentMappingStore_1.storeDiscussionChatIdForChain)(tgToken, chain);
+            }
             logger_1.logger.info('[tgChain] forwarded', {
                 chainId: chain.id,
                 from: sourceKey,
@@ -725,7 +734,7 @@ async function runTgChainsOnce() {
         logger_1.logger.warn('[tgChain] MAX bot not set — skip tick');
         return receivedAny;
     }
-    const chains = (await (0, adminPanelState_1.listTgChains)()).filter((c) => c.active && c.forward_posts && chainSourceKey(c) !== '');
+    const chains = (await (0, adminPanelState_1.listTgChains)()).filter((c) => c.active && (c.forward_posts || c.forward_comments) && chainSourceKey(c) !== '');
     if (chains.length === 0) {
         const mainToken = (0, resolveTelegramBotToken_1.resolveTelegramBotToken)();
         if (mainToken && (0, resolveTelegramBotToken_1.isMainTelegramBotToken)(mainToken)) {
@@ -765,6 +774,7 @@ async function runTgChainsOnce() {
         }
         const offset = getReaderOffset(tgToken);
         const includeMiniappBotUpdates = (0, resolveTelegramBotToken_1.isMainTelegramBotToken)(tgToken);
+        const includeDiscussionMessages = group.some((c) => c.forward_comments);
         let batch;
         try {
             // При ожидающемся flush альбома не блокируемся длинным long-poll.
@@ -774,6 +784,7 @@ async function runTgChainsOnce() {
                 : Math.max(0, Math.min(TG_CHAIN_LONG_POLL_SEC, Math.ceil(pendingAlbumDelayMs / 1000)));
             batch = await (0, telegramReader_1.getTelegramUpdatesWithIds)(tgToken, offset, timeoutSec, {
                 includeMiniappBotUpdates,
+                includeDiscussionMessages,
             });
         }
         catch (err) {
@@ -800,6 +811,7 @@ async function runTgChainsOnce() {
         const channelPosts = [];
         const editedChannelPosts = [];
         const editedMessages = [];
+        const discussionMessages = [];
         for (const u of batch) {
             receivedAny = true;
             nextOffset = Math.max(nextOffset, u.update_id + 1);
@@ -811,6 +823,9 @@ async function runTgChainsOnce() {
             }
             if (u.edited_message) {
                 editedMessages.push(u.edited_message);
+            }
+            if (u.message) {
+                discussionMessages.push(u.message);
             }
         }
         for (const chain of group) {
@@ -844,6 +859,23 @@ async function runTgChainsOnce() {
             const editedMessagesForChain = editedMessages.filter((m) => (0, tgChannelMatch_1.telegramMessageMatchesTgChain)(m.chat, chain));
             for (const edited of editedMessagesForChain) {
                 await processEditedChainMessage(chain, edited, tgToken);
+            }
+            if (chain.forward_comments && discussionMessages.length > 0 && botRef) {
+                const discussionChatId = await (0, postCommentMappingStore_1.resolveDiscussionChatId)(tgToken, chain);
+                if (discussionChatId != null) {
+                    for (const msg of discussionMessages) {
+                        if (msg.chat.id !== discussionChatId) {
+                            continue;
+                        }
+                        if ((0, tgCommentSyncService_1.isDiscussionAutoForward)(msg)) {
+                            (0, tgCommentSyncService_1.handleDiscussionAutoForward)(msg, chain.id);
+                            continue;
+                        }
+                        if (msg.reply_to_message) {
+                            await (0, tgCommentSyncService_1.handleTgComment)(msg, chain, botRef, discussionChatId);
+                        }
+                    }
+                }
             }
         }
         if (nextOffset > offset) {

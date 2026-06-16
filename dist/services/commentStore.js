@@ -24,6 +24,9 @@ function isCommentReply(value) {
     if (o.reply_id !== undefined && typeof o.reply_id !== 'string') {
         return false;
     }
+    if (o.from_telegram !== undefined && typeof o.from_telegram !== 'boolean') {
+        return false;
+    }
     return typeof o.text === 'string' && typeof o.timestamp === 'string';
 }
 function ensureCommentReplyIds(comment) {
@@ -260,7 +263,7 @@ class CommentStore {
      * Attaches a channel reply to a comment. Returns updated comment or `null`.
      * @param replyAdminName optional display name of the replying admin (non-empty trimmed string is stored).
      */
-    addReply(commentId, replyText, replyAdminName, replyPhotoUrls, notificationReplierName) {
+    addReply(commentId, replyText, replyAdminName, replyPhotoUrls, notificationReplierName, fromTelegram) {
         const c = this.getComment(commentId);
         if (!c) {
             return null;
@@ -276,6 +279,9 @@ class CommentStore {
         }
         if (Array.isArray(replyPhotoUrls) && replyPhotoUrls.length > 0) {
             reply.photo_urls = replyPhotoUrls.map((u) => u.trim()).filter(Boolean);
+        }
+        if (fromTelegram) {
+            reply.from_telegram = true;
         }
         const thread = existingRepliesList(c);
         thread.push(reply);
@@ -608,7 +614,66 @@ class CommentStore {
         return JSON.parse(raw);
     }
     saveRow(comment) {
-        this.getStatements().upsert.run(comment.comment_id, comment.post_id, comment.user_id, comment.username, comment.text, comment.timestamp, comment.reply ? JSON.stringify(comment.reply) : null, comment.notification_text ?? null, comment.notification_mids ? JSON.stringify(comment.notification_mids) : null, JSON.stringify(comment));
+        const prev = this.getStatements().getSyncMeta.get(comment.comment_id);
+        const tgCommentId = comment.tg_comment_id ?? prev?.tg_comment_id ?? null;
+        const maxCommentId = comment.max_comment_id ?? prev?.max_comment_id ?? comment.comment_id;
+        const source = comment.source ?? prev?.source ?? 'max';
+        const synced = comment.synced !== undefined ? (comment.synced ? 1 : 0) : (prev?.synced ?? 0);
+        const tgThreadReplyId = comment.tg_thread_reply_id ?? prev?.tg_thread_reply_id ?? null;
+        this.getStatements().upsert.run(comment.comment_id, comment.post_id, comment.user_id, comment.username, comment.text, comment.timestamp, comment.reply ? JSON.stringify(comment.reply) : null, comment.notification_text ?? null, comment.notification_mids ? JSON.stringify(comment.notification_mids) : null, JSON.stringify(comment), tgCommentId, maxCommentId, source, synced, tgThreadReplyId);
+    }
+    findCommentByTgMessageId(tgCommentId) {
+        const row = this.getStatements().findByTgCommentId.get(tgCommentId);
+        if (!row) {
+            return null;
+        }
+        try {
+            return normalizeCommentFromDisk(this.parseRow(row.data));
+        }
+        catch {
+            return null;
+        }
+    }
+    /**
+     * Сохраняет комментарий из TG-треда в miniapp БД с метаданными синхронизации.
+     */
+    saveTelegramThreadComment(input, tgCommentId) {
+        const comment = this.saveComment(input);
+        comment.tg_comment_id = tgCommentId;
+        comment.max_comment_id = comment.comment_id;
+        comment.source = 'telegram';
+        comment.synced = true;
+        this.saveRow(comment);
+        return comment;
+    }
+    setTgThreadReplyId(commentId, tgMessageId) {
+        const c = this.getComment(commentId);
+        if (!c) {
+            return null;
+        }
+        c.tg_thread_reply_id = tgMessageId;
+        c.synced = true;
+        this.saveRow(c);
+        return c;
+    }
+    /**
+     * Комментарии с ответом админа, ещё не отправленным в TG-тред.
+     */
+    listCommentsPendingTelegramThreadReply(limit = 20) {
+        const rows = this.getStatements().listPendingThreadReply.all(limit);
+        const out = [];
+        for (const row of rows) {
+            try {
+                const c = normalizeCommentFromDisk(this.parseRow(row.data));
+                if (c) {
+                    out.push(c);
+                }
+            }
+            catch {
+                // skip
+            }
+        }
+        return out;
     }
     getStatements() {
         if (this.statements) {
@@ -671,8 +736,18 @@ class CommentStore {
          FROM comments c
          GROUP BY c.user_id`),
             upsert: db.prepare(`INSERT OR REPLACE INTO comments (
-          comment_id, post_id, user_id, username, text, timestamp, reply, notification_text, notification_mids, data
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
+          comment_id, post_id, user_id, username, text, timestamp, reply, notification_text, notification_mids, data,
+          tg_comment_id, max_comment_id, source, synced, tg_thread_reply_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
+            getSyncMeta: db.prepare(`SELECT tg_comment_id, max_comment_id, source, synced, tg_thread_reply_id
+         FROM comments WHERE comment_id = ?`),
+            findByTgCommentId: db.prepare('SELECT data FROM comments WHERE tg_comment_id = ?'),
+            listPendingThreadReply: db.prepare(`SELECT data FROM comments
+         WHERE reply IS NOT NULL AND TRIM(reply) != ''
+           AND (tg_thread_reply_id IS NULL OR tg_thread_reply_id = 0)
+           AND (source IS NULL OR source != 'telegram')
+         ORDER BY timestamp DESC
+         LIMIT ?`),
             deleteById: db.prepare('DELETE FROM comments WHERE comment_id = ?'),
             deleteAll: db.prepare('DELETE FROM comments'),
             countAll: db.prepare('SELECT COUNT(*) AS n FROM comments'),
