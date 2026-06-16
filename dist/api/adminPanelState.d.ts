@@ -25,6 +25,12 @@ export interface TgChainRecord {
     bot_token: string;
     forward_posts: boolean;
     forward_comments: boolean;
+    /** Явный ID чата обсуждений TG (-100…); если пусто — linked_chat_id канала. */
+    tg_discussion_chat_id?: string | null;
+    /** От чьего имени публиковать ответы MAX → TG: канал или группа обсуждений (аноним). */
+    tg_discussion_send_as?: 'channel' | 'chat';
+    /** Ключевые слова/фразы: обычные комментарии TG синхронизируются только при совпадении. */
+    comment_sync_keywords?: string[];
     /** Кнопка «Комментарии» под постом в MAX после пересылки */
     add_comments_button: boolean;
     add_signature: boolean;

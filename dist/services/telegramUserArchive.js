@@ -7,6 +7,8 @@ exports.telegramUserArchiveConfigured = telegramUserArchiveConfigured;
 exports.getTelegramUserApiId = getTelegramUserApiId;
 exports.getTelegramUserApiHash = getTelegramUserApiHash;
 exports.getTelegramUserSession = getTelegramUserSession;
+exports.connectTelegramUserClient = connectTelegramUserClient;
+exports.resolveTelegramChannelEntity = resolveTelegramChannelEntity;
 exports.fetchChannelArchiveForImport = fetchChannelArchiveForImport;
 const promises_1 = __importDefault(require("node:fs/promises"));
 const node_os_1 = __importDefault(require("node:os"));
@@ -104,6 +106,13 @@ function getTelegramUserApiHash() {
 }
 function getTelegramUserSession() {
     return (0, mtprotoConfigStore_1.resolveMtprotoCredentials)().session;
+}
+/** Подключение MTProto user-сессии (импорт TG→MAX, отправка в обсуждения от канала). */
+async function connectTelegramUserClient() {
+    return createUserClient();
+}
+async function resolveTelegramChannelEntity(client, channelKey) {
+    return resolveChannelEntity(client, channelKey);
 }
 async function createUserClient() {
     const apiId = getTelegramUserApiId();

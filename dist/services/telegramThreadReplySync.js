@@ -19,7 +19,12 @@ const resolveTelegramBotToken_1 = require("./resolveTelegramBotToken");
 const commentSyncGuard_1 = require("../utils/commentSyncGuard");
 const commentSyncFilter_1 = require("../utils/commentSyncFilter");
 const logger_1 = require("../utils/logger");
+const telegramMtprotoDiscussionSender_1 = require("./telegramMtprotoDiscussionSender");
 const TG_API = 'https://api.telegram.org';
+function resolveDiscussionSendAs(chainId) {
+    const chain = (0, adminPanelState_1.listTgChainsSync)().find((c) => c.id === chainId);
+    return chain?.tg_discussion_send_as === 'chat' ? 'chat' : 'channel';
+}
 function resolveTelegramBotTokenForChain(chainId) {
     const chain = (0, adminPanelState_1.listTgChainsSync)().find((c) => c.id === chainId);
     const fromChain = chain?.bot_token?.trim();
@@ -31,6 +36,21 @@ function resolveTelegramBotTokenForChain(chainId) {
 function isCommentForwardEnabled(chainId) {
     const chain = (0, adminPanelState_1.listTgChainsSync)().find((c) => c.id === chainId);
     return chain?.active !== false && chain?.forward_comments === true;
+}
+function resolveChannelKeyForMapping(mapping) {
+    const chain = (0, adminPanelState_1.listTgChainsSync)().find((c) => c.id === mapping.chain_id);
+    const fromChainId = chain?.tg_channel_id?.trim();
+    if (fromChainId) {
+        return fromChainId;
+    }
+    const username = chain?.tg_username?.trim();
+    if (username) {
+        return username.startsWith('@') ? username : `@${username}`;
+    }
+    if (typeof mapping.tg_chat_id === 'number') {
+        return String(mapping.tg_chat_id);
+    }
+    return null;
 }
 function resolvePostThreadTarget(messageMid) {
     const mapping = (0, postCommentMappingStore_1.findMappingByMaxMid)(messageMid);
@@ -49,17 +69,54 @@ function resolvePostThreadTarget(messageMid) {
         token,
         threadChatId: mapping.tg_thread_chat_id,
         threadMsgId: mapping.tg_thread_msg_id,
+        channelKey: resolveChannelKeyForMapping(mapping),
+        sendAsMode: resolveDiscussionSendAs(mapping.chain_id),
     };
 }
-function buildMaxCommentTelegramText(comment) {
+function buildMaxCommentTelegramText(comment, asChannel) {
     const text = comment.text.trim();
+    const photoFallback = '📷 Фото';
+    if (asChannel) {
+        if (text) {
+            return text;
+        }
+        if (Array.isArray(comment.photo_urls) && comment.photo_urls.length > 0) {
+            return photoFallback;
+        }
+        return '';
+    }
     if (text) {
         return (0, commentSyncFilter_1.formatMaxCommentForTelegram)(comment.username, text);
     }
     if (Array.isArray(comment.photo_urls) && comment.photo_urls.length > 0) {
-        return (0, commentSyncFilter_1.formatMaxCommentForTelegram)(comment.username, '📷 Фото');
+        return (0, commentSyncFilter_1.formatMaxCommentForTelegram)(comment.username, photoFallback);
     }
     return '';
+}
+async function deliverTelegramThreadMessage(target, text, replyToId, useMtprotoSendAs, botFallbackText) {
+    if (useMtprotoSendAs && (target.sendAsMode === 'chat' || target.channelKey)) {
+        try {
+            const tgMsgId = await (0, telegramMtprotoDiscussionSender_1.sendDiscussionMessageAsPeer)(target.sendAsMode, target.threadChatId, target.channelKey, text, replyToId);
+            if (tgMsgId != null) {
+                return tgMsgId;
+            }
+            logger_1.logger.warn('[telegramThreadReplySync] sendAs peer unavailable, fallback to bot', {
+                chainId: target.chainId,
+                sendAsMode: target.sendAsMode,
+                channelKey: target.channelKey,
+            });
+        }
+        catch (err) {
+            logger_1.logger.warn('[telegramThreadReplySync] sendAs peer failed, fallback to bot', {
+                chainId: target.chainId,
+                sendAsMode: target.sendAsMode,
+                channelKey: target.channelKey,
+                err,
+            });
+        }
+    }
+    const botText = botFallbackText ?? text;
+    return sendTelegramThreadMessage(target.token, target.threadChatId, botText, replyToId);
 }
 async function sendTelegramThreadMessage(token, chatId, text, replyToMessageId) {
     const { data } = await axios_1.default.post(`${TG_API}/bot${token}/sendMessage`, {
@@ -156,10 +213,6 @@ async function syncMaxCommentToTelegramThread(_bot, comment, post) {
     if (freshComment.source === 'telegram' || freshComment.tg_comment_id) {
         return;
     }
-    const body = buildMaxCommentTelegramText(freshComment);
-    if (!body) {
-        return;
-    }
     const target = resolvePostThreadTarget(post.message_mid);
     if (!target) {
         logger_1.logger.warn('[telegramThreadReplySync] no thread mapping for MAX comment', {
@@ -168,12 +221,17 @@ async function syncMaxCommentToTelegramThread(_bot, comment, post) {
         });
         return;
     }
+    const postAsPeer = freshComment.posted_as_channel === true;
+    const body = buildMaxCommentTelegramText(freshComment, postAsPeer);
+    if (!body) {
+        return;
+    }
     const guardKey = `max-comment:${freshComment.comment_id}`;
     if ((0, commentSyncGuard_1.isCommentSynced)(guardKey)) {
         return;
     }
     try {
-        const tgMsgId = await sendTelegramThreadMessage(target.token, target.threadChatId, body, target.threadMsgId);
+        const tgMsgId = await deliverTelegramThreadMessage(target, body, target.threadMsgId, postAsPeer, postAsPeer ? (0, commentSyncFilter_1.formatMaxCommentForTelegram)(freshComment.username, body) : undefined);
         if (tgMsgId == null) {
             return;
         }
@@ -236,7 +294,7 @@ async function syncAdminReplyToTelegramThread(_bot, comment, post) {
         replyToId = freshComment.tg_comment_id;
     }
     try {
-        const tgMsgId = await sendTelegramThreadMessage(token, threadChatId, `${commentSyncFilter_1.MAX_REPLY_TG_PREFIX} ${replyText}`, replyToId);
+        const tgMsgId = await deliverTelegramThreadMessage(target, replyText, replyToId, true, `${commentSyncFilter_1.MAX_REPLY_TG_PREFIX} ${replyText}`);
         if (tgMsgId == null) {
             return;
         }

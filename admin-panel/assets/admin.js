@@ -2427,6 +2427,15 @@
       '<div data-chain-comment-fields' +
       (c.forward_comments ? '' : ' class="hidden"') +
       '>';
+    var sendAsVal = c.tg_discussion_send_as === 'chat' ? 'chat' : 'channel';
+    html +=
+      '<div class="form-group"><label>От чьего имени в TG (MAX → TG)</label><p class="muted text-sm" style="margin:0 0 6px">Нужна MTProto user-сессия (Импорт TG→MAX). «Чат» — как анонимный админ группы обсуждений.</p>';
+    html +=
+      '<select class="input" data-chain-discussion-send-as style="width:100%"><option value="channel"' +
+      (sendAsVal === 'channel' ? ' selected' : '') +
+      '>От имени канала</option><option value="chat"' +
+      (sendAsVal === 'chat' ? ' selected' : '') +
+      '>От имени чата обсуждений</option></select></div>';
     html +=
       '<div class="form-group"><label>Чат комментариев</label><p class="muted text-sm" style="margin:0 0 6px">Группа обсуждений. Пусто — linked chat канала.</p>';
     html +=
@@ -2470,6 +2479,10 @@
           comment_sync_keywords: readTagsFromWrap(kwWrap),
         };
         var discRaw = readTelegramChannelPick('tc_disc_' + sid + '_select', 'tc_disc_' + sid + '_manual', card);
+        var sendAsEl = qs('[data-chain-discussion-send-as]', card);
+        if (sendAsEl && (sendAsEl.value === 'channel' || sendAsEl.value === 'chat')) {
+          patch.tg_discussion_send_as = sendAsEl.value;
+        }
         if (discRaw) {
           patch.tg_discussion_chat_id = discRaw.replace(/^@/, '');
         } else if (chain.tg_discussion_chat_id) {

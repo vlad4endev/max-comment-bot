@@ -21,8 +21,27 @@ import {
   isTelegramCommentMarkedAnsweredInMax,
 } from '../utils/commentSyncFilter'
 import { logger } from '../utils/logger'
+import {
+  sendDiscussionMessageAsPeer,
+  type DiscussionSendAsMode,
+} from './telegramMtprotoDiscussionSender'
+import type { PostCommentMappingRow } from './postCommentMappingStore'
 
 const TG_API = 'https://api.telegram.org'
+
+type ThreadTarget = {
+  chainId: string
+  token: string
+  threadChatId: number
+  threadMsgId: number
+  channelKey: string | null
+  sendAsMode: DiscussionSendAsMode
+}
+
+function resolveDiscussionSendAs(chainId: string): DiscussionSendAsMode {
+  const chain = listTgChainsSync().find((c) => c.id === chainId)
+  return chain?.tg_discussion_send_as === 'chat' ? 'chat' : 'channel'
+}
 
 function resolveTelegramBotTokenForChain(chainId: string): string {
   const chain = listTgChainsSync().find((c) => c.id === chainId)
@@ -38,12 +57,23 @@ function isCommentForwardEnabled(chainId: string): boolean {
   return chain?.active !== false && chain?.forward_comments === true
 }
 
-function resolvePostThreadTarget(messageMid: string): {
-  chainId: string
-  token: string
-  threadChatId: number
-  threadMsgId: number
-} | null {
+function resolveChannelKeyForMapping(mapping: PostCommentMappingRow): string | null {
+  const chain = listTgChainsSync().find((c) => c.id === mapping.chain_id)
+  const fromChainId = chain?.tg_channel_id?.trim()
+  if (fromChainId) {
+    return fromChainId
+  }
+  const username = chain?.tg_username?.trim()
+  if (username) {
+    return username.startsWith('@') ? username : `@${username}`
+  }
+  if (typeof mapping.tg_chat_id === 'number') {
+    return String(mapping.tg_chat_id)
+  }
+  return null
+}
+
+function resolvePostThreadTarget(messageMid: string): ThreadTarget | null {
   const mapping = findMappingByMaxMid(messageMid)
   if (!mapping?.tg_thread_chat_id || !mapping.tg_thread_msg_id) {
     return null
@@ -60,18 +90,68 @@ function resolvePostThreadTarget(messageMid: string): {
     token,
     threadChatId: mapping.tg_thread_chat_id,
     threadMsgId: mapping.tg_thread_msg_id,
+    channelKey: resolveChannelKeyForMapping(mapping),
+    sendAsMode: resolveDiscussionSendAs(mapping.chain_id),
   }
 }
 
-function buildMaxCommentTelegramText(comment: Comment): string {
+function buildMaxCommentTelegramText(comment: Comment, asChannel: boolean): string {
   const text = comment.text.trim()
+  const photoFallback = '📷 Фото'
+  if (asChannel) {
+    if (text) {
+      return text
+    }
+    if (Array.isArray(comment.photo_urls) && comment.photo_urls.length > 0) {
+      return photoFallback
+    }
+    return ''
+  }
   if (text) {
     return formatMaxCommentForTelegram(comment.username, text)
   }
   if (Array.isArray(comment.photo_urls) && comment.photo_urls.length > 0) {
-    return formatMaxCommentForTelegram(comment.username, '📷 Фото')
+    return formatMaxCommentForTelegram(comment.username, photoFallback)
   }
   return ''
+}
+
+async function deliverTelegramThreadMessage(
+  target: ThreadTarget,
+  text: string,
+  replyToId: number,
+  useMtprotoSendAs: boolean,
+  botFallbackText?: string,
+): Promise<number | null> {
+  if (useMtprotoSendAs && (target.sendAsMode === 'chat' || target.channelKey)) {
+    try {
+      const tgMsgId = await sendDiscussionMessageAsPeer(
+        target.sendAsMode,
+        target.threadChatId,
+        target.channelKey,
+        text,
+        replyToId,
+      )
+      if (tgMsgId != null) {
+        return tgMsgId
+      }
+      logger.warn('[telegramThreadReplySync] sendAs peer unavailable, fallback to bot', {
+        chainId: target.chainId,
+        sendAsMode: target.sendAsMode,
+        channelKey: target.channelKey,
+      })
+    } catch (err: unknown) {
+      logger.warn('[telegramThreadReplySync] sendAs peer failed, fallback to bot', {
+        chainId: target.chainId,
+        sendAsMode: target.sendAsMode,
+        channelKey: target.channelKey,
+        err,
+      })
+    }
+  }
+
+  const botText = botFallbackText ?? text
+  return sendTelegramThreadMessage(target.token, target.threadChatId, botText, replyToId)
 }
 
 async function sendTelegramThreadMessage(
@@ -226,11 +306,6 @@ export async function syncMaxCommentToTelegramThread(
     return
   }
 
-  const body = buildMaxCommentTelegramText(freshComment)
-  if (!body) {
-    return
-  }
-
   const target = resolvePostThreadTarget(post.message_mid)
   if (!target) {
     logger.warn('[telegramThreadReplySync] no thread mapping for MAX comment', {
@@ -240,17 +315,24 @@ export async function syncMaxCommentToTelegramThread(
     return
   }
 
+  const postAsPeer = freshComment.posted_as_channel === true
+  const body = buildMaxCommentTelegramText(freshComment, postAsPeer)
+  if (!body) {
+    return
+  }
+
   const guardKey = `max-comment:${freshComment.comment_id}`
   if (isCommentSynced(guardKey)) {
     return
   }
 
   try {
-    const tgMsgId = await sendTelegramThreadMessage(
-      target.token,
-      target.threadChatId,
+    const tgMsgId = await deliverTelegramThreadMessage(
+      target,
       body,
       target.threadMsgId,
+      postAsPeer,
+      postAsPeer ? formatMaxCommentForTelegram(freshComment.username, body) : undefined,
     )
     if (tgMsgId == null) {
       return
@@ -333,11 +415,12 @@ export async function syncAdminReplyToTelegramThread(
   }
 
   try {
-    const tgMsgId = await sendTelegramThreadMessage(
-      token,
-      threadChatId,
-      `${MAX_REPLY_TG_PREFIX} ${replyText}`,
+    const tgMsgId = await deliverTelegramThreadMessage(
+      target,
+      replyText,
       replyToId,
+      true,
+      `${MAX_REPLY_TG_PREFIX} ${replyText}`,
     )
     if (tgMsgId == null) {
       return

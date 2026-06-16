@@ -93,6 +93,12 @@ function parseTgDiscussionChatId(value) {
     }
     return normalized;
 }
+function parseDiscussionSendAs(value) {
+    if (value === 'channel' || value === 'chat') {
+        return value;
+    }
+    return undefined;
+}
 function parseCommentSyncKeywords(value) {
     if (!Array.isArray(value)) {
         return undefined;
@@ -993,6 +999,7 @@ function createAdminRouter(deps) {
         }
         const ch = channelRegistry_1.channelRegistry.getChannel(maxChatId);
         const discussionChatId = parseTgDiscussionChatId(req.body.tg_discussion_chat_id);
+        const discussionSendAs = parseDiscussionSendAs(req.body.tg_discussion_send_as);
         const commentSyncKeywords = parseCommentSyncKeywords(req.body.comment_sync_keywords);
         const row = await (0, adminPanelState_1.createTgChain)({
             max_chat_id: maxChatId,
@@ -1003,6 +1010,7 @@ function createAdminRouter(deps) {
             forward_posts: req.body.forward_posts !== false,
             forward_comments: Boolean(req.body.forward_comments),
             tg_discussion_chat_id: discussionChatId === undefined ? null : discussionChatId,
+            ...(discussionSendAs ? { tg_discussion_send_as: discussionSendAs } : {}),
             comment_sync_keywords: (0, commentSyncFilter_1.normalizeCommentSyncKeywords)(commentSyncKeywords ?? []),
             add_comments_button: req.body.add_comments_button !== false,
             add_signature: Boolean(req.body.add_signature),
@@ -1030,6 +1038,9 @@ function createAdminRouter(deps) {
         const discussionChatId = parseTgDiscussionChatId(req.body.tg_discussion_chat_id);
         if (discussionChatId !== undefined)
             patch.tg_discussion_chat_id = discussionChatId;
+        const discussionSendAs = parseDiscussionSendAs(req.body.tg_discussion_send_as);
+        if (discussionSendAs !== undefined)
+            patch.tg_discussion_send_as = discussionSendAs;
         const commentSyncKeywords = parseCommentSyncKeywords(req.body.comment_sync_keywords);
         if ('comment_sync_keywords' in req.body) {
             patch.comment_sync_keywords = (0, commentSyncFilter_1.normalizeCommentSyncKeywords)(commentSyncKeywords ?? []);

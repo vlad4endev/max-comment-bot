@@ -126,6 +126,13 @@ function parseTgDiscussionChatId(value: unknown): string | null | undefined {
   return normalized
 }
 
+function parseDiscussionSendAs(value: unknown): 'channel' | 'chat' | undefined {
+  if (value === 'channel' || value === 'chat') {
+    return value
+  }
+  return undefined
+}
+
 function parseCommentSyncKeywords(value: unknown): string[] | undefined {
   if (!Array.isArray(value)) {
     return undefined
@@ -1123,6 +1130,7 @@ export function createAdminRouter(deps: AdminRouterDeps): express.Router {
     }
     const ch = channelRegistry.getChannel(maxChatId)
     const discussionChatId = parseTgDiscussionChatId(req.body.tg_discussion_chat_id)
+    const discussionSendAs = parseDiscussionSendAs(req.body.tg_discussion_send_as)
     const commentSyncKeywords = parseCommentSyncKeywords(req.body.comment_sync_keywords)
     const row = await createTgChain({
       max_chat_id: maxChatId,
@@ -1133,6 +1141,7 @@ export function createAdminRouter(deps: AdminRouterDeps): express.Router {
       forward_posts: req.body.forward_posts !== false,
       forward_comments: Boolean(req.body.forward_comments),
       tg_discussion_chat_id: discussionChatId === undefined ? null : discussionChatId,
+      ...(discussionSendAs ? { tg_discussion_send_as: discussionSendAs } : {}),
       comment_sync_keywords: normalizeCommentSyncKeywords(commentSyncKeywords ?? []),
       add_comments_button: req.body.add_comments_button !== false,
       add_signature: Boolean(req.body.add_signature),
@@ -1157,6 +1166,8 @@ export function createAdminRouter(deps: AdminRouterDeps): express.Router {
     if (typeof req.body.forward_comments === 'boolean') patch.forward_comments = req.body.forward_comments
     const discussionChatId = parseTgDiscussionChatId(req.body.tg_discussion_chat_id)
     if (discussionChatId !== undefined) patch.tg_discussion_chat_id = discussionChatId
+    const discussionSendAs = parseDiscussionSendAs(req.body.tg_discussion_send_as)
+    if (discussionSendAs !== undefined) patch.tg_discussion_send_as = discussionSendAs
     const commentSyncKeywords = parseCommentSyncKeywords(req.body.comment_sync_keywords)
     if ('comment_sync_keywords' in req.body) {
       patch.comment_sync_keywords = normalizeCommentSyncKeywords(commentSyncKeywords ?? [])

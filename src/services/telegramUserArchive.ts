@@ -114,6 +114,18 @@ export function getTelegramUserSession(): string {
   return resolveMtprotoCredentials().session
 }
 
+/** Подключение MTProto user-сессии (импорт TG→MAX, отправка в обсуждения от канала). */
+export async function connectTelegramUserClient(): Promise<TelegramClient> {
+  return createUserClient()
+}
+
+export async function resolveTelegramChannelEntity(
+  client: TelegramClient,
+  channelKey: string,
+): Promise<EntityLike> {
+  return resolveChannelEntity(client, channelKey)
+}
+
 async function createUserClient(): Promise<TelegramClient> {
   const apiId = getTelegramUserApiId()
   const apiHash = getTelegramUserApiHash()
