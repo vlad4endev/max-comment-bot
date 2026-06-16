@@ -10,6 +10,11 @@ export class TelegramGetUpdatesConflictError extends Error {
   }
 }
 
+export interface TgReplyToMessage {
+  message_id: number
+  reply_to_message?: TgReplyToMessage
+}
+
 export interface TgMessage {
   message_id: number
   text?: string
@@ -21,7 +26,7 @@ export interface TgMessage {
   document?: { file_id: string; mime_type?: string; file_name?: string }
   chat: { id: number; username?: string; type?: string }
   from?: { id?: number; first_name?: string; last_name?: string; username?: string }
-  reply_to_message?: { message_id: number }
+  reply_to_message?: TgReplyToMessage
   sender_chat?: { id: number; title?: string; username?: string }
   forward_from_message_id?: number
   forward_from_chat?: { id: number }

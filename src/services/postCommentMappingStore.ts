@@ -80,6 +80,11 @@ export async function resolveDiscussionChatId(
   tgToken: string,
   chain: TgChainRecord,
 ): Promise<number | null> {
+  const manual = chain.tg_discussion_chat_id?.trim()
+  if (manual && /^-?\d+$/.test(manual)) {
+    return Number(manual)
+  }
+
   const cacheKey = `${chain.id}:${tgToken}`
   if (discussionChatCache.has(cacheKey)) {
     return discussionChatCache.get(cacheKey) ?? null

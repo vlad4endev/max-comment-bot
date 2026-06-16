@@ -21,6 +21,10 @@ import {
 import { postStore } from './postStore'
 import { resolveCanonicalChannelChatId } from './resolveChannelChatId'
 import { isCommentSynced, markCommentSynced } from '../utils/commentSyncGuard'
+import {
+  resolveDiscussionThreadRootMsgId,
+  shouldSyncTgCommentToMax,
+} from '../utils/commentSyncFilter'
 import { logger } from '../utils/logger'
 
 export function isDiscussionAutoForward(message: TgMessage): boolean {
@@ -56,6 +60,7 @@ export async function handleTgComment(
   message: TgMessage,
   chain: TgChainRecord,
   bot: Bot,
+  discussionChatId: number,
 ): Promise<void> {
   if (!chain.forward_comments) {
     return
@@ -67,7 +72,10 @@ export async function handleTgComment(
     }
 
     const tgCommentId = message.message_id
-    const threadPostMsgId = message.reply_to_message.message_id
+    const threadRootMsgId = resolveDiscussionThreadRootMsgId(message)
+    if (threadRootMsgId == null) {
+      return
+    }
 
     if (isCommentSynced(`tg:${tgCommentId}`)) {
       return
@@ -77,7 +85,7 @@ export async function handleTgComment(
       return
     }
 
-    const mapping = findMappingByThreadMsgId(chain.id, threadPostMsgId)
+    const mapping = findMappingByThreadMsgId(chain.id, threadRootMsgId)
     if (!mapping?.max_mid) {
       return
     }
@@ -93,18 +101,38 @@ export async function handleTgComment(
       return
     }
 
-    const authorName =
-      [message.from?.first_name, message.from?.last_name].filter(Boolean).join(' ') ||
-      message.from?.username ||
-      'Аноним'
     const text = (message.text || message.caption || '').trim()
     if (!text) {
       return
     }
-    if (text.startsWith('👤 Администратор:')) {
+
+    const tgToken = chain.bot_token?.trim()
+    if (!tgToken) {
       return
     }
 
+    const shouldSync = await shouldSyncTgCommentToMax({
+      message,
+      chain,
+      token: tgToken,
+      discussionChatId,
+      postCommentCount: post.comment_count,
+      threadRootMsgId,
+    })
+    if (!shouldSync) {
+      logger.debug('[tgCommentSync] skipped by filter', {
+        chainId: chain.id,
+        tgCommentId,
+        postId: post.post_id,
+      })
+      return
+    }
+
+    const authorName =
+      [message.from?.first_name, message.from?.last_name].filter(Boolean).join(' ') ||
+      message.sender_chat?.title ||
+      message.from?.username ||
+      'Аноним'
     const userId = typeof message.from?.id === 'number' ? message.from.id : 0
     const saved = commentStore.saveTelegramThreadComment(
       {

@@ -1036,7 +1036,7 @@ export async function runTgChainsOnce(): Promise<boolean> {
               continue
             }
             if (msg.reply_to_message) {
-              await handleTgComment(msg, chain, botRef)
+              await handleTgComment(msg, chain, botRef, discussionChatId)
             }
           }
         }

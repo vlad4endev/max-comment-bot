@@ -982,6 +982,11 @@
       });
       if (adminOnly.length) list = adminOnly;
     }
+    if (options.groupsOnly) {
+      list = list.filter(function (ch) {
+        return ch.type === 'group' || ch.type === 'supergroup';
+      });
+    }
     var opts = '<option value="">— выберите канал/чат —</option>';
     list.forEach(function (ch) {
       var val = telegramChannelPickValue(ch);
@@ -2187,6 +2192,25 @@
       '</strong>. Новые посты в Telegram сразу появятся в MAX.';
   }
 
+  function readTagsFromWrap(wrap) {
+    var tags = [];
+    if (!wrap) return tags;
+    qsa('.tag', wrap).forEach(function (tg) {
+      var txt = tg.firstChild;
+      if (txt && txt.nodeType === 3) tags.push(String(txt.textContent || '').trim());
+    });
+    return tags;
+  }
+
+  function updateTgChainCommentSyncVisibility(root) {
+    var block = qs('#tc_comment_sync_block', root);
+    if (!block) return;
+    var row = qs('[data-toggle-key="forward_comments"]', root);
+    var sw = row ? qs('.switch', row) : null;
+    var on = sw && sw.classList.contains('on');
+    block.classList.toggle('hidden', !on);
+  }
+
   function submitTgChainFromForm(root, onDone) {
     var chatId = Number(qs('#tc_max', root).value);
     var tgRaw = readTelegramChannelPick('tc_tg_select', 'tc_tg_manual', root);
@@ -2209,6 +2233,12 @@
       add_comments_button: sw.add_comments_button !== false,
       add_signature: !!sw.add_signature,
     };
+    if (sw.forward_comments) {
+      var discRaw = readTelegramChannelPick('tc_discussion_select', 'tc_discussion_manual', root);
+      if (discRaw) payload.tg_discussion_chat_id = discRaw.replace(/^@/, '');
+      var kwWrap = qs('#tc_comment_keywords', root);
+      payload.comment_sync_keywords = readTagsFromWrap(kwWrap);
+    }
     if (!isNumeric) payload.tg_username = tgKey.replace(/^@/, '');
     if (token) payload.bot_token = token;
     postJson('/tg-chains', payload)
@@ -2300,6 +2330,19 @@
     if (c.errors_today) {
       html += '<span style="color:var(--danger,#e11)"> · ошибок: ' + esc(fmtNum(c.errors_today)) + '</span>';
     }
+    if (c.forward_comments) {
+      var kw = Array.isArray(c.comment_sync_keywords) ? c.comment_sync_keywords : [];
+      html += '<span class="muted text-sm"> · комментарии TG';
+      if (c.tg_discussion_chat_id) {
+        html += ' · чат ' + esc(c.tg_discussion_chat_id);
+      }
+      if (kw.length) {
+        html += ' · слова: ' + esc(kw.slice(0, 4).join(', ')) + (kw.length > 4 ? '…' : '');
+      } else {
+        html += ' · только админ';
+      }
+      html += '</span>';
+    }
     html += '</div><div class="tg-chain-card-actions">';
     html +=
       '<label class="tg-chain-mini-toggle"><span>Пересылка</span><span class="switch' +
@@ -2341,6 +2384,21 @@
       manual.addEventListener('input', onPickChange);
       manual.setAttribute('data-bound-input', '1');
     }
+    var kwWrap = qs('#tc_comment_keywords', main);
+    if (kwWrap && kwWrap.getAttribute('data-bound-tags') !== '1') {
+      bindTagsInput(kwWrap, [], function () {});
+      kwWrap.setAttribute('data-bound-tags', '1');
+    }
+    qsa('[data-toggle-key="forward_comments"] .switch', main).forEach(function (sw) {
+      if (sw.getAttribute('data-bound-comment-sync') === '1') return;
+      sw.addEventListener('click', function () {
+        window.setTimeout(function () {
+          updateTgChainCommentSyncVisibility(main);
+        }, 0);
+      });
+      sw.setAttribute('data-bound-comment-sync', '1');
+    });
+    updateTgChainCommentSyncVisibility(main);
     var refreshMax = qs('#tc_refresh_max', main);
     if (refreshMax && refreshMax.getAttribute('data-bound-click') !== '1') {
       refreshMax.addEventListener('click', function () {
@@ -2374,6 +2432,18 @@
                 '<div class="flex-between" style="align-items:center;gap:8px;margin-bottom:6px"><label style="margin:0">① Канал Telegram — откуда</label><button type="button" class="btn btn-ghost btn-sm" id="tc_refresh_tg"><i data-lucide="refresh-cw"></i> Обновить</button></div>' +
                 buildTelegramChannelSelect('tc_tg_select', data.channels || [], 'tc_tg_manual', { adminOnly: true });
               bindTgChainSetupPage(main);
+            }
+            var discSel = qs('#tc_discussion_select', main);
+            if (discSel) {
+              var frag = document.createElement('div');
+              frag.innerHTML = buildTelegramChannelSelect(
+                'tc_discussion_select',
+                data.channels || [],
+                'tc_discussion_manual',
+                { adminOnly: true, groupsOnly: true },
+              );
+              var newSel = qs('#tc_discussion_select', frag);
+              if (newSel) discSel.innerHTML = newSel.innerHTML;
             }
             updateTgChainPairPreview(main);
             showToast((data.channels || []).length ? 'Telegram обновлён' : 'Чаты не найдены', 'info');
@@ -2461,8 +2531,22 @@
         html += '</div>';
         html += '<details class="tg-chain-advanced"><summary>Дополнительно</summary><div style="margin-top:10px">';
         html += toggleRow('add_signature', 'Подпись «— TG»', '', false);
-        html += toggleRow('forward_comments', 'Пересылать комментарии TG', 'Опционально', false);
+        html += toggleRow('forward_comments', 'Пересылать комментарии TG', 'Синхронизация TG → MAX', false);
         html += '</div></details>';
+        html += '<div id="tc_comment_sync_block" class="tg-chain-comment-sync hidden">';
+        html +=
+          '<p class="muted text-sm" style="margin:0 0 10px;line-height:1.45">Обычные комментарии переносятся только при совпадении со словами ниже. Комментарии админа — всегда, если он отвечает пользователю или если в MAX ещё нет комментариев.</p>';
+        html +=
+          '<div class="form-group"><label>Чат комментариев Telegram</label><p class="muted text-sm" style="margin:0 0 6px">Группа обсуждений канала. Если не указать — берётся linked chat канала.</p>';
+        html +=
+          buildTelegramChannelSelect('tc_discussion_select', tgChats, 'tc_discussion_manual', {
+            adminOnly: true,
+            groupsOnly: true,
+          }) + '</div>';
+        html +=
+          '<div class="form-group"><label>Слова для переноса</label><p class="muted text-sm" style="margin:0 0 6px">Enter — добавить слово или фразу. Без слов обычные комментарии не переносятся.</p>';
+        html += '<div class="tags-input-wrap" id="tc_comment_keywords"></div></div>';
+        html += '</div>';
         if (!tgInt) {
           html +=
             '<div class="form-group mt-sm"><label>Токен бота Telegram</label><input class="input mono" id="tc_token" type="password" placeholder="Или подключите в «Интеграции»"/></div>';
