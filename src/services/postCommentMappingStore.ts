@@ -80,6 +80,10 @@ export function findMappingByTgMsgId(
 }
 
 export function findMappingByMaxMid(maxMid: string): PostCommentMappingRow | null {
+  const normalized = maxMid.trim()
+  if (!normalized) {
+    return null
+  }
   const row = getDb()
     .prepare(
       `SELECT chain_id, tg_msg_id, max_mid, tg_chat_id, tg_thread_chat_id, tg_thread_msg_id
@@ -88,8 +92,63 @@ export function findMappingByMaxMid(maxMid: string): PostCommentMappingRow | nul
        ORDER BY id DESC
        LIMIT 1`,
     )
-    .get(maxMid.trim()) as PostCommentMappingRow | undefined
+    .get(normalized) as PostCommentMappingRow | undefined
   return row ?? null
+}
+
+/**
+ * Заполняет post_comment_mapping из tg_chain_forwarded для постов,
+ * пересланных до включения синхронизации комментариев.
+ */
+export function backfillPostCommentMappingsFromForwarded(): number {
+  const db = getDb()
+  const rows = db
+    .prepare(
+      `SELECT chain_id, tg_message_id, max_message_mid, tg_payload
+       FROM tg_chain_forwarded
+       WHERE max_message_mid IS NOT NULL AND TRIM(max_message_mid) != ''`,
+    )
+    .all() as Array<{
+    chain_id: string
+    tg_message_id: number
+    max_message_mid: string
+    tg_payload: string | null
+  }>
+
+  const insert = db.prepare(
+    `INSERT INTO post_comment_mapping (chain_id, tg_msg_id, max_mid, tg_chat_id)
+     VALUES (?, ?, ?, ?)
+     ON CONFLICT(chain_id, tg_msg_id) DO NOTHING`,
+  )
+
+  let inserted = 0
+  for (const row of rows) {
+    let tgChatId: number | null = null
+    if (row.tg_payload) {
+      try {
+        const parsed = JSON.parse(row.tg_payload) as { chat?: { id?: number } }
+        if (typeof parsed.chat?.id === 'number') {
+          tgChatId = parsed.chat.id
+        }
+      } catch {
+        // ignore corrupt payload
+      }
+    }
+    const result = insert.run(
+      row.chain_id,
+      row.tg_message_id,
+      row.max_message_mid.trim(),
+      tgChatId,
+    )
+    inserted += Number(result.changes) || 0
+  }
+
+  if (inserted > 0) {
+    logger.info('[postCommentMapping] backfilled mappings from tg_chain_forwarded', {
+      inserted,
+    })
+  }
+  return inserted
 }
 
 export async function resolveDiscussionChatId(

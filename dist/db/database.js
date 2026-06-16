@@ -267,6 +267,7 @@ function initSchema(targetDb) {
     migrateChannelLinkDraftsSchema(targetDb);
     migrateAccountPairingTokensSchema(targetDb);
     migrateChannelJoinNotifiedSchema(targetDb);
+    migrateCommentSyncSchema(targetDb);
 }
 /** Флаг «уведомление о подключении уже отправлено» — переживает рестарт процесса. */
 function migrateChannelJoinNotifiedSchema(database) {
@@ -369,6 +370,88 @@ function migrateTgChainForwardedSchema(database) {
     }
     if (!hasPayload) {
         database.exec('ALTER TABLE tg_chain_forwarded ADD COLUMN tg_payload TEXT');
+    }
+}
+function migrateCommentSyncSchema(database) {
+    // Таблица маппинга: связывает tg_message_id с max_message_mid
+    // Дополняет tg_chain_forwarded — не заменяет её
+    database.prepare(`
+    CREATE TABLE IF NOT EXISTS post_comment_mapping (
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      chain_id     TEXT    NOT NULL,
+      tg_msg_id    INTEGER NOT NULL,
+      max_mid      TEXT    NOT NULL,
+      tg_chat_id   INTEGER,
+      created_at   TEXT    DEFAULT (datetime('now')),
+      UNIQUE (chain_id, tg_msg_id)
+    )
+  `).run();
+    // Таблица синхронизированных комментариев
+    // Если таблица comments уже есть — добавляем только недостающие колонки
+    const commentCols = database.prepare('PRAGMA table_info(comments)').all();
+    const colNames = commentCols.map((c) => c.name);
+    if (!colNames.includes('tg_comment_id')) {
+        database.prepare('ALTER TABLE comments ADD COLUMN tg_comment_id INTEGER').run();
+    }
+    if (!colNames.includes('max_comment_id')) {
+        database.prepare('ALTER TABLE comments ADD COLUMN max_comment_id TEXT').run();
+    }
+    if (!colNames.includes('source')) {
+        database.prepare("ALTER TABLE comments ADD COLUMN source TEXT DEFAULT 'max'").run();
+    }
+    if (!colNames.includes('synced')) {
+        database.prepare('ALTER TABLE comments ADD COLUMN synced INTEGER DEFAULT 0').run();
+    }
+    if (!colNames.includes('tg_thread_reply_id')) {
+        database.prepare('ALTER TABLE comments ADD COLUMN tg_thread_reply_id INTEGER').run();
+    }
+    const mappingCols = database.prepare('PRAGMA table_info(post_comment_mapping)').all();
+    const mappingColNames = mappingCols.map((c) => c.name);
+    if (!mappingColNames.includes('tg_thread_chat_id')) {
+        database.prepare('ALTER TABLE post_comment_mapping ADD COLUMN tg_thread_chat_id INTEGER').run();
+    }
+    if (!mappingColNames.includes('tg_thread_msg_id')) {
+        database.prepare('ALTER TABLE post_comment_mapping ADD COLUMN tg_thread_msg_id INTEGER').run();
+    }
+    // Индексы для быстрого поиска
+    database.prepare(`CREATE UNIQUE INDEX IF NOT EXISTS idx_comments_tg_comment_id
+     ON comments (tg_comment_id) WHERE tg_comment_id IS NOT NULL`).run();
+    database.prepare(`CREATE UNIQUE INDEX IF NOT EXISTS idx_comments_max_comment_id
+     ON comments (max_comment_id) WHERE max_comment_id IS NOT NULL`).run();
+    database.prepare(`CREATE INDEX IF NOT EXISTS idx_post_comment_mapping_tg
+     ON post_comment_mapping (chain_id, tg_msg_id)`).run();
+    database.prepare(`CREATE INDEX IF NOT EXISTS idx_post_comment_mapping_thread
+     ON post_comment_mapping (chain_id, tg_thread_msg_id)`).run();
+    backfillPostCommentMappingsFromForwarded(database);
+}
+function backfillPostCommentMappingsFromForwarded(database) {
+    const rows = database
+        .prepare(`SELECT chain_id, tg_message_id, max_message_mid, tg_payload
+       FROM tg_chain_forwarded
+       WHERE max_message_mid IS NOT NULL AND TRIM(max_message_mid) != ''`)
+        .all();
+    const insert = database.prepare(`INSERT INTO post_comment_mapping (chain_id, tg_msg_id, max_mid, tg_chat_id)
+     VALUES (?, ?, ?, ?)
+     ON CONFLICT(chain_id, tg_msg_id) DO NOTHING`);
+    let inserted = 0;
+    for (const row of rows) {
+        let tgChatId = null;
+        if (row.tg_payload) {
+            try {
+                const parsed = JSON.parse(row.tg_payload);
+                if (typeof parsed.chat?.id === 'number') {
+                    tgChatId = parsed.chat.id;
+                }
+            }
+            catch {
+                // ignore corrupt payload
+            }
+        }
+        const result = insert.run(row.chain_id, row.tg_message_id, row.max_message_mid.trim(), tgChatId);
+        inserted += Number(result.changes) || 0;
+    }
+    if (inserted > 0) {
+        getLogger().info('migrateCommentSyncSchema: backfilled post_comment_mapping', { inserted });
     }
 }
 function closeDb() {

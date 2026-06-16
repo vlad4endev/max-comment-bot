@@ -8,6 +8,7 @@ exports.linkThreadMessageToChannelPost = linkThreadMessageToChannelPost;
 exports.findMappingByThreadMsgId = findMappingByThreadMsgId;
 exports.findMappingByTgMsgId = findMappingByTgMsgId;
 exports.findMappingByMaxMid = findMappingByMaxMid;
+exports.backfillPostCommentMappingsFromForwarded = backfillPostCommentMappingsFromForwarded;
 exports.resolveDiscussionChatId = resolveDiscussionChatId;
 exports.storeDiscussionChatIdForChain = storeDiscussionChatIdForChain;
 const axios_1 = __importDefault(require("axios"));
@@ -50,14 +51,56 @@ function findMappingByTgMsgId(chainId, tgMsgId) {
     return row ?? null;
 }
 function findMappingByMaxMid(maxMid) {
+    const normalized = maxMid.trim();
+    if (!normalized) {
+        return null;
+    }
     const row = (0, database_1.getDb)()
         .prepare(`SELECT chain_id, tg_msg_id, max_mid, tg_chat_id, tg_thread_chat_id, tg_thread_msg_id
        FROM post_comment_mapping
        WHERE max_mid = ?
        ORDER BY id DESC
        LIMIT 1`)
-        .get(maxMid.trim());
+        .get(normalized);
     return row ?? null;
+}
+/**
+ * Заполняет post_comment_mapping из tg_chain_forwarded для постов,
+ * пересланных до включения синхронизации комментариев.
+ */
+function backfillPostCommentMappingsFromForwarded() {
+    const db = (0, database_1.getDb)();
+    const rows = db
+        .prepare(`SELECT chain_id, tg_message_id, max_message_mid, tg_payload
+       FROM tg_chain_forwarded
+       WHERE max_message_mid IS NOT NULL AND TRIM(max_message_mid) != ''`)
+        .all();
+    const insert = db.prepare(`INSERT INTO post_comment_mapping (chain_id, tg_msg_id, max_mid, tg_chat_id)
+     VALUES (?, ?, ?, ?)
+     ON CONFLICT(chain_id, tg_msg_id) DO NOTHING`);
+    let inserted = 0;
+    for (const row of rows) {
+        let tgChatId = null;
+        if (row.tg_payload) {
+            try {
+                const parsed = JSON.parse(row.tg_payload);
+                if (typeof parsed.chat?.id === 'number') {
+                    tgChatId = parsed.chat.id;
+                }
+            }
+            catch {
+                // ignore corrupt payload
+            }
+        }
+        const result = insert.run(row.chain_id, row.tg_message_id, row.max_message_mid.trim(), tgChatId);
+        inserted += Number(result.changes) || 0;
+    }
+    if (inserted > 0) {
+        logger_1.logger.info('[postCommentMapping] backfilled mappings from tg_chain_forwarded', {
+            inserted,
+        });
+    }
+    return inserted;
 }
 async function resolveDiscussionChatId(tgToken, chain) {
     const manual = chain.tg_discussion_chat_id?.trim();

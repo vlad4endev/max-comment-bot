@@ -11,6 +11,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.markTelegramCommentAnsweredInMax = markTelegramCommentAnsweredInMax;
 exports.syncAdminReplyToTelegramThread = syncAdminReplyToTelegramThread;
 const axios_1 = __importDefault(require("axios"));
+const adminPanelState_1 = require("../api/adminPanelState");
 const commentStore_1 = require("./commentStore");
 const postCommentMappingStore_1 = require("./postCommentMappingStore");
 const resolveTelegramBotToken_1 = require("./resolveTelegramBotToken");
@@ -18,6 +19,14 @@ const commentSyncGuard_1 = require("../utils/commentSyncGuard");
 const commentSyncFilter_1 = require("../utils/commentSyncFilter");
 const logger_1 = require("../utils/logger");
 const TG_API = 'https://api.telegram.org';
+function resolveTelegramBotTokenForChain(chainId) {
+    const chain = (0, adminPanelState_1.listTgChainsSync)().find((c) => c.id === chainId);
+    const fromChain = chain?.bot_token?.trim();
+    if (fromChain) {
+        return fromChain;
+    }
+    return (0, resolveTelegramBotToken_1.resolveTelegramBotToken)();
+}
 async function sendTelegramThreadMessage(token, chatId, text, replyToMessageId) {
     const { data } = await axios_1.default.post(`${TG_API}/bot${token}/sendMessage`, {
         chat_id: chatId,
@@ -109,7 +118,8 @@ async function markTelegramCommentAnsweredInMax(token, chatId, tgCommentId, comm
  * Отправляет последний ответ администратора в TG-тред, если есть маппинг поста.
  */
 async function syncAdminReplyToTelegramThread(_bot, comment, post) {
-    const maxReply = commentStore_1.commentStore.latestMaxAdminReply(comment);
+    const freshComment = commentStore_1.commentStore.getComment(comment.comment_id) ?? comment;
+    const maxReply = commentStore_1.commentStore.latestMaxAdminReply(freshComment);
     if (!maxReply) {
         return;
     }
@@ -119,30 +129,37 @@ async function syncAdminReplyToTelegramThread(_bot, comment, post) {
     }
     const mapping = (0, postCommentMappingStore_1.findMappingByMaxMid)(post.message_mid);
     if (!mapping?.tg_thread_chat_id || !mapping.tg_thread_msg_id) {
-        logger_1.logger.debug('[telegramThreadReplySync] no thread mapping for post', {
-            commentId: comment.comment_id,
+        logger_1.logger.warn('[telegramThreadReplySync] no thread mapping for post', {
+            commentId: freshComment.comment_id,
             messageMid: post.message_mid,
+            chainId: mapping?.chain_id ?? null,
+            tgThreadChatId: mapping?.tg_thread_chat_id ?? null,
+            tgThreadMsgId: mapping?.tg_thread_msg_id ?? null,
         });
         return;
     }
-    const token = (0, resolveTelegramBotToken_1.resolveTelegramBotToken)();
+    const token = resolveTelegramBotTokenForChain(mapping.chain_id);
     if (!token) {
+        logger_1.logger.warn('[telegramThreadReplySync] no Telegram bot token for chain', {
+            commentId: freshComment.comment_id,
+            chainId: mapping.chain_id,
+        });
         return;
     }
     const threadChatId = mapping.tg_thread_chat_id;
-    if (comment.tg_comment_id) {
-        await markTelegramCommentAnsweredInMax(token, threadChatId, comment.tg_comment_id, comment.text);
+    if (freshComment.tg_comment_id) {
+        await markTelegramCommentAnsweredInMax(token, threadChatId, freshComment.tg_comment_id, freshComment.text);
     }
-    if (comment.tg_thread_reply_id) {
+    if (freshComment.tg_thread_reply_id) {
         return;
     }
-    const guardKey = `max-reply:${comment.comment_id}:${replyText}`;
+    const guardKey = `max-reply:${freshComment.comment_id}:${replyText}`;
     if ((0, commentSyncGuard_1.isCommentSynced)(guardKey)) {
         return;
     }
     let replyToId = mapping.tg_thread_msg_id;
-    if (comment.tg_comment_id) {
-        replyToId = comment.tg_comment_id;
+    if (freshComment.tg_comment_id) {
+        replyToId = freshComment.tg_comment_id;
     }
     try {
         const tgMsgId = await sendTelegramThreadMessage(token, threadChatId, `${commentSyncFilter_1.MAX_REPLY_TG_PREFIX} ${replyText}`, replyToId);
@@ -151,16 +168,19 @@ async function syncAdminReplyToTelegramThread(_bot, comment, post) {
         }
         (0, commentSyncGuard_1.markCommentSynced)(`tg:${tgMsgId}`);
         (0, commentSyncGuard_1.markCommentSynced)(guardKey);
-        commentStore_1.commentStore.setTgThreadReplyId(comment.comment_id, tgMsgId);
+        commentStore_1.commentStore.setTgThreadReplyId(freshComment.comment_id, tgMsgId);
         logger_1.logger.info('[telegramThreadReplySync] delivered admin reply to TG thread', {
-            commentId: comment.comment_id,
+            commentId: freshComment.comment_id,
             tgMsgId,
             threadChatId,
+            replyToId,
         });
     }
     catch (err) {
         logger_1.logger.warn('[telegramThreadReplySync] sendMessage failed', {
-            commentId: comment.comment_id,
+            commentId: freshComment.comment_id,
+            threadChatId,
+            replyToId,
             err,
         });
     }

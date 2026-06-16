@@ -12,5 +12,10 @@ export declare function linkThreadMessageToChannelPost(chainId: string, channelM
 export declare function findMappingByThreadMsgId(chainId: string, threadMsgId: number): PostCommentMappingRow | null;
 export declare function findMappingByTgMsgId(chainId: string, tgMsgId: number): PostCommentMappingRow | null;
 export declare function findMappingByMaxMid(maxMid: string): PostCommentMappingRow | null;
+/**
+ * Заполняет post_comment_mapping из tg_chain_forwarded для постов,
+ * пересланных до включения синхронизации комментариев.
+ */
+export declare function backfillPostCommentMappingsFromForwarded(): number;
 export declare function resolveDiscussionChatId(tgToken: string, chain: TgChainRecord): Promise<number | null>;
 export declare function storeDiscussionChatIdForChain(tgToken: string, chain: TgChainRecord): Promise<void>;

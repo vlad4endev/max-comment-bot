@@ -456,6 +456,55 @@ function migrateCommentSyncSchema(database: Database.Database): void {
     `CREATE INDEX IF NOT EXISTS idx_post_comment_mapping_thread
      ON post_comment_mapping (chain_id, tg_thread_msg_id)`,
   ).run()
+
+  backfillPostCommentMappingsFromForwarded(database)
+}
+
+function backfillPostCommentMappingsFromForwarded(database: Database.Database): void {
+  const rows = database
+    .prepare(
+      `SELECT chain_id, tg_message_id, max_message_mid, tg_payload
+       FROM tg_chain_forwarded
+       WHERE max_message_mid IS NOT NULL AND TRIM(max_message_mid) != ''`,
+    )
+    .all() as Array<{
+    chain_id: string
+    tg_message_id: number
+    max_message_mid: string
+    tg_payload: string | null
+  }>
+
+  const insert = database.prepare(
+    `INSERT INTO post_comment_mapping (chain_id, tg_msg_id, max_mid, tg_chat_id)
+     VALUES (?, ?, ?, ?)
+     ON CONFLICT(chain_id, tg_msg_id) DO NOTHING`,
+  )
+
+  let inserted = 0
+  for (const row of rows) {
+    let tgChatId: number | null = null
+    if (row.tg_payload) {
+      try {
+        const parsed = JSON.parse(row.tg_payload) as { chat?: { id?: number } }
+        if (typeof parsed.chat?.id === 'number') {
+          tgChatId = parsed.chat.id
+        }
+      } catch {
+        // ignore corrupt payload
+      }
+    }
+    const result = insert.run(
+      row.chain_id,
+      row.tg_message_id,
+      row.max_message_mid.trim(),
+      tgChatId,
+    )
+    inserted += Number(result.changes) || 0
+  }
+
+  if (inserted > 0) {
+    getLogger().info('migrateCommentSyncSchema: backfilled post_comment_mapping', { inserted })
+  }
 }
 
 export function closeDb(): void {
