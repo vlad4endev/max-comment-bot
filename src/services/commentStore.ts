@@ -64,6 +64,16 @@ export interface Comment {
   notification_reply_log?: CommentNotificationReplyLogEntry[]
   /** Mini App: admin posted from composer without «Ответить» — show as channel, not personal profile. */
   posted_as_channel?: boolean
+  /** ID сообщения-комментария в TG discussion group. */
+  tg_comment_id?: number
+  /** Дублирует comment_id для индекса max_comment_id в SQLite. */
+  max_comment_id?: string
+  /** Источник комментария: miniapp/max или telegram thread. */
+  source?: 'telegram' | 'max'
+  /** Синхронизирован с другой платформой. */
+  synced?: boolean
+  /** ID ответа администратора, отправленного в TG-тред. */
+  tg_thread_reply_id?: number
 }
 
 function isCommentReply(value: unknown): value is CommentReply {
@@ -312,6 +322,9 @@ export class CommentStore {
     countByChannelChatId: Database.Statement
     aggregateByUser: Database.Statement
     upsert: Database.Statement
+    getSyncMeta: Database.Statement
+    findByTgCommentId: Database.Statement
+    listPendingThreadReply: Database.Statement
     deleteById: Database.Statement
     deleteAll: Database.Statement
     countAll: Database.Statement
@@ -775,6 +788,23 @@ export class CommentStore {
   }
 
   private saveRow(comment: Comment): void {
+    const prev = this.getStatements().getSyncMeta.get(comment.comment_id) as
+      | {
+          tg_comment_id: number | null
+          max_comment_id: string | null
+          source: string | null
+          synced: number | null
+          tg_thread_reply_id: number | null
+        }
+      | undefined
+
+    const tgCommentId = comment.tg_comment_id ?? prev?.tg_comment_id ?? null
+    const maxCommentId = comment.max_comment_id ?? prev?.max_comment_id ?? comment.comment_id
+    const source = comment.source ?? prev?.source ?? 'max'
+    const synced =
+      comment.synced !== undefined ? (comment.synced ? 1 : 0) : (prev?.synced ?? 0)
+    const tgThreadReplyId = comment.tg_thread_reply_id ?? prev?.tg_thread_reply_id ?? null
+
     this.getStatements().upsert.run(
       comment.comment_id,
       comment.post_id,
@@ -786,7 +816,70 @@ export class CommentStore {
       comment.notification_text ?? null,
       comment.notification_mids ? JSON.stringify(comment.notification_mids) : null,
       JSON.stringify(comment),
+      tgCommentId,
+      maxCommentId,
+      source,
+      synced,
+      tgThreadReplyId,
     )
+  }
+
+  findCommentByTgMessageId(tgCommentId: number): Comment | null {
+    const row = this.getStatements().findByTgCommentId.get(tgCommentId) as { data: string } | undefined
+    if (!row) {
+      return null
+    }
+    try {
+      return normalizeCommentFromDisk(this.parseRow(row.data))
+    } catch {
+      return null
+    }
+  }
+
+  /**
+   * Сохраняет комментарий из TG-треда в miniapp БД с метаданными синхронизации.
+   */
+  saveTelegramThreadComment(
+    input: Omit<Comment, 'comment_id' | 'timestamp' | 'source' | 'synced'>,
+    tgCommentId: number,
+  ): Comment {
+    const comment = this.saveComment(input)
+    comment.tg_comment_id = tgCommentId
+    comment.max_comment_id = comment.comment_id
+    comment.source = 'telegram'
+    comment.synced = true
+    this.saveRow(comment)
+    return comment
+  }
+
+  setTgThreadReplyId(commentId: string, tgMessageId: number): Comment | null {
+    const c = this.getComment(commentId)
+    if (!c) {
+      return null
+    }
+    c.tg_thread_reply_id = tgMessageId
+    c.synced = true
+    this.saveRow(c)
+    return c
+  }
+
+  /**
+   * Комментарии с ответом админа, ещё не отправленным в TG-тред.
+   */
+  listCommentsPendingTelegramThreadReply(limit = 20): Comment[] {
+    const rows = this.getStatements().listPendingThreadReply.all(limit) as { data: string }[]
+    const out: Comment[] = []
+    for (const row of rows) {
+      try {
+        const c = normalizeCommentFromDisk(this.parseRow(row.data))
+        if (c) {
+          out.push(c)
+        }
+      } catch {
+        // skip
+      }
+    }
+    return out
   }
 
   private getStatements(): NonNullable<CommentStore['statements']> {
@@ -863,8 +956,22 @@ export class CommentStore {
       ),
       upsert: db.prepare(
         `INSERT OR REPLACE INTO comments (
-          comment_id, post_id, user_id, username, text, timestamp, reply, notification_text, notification_mids, data
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          comment_id, post_id, user_id, username, text, timestamp, reply, notification_text, notification_mids, data,
+          tg_comment_id, max_comment_id, source, synced, tg_thread_reply_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ),
+      getSyncMeta: db.prepare(
+        `SELECT tg_comment_id, max_comment_id, source, synced, tg_thread_reply_id
+         FROM comments WHERE comment_id = ?`,
+      ),
+      findByTgCommentId: db.prepare('SELECT data FROM comments WHERE tg_comment_id = ?'),
+      listPendingThreadReply: db.prepare(
+        `SELECT data FROM comments
+         WHERE reply IS NOT NULL AND TRIM(reply) != ''
+           AND (tg_thread_reply_id IS NULL OR tg_thread_reply_id = 0)
+           AND (source IS NULL OR source != 'telegram')
+         ORDER BY timestamp DESC
+         LIMIT ?`,
       ),
       deleteById: db.prepare('DELETE FROM comments WHERE comment_id = ?'),
       deleteAll: db.prepare('DELETE FROM comments'),

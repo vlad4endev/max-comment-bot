@@ -91,6 +91,12 @@ async function main(): Promise<void> {
   // До HTTP: иначе при EADDRINUSE channelPoller уже в логах, а flowProcessor — нет.
   await flowProcessor.start()
 
+  // Синхронизация комментариев TG ↔ Max — добавлено
+  const { startMaxCommentSync } = await import('./services/maxCommentSyncService')
+  const stopCommentSync = startMaxCommentSync(bot, { intervalMs: 15_000 })
+  process.once('SIGINT', () => stopCommentSync())
+  process.once('SIGTERM', () => stopCommentSync())
+
   const channelCount = channelRegistry
     .getAllChannels()
     .filter((c) => c.type === 'channel').length
@@ -146,9 +152,10 @@ async function main(): Promise<void> {
       })
       logger.info('Подписка webhook активна (POST /subscriptions)')
     } catch (e) {
-      logger.error('Не удалось зарегистрировать webhook', e)
-      server.close()
-      process.exit(1)
+      logger.error(
+        'Не удалось зарегистрировать webhook — HTTP (/miniapp, /api) остаётся доступен; проверьте WEBHOOK_URL и доступ к API MAX',
+        e,
+      )
     }
 
     setupGracefulShutdown(bot, {

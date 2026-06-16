@@ -33,6 +33,7 @@ import {
   syncAdminCommentNotification,
 } from '../services/notificationService'
 import { notifyTelegramAdminsNewMiniappComment, syncTelegramAdminCommentNotification } from '../services/telegramAdminNotificationService'
+import { syncAdminReplyToTelegramThread } from '../services/telegramThreadReplySync'
 import { canManageMaxCommentViaTelegram } from '../services/telegramCommentModerationService'
 import { telegramBotUserStore } from '../services/telegramBotUserStore'
 import { verifyTelegramMiniappAuth } from '../services/telegramMiniappAuth'
@@ -2102,6 +2103,12 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
     if (!updated) {
       res.status(404).json({ error: 'comment not found' })
       return
+    }
+
+    try {
+      await syncAdminReplyToTelegramThread(deps.bot, updated, post)
+    } catch (err: unknown) {
+      logger.warn('POST /api/reply: sync TG thread failed', { commentId, err })
     }
 
     try {

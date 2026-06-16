@@ -25,6 +25,12 @@ import {
   setTelegramBotUpdatesOffset,
 } from './telegramMainBotOffsetStore'
 import { processTelegramMiniappBotUpdates } from './telegramMiniappService'
+import { upsertPostCommentMapping, storeDiscussionChatIdForChain, resolveDiscussionChatId } from './postCommentMappingStore'
+import {
+  handleDiscussionAutoForward,
+  handleTgComment,
+  isDiscussionAutoForward,
+} from './tgCommentSyncService'
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
@@ -208,6 +214,11 @@ function markForwarded(
          tg_payload = excluded.tg_payload`,
     )
     .run(chainId, message.message_id, maxMid, mediaGroupId, chunkIndex, payload)
+
+  // Синхронизация комментариев: дублируем маппинг в post_comment_mapping
+  if (maxMid) {
+    upsertPostCommentMapping(chainId, message.message_id, maxMid, message.chat?.id ?? null)
+  }
 }
 
 /** Токен TG-бота для опроса channel_post. Пустой bot_token в связке = основной CommentBot (как в miniapp), не reader. */
@@ -821,6 +832,9 @@ async function processChainMessageGroup(
       const forwardedToday = chain.forwarded_today + published
       chain.forwarded_today = forwardedToday
       await updateTgChain(chain.id, { forwarded_today: forwardedToday })
+      if (chain.forward_comments) {
+        void storeDiscussionChatIdForChain(tgToken, chain)
+      }
       logger.info('[tgChain] forwarded', {
         chainId: chain.id,
         from: sourceKey,
@@ -915,6 +929,7 @@ export async function runTgChainsOnce(): Promise<boolean> {
 
     const offset = getReaderOffset(tgToken)
     const includeMiniappBotUpdates = isMainTelegramBotToken(tgToken)
+    const includeDiscussionMessages = group.some((c) => c.forward_comments)
     let batch: TgChannelUpdate[]
     try {
       // При ожидающемся flush альбома не блокируемся длинным long-poll.
@@ -925,6 +940,7 @@ export async function runTgChainsOnce(): Promise<boolean> {
           : Math.max(0, Math.min(TG_CHAIN_LONG_POLL_SEC, Math.ceil(pendingAlbumDelayMs / 1000)))
       batch = await getTelegramUpdatesWithIds(tgToken, offset, timeoutSec, {
         includeMiniappBotUpdates,
+        includeDiscussionMessages,
       })
     } catch (err: unknown) {
       if (err instanceof TelegramGetUpdatesConflictError) {
@@ -952,6 +968,7 @@ export async function runTgChainsOnce(): Promise<boolean> {
     const channelPosts: TgMessage[] = []
     const editedChannelPosts: TgMessage[] = []
     const editedMessages: TgMessage[] = []
+    const discussionMessages: TgMessage[] = []
     for (const u of batch) {
       receivedAny = true
       nextOffset = Math.max(nextOffset, u.update_id + 1)
@@ -963,6 +980,9 @@ export async function runTgChainsOnce(): Promise<boolean> {
       }
       if (u.edited_message) {
         editedMessages.push(u.edited_message)
+      }
+      if (u.message) {
+        discussionMessages.push(u.message)
       }
     }
 
@@ -1002,6 +1022,24 @@ export async function runTgChainsOnce(): Promise<boolean> {
       )
       for (const edited of editedMessagesForChain) {
         await processEditedChainMessage(chain, edited, tgToken)
+      }
+
+      if (chain.forward_comments && discussionMessages.length > 0 && botRef) {
+        const discussionChatId = await resolveDiscussionChatId(tgToken, chain)
+        if (discussionChatId != null) {
+          for (const msg of discussionMessages) {
+            if (msg.chat.id !== discussionChatId) {
+              continue
+            }
+            if (isDiscussionAutoForward(msg)) {
+              handleDiscussionAutoForward(msg, chain.id)
+              continue
+            }
+            if (msg.reply_to_message) {
+              await handleTgComment(msg, chain, botRef)
+            }
+          }
+        }
       }
     }
 

@@ -19,7 +19,18 @@ export interface TgMessage {
   photo?: { file_id: string; file_size: number }[]
   video?: { file_id: string; mime_type?: string }
   document?: { file_id: string; mime_type?: string; file_name?: string }
-  chat: { id: number; username?: string }
+  chat: { id: number; username?: string; type?: string }
+  from?: { id?: number; first_name?: string; last_name?: string; username?: string }
+  reply_to_message?: { message_id: number }
+  sender_chat?: { id: number; title?: string; username?: string }
+  forward_from_message_id?: number
+  forward_from_chat?: { id: number }
+  is_automatic_forward?: boolean
+  forward_origin?: {
+    type?: string
+    chat?: { id: number }
+    message_id?: number
+  }
 }
 
 export interface TgChannelUpdate {
@@ -27,7 +38,7 @@ export interface TgChannelUpdate {
   channel_post?: TgMessage
   edited_channel_post?: TgMessage
   edited_message?: TgMessage
-  message?: Record<string, unknown>
+  message?: TgMessage
   my_chat_member?: Record<string, unknown>
   callback_query?: Record<string, unknown>
   raw?: Record<string, unknown>
@@ -75,11 +86,13 @@ export async function getTelegramUpdatesWithIds(
   token: string,
   offset: number,
   timeoutSec: number = 0,
-  options?: { includeMiniappBotUpdates?: boolean },
+  options?: { includeMiniappBotUpdates?: boolean; includeDiscussionMessages?: boolean },
 ): Promise<TgChannelUpdate[]> {
   const allowed = ['channel_post', 'edited_channel_post', 'edited_message']
   if (options?.includeMiniappBotUpdates) {
     allowed.push('message', 'my_chat_member', 'callback_query')
+  } else if (options?.includeDiscussionMessages) {
+    allowed.push('message')
   }
   for (let attempt = 0; attempt < 5; attempt++) {
     try {
@@ -98,7 +111,7 @@ export async function getTelegramUpdatesWithIds(
           channel_post: u.channel_post as TgMessage | undefined,
           edited_channel_post: u.edited_channel_post as TgMessage | undefined,
           edited_message: u.edited_message as TgMessage | undefined,
-          message: u.message as Record<string, unknown> | undefined,
+          message: u.message as TgMessage | undefined,
           my_chat_member: u.my_chat_member as Record<string, unknown> | undefined,
           callback_query: u.callback_query as Record<string, unknown> | undefined,
           raw: u as Record<string, unknown>,
