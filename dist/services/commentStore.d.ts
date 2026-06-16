@@ -63,6 +63,8 @@ export interface Comment {
     synced?: boolean;
     /** ID ответа администратора, отправленного в TG-тред. */
     tg_thread_reply_id?: number;
+    /** На комментарий ответили в Telegram (discussion group). */
+    answered_in_telegram?: boolean;
 }
 export declare function replyToNotificationLogEntry(reply: CommentReply, notificationReplierName?: string): CommentNotificationReplyLogEntry;
 export interface AdminCommentListRow {
@@ -160,6 +162,12 @@ export declare class CommentStore {
      */
     saveTelegramThreadComment(input: Omit<Comment, 'comment_id' | 'timestamp' | 'source' | 'synced'>, tgCommentId: number): Comment;
     setTgThreadReplyId(commentId: string, tgMessageId: number): Comment | null;
+    setTgCommentId(commentId: string, tgMessageId: number): Comment | null;
+    markAnsweredInTelegram(commentId: string): Comment | null;
+    /**
+     * Комментарии из MAX miniapp, ещё не отправленные в TG-тред.
+     */
+    listCommentsPendingMaxToTelegram(limit?: number): Comment[];
     /**
      * Последний ответ администратора из MAX (не импортированный из TG-треда).
      */

@@ -3405,6 +3405,14 @@
               ? '<div class="tg-name tg-source-tag">' + escDisplay('TG') + '</div>'
               : '')
           : '<div class="tg-name">' + escDisplay(userNameLabel) + '</div>';
+        var answeredInTg =
+          c.answered_in_telegram ||
+          replies.some(function (r) {
+            return r && r.from_telegram;
+          });
+        var answeredTgBadge = answeredInTg
+          ? '<div class="tg-answered-badge">' + escDisplay('✅ Отвечено в Telegram') + '</div>'
+          : '';
         return (
           '<div class="comment-group' +
           groupExtraCls +
@@ -3422,6 +3430,7 @@
           '<div class="tg-bubble bubble-u">' +
           nameHtml +
           (c.text ? '<div class="tg-text">' + escDisplay(c.text) + '</div>' : '') +
+          answeredTgBadge +
           commentMedia +
           '<span class="tg-time">' +
           esc(timeShown) +

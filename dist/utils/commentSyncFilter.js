@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.MAX_REPLY_TG_PREFIX = exports.MAX_ANSWERED_IN_MAX_MARKER = void 0;
+exports.MAX_COMMENT_TG_PREFIX = exports.MAX_REPLY_TG_PREFIX = exports.MAX_ANSWERED_IN_TELEGRAM_LABEL = exports.MAX_ANSWERED_IN_MAX_MARKER = void 0;
 exports.normalizeCommentSyncKeywords = normalizeCommentSyncKeywords;
 exports.matchesCommentSyncKeyword = matchesCommentSyncKeyword;
 exports.isTgCommentFromAdmin = isTgCommentFromAdmin;
@@ -10,6 +10,8 @@ exports.resolveChannelMsgIdFromThreadRoot = resolveChannelMsgIdFromThreadRoot;
 exports.resolveTgCommentAuthor = resolveTgCommentAuthor;
 exports.isTelegramCommentMarkedAnsweredInMax = isTelegramCommentMarkedAnsweredInMax;
 exports.isMaxAdminReplyInTelegram = isMaxAdminReplyInTelegram;
+exports.isMaxCommentInTelegram = isMaxCommentInTelegram;
+exports.formatMaxCommentForTelegram = formatMaxCommentForTelegram;
 exports.shouldSyncTgCommentToMax = shouldSyncTgCommentToMax;
 const integrationPlatformClient_1 = require("../services/integrationPlatformClient");
 function normalizeCommentSyncKeywords(words) {
@@ -132,21 +134,38 @@ function resolveTgCommentAuthor(message, chain, discussionChatId) {
 }
 /** Маркер на исходном комментарии в TG после ответа из MAX. */
 exports.MAX_ANSWERED_IN_MAX_MARKER = '✅ Отвечено в MAX';
+/** Подпись в miniapp: на комментарий ответили в Telegram. */
+exports.MAX_ANSWERED_IN_TELEGRAM_LABEL = '✅ Отвечено в Telegram';
 function isTelegramCommentMarkedAnsweredInMax(text) {
     return text.includes(exports.MAX_ANSWERED_IN_MAX_MARKER);
 }
 /** Префикс ответа админа из MAX в TG-треде (не синхронизировать обратно в miniapp). */
 exports.MAX_REPLY_TG_PREFIX = 'MAX ответ:';
+/** Префикс пользовательского комментария из MAX в TG-треде. */
+exports.MAX_COMMENT_TG_PREFIX = 'MAX ·';
 /** Старый префикс — игнорируем при обратной синхронизации. */
 const LEGACY_ADMIN_REPLY_TG_PREFIX = '👤 Администратор:';
 function isMaxAdminReplyInTelegram(text) {
     const trimmed = text.trim();
     return (trimmed.startsWith(exports.MAX_REPLY_TG_PREFIX) || trimmed.startsWith(LEGACY_ADMIN_REPLY_TG_PREFIX));
 }
+function isMaxCommentInTelegram(text) {
+    return text.trim().startsWith(exports.MAX_COMMENT_TG_PREFIX);
+}
+/** Текст сообщения в TG-треде: имя автора и комментарий из MAX miniapp. */
+function formatMaxCommentForTelegram(username, text) {
+    const name = username.trim() || 'Пользователь';
+    const body = text.trim();
+    if (body) {
+        return `${exports.MAX_COMMENT_TG_PREFIX} ${name}: ${body}`;
+    }
+    return `${exports.MAX_COMMENT_TG_PREFIX} ${name}`;
+}
 async function shouldSyncTgCommentToMax(params) {
     const text = (params.message.text || params.message.caption || '').trim();
     if (!text ||
         isMaxAdminReplyInTelegram(text) ||
+        isMaxCommentInTelegram(text) ||
         isTelegramCommentMarkedAnsweredInMax(text)) {
         return false;
     }

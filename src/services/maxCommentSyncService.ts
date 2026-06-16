@@ -1,7 +1,7 @@
 /**
  * maxCommentSyncService.ts
  *
- * Периодически догоняет ответы администратора из Max miniapp,
+ * Периодически догоняет комментарии и ответы админа из MAX miniapp,
  * которые ещё не отправлены в TG discussion group.
  */
 
@@ -9,7 +9,10 @@ import type { Bot } from '@maxhub/max-bot-api'
 
 import { commentStore } from './commentStore'
 import { postStore } from './postStore'
-import { syncAdminReplyToTelegramThread } from './telegramThreadReplySync'
+import {
+  syncAdminReplyToTelegramThread,
+  syncMaxCommentToTelegramThread,
+} from './telegramThreadReplySync'
 import { logger } from '../utils/logger'
 
 interface SyncOptions {
@@ -21,8 +24,17 @@ export function startMaxCommentSync(bot: Bot, options: SyncOptions = {}): () => 
 
   async function syncOnce(): Promise<void> {
     try {
-      const pending = commentStore.listCommentsPendingTelegramThreadReply(25)
-      for (const comment of pending) {
+      const pendingComments = commentStore.listCommentsPendingMaxToTelegram(25)
+      for (const comment of pendingComments) {
+        const post = postStore.getPost(comment.post_id)
+        if (!post) {
+          continue
+        }
+        await syncMaxCommentToTelegramThread(bot, comment, post)
+      }
+
+      const pendingReplies = commentStore.listCommentsPendingTelegramThreadReply(25)
+      for (const comment of pendingReplies) {
         const post = postStore.getPost(comment.post_id)
         if (!post) {
           continue

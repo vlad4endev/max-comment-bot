@@ -58,6 +58,7 @@ async function handleTgAdminReplyToComment(message, parentComment, chain, bot, m
     if (!text || (0, commentSyncFilter_1.isMaxAdminReplyInTelegram)(text)) {
         return;
     }
+    commentStore_1.commentStore.markAnsweredInTelegram(parentComment.comment_id);
     if (listExistingReplyTexts(parentComment).includes(text)) {
         (0, commentSyncGuard_1.markCommentSynced)(`tg:${tgCommentId}`);
         return;
@@ -193,6 +194,7 @@ async function handleTgComment(message, chain, bot, discussionChatId) {
                 tgCommentId,
                 directReplyId,
             });
+            (0, commentSyncGuard_1.markCommentSynced)(`tg:${tgCommentId}`);
             return;
         }
         const shouldSync = await (0, commentSyncFilter_1.shouldSyncTgCommentToMax)({

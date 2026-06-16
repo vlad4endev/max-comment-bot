@@ -33,7 +33,10 @@ import {
   syncAdminCommentNotification,
 } from '../services/notificationService'
 import { notifyTelegramAdminsNewMiniappComment, syncTelegramAdminCommentNotification } from '../services/telegramAdminNotificationService'
-import { syncAdminReplyToTelegramThread } from '../services/telegramThreadReplySync'
+import {
+  syncAdminReplyToTelegramThread,
+  syncMaxCommentToTelegramThread,
+} from '../services/telegramThreadReplySync'
 import { canManageMaxCommentViaTelegram } from '../services/telegramCommentModerationService'
 import { telegramBotUserStore } from '../services/telegramBotUserStore'
 import { verifyTelegramMiniappAuth } from '../services/telegramMiniappAuth'
@@ -419,6 +422,7 @@ function toWireComment(c: Comment): {
   photo_urls?: string[]
   posted_as_channel?: boolean
   source?: 'telegram' | 'max'
+  answered_in_telegram?: boolean
   reply?: {
     reply_id?: string
     text: string
@@ -455,6 +459,7 @@ function toWireComment(c: Comment): {
       : {}),
     ...(c.posted_as_channel ? { posted_as_channel: true } : {}),
     ...(c.source === 'telegram' ? { source: 'telegram' as const } : {}),
+    ...(c.answered_in_telegram ? { answered_in_telegram: true } : {}),
     ...(c.reply ? { reply: c.reply } : {}),
     ...(replies ? { replies } : {}),
   }
@@ -1991,6 +1996,12 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
     const updatedPost = postStore.getPost(postId)
     if (updatedPost) {
       await postStore.updateButtonCaption(deps.bot, updatedPost)
+    }
+
+    try {
+      await syncMaxCommentToTelegramThread(deps.bot, saved, post)
+    } catch (err: unknown) {
+      logger.warn('POST /api/comment: sync TG thread failed', { commentId: saved.comment_id, err })
     }
 
     const channelTitle = channelRegistry.getChannel(chatId)?.title ?? '—'

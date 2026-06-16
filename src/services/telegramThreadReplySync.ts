@@ -1,7 +1,7 @@
 /**
  * telegramThreadReplySync.ts
  *
- * Ответ администратора в Max miniapp → сообщение в TG discussion group.
+ * MAX miniapp → TG discussion group: пользовательские комментарии и ответы админа.
  */
 
 import type { Bot } from '@maxhub/max-bot-api'
@@ -17,6 +17,7 @@ import { isCommentSynced, markCommentSynced } from '../utils/commentSyncGuard'
 import {
   MAX_ANSWERED_IN_MAX_MARKER,
   MAX_REPLY_TG_PREFIX,
+  formatMaxCommentForTelegram,
   isTelegramCommentMarkedAnsweredInMax,
 } from '../utils/commentSyncFilter'
 import { logger } from '../utils/logger'
@@ -30,6 +31,47 @@ function resolveTelegramBotTokenForChain(chainId: string): string {
     return fromChain
   }
   return resolveTelegramBotToken()
+}
+
+function isCommentForwardEnabled(chainId: string): boolean {
+  const chain = listTgChainsSync().find((c) => c.id === chainId)
+  return chain?.active !== false && chain?.forward_comments === true
+}
+
+function resolvePostThreadTarget(messageMid: string): {
+  chainId: string
+  token: string
+  threadChatId: number
+  threadMsgId: number
+} | null {
+  const mapping = findMappingByMaxMid(messageMid)
+  if (!mapping?.tg_thread_chat_id || !mapping.tg_thread_msg_id) {
+    return null
+  }
+  if (!isCommentForwardEnabled(mapping.chain_id)) {
+    return null
+  }
+  const token = resolveTelegramBotTokenForChain(mapping.chain_id)
+  if (!token) {
+    return null
+  }
+  return {
+    chainId: mapping.chain_id,
+    token,
+    threadChatId: mapping.tg_thread_chat_id,
+    threadMsgId: mapping.tg_thread_msg_id,
+  }
+}
+
+function buildMaxCommentTelegramText(comment: Comment): string {
+  const text = comment.text.trim()
+  if (text) {
+    return formatMaxCommentForTelegram(comment.username, text)
+  }
+  if (Array.isArray(comment.photo_urls) && comment.photo_urls.length > 0) {
+    return formatMaxCommentForTelegram(comment.username, '📷 Фото')
+  }
+  return ''
 }
 
 async function sendTelegramThreadMessage(
@@ -172,6 +214,68 @@ export async function markTelegramCommentAnsweredInMax(
 }
 
 /**
+ * Отправляет пользовательский комментарий из MAX miniapp в TG-тред.
+ */
+export async function syncMaxCommentToTelegramThread(
+  _bot: Bot,
+  comment: Comment,
+  post: Post,
+): Promise<void> {
+  const freshComment = commentStore.getComment(comment.comment_id) ?? comment
+  if (freshComment.source === 'telegram' || freshComment.tg_comment_id) {
+    return
+  }
+
+  const body = buildMaxCommentTelegramText(freshComment)
+  if (!body) {
+    return
+  }
+
+  const target = resolvePostThreadTarget(post.message_mid)
+  if (!target) {
+    logger.warn('[telegramThreadReplySync] no thread mapping for MAX comment', {
+      commentId: freshComment.comment_id,
+      messageMid: post.message_mid,
+    })
+    return
+  }
+
+  const guardKey = `max-comment:${freshComment.comment_id}`
+  if (isCommentSynced(guardKey)) {
+    return
+  }
+
+  try {
+    const tgMsgId = await sendTelegramThreadMessage(
+      target.token,
+      target.threadChatId,
+      body,
+      target.threadMsgId,
+    )
+    if (tgMsgId == null) {
+      return
+    }
+
+    markCommentSynced(`tg:${tgMsgId}`)
+    markCommentSynced(guardKey)
+    commentStore.setTgCommentId(freshComment.comment_id, tgMsgId)
+
+    logger.info('[telegramThreadReplySync] delivered MAX comment to TG thread', {
+      commentId: freshComment.comment_id,
+      tgMsgId,
+      threadChatId: target.threadChatId,
+      username: freshComment.username,
+    })
+  } catch (err: unknown) {
+    logger.warn('[telegramThreadReplySync] send MAX comment failed', {
+      commentId: freshComment.comment_id,
+      threadChatId: target.threadChatId,
+      err,
+    })
+  }
+}
+
+/**
  * Отправляет последний ответ администратора в TG-тред, если есть маппинг поста.
  */
 export async function syncAdminReplyToTelegramThread(
@@ -190,8 +294,9 @@ export async function syncAdminReplyToTelegramThread(
     return
   }
 
-  const mapping = findMappingByMaxMid(post.message_mid)
-  if (!mapping?.tg_thread_chat_id || !mapping.tg_thread_msg_id) {
+  const target = resolvePostThreadTarget(post.message_mid)
+  if (!target) {
+    const mapping = findMappingByMaxMid(post.message_mid)
     logger.warn('[telegramThreadReplySync] no thread mapping for post', {
       commentId: freshComment.comment_id,
       messageMid: post.message_mid,
@@ -202,16 +307,7 @@ export async function syncAdminReplyToTelegramThread(
     return
   }
 
-  const token = resolveTelegramBotTokenForChain(mapping.chain_id)
-  if (!token) {
-    logger.warn('[telegramThreadReplySync] no Telegram bot token for chain', {
-      commentId: freshComment.comment_id,
-      chainId: mapping.chain_id,
-    })
-    return
-  }
-
-  const threadChatId = mapping.tg_thread_chat_id
+  const { token, threadChatId, threadMsgId: mappingThreadMsgId } = target
 
   if (freshComment.tg_comment_id) {
     await markTelegramCommentAnsweredInMax(
@@ -231,7 +327,7 @@ export async function syncAdminReplyToTelegramThread(
     return
   }
 
-  let replyToId = mapping.tg_thread_msg_id
+  let replyToId = mappingThreadMsgId
   if (freshComment.tg_comment_id) {
     replyToId = freshComment.tg_comment_id
   }

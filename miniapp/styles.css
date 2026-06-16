@@ -1672,6 +1672,14 @@
       overflow: hidden;
       word-break: break-word;
     }
+    #view-comments .tg-answered-badge {
+      margin-top: 6px;
+      font-size: 12px;
+      line-height: 1.35;
+      font-weight: 600;
+      color: var(--tg-name);
+      opacity: 0.92;
+    }
     #view-comments .msg-out.msg-channel .tg-reply-to-text {
       opacity: 0.85;
     }

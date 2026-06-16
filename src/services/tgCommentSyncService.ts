@@ -93,6 +93,8 @@ async function handleTgAdminReplyToComment(
     return
   }
 
+  commentStore.markAnsweredInTelegram(parentComment.comment_id)
+
   if (listExistingReplyTexts(parentComment).includes(text)) {
     markCommentSynced(`tg:${tgCommentId}`)
     return
@@ -268,6 +270,7 @@ export async function handleTgComment(
         tgCommentId,
         directReplyId,
       })
+      markCommentSynced(`tg:${tgCommentId}`)
       return
     }
 

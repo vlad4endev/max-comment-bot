@@ -2,13 +2,14 @@
 /**
  * telegramThreadReplySync.ts
  *
- * Ответ администратора в Max miniapp → сообщение в TG discussion group.
+ * MAX miniapp → TG discussion group: пользовательские комментарии и ответы админа.
  */
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.markTelegramCommentAnsweredInMax = markTelegramCommentAnsweredInMax;
+exports.syncMaxCommentToTelegramThread = syncMaxCommentToTelegramThread;
 exports.syncAdminReplyToTelegramThread = syncAdminReplyToTelegramThread;
 const axios_1 = __importDefault(require("axios"));
 const adminPanelState_1 = require("../api/adminPanelState");
@@ -26,6 +27,39 @@ function resolveTelegramBotTokenForChain(chainId) {
         return fromChain;
     }
     return (0, resolveTelegramBotToken_1.resolveTelegramBotToken)();
+}
+function isCommentForwardEnabled(chainId) {
+    const chain = (0, adminPanelState_1.listTgChainsSync)().find((c) => c.id === chainId);
+    return chain?.active !== false && chain?.forward_comments === true;
+}
+function resolvePostThreadTarget(messageMid) {
+    const mapping = (0, postCommentMappingStore_1.findMappingByMaxMid)(messageMid);
+    if (!mapping?.tg_thread_chat_id || !mapping.tg_thread_msg_id) {
+        return null;
+    }
+    if (!isCommentForwardEnabled(mapping.chain_id)) {
+        return null;
+    }
+    const token = resolveTelegramBotTokenForChain(mapping.chain_id);
+    if (!token) {
+        return null;
+    }
+    return {
+        chainId: mapping.chain_id,
+        token,
+        threadChatId: mapping.tg_thread_chat_id,
+        threadMsgId: mapping.tg_thread_msg_id,
+    };
+}
+function buildMaxCommentTelegramText(comment) {
+    const text = comment.text.trim();
+    if (text) {
+        return (0, commentSyncFilter_1.formatMaxCommentForTelegram)(comment.username, text);
+    }
+    if (Array.isArray(comment.photo_urls) && comment.photo_urls.length > 0) {
+        return (0, commentSyncFilter_1.formatMaxCommentForTelegram)(comment.username, '📷 Фото');
+    }
+    return '';
 }
 async function sendTelegramThreadMessage(token, chatId, text, replyToMessageId) {
     const { data } = await axios_1.default.post(`${TG_API}/bot${token}/sendMessage`, {
@@ -115,6 +149,53 @@ async function markTelegramCommentAnsweredInMax(token, chatId, tgCommentId, comm
     }
 }
 /**
+ * Отправляет пользовательский комментарий из MAX miniapp в TG-тред.
+ */
+async function syncMaxCommentToTelegramThread(_bot, comment, post) {
+    const freshComment = commentStore_1.commentStore.getComment(comment.comment_id) ?? comment;
+    if (freshComment.source === 'telegram' || freshComment.tg_comment_id) {
+        return;
+    }
+    const body = buildMaxCommentTelegramText(freshComment);
+    if (!body) {
+        return;
+    }
+    const target = resolvePostThreadTarget(post.message_mid);
+    if (!target) {
+        logger_1.logger.warn('[telegramThreadReplySync] no thread mapping for MAX comment', {
+            commentId: freshComment.comment_id,
+            messageMid: post.message_mid,
+        });
+        return;
+    }
+    const guardKey = `max-comment:${freshComment.comment_id}`;
+    if ((0, commentSyncGuard_1.isCommentSynced)(guardKey)) {
+        return;
+    }
+    try {
+        const tgMsgId = await sendTelegramThreadMessage(target.token, target.threadChatId, body, target.threadMsgId);
+        if (tgMsgId == null) {
+            return;
+        }
+        (0, commentSyncGuard_1.markCommentSynced)(`tg:${tgMsgId}`);
+        (0, commentSyncGuard_1.markCommentSynced)(guardKey);
+        commentStore_1.commentStore.setTgCommentId(freshComment.comment_id, tgMsgId);
+        logger_1.logger.info('[telegramThreadReplySync] delivered MAX comment to TG thread', {
+            commentId: freshComment.comment_id,
+            tgMsgId,
+            threadChatId: target.threadChatId,
+            username: freshComment.username,
+        });
+    }
+    catch (err) {
+        logger_1.logger.warn('[telegramThreadReplySync] send MAX comment failed', {
+            commentId: freshComment.comment_id,
+            threadChatId: target.threadChatId,
+            err,
+        });
+    }
+}
+/**
  * Отправляет последний ответ администратора в TG-тред, если есть маппинг поста.
  */
 async function syncAdminReplyToTelegramThread(_bot, comment, post) {
@@ -127,8 +208,9 @@ async function syncAdminReplyToTelegramThread(_bot, comment, post) {
     if (!replyText) {
         return;
     }
-    const mapping = (0, postCommentMappingStore_1.findMappingByMaxMid)(post.message_mid);
-    if (!mapping?.tg_thread_chat_id || !mapping.tg_thread_msg_id) {
+    const target = resolvePostThreadTarget(post.message_mid);
+    if (!target) {
+        const mapping = (0, postCommentMappingStore_1.findMappingByMaxMid)(post.message_mid);
         logger_1.logger.warn('[telegramThreadReplySync] no thread mapping for post', {
             commentId: freshComment.comment_id,
             messageMid: post.message_mid,
@@ -138,15 +220,7 @@ async function syncAdminReplyToTelegramThread(_bot, comment, post) {
         });
         return;
     }
-    const token = resolveTelegramBotTokenForChain(mapping.chain_id);
-    if (!token) {
-        logger_1.logger.warn('[telegramThreadReplySync] no Telegram bot token for chain', {
-            commentId: freshComment.comment_id,
-            chainId: mapping.chain_id,
-        });
-        return;
-    }
-    const threadChatId = mapping.tg_thread_chat_id;
+    const { token, threadChatId, threadMsgId: mappingThreadMsgId } = target;
     if (freshComment.tg_comment_id) {
         await markTelegramCommentAnsweredInMax(token, threadChatId, freshComment.tg_comment_id, freshComment.text);
     }
@@ -157,7 +231,7 @@ async function syncAdminReplyToTelegramThread(_bot, comment, post) {
     if ((0, commentSyncGuard_1.isCommentSynced)(guardKey)) {
         return;
     }
-    let replyToId = mapping.tg_thread_msg_id;
+    let replyToId = mappingThreadMsgId;
     if (freshComment.tg_comment_id) {
         replyToId = freshComment.tg_comment_id;
     }

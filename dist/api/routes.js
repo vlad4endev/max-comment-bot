@@ -333,6 +333,7 @@ function toWireComment(c) {
             : {}),
         ...(c.posted_as_channel ? { posted_as_channel: true } : {}),
         ...(c.source === 'telegram' ? { source: 'telegram' } : {}),
+        ...(c.answered_in_telegram ? { answered_in_telegram: true } : {}),
         ...(c.reply ? { reply: c.reply } : {}),
         ...(replies ? { replies } : {}),
     };
@@ -1754,6 +1755,12 @@ function createCommentApiRouter(deps) {
         const updatedPost = postStore_1.postStore.getPost(postId);
         if (updatedPost) {
             await postStore_1.postStore.updateButtonCaption(deps.bot, updatedPost);
+        }
+        try {
+            await (0, telegramThreadReplySync_1.syncMaxCommentToTelegramThread)(deps.bot, saved, post);
+        }
+        catch (err) {
+            logger_1.logger.warn('POST /api/comment: sync TG thread failed', { commentId: saved.comment_id, err });
         }
         const channelTitle = channelRegistry_1.channelRegistry.getChannel(chatId)?.title ?? '—';
         try {

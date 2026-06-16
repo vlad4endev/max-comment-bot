@@ -156,6 +156,9 @@ function normalizeCommentFromDisk(raw) {
     if (o.max_comment_id !== undefined && typeof o.max_comment_id !== 'string') {
         return null;
     }
+    if (o.answered_in_telegram !== undefined && typeof o.answered_in_telegram !== 'boolean') {
+        return null;
+    }
     const comment = {
         comment_id: o.comment_id,
         post_id: o.post_id,
@@ -203,6 +206,7 @@ function normalizeCommentFromDisk(raw) {
         ...(typeof o.tg_thread_reply_id === 'number' && o.tg_thread_reply_id > 0
             ? { tg_thread_reply_id: o.tg_thread_reply_id }
             : {}),
+        ...(o.answered_in_telegram === true ? { answered_in_telegram: true } : {}),
     };
     ensureCommentReplyIds(comment);
     return comment;
@@ -687,6 +691,43 @@ class CommentStore {
         this.saveRow(c);
         return c;
     }
+    setTgCommentId(commentId, tgMessageId) {
+        const c = this.getComment(commentId);
+        if (!c) {
+            return null;
+        }
+        c.tg_comment_id = tgMessageId;
+        c.synced = true;
+        this.saveRow(c);
+        return c;
+    }
+    markAnsweredInTelegram(commentId) {
+        const c = this.getComment(commentId);
+        if (!c) {
+            return null;
+        }
+        if (c.answered_in_telegram) {
+            return c;
+        }
+        c.answered_in_telegram = true;
+        this.saveRow(c);
+        logger_1.logger.info(`commentStore: marked answered in Telegram ${commentId}`);
+        return c;
+    }
+    /**
+     * Комментарии из MAX miniapp, ещё не отправленные в TG-тред.
+     */
+    listCommentsPendingMaxToTelegram(limit = 25) {
+        const rows = this.getStatements().listPendingMaxToTelegram.all(limit);
+        const out = [];
+        for (const row of rows) {
+            const c = commentFromStorageRow(row);
+            if (c && c.source !== 'telegram' && !c.tg_comment_id) {
+                out.push(c);
+            }
+        }
+        return out;
+    }
     /**
      * Последний ответ администратора из MAX (не импортированный из TG-треда).
      */
@@ -787,6 +828,11 @@ class CommentStore {
          WHERE reply IS NOT NULL AND TRIM(reply) != ''
            AND (tg_thread_reply_id IS NULL OR tg_thread_reply_id = 0)
          ORDER BY timestamp DESC
+         LIMIT ?`),
+            listPendingMaxToTelegram: db.prepare(`SELECT ${storageFields} FROM comments
+         WHERE (source IS NULL OR source = 'max')
+           AND (tg_comment_id IS NULL OR tg_comment_id = 0)
+         ORDER BY timestamp ASC
          LIMIT ?`),
             deleteById: db.prepare('DELETE FROM comments WHERE comment_id = ?'),
             deleteAll: db.prepare('DELETE FROM comments'),

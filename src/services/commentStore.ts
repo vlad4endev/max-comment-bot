@@ -76,6 +76,8 @@ export interface Comment {
   synced?: boolean
   /** ID ответа администратора, отправленного в TG-тред. */
   tg_thread_reply_id?: number
+  /** На комментарий ответили в Telegram (discussion group). */
+  answered_in_telegram?: boolean
 }
 
 function isCommentReply(value: unknown): value is CommentReply {
@@ -242,6 +244,9 @@ function normalizeCommentFromDisk(raw: unknown): Comment | null {
   if (o.max_comment_id !== undefined && typeof o.max_comment_id !== 'string') {
     return null
   }
+  if (o.answered_in_telegram !== undefined && typeof o.answered_in_telegram !== 'boolean') {
+    return null
+  }
   const comment: Comment = {
     comment_id: o.comment_id,
     post_id: o.post_id,
@@ -289,6 +294,7 @@ function normalizeCommentFromDisk(raw: unknown): Comment | null {
     ...(typeof o.tg_thread_reply_id === 'number' && o.tg_thread_reply_id > 0
       ? { tg_thread_reply_id: o.tg_thread_reply_id }
       : {}),
+    ...(o.answered_in_telegram === true ? { answered_in_telegram: true } : {}),
   }
   ensureCommentReplyIds(comment)
   return comment
@@ -400,6 +406,7 @@ export class CommentStore {
     getSyncMeta: Database.Statement
     findByTgCommentId: Database.Statement
     listPendingThreadReply: Database.Statement
+    listPendingMaxToTelegram: Database.Statement
     deleteById: Database.Statement
     deleteAll: Database.Statement
     countAll: Database.Statement
@@ -919,6 +926,46 @@ export class CommentStore {
     return c
   }
 
+  setTgCommentId(commentId: string, tgMessageId: number): Comment | null {
+    const c = this.getComment(commentId)
+    if (!c) {
+      return null
+    }
+    c.tg_comment_id = tgMessageId
+    c.synced = true
+    this.saveRow(c)
+    return c
+  }
+
+  markAnsweredInTelegram(commentId: string): Comment | null {
+    const c = this.getComment(commentId)
+    if (!c) {
+      return null
+    }
+    if (c.answered_in_telegram) {
+      return c
+    }
+    c.answered_in_telegram = true
+    this.saveRow(c)
+    logger.info(`commentStore: marked answered in Telegram ${commentId}`)
+    return c
+  }
+
+  /**
+   * Комментарии из MAX miniapp, ещё не отправленные в TG-тред.
+   */
+  listCommentsPendingMaxToTelegram(limit = 25): Comment[] {
+    const rows = this.getStatements().listPendingMaxToTelegram.all(limit) as CommentStorageRow[]
+    const out: Comment[] = []
+    for (const row of rows) {
+      const c = commentFromStorageRow(row)
+      if (c && c.source !== 'telegram' && !c.tg_comment_id) {
+        out.push(c)
+      }
+    }
+    return out
+  }
+
   /**
    * Последний ответ администратора из MAX (не импортированный из TG-треда).
    */
@@ -1041,6 +1088,13 @@ export class CommentStore {
          WHERE reply IS NOT NULL AND TRIM(reply) != ''
            AND (tg_thread_reply_id IS NULL OR tg_thread_reply_id = 0)
          ORDER BY timestamp DESC
+         LIMIT ?`,
+      ),
+      listPendingMaxToTelegram: db.prepare(
+        `SELECT ${storageFields} FROM comments
+         WHERE (source IS NULL OR source = 'max')
+           AND (tg_comment_id IS NULL OR tg_comment_id = 0)
+         ORDER BY timestamp ASC
          LIMIT ?`,
       ),
       deleteById: db.prepare('DELETE FROM comments WHERE comment_id = ?'),

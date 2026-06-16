@@ -151,12 +151,18 @@ export function resolveTgCommentAuthor(
 /** Маркер на исходном комментарии в TG после ответа из MAX. */
 export const MAX_ANSWERED_IN_MAX_MARKER = '✅ Отвечено в MAX'
 
+/** Подпись в miniapp: на комментарий ответили в Telegram. */
+export const MAX_ANSWERED_IN_TELEGRAM_LABEL = '✅ Отвечено в Telegram'
+
 export function isTelegramCommentMarkedAnsweredInMax(text: string): boolean {
   return text.includes(MAX_ANSWERED_IN_MAX_MARKER)
 }
 
 /** Префикс ответа админа из MAX в TG-треде (не синхронизировать обратно в miniapp). */
 export const MAX_REPLY_TG_PREFIX = 'MAX ответ:'
+
+/** Префикс пользовательского комментария из MAX в TG-треде. */
+export const MAX_COMMENT_TG_PREFIX = 'MAX ·'
 
 /** Старый префикс — игнорируем при обратной синхронизации. */
 const LEGACY_ADMIN_REPLY_TG_PREFIX = '👤 Администратор:'
@@ -166,6 +172,20 @@ export function isMaxAdminReplyInTelegram(text: string): boolean {
   return (
     trimmed.startsWith(MAX_REPLY_TG_PREFIX) || trimmed.startsWith(LEGACY_ADMIN_REPLY_TG_PREFIX)
   )
+}
+
+export function isMaxCommentInTelegram(text: string): boolean {
+  return text.trim().startsWith(MAX_COMMENT_TG_PREFIX)
+}
+
+/** Текст сообщения в TG-треде: имя автора и комментарий из MAX miniapp. */
+export function formatMaxCommentForTelegram(username: string, text: string): string {
+  const name = username.trim() || 'Пользователь'
+  const body = text.trim()
+  if (body) {
+    return `${MAX_COMMENT_TG_PREFIX} ${name}: ${body}`
+  }
+  return `${MAX_COMMENT_TG_PREFIX} ${name}`
 }
 
 export async function shouldSyncTgCommentToMax(params: {
@@ -180,6 +200,7 @@ export async function shouldSyncTgCommentToMax(params: {
   if (
     !text ||
     isMaxAdminReplyInTelegram(text) ||
+    isMaxCommentInTelegram(text) ||
     isTelegramCommentMarkedAnsweredInMax(text)
   ) {
     return false
