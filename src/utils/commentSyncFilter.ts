@@ -244,6 +244,11 @@ export function resolveTgCommentAuthor(
   return { userId: fromId || 1, username: 'Аноним' }
 }
 
+/** Комментарий из TG-треда (не создан в MAX miniapp). */
+export function isTelegramOriginComment(comment: { source?: 'telegram' | 'max' }): boolean {
+  return comment.source !== 'max'
+}
+
 /** Маркер на исходном комментарии в TG после ответа админа в MAX (без нового сообщения в треде). */
 export const MAX_ANSWERED_IN_MAX_MARKER = '🔒 Забронирован в MAX'
 

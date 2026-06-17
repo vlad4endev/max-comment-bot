@@ -291,7 +291,7 @@ function normalizeCommentFromDisk(raw: unknown): Comment | null {
       ? { max_comment_id: o.max_comment_id.trim() }
       : {}),
     ...(o.synced === true ? { synced: true } : {}),
-    ...(typeof o.tg_thread_reply_id === 'number' && o.tg_thread_reply_id > 0
+    ...(typeof o.tg_thread_reply_id === 'number' && o.tg_thread_reply_id !== 0
       ? { tg_thread_reply_id: o.tg_thread_reply_id }
       : {}),
     ...(o.answered_in_telegram === true ? { answered_in_telegram: true } : {}),
@@ -322,7 +322,7 @@ function mergeCommentSyncMeta(comment: Comment, row: CommentStorageRow): Comment
   if (row.synced === 1) {
     comment.synced = true
   }
-  if (typeof row.tg_thread_reply_id === 'number' && row.tg_thread_reply_id > 0) {
+  if (typeof row.tg_thread_reply_id === 'number' && row.tg_thread_reply_id !== 0) {
     comment.tg_thread_reply_id = row.tg_thread_reply_id
   }
   return comment

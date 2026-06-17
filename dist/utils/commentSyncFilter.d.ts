@@ -22,6 +22,10 @@ export declare function resolveTgCommentAuthor(message: TgMessage, chain: TgChai
     userId: number;
     username: string;
 };
+/** Комментарий из TG-треда (не создан в MAX miniapp). */
+export declare function isTelegramOriginComment(comment: {
+    source?: 'telegram' | 'max';
+}): boolean;
 /** Маркер на исходном комментарии в TG после ответа админа в MAX (без нового сообщения в треде). */
 export declare const MAX_ANSWERED_IN_MAX_MARKER = "\uD83D\uDD12 \u0417\u0430\u0431\u0440\u043E\u043D\u0438\u0440\u043E\u0432\u0430\u043D \u0432 MAX";
 /** Старый маркер — учитываем при проверке уже помеченных сообщений. */

@@ -95,23 +95,15 @@ function resolvePostThreadTarget(messageMid: string): ThreadTarget | null {
   }
 }
 
-function buildMaxCommentTelegramText(comment: Comment, asChannel: boolean): string {
+function buildMaxCommentTelegramText(comment: Comment): string {
   const text = comment.text.trim()
   const photoFallback = '📷 Фото'
-  if (asChannel) {
-    if (text) {
-      return text
-    }
-    if (Array.isArray(comment.photo_urls) && comment.photo_urls.length > 0) {
-      return photoFallback
-    }
-    return ''
-  }
+  const name = comment.username.trim() || 'Пользователь'
   if (text) {
-    return formatMaxCommentForTelegram(comment.username, text)
+    return formatMaxCommentForTelegram(name, text)
   }
   if (Array.isArray(comment.photo_urls) && comment.photo_urls.length > 0) {
-    return formatMaxCommentForTelegram(comment.username, photoFallback)
+    return formatMaxCommentForTelegram(name, photoFallback)
   }
   return ''
 }
@@ -195,6 +187,13 @@ async function tryEditTelegramMessageText(
     },
     { timeout: 20_000 },
   )
+  if (!data.ok) {
+    logger.debug('[telegramThreadReplySync] editMessageText not ok', {
+      chatId,
+      messageId,
+      description: data.description,
+    })
+  }
   return data.ok === true
 }
 
@@ -235,22 +234,23 @@ async function trySetTelegramMessageReaction(
 
 /**
  * Помечает исходный комментарий в TG-треде как отвеченный в MAX.
+ * @returns true если сообщение успешно помечено (edit или reaction)
  */
 export async function markTelegramCommentAnsweredInMax(
   token: string,
   chatId: number,
   tgCommentId: number,
   commentText: string,
-): Promise<void> {
+): Promise<boolean> {
   const guardKey = `tg-marked-max:${tgCommentId}`
   if (isCommentSynced(guardKey)) {
-    return
+    return true
   }
 
   const baseText = commentText.trim()
   if (!baseText || isTelegramCommentMarkedAnsweredInMax(baseText)) {
     markCommentSynced(guardKey)
-    return
+    return true
   }
 
   const markedText = `${baseText}\n\n${MAX_ANSWERED_IN_MAX_MARKER}`
@@ -265,7 +265,7 @@ export async function markTelegramCommentAnsweredInMax(
         tgCommentId,
         chatId,
       })
-      return
+      return true
     }
   } catch (err: unknown) {
     logger.debug('[telegramThreadReplySync] edit TG comment for MAX answered mark failed', {
@@ -282,7 +282,7 @@ export async function markTelegramCommentAnsweredInMax(
         tgCommentId,
         chatId,
       })
-      return
+      return true
     }
   } catch (err: unknown) {
     logger.warn('[telegramThreadReplySync] setMessageReaction failed', {
@@ -291,6 +291,12 @@ export async function markTelegramCommentAnsweredInMax(
       err,
     })
   }
+
+  logger.warn('[telegramThreadReplySync] failed to mark TG comment as answered in MAX', {
+    tgCommentId,
+    chatId,
+  })
+  return false
 }
 
 /**
@@ -315,8 +321,7 @@ export async function syncMaxCommentToTelegramThread(
     return
   }
 
-  const postAsPeer = freshComment.posted_as_channel === true
-  const body = buildMaxCommentTelegramText(freshComment, postAsPeer)
+  const body = buildMaxCommentTelegramText(freshComment)
   if (!body) {
     return
   }
@@ -331,8 +336,7 @@ export async function syncMaxCommentToTelegramThread(
       target,
       body,
       target.threadMsgId,
-      postAsPeer,
-      postAsPeer ? formatMaxCommentForTelegram(freshComment.username, body) : undefined,
+      false,
     )
     if (tgMsgId == null) {
       return
@@ -411,25 +415,37 @@ export async function syncAdminReplyToTelegramThread(
     return
   }
 
+  // MAX→TG: сначала убедимся, что комментарий уже в TG-треде.
+  let commentForMark = commentStore.getComment(freshComment.comment_id) ?? freshComment
+  if (!commentForMark.tg_comment_id) {
+    await syncMaxCommentToTelegramThread(_bot, commentForMark, post)
+    commentForMark = commentStore.getComment(freshComment.comment_id) ?? commentForMark
+  }
+
   // MAX→TG: правим исходное сообщение, текст ответа в TG не отправляем.
-  if (freshComment.tg_comment_id) {
-    const tgMessageText = buildMaxCommentTelegramText(
-      freshComment,
-      freshComment.posted_as_channel === true,
-    )
-    await markTelegramCommentAnsweredInMax(
+  if (commentForMark.tg_comment_id) {
+    const tgMessageText = buildMaxCommentTelegramText(commentForMark)
+    const marked = await markTelegramCommentAnsweredInMax(
       token,
       threadChatId,
-      freshComment.tg_comment_id,
+      commentForMark.tg_comment_id,
       tgMessageText,
     )
-    markCommentSynced(guardKey)
-    commentStore.markTelegramThreadReplyHandled(freshComment.comment_id)
-    logger.info('[telegramThreadReplySync] marked MAX comment as booked in MAX (TG edit only)', {
-      commentId: freshComment.comment_id,
-      tgCommentId: freshComment.tg_comment_id,
-      threadChatId,
-    })
+    if (marked) {
+      markCommentSynced(guardKey)
+      commentStore.markTelegramThreadReplyHandled(freshComment.comment_id)
+      logger.info('[telegramThreadReplySync] marked MAX comment as booked in MAX (TG edit only)', {
+        commentId: freshComment.comment_id,
+        tgCommentId: commentForMark.tg_comment_id,
+        threadChatId,
+      })
+    } else {
+      logger.warn('[telegramThreadReplySync] could not mark MAX comment in TG thread', {
+        commentId: freshComment.comment_id,
+        tgCommentId: commentForMark.tg_comment_id,
+        threadChatId,
+      })
+    }
     return
   }
 

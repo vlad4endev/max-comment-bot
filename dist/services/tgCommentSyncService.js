@@ -182,10 +182,6 @@ async function handleTgComment(message, chain, bot, discussionChatId) {
             });
             return;
         }
-        const text = (message.text || message.caption || '').trim();
-        if (!text) {
-            return;
-        }
         const tgToken = chain.bot_token?.trim();
         if (!tgToken) {
             return;
@@ -194,7 +190,7 @@ async function handleTgComment(message, chain, bot, discussionChatId) {
         const directReplyId = message.reply_to_message.message_id;
         if (directReplyId !== threadRootMsgId) {
             const parentComment = commentStore_1.commentStore.findCommentByTgMessageId(directReplyId);
-            if (parentComment?.source === 'telegram') {
+            if (parentComment && (0, commentSyncFilter_1.isTelegramOriginComment)(parentComment)) {
                 await handleTgReplyToSyncedTelegramComment(message, parentComment, chain, bot, maxChatId, post, tgCommentId, isAdmin);
                 return;
             }
@@ -208,6 +204,10 @@ async function handleTgComment(message, chain, bot, discussionChatId) {
                 });
                 return;
             }
+        }
+        const text = (message.text || message.caption || '').trim();
+        if (!text) {
+            return;
         }
         const shouldSync = await (0, commentSyncFilter_1.shouldSyncTgCommentToMax)({
             message,

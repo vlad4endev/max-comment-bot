@@ -31,6 +31,7 @@ import { resolveCanonicalChannelChatId } from './resolveChannelChatId'
 import { isCommentSynced, markCommentSynced } from '../utils/commentSyncGuard'
 import {
   isMaxAdminReplyInTelegram,
+  isTelegramOriginComment,
   isTgCommentFromAdmin,
   resolveChannelMsgIdFromThreadRoot,
   resolveDiscussionThreadRootMsgId,
@@ -248,11 +249,6 @@ export async function handleTgComment(
       return
     }
 
-    const text = (message.text || message.caption || '').trim()
-    if (!text) {
-      return
-    }
-
     const tgToken = chain.bot_token?.trim()
     if (!tgToken) {
       return
@@ -263,7 +259,7 @@ export async function handleTgComment(
 
     if (directReplyId !== threadRootMsgId) {
       const parentComment = commentStore.findCommentByTgMessageId(directReplyId)
-      if (parentComment?.source === 'telegram') {
+      if (parentComment && isTelegramOriginComment(parentComment)) {
         await handleTgReplyToSyncedTelegramComment(
           message,
           parentComment,
@@ -286,6 +282,11 @@ export async function handleTgComment(
         })
         return
       }
+    }
+
+    const text = (message.text || message.caption || '').trim()
+    if (!text) {
+      return
     }
 
     const shouldSync = await shouldSyncTgCommentToMax({

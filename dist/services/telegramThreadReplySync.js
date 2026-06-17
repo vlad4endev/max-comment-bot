@@ -73,23 +73,15 @@ function resolvePostThreadTarget(messageMid) {
         sendAsMode: resolveDiscussionSendAs(mapping.chain_id),
     };
 }
-function buildMaxCommentTelegramText(comment, asChannel) {
+function buildMaxCommentTelegramText(comment) {
     const text = comment.text.trim();
     const photoFallback = '📷 Фото';
-    if (asChannel) {
-        if (text) {
-            return text;
-        }
-        if (Array.isArray(comment.photo_urls) && comment.photo_urls.length > 0) {
-            return photoFallback;
-        }
-        return '';
-    }
+    const name = comment.username.trim() || 'Пользователь';
     if (text) {
-        return (0, commentSyncFilter_1.formatMaxCommentForTelegram)(comment.username, text);
+        return (0, commentSyncFilter_1.formatMaxCommentForTelegram)(name, text);
     }
     if (Array.isArray(comment.photo_urls) && comment.photo_urls.length > 0) {
-        return (0, commentSyncFilter_1.formatMaxCommentForTelegram)(comment.username, photoFallback);
+        return (0, commentSyncFilter_1.formatMaxCommentForTelegram)(name, photoFallback);
     }
     return '';
 }
@@ -136,6 +128,13 @@ async function tryEditTelegramMessageText(token, chatId, messageId, text) {
         message_id: messageId,
         text,
     }, { timeout: 20_000 });
+    if (!data.ok) {
+        logger_1.logger.debug('[telegramThreadReplySync] editMessageText not ok', {
+            chatId,
+            messageId,
+            description: data.description,
+        });
+    }
     return data.ok === true;
 }
 async function tryEditTelegramMessageCaption(token, chatId, messageId, caption) {
@@ -156,16 +155,17 @@ async function trySetTelegramMessageReaction(token, chatId, messageId) {
 }
 /**
  * Помечает исходный комментарий в TG-треде как отвеченный в MAX.
+ * @returns true если сообщение успешно помечено (edit или reaction)
  */
 async function markTelegramCommentAnsweredInMax(token, chatId, tgCommentId, commentText) {
     const guardKey = `tg-marked-max:${tgCommentId}`;
     if ((0, commentSyncGuard_1.isCommentSynced)(guardKey)) {
-        return;
+        return true;
     }
     const baseText = commentText.trim();
     if (!baseText || (0, commentSyncFilter_1.isTelegramCommentMarkedAnsweredInMax)(baseText)) {
         (0, commentSyncGuard_1.markCommentSynced)(guardKey);
-        return;
+        return true;
     }
     const markedText = `${baseText}\n\n${commentSyncFilter_1.MAX_ANSWERED_IN_MAX_MARKER}`;
     try {
@@ -177,7 +177,7 @@ async function markTelegramCommentAnsweredInMax(token, chatId, tgCommentId, comm
                 tgCommentId,
                 chatId,
             });
-            return;
+            return true;
         }
     }
     catch (err) {
@@ -194,7 +194,7 @@ async function markTelegramCommentAnsweredInMax(token, chatId, tgCommentId, comm
                 tgCommentId,
                 chatId,
             });
-            return;
+            return true;
         }
     }
     catch (err) {
@@ -204,6 +204,11 @@ async function markTelegramCommentAnsweredInMax(token, chatId, tgCommentId, comm
             err,
         });
     }
+    logger_1.logger.warn('[telegramThreadReplySync] failed to mark TG comment as answered in MAX', {
+        tgCommentId,
+        chatId,
+    });
+    return false;
 }
 /**
  * Отправляет пользовательский комментарий из MAX miniapp в TG-тред.
@@ -221,8 +226,7 @@ async function syncMaxCommentToTelegramThread(_bot, comment, post) {
         });
         return;
     }
-    const postAsPeer = freshComment.posted_as_channel === true;
-    const body = buildMaxCommentTelegramText(freshComment, postAsPeer);
+    const body = buildMaxCommentTelegramText(freshComment);
     if (!body) {
         return;
     }
@@ -231,7 +235,7 @@ async function syncMaxCommentToTelegramThread(_bot, comment, post) {
         return;
     }
     try {
-        const tgMsgId = await deliverTelegramThreadMessage(target, body, target.threadMsgId, postAsPeer, postAsPeer ? (0, commentSyncFilter_1.formatMaxCommentForTelegram)(freshComment.username, body) : undefined);
+        const tgMsgId = await deliverTelegramThreadMessage(target, body, target.threadMsgId, false);
         if (tgMsgId == null) {
             return;
         }
@@ -296,17 +300,32 @@ async function syncAdminReplyToTelegramThread(_bot, comment, post) {
         });
         return;
     }
+    // MAX→TG: сначала убедимся, что комментарий уже в TG-треде.
+    let commentForMark = commentStore_1.commentStore.getComment(freshComment.comment_id) ?? freshComment;
+    if (!commentForMark.tg_comment_id) {
+        await syncMaxCommentToTelegramThread(_bot, commentForMark, post);
+        commentForMark = commentStore_1.commentStore.getComment(freshComment.comment_id) ?? commentForMark;
+    }
     // MAX→TG: правим исходное сообщение, текст ответа в TG не отправляем.
-    if (freshComment.tg_comment_id) {
-        const tgMessageText = buildMaxCommentTelegramText(freshComment, freshComment.posted_as_channel === true);
-        await markTelegramCommentAnsweredInMax(token, threadChatId, freshComment.tg_comment_id, tgMessageText);
-        (0, commentSyncGuard_1.markCommentSynced)(guardKey);
-        commentStore_1.commentStore.markTelegramThreadReplyHandled(freshComment.comment_id);
-        logger_1.logger.info('[telegramThreadReplySync] marked MAX comment as booked in MAX (TG edit only)', {
-            commentId: freshComment.comment_id,
-            tgCommentId: freshComment.tg_comment_id,
-            threadChatId,
-        });
+    if (commentForMark.tg_comment_id) {
+        const tgMessageText = buildMaxCommentTelegramText(commentForMark);
+        const marked = await markTelegramCommentAnsweredInMax(token, threadChatId, commentForMark.tg_comment_id, tgMessageText);
+        if (marked) {
+            (0, commentSyncGuard_1.markCommentSynced)(guardKey);
+            commentStore_1.commentStore.markTelegramThreadReplyHandled(freshComment.comment_id);
+            logger_1.logger.info('[telegramThreadReplySync] marked MAX comment as booked in MAX (TG edit only)', {
+                commentId: freshComment.comment_id,
+                tgCommentId: commentForMark.tg_comment_id,
+                threadChatId,
+            });
+        }
+        else {
+            logger_1.logger.warn('[telegramThreadReplySync] could not mark MAX comment in TG thread', {
+                commentId: freshComment.comment_id,
+                tgCommentId: commentForMark.tg_comment_id,
+                threadChatId,
+            });
+        }
         return;
     }
     const { threadMsgId: mappingThreadMsgId } = target;

@@ -11,6 +11,7 @@ exports.resolveThreadRootMessage = resolveThreadRootMessage;
 exports.resolveDiscussionThreadRootMsgId = resolveDiscussionThreadRootMsgId;
 exports.resolveChannelMsgIdFromThreadRoot = resolveChannelMsgIdFromThreadRoot;
 exports.resolveTgCommentAuthor = resolveTgCommentAuthor;
+exports.isTelegramOriginComment = isTelegramOriginComment;
 exports.isTelegramCommentMarkedAnsweredInMax = isTelegramCommentMarkedAnsweredInMax;
 exports.isMaxAdminReplyInTelegram = isMaxAdminReplyInTelegram;
 exports.isMaxCommentInTelegram = isMaxCommentInTelegram;
@@ -199,6 +200,10 @@ function resolveTgCommentAuthor(message, chain, discussionChatId) {
         }
     }
     return { userId: fromId || 1, username: 'Аноним' };
+}
+/** Комментарий из TG-треда (не создан в MAX miniapp). */
+function isTelegramOriginComment(comment) {
+    return comment.source !== 'max';
 }
 /** Маркер на исходном комментарии в TG после ответа админа в MAX (без нового сообщения в треде). */
 exports.MAX_ANSWERED_IN_MAX_MARKER = '🔒 Забронирован в MAX';
