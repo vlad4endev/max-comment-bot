@@ -18,4 +18,9 @@ export declare function findMappingByMaxMid(maxMid: string): PostCommentMappingR
  */
 export declare function backfillPostCommentMappingsFromForwarded(): number;
 export declare function resolveDiscussionChatId(tgToken: string, chain: TgChainRecord): Promise<number | null>;
-export declare function storeDiscussionChatIdForChain(tgToken: string, chain: TgChainRecord): Promise<void>;
+/**
+ * Раньше проставлял tg_thread_chat_id без tg_thread_msg_id — из-за этого
+ * findMappingByMaxMid выбирал «битую» строку. Thread id задаётся через
+ * handleDiscussionAutoForward / ensurePostThreadMapping.
+ */
+export declare function storeDiscussionChatIdForChain(_tgToken: string, _chain: TgChainRecord): Promise<void>;

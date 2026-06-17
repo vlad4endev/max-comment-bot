@@ -692,9 +692,7 @@ async function processChainMessageGroup(chain, messages, tgToken) {
             const forwardedToday = chain.forwarded_today + published;
             chain.forwarded_today = forwardedToday;
             await (0, adminPanelState_1.updateTgChain)(chain.id, { forwarded_today: forwardedToday });
-            if (chain.forward_comments) {
-                void (0, postCommentMappingStore_1.storeDiscussionChatIdForChain)(tgToken, chain);
-            }
+            // thread chat/msg id — через handleDiscussionAutoForward / ensurePostThreadMapping
             logger_1.logger.info('[tgChain] forwarded', {
                 chainId: chain.id,
                 from: sourceKey,

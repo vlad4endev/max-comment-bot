@@ -25,7 +25,7 @@ import {
   setTelegramBotUpdatesOffset,
 } from './telegramMainBotOffsetStore'
 import { processTelegramMiniappBotUpdates } from './telegramMiniappService'
-import { upsertPostCommentMapping, storeDiscussionChatIdForChain, resolveDiscussionChatId } from './postCommentMappingStore'
+import { upsertPostCommentMapping, resolveDiscussionChatId } from './postCommentMappingStore'
 import { ensurePostThreadMapping } from './telegramDiscussionThreadResolver'
 import {
   handleDiscussionAutoForward,
@@ -839,9 +839,7 @@ async function processChainMessageGroup(
       const forwardedToday = chain.forwarded_today + published
       chain.forwarded_today = forwardedToday
       await updateTgChain(chain.id, { forwarded_today: forwardedToday })
-      if (chain.forward_comments) {
-        void storeDiscussionChatIdForChain(tgToken, chain)
-      }
+      // thread chat/msg id — через handleDiscussionAutoForward / ensurePostThreadMapping
       logger.info('[tgChain] forwarded', {
         chainId: chain.id,
         from: sourceKey,

@@ -84,12 +84,16 @@ export function findMappingByMaxMid(maxMid: string): PostCommentMappingRow | nul
   if (!normalized) {
     return null
   }
+  // Один max_mid может иметь несколько tg_msg_id (редактирование/альбом).
+  // Предпочитаем строку с заполненным thread id — иначе sync ломается на «битой» последней записи.
   const row = getDb()
     .prepare(
       `SELECT chain_id, tg_msg_id, max_mid, tg_chat_id, tg_thread_chat_id, tg_thread_msg_id
        FROM post_comment_mapping
        WHERE max_mid = ?
-       ORDER BY id DESC
+       ORDER BY
+         (CASE WHEN tg_thread_msg_id IS NOT NULL AND tg_thread_msg_id > 0 THEN 1 ELSE 0 END) DESC,
+         id DESC
        LIMIT 1`,
     )
     .get(normalized) as PostCommentMappingRow | undefined
@@ -196,19 +200,14 @@ export async function resolveDiscussionChatId(
   }
 }
 
+/**
+ * Раньше проставлял tg_thread_chat_id без tg_thread_msg_id — из-за этого
+ * findMappingByMaxMid выбирал «битую» строку. Thread id задаётся через
+ * handleDiscussionAutoForward / ensurePostThreadMapping.
+ */
 export async function storeDiscussionChatIdForChain(
-  tgToken: string,
-  chain: TgChainRecord,
+  _tgToken: string,
+  _chain: TgChainRecord,
 ): Promise<void> {
-  const threadChatId = await resolveDiscussionChatId(tgToken, chain)
-  if (threadChatId == null) {
-    return
-  }
-  getDb()
-    .prepare(
-      `UPDATE post_comment_mapping
-       SET tg_thread_chat_id = ?
-       WHERE chain_id = ? AND (tg_thread_chat_id IS NULL OR tg_thread_chat_id = 0)`,
-    )
-    .run(threadChatId, chain.id)
+  // no-op
 }
