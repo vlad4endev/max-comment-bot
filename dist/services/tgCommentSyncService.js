@@ -18,6 +18,7 @@ const channelRegistry_1 = require("./channelRegistry");
 const postCommentMappingStore_1 = require("./postCommentMappingStore");
 const postStore_1 = require("./postStore");
 const resolveChannelChatId_1 = require("./resolveChannelChatId");
+const resolveTelegramBotToken_1 = require("./resolveTelegramBotToken");
 const commentSyncGuard_1 = require("../utils/commentSyncGuard");
 const commentSyncFilter_1 = require("../utils/commentSyncFilter");
 const logger_1 = require("../utils/logger");
@@ -51,18 +52,23 @@ function listExistingReplyTexts(comment) {
     return thread.map((r) => r.text.trim()).filter(Boolean);
 }
 /**
- * Реплай в TG на комментарий, перенесённый из TG в MAX: пометка «отвечено в Telegram»,
- * без исходящего сообщения в TG. Текст ответа админа сохраняется в MAX.
+ * Реплай в TG на комментарий, известный в MAX (из TG или из miniapp):
+ * пометка «отвечено в Telegram» в MAX, без исходящего сообщения в TG.
  */
-async function handleTgReplyToSyncedTelegramComment(message, parentComment, chain, bot, maxChatId, post, tgCommentId, isAdmin) {
+async function handleTgReplyToMaxComment(message, parentComment, chain, bot, maxChatId, post, tgCommentId, isAdmin) {
     const text = (message.text || message.caption || '').trim();
-    commentStore_1.commentStore.markAnsweredInTelegram(parentComment.comment_id);
-    if (!isAdmin || !text || (0, commentSyncFilter_1.isMaxAdminReplyInTelegram)(text)) {
+    if (text && ((0, commentSyncFilter_1.isMaxAdminReplyInTelegram)(text) || (0, commentSyncFilter_1.isMaxCommentInTelegram)(text))) {
         (0, commentSyncGuard_1.markCommentSynced)(`tg:${tgCommentId}`);
-        logger_1.logger.info('[tgCommentSync] marked TG-origin comment as answered in Telegram', {
+        return;
+    }
+    commentStore_1.commentStore.markAnsweredInTelegram(parentComment.comment_id);
+    if (!isAdmin || !text) {
+        (0, commentSyncGuard_1.markCommentSynced)(`tg:${tgCommentId}`);
+        logger_1.logger.info('[tgCommentSync] marked MAX comment as answered in Telegram', {
             chainId: chain.id,
             tgCommentId,
             parentCommentId: parentComment.comment_id,
+            parentSource: parentComment.source ?? null,
             isAdmin,
         });
         return;
@@ -123,6 +129,7 @@ async function handleTgReplyToSyncedTelegramComment(message, parentComment, chai
         chainId: chain.id,
         tgCommentId,
         parentCommentId: parentComment.comment_id,
+        parentSource: parentComment.source ?? null,
         postId: post.post_id,
     });
 }
@@ -182,7 +189,7 @@ async function handleTgComment(message, chain, bot, discussionChatId) {
             });
             return;
         }
-        const tgToken = chain.bot_token?.trim();
+        const tgToken = chain.bot_token?.trim() || (0, resolveTelegramBotToken_1.resolveTelegramBotToken)();
         if (!tgToken) {
             return;
         }
@@ -190,18 +197,8 @@ async function handleTgComment(message, chain, bot, discussionChatId) {
         const directReplyId = message.reply_to_message.message_id;
         if (directReplyId !== threadRootMsgId) {
             const parentComment = commentStore_1.commentStore.findCommentByTgMessageId(directReplyId);
-            if (parentComment && (0, commentSyncFilter_1.isTelegramOriginComment)(parentComment)) {
-                await handleTgReplyToSyncedTelegramComment(message, parentComment, chain, bot, maxChatId, post, tgCommentId, isAdmin);
-                return;
-            }
-            if (isAdmin && parentComment) {
-                (0, commentSyncGuard_1.markCommentSynced)(`tg:${tgCommentId}`);
-                logger_1.logger.debug('[tgCommentSync] admin reply to non-TG-origin comment skipped', {
-                    chainId: chain.id,
-                    tgCommentId,
-                    parentCommentId: parentComment.comment_id,
-                    parentSource: parentComment.source ?? null,
-                });
+            if (parentComment) {
+                await handleTgReplyToMaxComment(message, parentComment, chain, bot, maxChatId, post, tgCommentId, isAdmin);
                 return;
             }
         }

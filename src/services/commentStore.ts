@@ -78,6 +78,10 @@ export interface Comment {
   tg_thread_reply_id?: number
   /** На комментарий ответили в Telegram (discussion group). */
   answered_in_telegram?: boolean
+  /** Точный текст сообщения, отправленного ботом в TG-тред (для edit). */
+  tg_message_text?: string
+  /** Маркер «Забронирован в MAX» успешно применён в TG-треде. */
+  booked_in_max_tg?: boolean
 }
 
 function isCommentReply(value: unknown): value is CommentReply {
@@ -247,6 +251,12 @@ function normalizeCommentFromDisk(raw: unknown): Comment | null {
   if (o.answered_in_telegram !== undefined && typeof o.answered_in_telegram !== 'boolean') {
     return null
   }
+  if (o.tg_message_text !== undefined && typeof o.tg_message_text !== 'string') {
+    return null
+  }
+  if (o.booked_in_max_tg !== undefined && typeof o.booked_in_max_tg !== 'boolean') {
+    return null
+  }
   const comment: Comment = {
     comment_id: o.comment_id,
     post_id: o.post_id,
@@ -295,6 +305,10 @@ function normalizeCommentFromDisk(raw: unknown): Comment | null {
       ? { tg_thread_reply_id: o.tg_thread_reply_id }
       : {}),
     ...(o.answered_in_telegram === true ? { answered_in_telegram: true } : {}),
+    ...(typeof o.tg_message_text === 'string' && o.tg_message_text.trim()
+      ? { tg_message_text: o.tg_message_text.trim() }
+      : {}),
+    ...(o.booked_in_max_tg === true ? { booked_in_max_tg: true } : {}),
   }
   ensureCommentReplyIds(comment)
   return comment
@@ -926,13 +940,27 @@ export class CommentStore {
     return c
   }
 
-  setTgCommentId(commentId: string, tgMessageId: number): Comment | null {
+  setTgCommentId(commentId: string, tgMessageId: number, tgMessageText?: string): Comment | null {
     const c = this.getComment(commentId)
     if (!c) {
       return null
     }
     c.tg_comment_id = tgMessageId
+    const trimmedText = tgMessageText?.trim()
+    if (trimmedText) {
+      c.tg_message_text = trimmedText
+    }
     c.synced = true
+    this.saveRow(c)
+    return c
+  }
+
+  markBookedInMaxTelegram(commentId: string): Comment | null {
+    const c = this.getComment(commentId)
+    if (!c) {
+      return null
+    }
+    c.booked_in_max_tg = true
     this.saveRow(c)
     return c
   }

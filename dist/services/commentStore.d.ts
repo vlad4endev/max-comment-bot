@@ -65,6 +65,10 @@ export interface Comment {
     tg_thread_reply_id?: number;
     /** На комментарий ответили в Telegram (discussion group). */
     answered_in_telegram?: boolean;
+    /** Точный текст сообщения, отправленного ботом в TG-тред (для edit). */
+    tg_message_text?: string;
+    /** Маркер «Забронирован в MAX» успешно применён в TG-треде. */
+    booked_in_max_tg?: boolean;
 }
 export declare function replyToNotificationLogEntry(reply: CommentReply, notificationReplierName?: string): CommentNotificationReplyLogEntry;
 export interface AdminCommentListRow {
@@ -162,7 +166,8 @@ export declare class CommentStore {
      */
     saveTelegramThreadComment(input: Omit<Comment, 'comment_id' | 'timestamp' | 'source' | 'synced'>, tgCommentId: number): Comment;
     setTgThreadReplyId(commentId: string, tgMessageId: number): Comment | null;
-    setTgCommentId(commentId: string, tgMessageId: number): Comment | null;
+    setTgCommentId(commentId: string, tgMessageId: number, tgMessageText?: string): Comment | null;
+    markBookedInMaxTelegram(commentId: string): Comment | null;
     markAnsweredInTelegram(commentId: string): Comment | null;
     /**
      * Ответ админа из MAX обработан для TG-треда без исходящего сообщения (sentinel -1).

@@ -159,6 +159,12 @@ function normalizeCommentFromDisk(raw) {
     if (o.answered_in_telegram !== undefined && typeof o.answered_in_telegram !== 'boolean') {
         return null;
     }
+    if (o.tg_message_text !== undefined && typeof o.tg_message_text !== 'string') {
+        return null;
+    }
+    if (o.booked_in_max_tg !== undefined && typeof o.booked_in_max_tg !== 'boolean') {
+        return null;
+    }
     const comment = {
         comment_id: o.comment_id,
         post_id: o.post_id,
@@ -207,6 +213,10 @@ function normalizeCommentFromDisk(raw) {
             ? { tg_thread_reply_id: o.tg_thread_reply_id }
             : {}),
         ...(o.answered_in_telegram === true ? { answered_in_telegram: true } : {}),
+        ...(typeof o.tg_message_text === 'string' && o.tg_message_text.trim()
+            ? { tg_message_text: o.tg_message_text.trim() }
+            : {}),
+        ...(o.booked_in_max_tg === true ? { booked_in_max_tg: true } : {}),
     };
     ensureCommentReplyIds(comment);
     return comment;
@@ -691,13 +701,26 @@ class CommentStore {
         this.saveRow(c);
         return c;
     }
-    setTgCommentId(commentId, tgMessageId) {
+    setTgCommentId(commentId, tgMessageId, tgMessageText) {
         const c = this.getComment(commentId);
         if (!c) {
             return null;
         }
         c.tg_comment_id = tgMessageId;
+        const trimmedText = tgMessageText?.trim();
+        if (trimmedText) {
+            c.tg_message_text = trimmedText;
+        }
         c.synced = true;
+        this.saveRow(c);
+        return c;
+    }
+    markBookedInMaxTelegram(commentId) {
+        const c = this.getComment(commentId);
+        if (!c) {
+            return null;
+        }
+        c.booked_in_max_tg = true;
         this.saveRow(c);
         return c;
     }

@@ -10,7 +10,10 @@ import type { Post } from './postStore';
  * Помечает исходный комментарий в TG-треде как отвеченный в MAX.
  * @returns true если сообщение успешно помечено (edit или reaction)
  */
-export declare function markTelegramCommentAnsweredInMax(token: string, chatId: number, tgCommentId: number, commentText: string): Promise<boolean>;
+export declare function markTelegramCommentAnsweredInMax(token: string, chatId: number, tgCommentId: number, commentText: string, options?: {
+    messageThreadId?: number;
+    commentId?: string;
+}): Promise<boolean>;
 /**
  * Отправляет пользовательский комментарий из MAX miniapp в TG-тред.
  */

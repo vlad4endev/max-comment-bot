@@ -28,10 +28,11 @@ import {
 import { postStore } from './postStore'
 import type { Post } from './postStore'
 import { resolveCanonicalChannelChatId } from './resolveChannelChatId'
+import { resolveTelegramBotToken } from './resolveTelegramBotToken'
 import { isCommentSynced, markCommentSynced } from '../utils/commentSyncGuard'
 import {
   isMaxAdminReplyInTelegram,
-  isTelegramOriginComment,
+  isMaxCommentInTelegram,
   isTgCommentFromAdmin,
   resolveChannelMsgIdFromThreadRoot,
   resolveDiscussionThreadRootMsgId,
@@ -78,10 +79,10 @@ function listExistingReplyTexts(comment: Comment): string[] {
 }
 
 /**
- * Реплай в TG на комментарий, перенесённый из TG в MAX: пометка «отвечено в Telegram»,
- * без исходящего сообщения в TG. Текст ответа админа сохраняется в MAX.
+ * Реплай в TG на комментарий, известный в MAX (из TG или из miniapp):
+ * пометка «отвечено в Telegram» в MAX, без исходящего сообщения в TG.
  */
-async function handleTgReplyToSyncedTelegramComment(
+async function handleTgReplyToMaxComment(
   message: TgMessage,
   parentComment: Comment,
   chain: TgChainRecord,
@@ -92,14 +93,20 @@ async function handleTgReplyToSyncedTelegramComment(
   isAdmin: boolean,
 ): Promise<void> {
   const text = (message.text || message.caption || '').trim()
+  if (text && (isMaxAdminReplyInTelegram(text) || isMaxCommentInTelegram(text))) {
+    markCommentSynced(`tg:${tgCommentId}`)
+    return
+  }
+
   commentStore.markAnsweredInTelegram(parentComment.comment_id)
 
-  if (!isAdmin || !text || isMaxAdminReplyInTelegram(text)) {
+  if (!isAdmin || !text) {
     markCommentSynced(`tg:${tgCommentId}`)
-    logger.info('[tgCommentSync] marked TG-origin comment as answered in Telegram', {
+    logger.info('[tgCommentSync] marked MAX comment as answered in Telegram', {
       chainId: chain.id,
       tgCommentId,
       parentCommentId: parentComment.comment_id,
+      parentSource: parentComment.source ?? null,
       isAdmin,
     })
     return
@@ -171,6 +178,7 @@ async function handleTgReplyToSyncedTelegramComment(
     chainId: chain.id,
     tgCommentId,
     parentCommentId: parentComment.comment_id,
+    parentSource: parentComment.source ?? null,
     postId: post.post_id,
   })
 }
@@ -249,7 +257,7 @@ export async function handleTgComment(
       return
     }
 
-    const tgToken = chain.bot_token?.trim()
+    const tgToken = chain.bot_token?.trim() || resolveTelegramBotToken()
     if (!tgToken) {
       return
     }
@@ -259,8 +267,8 @@ export async function handleTgComment(
 
     if (directReplyId !== threadRootMsgId) {
       const parentComment = commentStore.findCommentByTgMessageId(directReplyId)
-      if (parentComment && isTelegramOriginComment(parentComment)) {
-        await handleTgReplyToSyncedTelegramComment(
+      if (parentComment) {
+        await handleTgReplyToMaxComment(
           message,
           parentComment,
           chain,
@@ -270,16 +278,6 @@ export async function handleTgComment(
           tgCommentId,
           isAdmin,
         )
-        return
-      }
-      if (isAdmin && parentComment) {
-        markCommentSynced(`tg:${tgCommentId}`)
-        logger.debug('[tgCommentSync] admin reply to non-TG-origin comment skipped', {
-          chainId: chain.id,
-          tgCommentId,
-          parentCommentId: parentComment.comment_id,
-          parentSource: parentComment.source ?? null,
-        })
         return
       }
     }

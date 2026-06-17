@@ -74,6 +74,10 @@ function resolvePostThreadTarget(messageMid) {
     };
 }
 function buildMaxCommentTelegramText(comment) {
+    const stored = comment.tg_message_text?.trim();
+    if (stored) {
+        return stored;
+    }
     const text = comment.text.trim();
     const photoFallback = '📷 Фото';
     const name = comment.username.trim() || 'Пользователь';
@@ -84,6 +88,29 @@ function buildMaxCommentTelegramText(comment) {
         return (0, commentSyncFilter_1.formatMaxCommentForTelegram)(name, photoFallback);
     }
     return '';
+}
+function tgPayload(target, extra) {
+    const payload = {
+        chat_id: target.chatId,
+        message_id: target.messageId,
+        ...extra,
+    };
+    if (typeof target.messageThreadId === 'number' && target.messageThreadId > 0) {
+        payload.message_thread_id = target.messageThreadId;
+    }
+    return payload;
+}
+async function callTelegramBot(token, method, payload, logContext) {
+    const { data } = await axios_1.default.post(`${TG_API}/bot${token}/${method}`, payload, {
+        timeout: 20_000,
+    });
+    if (!data.ok) {
+        logger_1.logger.warn(`[telegramThreadReplySync] ${method} failed`, {
+            ...logContext,
+            description: data.description,
+        });
+    }
+    return data;
 }
 async function deliverTelegramThreadMessage(target, text, replyToId, useMtprotoSendAs, botFallbackText) {
     if (useMtprotoSendAs && (target.sendAsMode === 'chat' || target.channelKey)) {
@@ -108,105 +135,140 @@ async function deliverTelegramThreadMessage(target, text, replyToId, useMtprotoS
         }
     }
     const botText = botFallbackText ?? text;
-    return sendTelegramThreadMessage(target.token, target.threadChatId, botText, replyToId);
+    return sendTelegramThreadMessage(target.token, target.threadChatId, botText, replyToId, target.threadMsgId);
 }
-async function sendTelegramThreadMessage(token, chatId, text, replyToMessageId) {
-    const { data } = await axios_1.default.post(`${TG_API}/bot${token}/sendMessage`, {
+async function sendTelegramThreadMessage(token, chatId, text, replyToMessageId, messageThreadId) {
+    const payload = {
         chat_id: chatId,
         text,
         reply_to_message_id: replyToMessageId,
-    }, { timeout: 20_000 });
+    };
+    if (typeof messageThreadId === 'number' && messageThreadId > 0) {
+        payload.message_thread_id = messageThreadId;
+    }
+    const data = await callTelegramBot(token, 'sendMessage', payload, { chatId, replyToMessageId, messageThreadId });
     if (!data.ok) {
         throw new Error(data.description ?? 'Telegram sendMessage failed');
     }
     const messageId = data.result?.message_id;
     return typeof messageId === 'number' ? messageId : null;
 }
-async function tryEditTelegramMessageText(token, chatId, messageId, text) {
-    const { data } = await axios_1.default.post(`${TG_API}/bot${token}/editMessageText`, {
+async function tryEditTelegramMessageText(target, text) {
+    const data = await callTelegramBot(target.token, 'editMessageText', tgPayload(target, { text }), { chatId: target.chatId, messageId: target.messageId });
+    return data.ok === true;
+}
+async function tryEditTelegramMessageCaption(target, caption) {
+    const data = await callTelegramBot(target.token, 'editMessageCaption', tgPayload(target, { caption }), { chatId: target.chatId, messageId: target.messageId });
+    return data.ok === true;
+}
+async function tryEditTelegramMessageReplyMarkup(target) {
+    const data = await callTelegramBot(target.token, 'editMessageReplyMarkup', tgPayload(target, {
+        reply_markup: {
+            inline_keyboard: [[{ text: commentSyncFilter_1.MAX_ANSWERED_IN_MAX_MARKER, callback_data: 'max:booked' }]],
+        },
+    }), { chatId: target.chatId, messageId: target.messageId });
+    return data.ok === true;
+}
+async function trySetTelegramMessageReaction(target, emoji) {
+    const data = await callTelegramBot(target.token, 'setMessageReaction', tgPayload(target, {
+        reaction: [{ type: 'emoji', emoji }],
+    }), { chatId: target.chatId, messageId: target.messageId, emoji });
+    return data.ok === true;
+}
+async function trySendBookedMarkerReply(token, chatId, replyToMessageId, messageThreadId) {
+    const payload = {
         chat_id: chatId,
-        message_id: messageId,
-        text,
-    }, { timeout: 20_000 });
-    if (!data.ok) {
-        logger_1.logger.debug('[telegramThreadReplySync] editMessageText not ok', {
-            chatId,
-            messageId,
-            description: data.description,
-        });
+        text: commentSyncFilter_1.MAX_ANSWERED_IN_MAX_MARKER,
+        reply_to_message_id: replyToMessageId,
+    };
+    if (typeof messageThreadId === 'number' && messageThreadId > 0) {
+        payload.message_thread_id = messageThreadId;
     }
-    return data.ok === true;
-}
-async function tryEditTelegramMessageCaption(token, chatId, messageId, caption) {
-    const { data } = await axios_1.default.post(`${TG_API}/bot${token}/editMessageCaption`, {
-        chat_id: chatId,
-        message_id: messageId,
-        caption,
-    }, { timeout: 20_000 });
-    return data.ok === true;
-}
-async function trySetTelegramMessageReaction(token, chatId, messageId) {
-    const { data } = await axios_1.default.post(`${TG_API}/bot${token}/setMessageReaction`, {
-        chat_id: chatId,
-        message_id: messageId,
-        reaction: [{ type: 'emoji', emoji: '✅' }],
-    }, { timeout: 20_000 });
+    const data = await callTelegramBot(token, 'sendMessage', payload, { chatId, replyToMessageId, messageThreadId });
     return data.ok === true;
 }
 /**
  * Помечает исходный комментарий в TG-треде как отвеченный в MAX.
  * @returns true если сообщение успешно помечено (edit или reaction)
  */
-async function markTelegramCommentAnsweredInMax(token, chatId, tgCommentId, commentText) {
-    const guardKey = `tg-marked-max:${tgCommentId}`;
-    if ((0, commentSyncGuard_1.isCommentSynced)(guardKey)) {
-        return true;
+async function markTelegramCommentAnsweredInMax(token, chatId, tgCommentId, commentText, options) {
+    if (options?.commentId) {
+        const existing = commentStore_1.commentStore.getComment(options.commentId);
+        if (existing?.booked_in_max_tg) {
+            return true;
+        }
     }
+    const target = {
+        token,
+        chatId,
+        messageId: tgCommentId,
+        messageThreadId: options?.messageThreadId,
+    };
     const baseText = commentText.trim();
-    if (!baseText || (0, commentSyncFilter_1.isTelegramCommentMarkedAnsweredInMax)(baseText)) {
-        (0, commentSyncGuard_1.markCommentSynced)(guardKey);
+    if (!baseText) {
+        logger_1.logger.warn('[telegramThreadReplySync] empty TG message text for booked marker', {
+            tgCommentId,
+            chatId,
+            commentId: options?.commentId ?? null,
+        });
+        return false;
+    }
+    if ((0, commentSyncFilter_1.isTelegramCommentMarkedAnsweredInMax)(baseText)) {
+        if (options?.commentId) {
+            commentStore_1.commentStore.markBookedInMaxTelegram(options.commentId);
+        }
         return true;
     }
     const markedText = `${baseText}\n\n${commentSyncFilter_1.MAX_ANSWERED_IN_MAX_MARKER}`;
-    try {
-        const edited = (await tryEditTelegramMessageText(token, chatId, tgCommentId, markedText)) ||
-            (await tryEditTelegramMessageCaption(token, chatId, tgCommentId, markedText));
-        if (edited) {
-            (0, commentSyncGuard_1.markCommentSynced)(guardKey);
-            logger_1.logger.info('[telegramThreadReplySync] marked TG comment as answered in MAX (edit)', {
-                tgCommentId,
-                chatId,
-            });
-            return true;
-        }
-    }
-    catch (err) {
-        logger_1.logger.debug('[telegramThreadReplySync] edit TG comment for MAX answered mark failed', {
+    const edited = (await tryEditTelegramMessageText(target, markedText)) ||
+        (await tryEditTelegramMessageCaption(target, markedText));
+    if (edited) {
+        logger_1.logger.info('[telegramThreadReplySync] marked TG comment as answered in MAX (edit)', {
             tgCommentId,
-            err,
+            chatId,
         });
+        if (options?.commentId) {
+            commentStore_1.commentStore.markBookedInMaxTelegram(options.commentId);
+        }
+        return true;
     }
-    try {
-        const reacted = await trySetTelegramMessageReaction(token, chatId, tgCommentId);
-        if (reacted) {
-            (0, commentSyncGuard_1.markCommentSynced)(guardKey);
+    if (await tryEditTelegramMessageReplyMarkup(target)) {
+        logger_1.logger.info('[telegramThreadReplySync] marked TG comment as answered in MAX (reply markup)', {
+            tgCommentId,
+            chatId,
+        });
+        if (options?.commentId) {
+            commentStore_1.commentStore.markBookedInMaxTelegram(options.commentId);
+        }
+        return true;
+    }
+    for (const emoji of ['✅', '👍', '🔒']) {
+        if (await trySetTelegramMessageReaction(target, emoji)) {
             logger_1.logger.info('[telegramThreadReplySync] marked TG comment as answered in MAX (reaction)', {
                 tgCommentId,
                 chatId,
+                emoji,
             });
+            if (options?.commentId) {
+                commentStore_1.commentStore.markBookedInMaxTelegram(options.commentId);
+            }
             return true;
         }
     }
-    catch (err) {
-        logger_1.logger.warn('[telegramThreadReplySync] setMessageReaction failed', {
+    if (await trySendBookedMarkerReply(token, chatId, tgCommentId, options?.messageThreadId)) {
+        logger_1.logger.info('[telegramThreadReplySync] marked TG comment as answered in MAX (reply marker)', {
             tgCommentId,
             chatId,
-            err,
         });
+        if (options?.commentId) {
+            commentStore_1.commentStore.markBookedInMaxTelegram(options.commentId);
+        }
+        return true;
     }
     logger_1.logger.warn('[telegramThreadReplySync] failed to mark TG comment as answered in MAX', {
         tgCommentId,
         chatId,
+        commentId: options?.commentId ?? null,
     });
     return false;
 }
@@ -241,7 +303,7 @@ async function syncMaxCommentToTelegramThread(_bot, comment, post) {
         }
         (0, commentSyncGuard_1.markCommentSynced)(`tg:${tgMsgId}`);
         (0, commentSyncGuard_1.markCommentSynced)(guardKey);
-        commentStore_1.commentStore.setTgCommentId(freshComment.comment_id, tgMsgId);
+        commentStore_1.commentStore.setTgCommentId(freshComment.comment_id, tgMsgId, body);
         logger_1.logger.info('[telegramThreadReplySync] delivered MAX comment to TG thread', {
             commentId: freshComment.comment_id,
             tgMsgId,
@@ -278,6 +340,11 @@ async function syncAdminReplyToTelegramThread(_bot, comment, post) {
     if ((0, commentSyncGuard_1.isCommentSynced)(guardKey)) {
         return;
     }
+    if (freshComment.booked_in_max_tg) {
+        (0, commentSyncGuard_1.markCommentSynced)(guardKey);
+        commentStore_1.commentStore.markTelegramThreadReplyHandled(freshComment.comment_id);
+        return;
+    }
     const target = resolvePostThreadTarget(post.message_mid);
     if (!target) {
         const mapping = (0, postCommentMappingStore_1.findMappingByMaxMid)(post.message_mid);
@@ -309,7 +376,10 @@ async function syncAdminReplyToTelegramThread(_bot, comment, post) {
     // MAX→TG: правим исходное сообщение, текст ответа в TG не отправляем.
     if (commentForMark.tg_comment_id) {
         const tgMessageText = buildMaxCommentTelegramText(commentForMark);
-        const marked = await markTelegramCommentAnsweredInMax(token, threadChatId, commentForMark.tg_comment_id, tgMessageText);
+        const marked = await markTelegramCommentAnsweredInMax(token, threadChatId, commentForMark.tg_comment_id, tgMessageText, {
+            messageThreadId: target.threadMsgId,
+            commentId: commentForMark.comment_id,
+        });
         if (marked) {
             (0, commentSyncGuard_1.markCommentSynced)(guardKey);
             commentStore_1.commentStore.markTelegramThreadReplyHandled(freshComment.comment_id);
