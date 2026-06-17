@@ -244,14 +244,20 @@ export function resolveTgCommentAuthor(
   return { userId: fromId || 1, username: 'Аноним' }
 }
 
-/** Маркер на исходном комментарии в TG после ответа из MAX. */
-export const MAX_ANSWERED_IN_MAX_MARKER = '✅ Отвечено в MAX'
+/** Маркер на исходном комментарии в TG после ответа админа в MAX (без нового сообщения в треде). */
+export const MAX_ANSWERED_IN_MAX_MARKER = '🔒 Забронирован в MAX'
+
+/** Старый маркер — учитываем при проверке уже помеченных сообщений. */
+export const LEGACY_ANSWERED_IN_MAX_MARKER = '✅ Отвечено в MAX'
 
 /** Подпись в miniapp: на комментарий ответили в Telegram. */
 export const MAX_ANSWERED_IN_TELEGRAM_LABEL = '✅ Отвечено в Telegram'
 
 export function isTelegramCommentMarkedAnsweredInMax(text: string): boolean {
-  return text.includes(MAX_ANSWERED_IN_MAX_MARKER)
+  return (
+    text.includes(MAX_ANSWERED_IN_MAX_MARKER) ||
+    text.includes(LEGACY_ANSWERED_IN_MAX_MARKER)
+  )
 }
 
 /** Префикс ответа админа из MAX в TG-треде (не синхронизировать обратно в miniapp). */

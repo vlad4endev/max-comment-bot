@@ -952,6 +952,24 @@ export class CommentStore {
   }
 
   /**
+   * Ответ админа из MAX обработан для TG-треда без исходящего сообщения (sentinel -1).
+   */
+  markTelegramThreadReplyHandled(commentId: string): Comment | null {
+    const c = this.getComment(commentId)
+    if (!c) {
+      return null
+    }
+    if (typeof c.tg_thread_reply_id === 'number' && c.tg_thread_reply_id !== 0) {
+      return c
+    }
+    c.tg_thread_reply_id = -1
+    c.synced = true
+    this.saveRow(c)
+    logger.info(`commentStore: TG thread reply handled without outbound message ${commentId}`)
+    return c
+  }
+
+  /**
    * Комментарии из MAX miniapp, ещё не отправленные в TG-тред.
    */
   listCommentsPendingMaxToTelegram(limit = 25): Comment[] {

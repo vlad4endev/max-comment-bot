@@ -358,7 +358,8 @@ export async function syncMaxCommentToTelegramThread(
 }
 
 /**
- * Отправляет последний ответ администратора в TG-тред, если есть маппинг поста.
+ * Отправляет ответ администратора из MAX в TG-тред только если комментарий
+ * не привязан к TG (fallback). Для MAX→TG комментариев — только правка маркера.
  */
 export async function syncAdminReplyToTelegramThread(
   _bot: Bot,
@@ -376,6 +377,15 @@ export async function syncAdminReplyToTelegramThread(
     return
   }
 
+  if (freshComment.tg_thread_reply_id) {
+    return
+  }
+
+  const guardKey = `max-reply:${freshComment.comment_id}:${replyText}`
+  if (isCommentSynced(guardKey)) {
+    return
+  }
+
   const target = resolvePostThreadTarget(post.message_mid)
   if (!target) {
     const mapping = findMappingByMaxMid(post.message_mid)
@@ -389,30 +399,42 @@ export async function syncAdminReplyToTelegramThread(
     return
   }
 
-  const { token, threadChatId, threadMsgId: mappingThreadMsgId } = target
+  const { token, threadChatId } = target
 
+  // TG→MAX: ответы идут только TG→MAX, в Telegram ничего не отправляем.
+  if (freshComment.source === 'telegram') {
+    markCommentSynced(guardKey)
+    commentStore.markTelegramThreadReplyHandled(freshComment.comment_id)
+    logger.info('[telegramThreadReplySync] skipped outbound TG reply for TG-origin comment', {
+      commentId: freshComment.comment_id,
+    })
+    return
+  }
+
+  // MAX→TG: правим исходное сообщение, текст ответа в TG не отправляем.
   if (freshComment.tg_comment_id) {
+    const tgMessageText = buildMaxCommentTelegramText(
+      freshComment,
+      freshComment.posted_as_channel === true,
+    )
     await markTelegramCommentAnsweredInMax(
       token,
       threadChatId,
       freshComment.tg_comment_id,
-      freshComment.text,
+      tgMessageText,
     )
-  }
-
-  if (freshComment.tg_thread_reply_id) {
+    markCommentSynced(guardKey)
+    commentStore.markTelegramThreadReplyHandled(freshComment.comment_id)
+    logger.info('[telegramThreadReplySync] marked MAX comment as booked in MAX (TG edit only)', {
+      commentId: freshComment.comment_id,
+      tgCommentId: freshComment.tg_comment_id,
+      threadChatId,
+    })
     return
   }
 
-  const guardKey = `max-reply:${freshComment.comment_id}:${replyText}`
-  if (isCommentSynced(guardKey)) {
-    return
-  }
-
+  const { threadMsgId: mappingThreadMsgId } = target
   let replyToId = mappingThreadMsgId
-  if (freshComment.tg_comment_id) {
-    replyToId = freshComment.tg_comment_id
-  }
 
   try {
     const tgMsgId = await deliverTelegramThreadMessage(
@@ -430,7 +452,7 @@ export async function syncAdminReplyToTelegramThread(
     markCommentSynced(guardKey)
     commentStore.setTgThreadReplyId(freshComment.comment_id, tgMsgId)
 
-    logger.info('[telegramThreadReplySync] delivered admin reply to TG thread', {
+    logger.info('[telegramThreadReplySync] delivered admin reply to TG thread (fallback)', {
       commentId: freshComment.comment_id,
       tgMsgId,
       threadChatId,

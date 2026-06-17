@@ -715,6 +715,23 @@ class CommentStore {
         return c;
     }
     /**
+     * Ответ админа из MAX обработан для TG-треда без исходящего сообщения (sentinel -1).
+     */
+    markTelegramThreadReplyHandled(commentId) {
+        const c = this.getComment(commentId);
+        if (!c) {
+            return null;
+        }
+        if (typeof c.tg_thread_reply_id === 'number' && c.tg_thread_reply_id !== 0) {
+            return c;
+        }
+        c.tg_thread_reply_id = -1;
+        c.synced = true;
+        this.saveRow(c);
+        logger_1.logger.info(`commentStore: TG thread reply handled without outbound message ${commentId}`);
+        return c;
+    }
+    /**
      * Комментарии из MAX miniapp, ещё не отправленные в TG-тред.
      */
     listCommentsPendingMaxToTelegram(limit = 25) {

@@ -15,6 +15,7 @@ export declare function markTelegramCommentAnsweredInMax(token: string, chatId: 
  */
 export declare function syncMaxCommentToTelegramThread(_bot: Bot, comment: Comment, post: Post): Promise<void>;
 /**
- * Отправляет последний ответ администратора в TG-тред, если есть маппинг поста.
+ * Отправляет ответ администратора из MAX в TG-тред только если комментарий
+ * не привязан к TG (fallback). Для MAX→TG комментариев — только правка маркера.
  */
 export declare function syncAdminReplyToTelegramThread(_bot: Bot, comment: Comment, post: Post): Promise<void>;

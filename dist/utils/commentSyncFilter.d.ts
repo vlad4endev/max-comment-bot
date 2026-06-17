@@ -22,8 +22,10 @@ export declare function resolveTgCommentAuthor(message: TgMessage, chain: TgChai
     userId: number;
     username: string;
 };
-/** Маркер на исходном комментарии в TG после ответа из MAX. */
-export declare const MAX_ANSWERED_IN_MAX_MARKER = "\u2705 \u041E\u0442\u0432\u0435\u0447\u0435\u043D\u043E \u0432 MAX";
+/** Маркер на исходном комментарии в TG после ответа админа в MAX (без нового сообщения в треде). */
+export declare const MAX_ANSWERED_IN_MAX_MARKER = "\uD83D\uDD12 \u0417\u0430\u0431\u0440\u043E\u043D\u0438\u0440\u043E\u0432\u0430\u043D \u0432 MAX";
+/** Старый маркер — учитываем при проверке уже помеченных сообщений. */
+export declare const LEGACY_ANSWERED_IN_MAX_MARKER = "\u2705 \u041E\u0442\u0432\u0435\u0447\u0435\u043D\u043E \u0432 MAX";
 /** Подпись в miniapp: на комментарий ответили в Telegram. */
 export declare const MAX_ANSWERED_IN_TELEGRAM_LABEL = "\u2705 \u041E\u0442\u0432\u0435\u0447\u0435\u043D\u043E \u0432 Telegram";
 export declare function isTelegramCommentMarkedAnsweredInMax(text: string): boolean;

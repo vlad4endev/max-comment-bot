@@ -165,6 +165,10 @@ export declare class CommentStore {
     setTgCommentId(commentId: string, tgMessageId: number): Comment | null;
     markAnsweredInTelegram(commentId: string): Comment | null;
     /**
+     * Ответ админа из MAX обработан для TG-треда без исходящего сообщения (sentinel -1).
+     */
+    markTelegramThreadReplyHandled(commentId: string): Comment | null;
+    /**
      * Комментарии из MAX miniapp, ещё не отправленные в TG-тред.
      */
     listCommentsPendingMaxToTelegram(limit?: number): Comment[];

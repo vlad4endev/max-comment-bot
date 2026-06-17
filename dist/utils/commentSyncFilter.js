@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.MAX_COMMENT_TG_PREFIX = exports.MAX_REPLY_TG_PREFIX = exports.MAX_ANSWERED_IN_TELEGRAM_LABEL = exports.MAX_ANSWERED_IN_MAX_MARKER = void 0;
+exports.MAX_COMMENT_TG_PREFIX = exports.MAX_REPLY_TG_PREFIX = exports.MAX_ANSWERED_IN_TELEGRAM_LABEL = exports.LEGACY_ANSWERED_IN_MAX_MARKER = exports.MAX_ANSWERED_IN_MAX_MARKER = void 0;
 exports.normalizeCommentSyncMatchMode = normalizeCommentSyncMatchMode;
 exports.normalizeCommentSyncKeywords = normalizeCommentSyncKeywords;
 exports.parseCommentSyncKeyword = parseCommentSyncKeyword;
@@ -200,12 +200,15 @@ function resolveTgCommentAuthor(message, chain, discussionChatId) {
     }
     return { userId: fromId || 1, username: 'Аноним' };
 }
-/** Маркер на исходном комментарии в TG после ответа из MAX. */
-exports.MAX_ANSWERED_IN_MAX_MARKER = '✅ Отвечено в MAX';
+/** Маркер на исходном комментарии в TG после ответа админа в MAX (без нового сообщения в треде). */
+exports.MAX_ANSWERED_IN_MAX_MARKER = '🔒 Забронирован в MAX';
+/** Старый маркер — учитываем при проверке уже помеченных сообщений. */
+exports.LEGACY_ANSWERED_IN_MAX_MARKER = '✅ Отвечено в MAX';
 /** Подпись в miniapp: на комментарий ответили в Telegram. */
 exports.MAX_ANSWERED_IN_TELEGRAM_LABEL = '✅ Отвечено в Telegram';
 function isTelegramCommentMarkedAnsweredInMax(text) {
-    return text.includes(exports.MAX_ANSWERED_IN_MAX_MARKER);
+    return (text.includes(exports.MAX_ANSWERED_IN_MAX_MARKER) ||
+        text.includes(exports.LEGACY_ANSWERED_IN_MAX_MARKER));
 }
 /** Префикс ответа админа из MAX в TG-треде (не синхронизировать обратно в miniapp). */
 exports.MAX_REPLY_TG_PREFIX = 'MAX ответ:';
