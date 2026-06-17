@@ -678,6 +678,11 @@
     return ch.id || ch.username || '';
   }
 
+  function telegramChannelPickValuesEqual(a, b) {
+    if (!a || !b) return false;
+    return String(a).replace(/^@/, '') === String(b).replace(/^@/, '');
+  }
+
   function renderTelegramChatItemHtml(ch, opts) {
     opts = opts || {};
     var pick = telegramChannelPickValue(ch);
@@ -1053,12 +1058,20 @@
         return ch.type === 'group' || ch.type === 'supergroup';
       });
     }
+    var savedValue = options.selectedValue || options.manualValue || '';
     var opts = '<option value="">— выберите канал/чат —</option>';
     list.forEach(function (ch) {
       var val = telegramChannelPickValue(ch);
       var label = ch.title + (ch.username ? ' (' + ch.username + ')' : '') + ' · ' + telegramChatTypeLabel(ch.type);
       if (ch.botIsAdmin) label += ' · админ';
-      opts += '<option value="' + esc(val) + '">' + esc(label) + '</option>';
+      opts +=
+        '<option value="' +
+        esc(val) +
+        '"' +
+        (savedValue && telegramChannelPickValuesEqual(val, savedValue) ? ' selected' : '') +
+        '>' +
+        esc(label) +
+        '</option>';
     });
     var html =
       '<select class="select" id="' +
@@ -1071,8 +1084,13 @@
         '<input class="input mt-sm mono" id="' +
         esc(extraManualId) +
         '" placeholder="или введите @username / -100..."';
-      if (options.manualValue) {
-        html += ' value="' + esc(String(options.manualValue)) + '"';
+      var savedInList =
+        savedValue &&
+        list.some(function (ch) {
+          return telegramChannelPickValuesEqual(telegramChannelPickValue(ch), savedValue);
+        });
+      if (savedValue && !savedInList) {
+        html += ' value="' + esc(String(savedValue)) + '"';
       }
       html += '/>';
     }
@@ -1081,10 +1099,10 @@
 
   function readTelegramChannelPick(selectId, manualId, root) {
     var sel = qs('#' + selectId, root);
+    var fromSelect = sel ? String(sel.value || '').trim() : '';
+    if (fromSelect) return fromSelect;
     var manual = manualId ? qs('#' + manualId, root) : null;
-    var fromManual = manual ? String(manual.value || '').trim() : '';
-    if (fromManual) return fromManual;
-    return sel ? String(sel.value || '').trim() : '';
+    return manual ? String(manual.value || '').trim() : '';
   }
 
   function showToast(msg, type) {
@@ -2488,7 +2506,7 @@
       buildTelegramChannelSelect('tc_disc_' + sid + '_select', tgChats, 'tc_disc_' + sid + '_manual', {
         adminOnly: true,
         groupsOnly: true,
-        manualValue: discVal,
+        selectedValue: discVal,
       });
     html += '</div>';
     html +=
