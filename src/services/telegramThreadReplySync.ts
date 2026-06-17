@@ -11,6 +11,7 @@ import { listTgChainsSync } from '../api/adminPanelState'
 import type { Comment } from './commentStore'
 import { commentStore } from './commentStore'
 import { findMappingByMaxMid } from './postCommentMappingStore'
+import { ensurePostThreadMapping } from './telegramDiscussionThreadResolver'
 import type { Post } from './postStore'
 import { resolveTelegramBotToken } from './resolveTelegramBotToken'
 import { isCommentSynced, markCommentSynced } from '../utils/commentSyncGuard'
@@ -80,9 +81,8 @@ function resolveChannelKeyForMapping(mapping: PostCommentMappingRow): string | n
   return null
 }
 
-function resolvePostThreadTarget(messageMid: string): ThreadTarget | null {
-  const mapping = findMappingByMaxMid(messageMid)
-  if (!mapping?.tg_thread_chat_id || !mapping.tg_thread_msg_id) {
+function resolvePostThreadTargetFromMapping(mapping: PostCommentMappingRow): ThreadTarget | null {
+  if (!mapping.tg_thread_chat_id || !mapping.tg_thread_msg_id) {
     return null
   }
   if (!isCommentForwardEnabled(mapping.chain_id)) {
@@ -100,6 +100,15 @@ function resolvePostThreadTarget(messageMid: string): ThreadTarget | null {
     channelKey: resolveChannelKeyForMapping(mapping),
     sendAsMode: resolveDiscussionSendAs(mapping.chain_id),
   }
+}
+
+async function resolvePostThreadTarget(messageMid: string): Promise<ThreadTarget | null> {
+  await ensurePostThreadMapping(messageMid)
+  const mapping = findMappingByMaxMid(messageMid)
+  if (!mapping) {
+    return null
+  }
+  return resolvePostThreadTargetFromMapping(mapping)
 }
 
 function buildMaxCommentTelegramText(comment: Comment): string {
@@ -417,7 +426,7 @@ export async function syncMaxCommentToTelegramThread(
     return
   }
 
-  const target = resolvePostThreadTarget(post.message_mid)
+  const target = await resolvePostThreadTarget(post.message_mid)
   if (!target) {
     logger.warn('[telegramThreadReplySync] no thread mapping for MAX comment', {
       commentId: freshComment.comment_id,
@@ -501,7 +510,7 @@ export async function syncAdminReplyToTelegramThread(
     return
   }
 
-  const target = resolvePostThreadTarget(post.message_mid)
+  const target = await resolvePostThreadTarget(post.message_mid)
   if (!target) {
     const mapping = findMappingByMaxMid(post.message_mid)
     logger.warn('[telegramThreadReplySync] no thread mapping for post', {

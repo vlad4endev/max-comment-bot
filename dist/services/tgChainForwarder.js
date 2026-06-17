@@ -24,6 +24,7 @@ const maxApiRetry_1 = require("../utils/maxApiRetry");
 const telegramMainBotOffsetStore_1 = require("./telegramMainBotOffsetStore");
 const telegramMiniappService_1 = require("./telegramMiniappService");
 const postCommentMappingStore_1 = require("./postCommentMappingStore");
+const telegramDiscussionThreadResolver_1 = require("./telegramDiscussionThreadResolver");
 const tgCommentSyncService_1 = require("./tgCommentSyncService");
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 /** Long-poll Telegram for new channel_post (сек). */
@@ -160,6 +161,12 @@ function markForwarded(chainId, message, maxMid, chunkIndex) {
     // Синхронизация комментариев: дублируем маппинг в post_comment_mapping
     if (maxMid) {
         (0, postCommentMappingStore_1.upsertPostCommentMapping)(chainId, message.message_id, maxMid, message.chat?.id ?? null);
+        const chain = (0, adminPanelState_1.listTgChainsSync)().find((c) => c.id === chainId);
+        if (chain?.forward_comments) {
+            void (0, telegramDiscussionThreadResolver_1.ensurePostThreadMapping)(maxMid).catch((err) => {
+                logger_1.logger.warn('[tgChain] ensurePostThreadMapping failed', { chainId, maxMid, err });
+            });
+        }
     }
 }
 /** Токен TG-бота для опроса channel_post. Пустой bot_token в связке = основной CommentBot (как в miniapp), не reader. */

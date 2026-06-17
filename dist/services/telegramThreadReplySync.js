@@ -15,6 +15,7 @@ const axios_1 = __importDefault(require("axios"));
 const adminPanelState_1 = require("../api/adminPanelState");
 const commentStore_1 = require("./commentStore");
 const postCommentMappingStore_1 = require("./postCommentMappingStore");
+const telegramDiscussionThreadResolver_1 = require("./telegramDiscussionThreadResolver");
 const resolveTelegramBotToken_1 = require("./resolveTelegramBotToken");
 const commentSyncGuard_1 = require("../utils/commentSyncGuard");
 const commentSyncFilter_1 = require("../utils/commentSyncFilter");
@@ -52,9 +53,8 @@ function resolveChannelKeyForMapping(mapping) {
     }
     return null;
 }
-function resolvePostThreadTarget(messageMid) {
-    const mapping = (0, postCommentMappingStore_1.findMappingByMaxMid)(messageMid);
-    if (!mapping?.tg_thread_chat_id || !mapping.tg_thread_msg_id) {
+function resolvePostThreadTargetFromMapping(mapping) {
+    if (!mapping.tg_thread_chat_id || !mapping.tg_thread_msg_id) {
         return null;
     }
     if (!isCommentForwardEnabled(mapping.chain_id)) {
@@ -72,6 +72,14 @@ function resolvePostThreadTarget(messageMid) {
         channelKey: resolveChannelKeyForMapping(mapping),
         sendAsMode: resolveDiscussionSendAs(mapping.chain_id),
     };
+}
+async function resolvePostThreadTarget(messageMid) {
+    await (0, telegramDiscussionThreadResolver_1.ensurePostThreadMapping)(messageMid);
+    const mapping = (0, postCommentMappingStore_1.findMappingByMaxMid)(messageMid);
+    if (!mapping) {
+        return null;
+    }
+    return resolvePostThreadTargetFromMapping(mapping);
 }
 function buildMaxCommentTelegramText(comment) {
     const stored = comment.tg_message_text?.trim();
@@ -280,7 +288,7 @@ async function syncMaxCommentToTelegramThread(_bot, comment, post) {
     if (freshComment.source === 'telegram' || freshComment.tg_comment_id) {
         return;
     }
-    const target = resolvePostThreadTarget(post.message_mid);
+    const target = await resolvePostThreadTarget(post.message_mid);
     if (!target) {
         logger_1.logger.warn('[telegramThreadReplySync] no thread mapping for MAX comment', {
             commentId: freshComment.comment_id,
@@ -345,7 +353,7 @@ async function syncAdminReplyToTelegramThread(_bot, comment, post) {
         commentStore_1.commentStore.markTelegramThreadReplyHandled(freshComment.comment_id);
         return;
     }
-    const target = resolvePostThreadTarget(post.message_mid);
+    const target = await resolvePostThreadTarget(post.message_mid);
     if (!target) {
         const mapping = (0, postCommentMappingStore_1.findMappingByMaxMid)(post.message_mid);
         logger_1.logger.warn('[telegramThreadReplySync] no thread mapping for post', {

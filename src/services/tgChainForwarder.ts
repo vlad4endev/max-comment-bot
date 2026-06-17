@@ -11,7 +11,7 @@ import {
   getTelegramUpdatesWithIds,
   type TgMessage,
 } from '../forwarder/telegramReader'
-import { listTgChains, updateTgChain, type TgChainRecord } from '../api/adminPanelState'
+import { listTgChains, listTgChainsSync, updateTgChain, type TgChainRecord } from '../api/adminPanelState'
 import { assertTelegramPollingReady } from './channelImportService'
 import { ensureTelegramPollingMode } from './integrationPlatformClient'
 import { attachAndVerifyCommentsForForwardedPost } from './channelPostPublishGate'
@@ -26,6 +26,7 @@ import {
 } from './telegramMainBotOffsetStore'
 import { processTelegramMiniappBotUpdates } from './telegramMiniappService'
 import { upsertPostCommentMapping, storeDiscussionChatIdForChain, resolveDiscussionChatId } from './postCommentMappingStore'
+import { ensurePostThreadMapping } from './telegramDiscussionThreadResolver'
 import {
   handleDiscussionAutoForward,
   handleTgComment,
@@ -218,6 +219,12 @@ function markForwarded(
   // Синхронизация комментариев: дублируем маппинг в post_comment_mapping
   if (maxMid) {
     upsertPostCommentMapping(chainId, message.message_id, maxMid, message.chat?.id ?? null)
+    const chain = listTgChainsSync().find((c) => c.id === chainId)
+    if (chain?.forward_comments) {
+      void ensurePostThreadMapping(maxMid).catch((err: unknown) => {
+        logger.warn('[tgChain] ensurePostThreadMapping failed', { chainId, maxMid, err })
+      })
+    }
   }
 }
 
