@@ -10,6 +10,7 @@ const adminPanelState_1 = require("../api/adminPanelState");
 const logger_1 = require("../utils/logger");
 const postCommentMappingStore_1 = require("./postCommentMappingStore");
 const resolveTelegramBotToken_1 = require("./resolveTelegramBotToken");
+const mtprotoConfigStore_1 = require("./mtprotoConfigStore");
 const telegramUserArchive_1 = require("./telegramUserArchive");
 function resolveBotTokenForChain(chain) {
     const fromChain = chain.bot_token?.trim();
@@ -61,7 +62,13 @@ function extractThreadFromDiscussionMessage(result) {
     return null;
 }
 async function resolveThreadViaMtproto(chain, mapping) {
-    if (!(0, telegramUserArchive_1.telegramUserArchiveConfigured)()) {
+    const mtproto = (0, mtprotoConfigStore_1.resolveMtprotoCredentials)();
+    if (!(0, mtprotoConfigStore_1.isMtprotoSessionReady)()) {
+        logger_1.logger.debug('[discussionThreadResolver] MTProto session not configured', {
+            chainId: chain.id,
+            maxMid: mapping.max_mid,
+            mtprotoSource: mtproto.source,
+        });
         return null;
     }
     if (typeof mapping.tg_msg_id !== 'number' || mapping.tg_msg_id <= 0) {
@@ -156,7 +163,8 @@ async function ensurePostThreadMapping(maxMid) {
         channelMsgId: mapping.tg_msg_id,
         threadChatId,
         threadMsgId,
-        mtprotoConfigured: (0, telegramUserArchive_1.telegramUserArchiveConfigured)(),
+        mtprotoReady: (0, mtprotoConfigStore_1.isMtprotoSessionReady)(),
+        mtprotoSource: (0, mtprotoConfigStore_1.resolveMtprotoCredentials)().source,
     });
     return null;
 }

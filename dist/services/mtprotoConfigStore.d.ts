@@ -19,4 +19,6 @@ export declare function writeMtprotoConfigFile(patch: Partial<MtprotoConfigFile>
 export declare function clearMtprotoSession(): void;
 export declare function deleteMtprotoConfigFile(): void;
 export declare function resolveMtprotoCredentials(): ResolvedMtprotoCredentials;
+/** User-сессия из админки (data/mtproto-config.json) или .env — для MTProto API. */
+export declare function isMtprotoSessionReady(): boolean;
 export declare function maskPhone(phone: string): string;

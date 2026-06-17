@@ -141,6 +141,12 @@ export function resolveMtprotoCredentials(): ResolvedMtprotoCredentials {
   return { apiId: apiId ?? null, apiHash, session, source }
 }
 
+/** User-сессия из админки (data/mtproto-config.json) или .env — для MTProto API. */
+export function isMtprotoSessionReady(): boolean {
+  const { apiId, apiHash, session } = resolveMtprotoCredentials()
+  return apiId !== null && apiHash !== '' && session !== ''
+}
+
 export function maskPhone(phone: string): string {
   const p = phone.trim()
   if (p.length <= 4) return '••••'

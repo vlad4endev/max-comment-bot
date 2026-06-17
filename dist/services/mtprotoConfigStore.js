@@ -5,6 +5,7 @@ exports.writeMtprotoConfigFile = writeMtprotoConfigFile;
 exports.clearMtprotoSession = clearMtprotoSession;
 exports.deleteMtprotoConfigFile = deleteMtprotoConfigFile;
 exports.resolveMtprotoCredentials = resolveMtprotoCredentials;
+exports.isMtprotoSessionReady = isMtprotoSessionReady;
 exports.maskPhone = maskPhone;
 const node_fs_1 = require("node:fs");
 const node_path_1 = require("node:path");
@@ -119,6 +120,11 @@ function resolveMtprotoCredentials() {
         source = 'env';
     }
     return { apiId: apiId ?? null, apiHash, session, source };
+}
+/** User-сессия из админки (data/mtproto-config.json) или .env — для MTProto API. */
+function isMtprotoSessionReady() {
+    const { apiId, apiHash, session } = resolveMtprotoCredentials();
+    return apiId !== null && apiHash !== '' && session !== '';
 }
 function maskPhone(phone) {
     const p = phone.trim();

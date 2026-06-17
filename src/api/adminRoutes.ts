@@ -60,6 +60,7 @@ import { buildDashboardAnalytics, parseDashboardPeriodDays } from '../services/a
 import { integrationsStore } from '../services/integrationsStore'
 import { parseAdminLogLine, type AdminLogEntry, type AdminLogLevel } from '../utils/adminLogFormat'
 import { resolveTgChainChannelFields } from '../services/tgChainChannelRef'
+import { isMtprotoSessionReady, resolveMtprotoCredentials } from '../services/mtprotoConfigStore'
 import { findActiveTgChainForPair } from '../utils/tgChainPair'
 import { getAdminLogTail, logger } from '../utils/logger'
 import { extractMemberAvatarUrl } from '../utils/memberAvatar'
@@ -1089,7 +1090,15 @@ export function createAdminRouter(deps: AdminRouterDeps): express.Router {
     const active = chains.filter((c) => c.active).length
     const forwardedToday = chains.reduce((s, c) => s + c.forwarded_today, 0)
     const errorsToday = chains.reduce((s, c) => s + c.errors_today, 0)
-    res.json({ chains, stats: { active, forwarded_today: forwardedToday, errors_today: errorsToday } })
+    const mtproto = resolveMtprotoCredentials()
+    res.json({
+      chains,
+      stats: { active, forwarded_today: forwardedToday, errors_today: errorsToday },
+      mtproto: {
+        ready: isMtprotoSessionReady(),
+        source: mtproto.source,
+      },
+    })
   })
 
   secured.post('/tg-chains', async (req, res) => {

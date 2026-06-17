@@ -10,7 +10,7 @@ import { StringSession } from 'telegram/sessions'
 import { logger } from '../utils/logger'
 import { normalizeTelegramChannelKey } from '../utils/tgChannelMatch'
 import type { StagedPayload } from './channelImportService'
-import { resolveMtprotoCredentials } from './mtprotoConfigStore'
+import { resolveMtprotoCredentials, isMtprotoSessionReady } from './mtprotoConfigStore'
 
 const MEDIA_DOWNLOAD_TIMEOUT_MS = 120_000
 const ARCHIVE_FETCH_TIMEOUT_MS = 20 * 60_000
@@ -98,8 +98,7 @@ async function withFloodWaitRetry<T>(
 }
 
 export function telegramUserArchiveConfigured(): boolean {
-  const { apiId, apiHash, session } = resolveMtprotoCredentials()
-  return apiId !== null && apiHash !== '' && session !== ''
+  return isMtprotoSessionReady()
 }
 
 export function getTelegramUserApiId(): number | null {
@@ -132,7 +131,7 @@ async function createUserClient(): Promise<TelegramClient> {
   const session = getTelegramUserSession()
   if (apiId === null || !apiHash || !session) {
     throw new Error(
-      'Не настроен user-аккаунт: укажите MTProto в админке (Импорт TG→MAX) или TG_API_ID, TG_API_HASH, TG_USER_SESSION в .env',
+      'Не настроен user-аккаунт: войдите в MTProto в админке (TG→MAX или Импорт TG→MAX) или задайте TG_API_ID, TG_API_HASH, TG_USER_SESSION в .env',
     )
   }
   const client = new TelegramClient(new StringSession(session), apiId, apiHash, {

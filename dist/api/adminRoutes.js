@@ -35,6 +35,7 @@ const analyticsService_1 = require("../services/analyticsService");
 const integrationsStore_1 = require("../services/integrationsStore");
 const adminLogFormat_1 = require("../utils/adminLogFormat");
 const tgChainChannelRef_1 = require("../services/tgChainChannelRef");
+const mtprotoConfigStore_1 = require("../services/mtprotoConfigStore");
 const tgChainPair_1 = require("../utils/tgChainPair");
 const logger_1 = require("../utils/logger");
 const memberAvatar_1 = require("../utils/memberAvatar");
@@ -963,7 +964,15 @@ function createAdminRouter(deps) {
         const active = chains.filter((c) => c.active).length;
         const forwardedToday = chains.reduce((s, c) => s + c.forwarded_today, 0);
         const errorsToday = chains.reduce((s, c) => s + c.errors_today, 0);
-        res.json({ chains, stats: { active, forwarded_today: forwardedToday, errors_today: errorsToday } });
+        const mtproto = (0, mtprotoConfigStore_1.resolveMtprotoCredentials)();
+        res.json({
+            chains,
+            stats: { active, forwarded_today: forwardedToday, errors_today: errorsToday },
+            mtproto: {
+                ready: (0, mtprotoConfigStore_1.isMtprotoSessionReady)(),
+                source: mtproto.source,
+            },
+        });
     });
     secured.post('/tg-chains', async (req, res) => {
         if (!isRecord(req.body)) {

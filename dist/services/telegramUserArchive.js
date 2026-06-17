@@ -95,8 +95,7 @@ async function withFloodWaitRetry(jobId, label, run, maxRetries = 5) {
     throw new Error('unexpected flood-wait retry state');
 }
 function telegramUserArchiveConfigured() {
-    const { apiId, apiHash, session } = (0, mtprotoConfigStore_1.resolveMtprotoCredentials)();
-    return apiId !== null && apiHash !== '' && session !== '';
+    return (0, mtprotoConfigStore_1.isMtprotoSessionReady)();
 }
 function getTelegramUserApiId() {
     return (0, mtprotoConfigStore_1.resolveMtprotoCredentials)().apiId;
@@ -119,7 +118,7 @@ async function createUserClient() {
     const apiHash = getTelegramUserApiHash();
     const session = getTelegramUserSession();
     if (apiId === null || !apiHash || !session) {
-        throw new Error('Не настроен user-аккаунт: укажите MTProto в админке (Импорт TG→MAX) или TG_API_ID, TG_API_HASH, TG_USER_SESSION в .env');
+        throw new Error('Не настроен user-аккаунт: войдите в MTProto в админке (TG→MAX или Импорт TG→MAX) или задайте TG_API_ID, TG_API_HASH, TG_USER_SESSION в .env');
     }
     const client = new telegram_1.TelegramClient(new sessions_1.StringSession(session), apiId, apiHash, {
         connectionRetries: 3,

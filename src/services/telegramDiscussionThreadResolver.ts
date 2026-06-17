@@ -15,10 +15,10 @@ import {
   type PostCommentMappingRow,
 } from './postCommentMappingStore'
 import { resolveTelegramBotToken } from './resolveTelegramBotToken'
+import { isMtprotoSessionReady, resolveMtprotoCredentials } from './mtprotoConfigStore'
 import {
   connectTelegramUserClient,
   resolveTelegramChannelEntity,
-  telegramUserArchiveConfigured,
 } from './telegramUserArchive'
 
 function resolveBotTokenForChain(chain: TgChainRecord): string {
@@ -80,7 +80,13 @@ async function resolveThreadViaMtproto(
   chain: TgChainRecord,
   mapping: PostCommentMappingRow,
 ): Promise<{ threadChatId: number; threadMsgId: number } | null> {
-  if (!telegramUserArchiveConfigured()) {
+  const mtproto = resolveMtprotoCredentials()
+  if (!isMtprotoSessionReady()) {
+    logger.debug('[discussionThreadResolver] MTProto session not configured', {
+      chainId: chain.id,
+      maxMid: mapping.max_mid,
+      mtprotoSource: mtproto.source,
+    })
     return null
   }
   if (typeof mapping.tg_msg_id !== 'number' || mapping.tg_msg_id <= 0) {
@@ -187,7 +193,8 @@ export async function ensurePostThreadMapping(maxMid: string): Promise<PostComme
     channelMsgId: mapping.tg_msg_id,
     threadChatId,
     threadMsgId,
-    mtprotoConfigured: telegramUserArchiveConfigured(),
+    mtprotoReady: isMtprotoSessionReady(),
+    mtprotoSource: resolveMtprotoCredentials().source,
   })
   return null
 }

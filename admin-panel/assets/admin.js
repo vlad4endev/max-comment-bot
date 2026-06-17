@@ -2475,7 +2475,7 @@
       '>';
     var sendAsVal = c.tg_discussion_send_as === 'chat' ? 'chat' : 'channel';
     html +=
-      '<div class="form-group"><label>От чьего имени в TG (MAX → TG)</label><p class="muted text-sm" style="margin:0 0 6px">Нужна MTProto user-сессия (Импорт TG→MAX). «Чат» — как анонимный админ группы обсуждений.</p>';
+      '<div class="form-group"><label>От чьего имени в TG (MAX → TG)</label><p class="muted text-sm" style="margin:0 0 6px">Нужна MTProto user-сессия (блок выше на странице TG→MAX). «Чат» — как анонимный админ группы обсуждений.</p>';
     html +=
       '<select class="input" data-chain-discussion-send-as style="width:100%"><option value="channel"' +
       (sendAsVal === 'channel' ? ' selected' : '') +
@@ -2857,6 +2857,8 @@
         html += '<li>У TG-бота нет webhook (иначе перехват не работает)</li>';
         html += '</ol></section>';
 
+        html += buildMtprotoPanelHtml();
+
         html += '<section class="card-like forwarding-section">';
         html += '<h3 class="tg-chain-setup-title">Настроить пересылку</h3>';
         html += '<p class="muted text-sm" style="margin:0 0 14px">Шаг 1 — канал-источник, шаг 2 — канал в MAX. Списки из «Интеграции».</p>';
@@ -2921,6 +2923,8 @@
         }
         html += '</div>';
         main.innerHTML = html;
+        bindMtprotoPanel(main);
+        refreshMtprotoPanel(main);
         qsa('.tg-chain-card', main).forEach(function (card) {
           var chainId = card.getAttribute('data-chain-id');
           var chain = chains.find(function (c) {
@@ -2988,9 +2992,9 @@
   function buildMtprotoPanelHtml() {
     var html = '<div class="card-like mb-md mtproto-panel" id="ci_mtproto_panel">';
     html += '<div class="flex-between" style="align-items:flex-start;gap:12px;flex-wrap:wrap">';
-    html += '<div><h2 class="forwarding-section-title" style="margin:0">MTProto — архив канала</h2>';
+    html += '<div><h2 class="forwarding-section-title" style="margin:0">MTProto — user-аккаунт Telegram</h2>';
     html +=
-      '<p class="muted text-sm" style="margin:6px 0 0;line-height:1.45">Для переноса ~30 и более старых постов нужен <strong>user-аккаунт</strong> Telegram. Ключи — на <a href="https://my.telegram.org/apps" target="_blank" rel="noopener">my.telegram.org</a>. Аккаунт должен видеть канал (участник или админ).</p></div>';
+      '<p class="muted text-sm" style="margin:6px 0 0;line-height:1.45">Нужен для синхронизации комментариев MAX↔TG и переноса архива канала. Ключи — на <a href="https://my.telegram.org/apps" target="_blank" rel="noopener">my.telegram.org</a>. Аккаунт должен видеть канал (участник или админ).</p></div>';
     html += '<span class="mtproto-status-badge" id="ci_mtproto_badge">…</span></div>';
     html += '<div id="ci_mtproto_hint" class="muted text-sm mt-sm" style="line-height:1.45"></div>';
     html += '<div class="mtproto-grid mt-md">';
