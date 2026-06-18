@@ -237,21 +237,6 @@ async function handleTgComment(message, chain, bot, discussionChatId) {
                 await postStore_1.postStore.updateButtonCaption(bot, updatedPost);
             }
         }
-        const channelTitle = channelRegistry_1.channelRegistry.getChannel(maxChatId)?.title ?? chain.max_title ?? '—';
-        try {
-            await (0, notificationService_1.notifyAdminsNewMiniappComment)(bot, {
-                commentId: saved.comment_id,
-                channelChatId: maxChatId,
-                postText: post.text,
-                channelTitle,
-                username: authorName,
-                commentText: text,
-                postId: post.post_id,
-            });
-        }
-        catch (err) {
-            logger_1.logger.warn('[tgCommentSync] notify MAX admins failed', { err });
-        }
         logger_1.logger.info('[tgCommentSync] synced TG comment to miniapp', {
             chainId: chain.id,
             tgCommentId,

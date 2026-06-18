@@ -14,7 +14,6 @@ import type { TgMessage } from '../forwarder/telegramReader'
 import type { Comment } from './commentStore'
 import { commentStore } from './commentStore'
 import {
-  notifyAdminsNewMiniappComment,
   notifyUserAboutMiniappReply,
   syncAdminCommentNotification,
 } from './notificationService'
@@ -327,21 +326,6 @@ export async function handleTgComment(
       if (updatedPost) {
         await postStore.updateButtonCaption(bot, updatedPost)
       }
-    }
-
-    const channelTitle = channelRegistry.getChannel(maxChatId)?.title ?? chain.max_title ?? '—'
-    try {
-      await notifyAdminsNewMiniappComment(bot, {
-        commentId: saved.comment_id,
-        channelChatId: maxChatId,
-        postText: post.text,
-        channelTitle,
-        username: authorName,
-        commentText: text,
-        postId: post.post_id,
-      })
-    } catch (err: unknown) {
-      logger.warn('[tgCommentSync] notify MAX admins failed', { err })
     }
 
     logger.info('[tgCommentSync] synced TG comment to miniapp', {
