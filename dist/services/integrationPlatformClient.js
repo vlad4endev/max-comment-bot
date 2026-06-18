@@ -55,6 +55,7 @@ exports.fetchTelegramChannelPosts = fetchTelegramChannelPosts;
 exports.fetchVkWallPosts = fetchVkWallPosts;
 exports.publishVkWallPost = publishVkWallPost;
 const axios_1 = __importDefault(require("axios"));
+const adminPanelState_1 = require("../api/adminPanelState");
 const logger_1 = require("../utils/logger");
 const telegramBotUserStore_1 = require("./telegramBotUserStore");
 const telegramMainBotUpdates_1 = require("./telegramMainBotUpdates");
@@ -71,6 +72,95 @@ const TELEGRAM_DISCOVERY_UPDATES = [
     'edited_channel_post',
     'my_chat_member',
 ];
+const TELEGRAM_DISCOVERY_MAX_PAGES = 16;
+function isNumericTelegramChatId(raw) {
+    return /^-?\d+$/.test(String(raw).trim());
+}
+function persistTelegramChannelsToRegistry(channels) {
+    for (const ch of channels) {
+        if (ch.type !== 'channel' && ch.type !== 'supergroup' && ch.type !== 'group') {
+            continue;
+        }
+        telegramChannelRegistry_1.telegramChannelRegistry.saveChannel({
+            chatId: ch.id,
+            title: ch.title,
+            username: ch.username,
+            type: ch.type ?? 'channel',
+            botIsAdmin: ch.botIsAdmin === true,
+        });
+    }
+}
+/** ID из реестра, кэша интеграции и TG→MAX связок — для проверки прав бота через getChatMember. */
+async function buildTelegramLinkedChatCandidateStubs(token, options) {
+    await (0, adminPanelState_1.ensureAdminPanelStateLoaded)();
+    const ids = new Set();
+    for (const row of telegramChannelRegistry_1.telegramChannelRegistry.getAllChannels()) {
+        ids.add(row.chat_id);
+    }
+    for (const ch of options.existingLinkedChats ?? []) {
+        const id = String(ch.id ?? '').trim();
+        if (isNumericTelegramChatId(id)) {
+            ids.add(id);
+        }
+    }
+    for (const chain of (0, adminPanelState_1.listTgChainsSync)()) {
+        const channelId = chain.tg_channel_id?.trim() ?? '';
+        if (isNumericTelegramChatId(channelId)) {
+            ids.add(channelId);
+        }
+        const discussionId = chain.tg_discussion_chat_id?.trim() ?? '';
+        if (isNumericTelegramChatId(discussionId)) {
+            ids.add(discussionId);
+        }
+        if (options.resolveUsernames) {
+            const uname = chain.tg_username?.trim().replace(/^@/, '') ?? '';
+            if (uname && !isNumericTelegramChatId(channelId)) {
+                const resolved = await resolveTelegramChannelChatIdFromKey(token, `@${uname}`);
+                if (resolved && isNumericTelegramChatId(resolved.chatId)) {
+                    ids.add(resolved.chatId);
+                }
+            }
+        }
+    }
+    return [...ids].map((id) => {
+        const reg = telegramChannelRegistry_1.telegramChannelRegistry.getChannel(id);
+        const rawType = reg?.type?.trim() ?? 'channel';
+        const type = rawType === 'channel' ||
+            rawType === 'supergroup' ||
+            rawType === 'group' ||
+            rawType === 'private'
+            ? rawType
+            : 'channel';
+        const username = reg?.username && reg.username.trim() !== ''
+            ? reg.username.startsWith('@')
+                ? reg.username
+                : `@${reg.username.replace(/^@/, '')}`
+            : undefined;
+        return {
+            id,
+            title: reg?.title?.trim() || id,
+            username,
+            type,
+            botIsAdmin: reg?.bot_is_admin,
+        };
+    });
+}
+async function finalizeTelegramLinkedChatsList(options) {
+    const trimmed = options.token.trim();
+    const registryChannels = listTelegramChannelsFromRegistry();
+    const candidateStubs = await buildTelegramLinkedChatCandidateStubs(trimmed, {
+        existingLinkedChats: options.existingLinkedChats,
+        resolveUsernames: options.refresh,
+    });
+    let channels = mergePlatformChannels(mergePlatformChannels(options.existingLinkedChats, options.discovered), mergePlatformChannels(registryChannels, candidateStubs));
+    if (trimmed !== '') {
+        channels = await enrichTelegramChatsWithBotAdmin(trimmed, channels);
+        if (options.refresh) {
+            persistTelegramChannelsToRegistry(channels);
+        }
+    }
+    return channels;
+}
 /** Webhook блокирует getUpdates — для опроса и обнаружения чатов нужен polling. */
 async function ensureTelegramPollingMode(token) {
     try {
@@ -139,7 +229,10 @@ async function syncTelegramDiscoveryBeforeList(token) {
     }
     try {
         const { syncMainTelegramBotDiscoveryUpdates } = await Promise.resolve().then(() => __importStar(require('./tgChainForwarder')));
-        await syncMainTelegramBotDiscoveryUpdates(token, { timeoutSec: 0, maxPages: 8 });
+        await syncMainTelegramBotDiscoveryUpdates(token, {
+            timeoutSec: 0,
+            maxPages: TELEGRAM_DISCOVERY_MAX_PAGES,
+        });
     }
     catch (err) {
         logger_1.logger.warn('syncTelegramDiscoveryBeforeList failed', err);
@@ -149,23 +242,24 @@ async function syncTelegramDiscoveryBeforeList(token) {
 async function buildTelegramLinkedChatsList(options) {
     const { integrationId, token, existingLinkedChats, refresh } = options;
     const trimmed = token.trim();
-    const registryChannels = listTelegramChannelsFromRegistry();
     if (!refresh && (existingLinkedChats?.length ?? 0) > 0) {
-        let channels = mergePlatformChannels(existingLinkedChats, registryChannels);
-        if (trimmed !== '') {
-            channels = await enrichTelegramChatsWithBotAdmin(trimmed, channels);
-        }
-        return channels;
+        return finalizeTelegramLinkedChatsList({
+            token: trimmed,
+            existingLinkedChats,
+            discovered: [],
+            refresh: false,
+        });
     }
     if (refresh && trimmed !== '') {
         await syncTelegramDiscoveryBeforeList(trimmed);
     }
     const discovered = trimmed !== '' ? await listTelegramBotChats(trimmed, integrationId) : [];
-    let channels = mergePlatformChannels(mergePlatformChannels(existingLinkedChats, discovered), registryChannels);
-    if (trimmed !== '') {
-        channels = await enrichTelegramChatsWithBotAdmin(trimmed, channels);
-    }
-    return channels;
+    return finalizeTelegramLinkedChatsList({
+        token: trimmed,
+        existingLinkedChats,
+        discovered,
+        refresh,
+    });
 }
 function mergePlatformChannels(existing, discovered) {
     const seen = new Map();
@@ -222,6 +316,7 @@ async function fetchTelegramChatMemberStatus(token, chatId, botUserId) {
         const status = data.result?.status ?? '';
         const botIsAdmin = status === 'administrator' || status === 'creator';
         if (!data.ok) {
+            logger_1.logger.debug('fetchTelegramChatMemberStatus: getChatMember not ok', { chatId });
             return { botIsAdmin: false };
         }
         let chatMeta = { ok: false };
@@ -245,7 +340,8 @@ async function fetchTelegramChatMemberStatus(token, chatId, botUserId) {
             type: chat ? normalizeTelegramChatType(chat.type) : undefined,
         };
     }
-    catch {
+    catch (err) {
+        logger_1.logger.debug('fetchTelegramChatMemberStatus failed', { chatId, err });
         return { botIsAdmin: false };
     }
 }
@@ -489,7 +585,7 @@ async function listTelegramBotChats(token, integrationId) {
             ? flowStateStore_1.flowStateStore.getTelegramUpdateOffset(integrationId)
             : undefined;
     try {
-        for (let page = 0; page < 8; page++) {
+        for (let page = 0; page < TELEGRAM_DISCOVERY_MAX_PAGES; page++) {
             const params = {
                 limit: 100,
                 timeout: 0,

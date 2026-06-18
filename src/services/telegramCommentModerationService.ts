@@ -3,6 +3,7 @@ import axios from 'axios'
 
 import { getTelegramToken } from '../config'
 import { logger } from '../utils/logger'
+import { listTgChainsForMaxChannel } from './channelCommentsButtonPolicy'
 import { profilePairingForPlatformUser } from './channelLinkAdminTeamSync'
 import { isUserChannelAdmin } from './channelPostActions'
 import { resolveCanonicalChannelChatId } from './resolveChannelChatId'
@@ -19,6 +20,7 @@ import {
   syncTelegramAdminCommentNotification,
   TG_COMMENT_CALLBACK_PREFIX,
 } from './telegramAdminNotificationService'
+import { telegramChannelNotifyLinkStore } from './telegramChannelNotifyLinkStore'
 
 const TG_API = 'https://api.telegram.org'
 
@@ -98,6 +100,8 @@ export async function canManageMaxCommentViaTelegram(
   maxChatId: number,
 ): Promise<boolean> {
   const channelChatId = resolveCanonicalChannelChatId(maxChatId) ?? maxChatId
+
+  // Check 1: paired MAX account is a channel admin
   const pairing = profilePairingForPlatformUser('telegram', telegramUserId)
   if (pairing.max_user_id != null) {
     const isMaxAdmin = await isUserChannelAdmin(bot, channelChatId, pairing.max_user_id)
@@ -105,11 +109,34 @@ export async function canManageMaxCommentViaTelegram(
       return true
     }
   }
+
   const token = getTelegramToken()
   if (!token) {
     return false
   }
-  return isTelegramAdminOfLinkedChannel(token, telegramUserId, channelChatId)
+
+  // Check 2: verified TG channel admin via API (requires bot to be admin/member of TG channel)
+  if (await isTelegramAdminOfLinkedChannel(token, telegramUserId, channelChatId)) {
+    return true
+  }
+
+  // Check 3: user is the tg_user_id of a TG chain for this MAX channel (chain owner receives
+  // notifications via collectTelegramAdminNotifyRecipientIds, so must be allowed to reply)
+  for (const chain of listTgChainsForMaxChannel(channelChatId)) {
+    if (chain.tg_user_id === telegramUserId) {
+      return true
+    }
+  }
+
+  // Check 4: user is registered in the notify link store for a linked TG channel — covers admins
+  // who enrolled via invite link or syncChannelLinkAdminTeam when the bot's API check may fail
+  for (const tgChannelId of resolveTelegramSourceChannelsForMaxChat(channelChatId)) {
+    if (telegramChannelNotifyLinkStore.isLinked(telegramUserId, tgChannelId)) {
+      return true
+    }
+  }
+
+  return false
 }
 
 function resolveCommentContext(commentId: string): {

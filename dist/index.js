@@ -1,4 +1,37 @@
 "use strict";
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
 Object.defineProperty(exports, "__esModule", { value: true });
 const node_http_1 = require("node:http");
 const bot_1 = require("./bot");
@@ -79,6 +112,11 @@ async function main() {
     (0, autopostScheduler_1.startAutopostScheduler)();
     // До HTTP: иначе при EADDRINUSE channelPoller уже в логах, а flowProcessor — нет.
     await flowProcessor_1.flowProcessor.start();
+    // Синхронизация комментариев TG ↔ Max — добавлено
+    const { startMaxCommentSync } = await Promise.resolve().then(() => __importStar(require('./services/maxCommentSyncService')));
+    const stopCommentSync = startMaxCommentSync(bot, { intervalMs: 15_000 });
+    process.once('SIGINT', () => stopCommentSync());
+    process.once('SIGTERM', () => stopCommentSync());
     const channelCount = channelRegistry_1.channelRegistry
         .getAllChannels()
         .filter((c) => c.type === 'channel').length;
@@ -125,9 +163,7 @@ async function main() {
             logger_1.logger.info('Подписка webhook активна (POST /subscriptions)');
         }
         catch (e) {
-            logger_1.logger.error('Не удалось зарегистрировать webhook', e);
-            server.close();
-            process.exit(1);
+            logger_1.logger.error('Не удалось зарегистрировать webhook — HTTP (/miniapp, /api) остаётся доступен; проверьте WEBHOOK_URL и доступ к API MAX', e);
         }
         (0, bot_1.setupGracefulShutdown)(bot, {
             receiveMode: 'webhook',
