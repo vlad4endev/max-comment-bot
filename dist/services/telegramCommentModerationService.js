@@ -9,6 +9,7 @@ exports.tryHandleTelegramCommentModerationReply = tryHandleTelegramCommentModera
 const axios_1 = __importDefault(require("axios"));
 const config_1 = require("../config");
 const logger_1 = require("../utils/logger");
+const channelCommentsButtonPolicy_1 = require("./channelCommentsButtonPolicy");
 const channelLinkAdminTeamSync_1 = require("./channelLinkAdminTeamSync");
 const channelPostActions_1 = require("./channelPostActions");
 const resolveChannelChatId_1 = require("./resolveChannelChatId");
@@ -18,6 +19,7 @@ const integrationPlatformClient_1 = require("./integrationPlatformClient");
 const notificationService_1 = require("./notificationService");
 const postStore_1 = require("./postStore");
 const telegramAdminNotificationService_1 = require("./telegramAdminNotificationService");
+const telegramChannelNotifyLinkStore_1 = require("./telegramChannelNotifyLinkStore");
 const TG_API = 'https://api.telegram.org';
 const pendingRepliesByUser = new Map();
 const PENDING_REPLY_TTL_MS = 15 * 60 * 1000;
@@ -62,6 +64,7 @@ async function isTelegramAdminOfLinkedChannel(token, telegramUserId, maxChatId) 
 }
 async function canManageMaxCommentViaTelegram(bot, telegramUserId, maxChatId) {
     const channelChatId = (0, resolveChannelChatId_1.resolveCanonicalChannelChatId)(maxChatId) ?? maxChatId;
+    // Check 1: paired MAX account is a channel admin
     const pairing = (0, channelLinkAdminTeamSync_1.profilePairingForPlatformUser)('telegram', telegramUserId);
     if (pairing.max_user_id != null) {
         const isMaxAdmin = await (0, channelPostActions_1.isUserChannelAdmin)(bot, channelChatId, pairing.max_user_id);
@@ -73,7 +76,25 @@ async function canManageMaxCommentViaTelegram(bot, telegramUserId, maxChatId) {
     if (!token) {
         return false;
     }
-    return isTelegramAdminOfLinkedChannel(token, telegramUserId, channelChatId);
+    // Check 2: verified TG channel admin via API (requires bot to be admin/member of TG channel)
+    if (await isTelegramAdminOfLinkedChannel(token, telegramUserId, channelChatId)) {
+        return true;
+    }
+    // Check 3: user is the tg_user_id of a TG chain for this MAX channel (chain owner receives
+    // notifications via collectTelegramAdminNotifyRecipientIds, so must be allowed to reply)
+    for (const chain of (0, channelCommentsButtonPolicy_1.listTgChainsForMaxChannel)(channelChatId)) {
+        if (chain.tg_user_id === telegramUserId) {
+            return true;
+        }
+    }
+    // Check 4: user is registered in the notify link store for a linked TG channel — covers admins
+    // who enrolled via invite link or syncChannelLinkAdminTeam when the bot's API check may fail
+    for (const tgChannelId of (0, telegramAdminNotificationService_1.resolveTelegramSourceChannelsForMaxChat)(channelChatId)) {
+        if (telegramChannelNotifyLinkStore_1.telegramChannelNotifyLinkStore.isLinked(telegramUserId, tgChannelId)) {
+            return true;
+        }
+    }
+    return false;
 }
 function resolveCommentContext(commentId) {
     const comment = commentStore_1.commentStore.getComment(commentId);

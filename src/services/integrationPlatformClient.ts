@@ -1,5 +1,6 @@
 import axios from 'axios'
 
+import { ensureAdminPanelStateLoaded, listTgChainsSync } from '../api/adminPanelState'
 import { logger } from '../utils/logger'
 import { telegramBotUserStore } from './telegramBotUserStore'
 import { processMainTelegramBotMyChatMemberUpdate } from './telegramMainBotUpdates'
@@ -53,6 +54,119 @@ const TELEGRAM_DISCOVERY_UPDATES = [
   'edited_channel_post',
   'my_chat_member',
 ] as const
+
+const TELEGRAM_DISCOVERY_MAX_PAGES = 16
+
+function isNumericTelegramChatId(raw: string): boolean {
+  return /^-?\d+$/.test(String(raw).trim())
+}
+
+function persistTelegramChannelsToRegistry(channels: PlatformChannelInfo[]): void {
+  for (const ch of channels) {
+    if (ch.type !== 'channel' && ch.type !== 'supergroup' && ch.type !== 'group') {
+      continue
+    }
+    telegramChannelRegistry.saveChannel({
+      chatId: ch.id,
+      title: ch.title,
+      username: ch.username,
+      type: ch.type ?? 'channel',
+      botIsAdmin: ch.botIsAdmin === true,
+    })
+  }
+}
+
+/** ID из реестра, кэша интеграции и TG→MAX связок — для проверки прав бота через getChatMember. */
+async function buildTelegramLinkedChatCandidateStubs(
+  token: string,
+  options: {
+    existingLinkedChats?: PlatformChannelInfo[]
+    resolveUsernames: boolean
+  },
+): Promise<PlatformChannelInfo[]> {
+  await ensureAdminPanelStateLoaded()
+  const ids = new Set<string>()
+
+  for (const row of telegramChannelRegistry.getAllChannels()) {
+    ids.add(row.chat_id)
+  }
+  for (const ch of options.existingLinkedChats ?? []) {
+    const id = String(ch.id ?? '').trim()
+    if (isNumericTelegramChatId(id)) {
+      ids.add(id)
+    }
+  }
+  for (const chain of listTgChainsSync()) {
+    const channelId = chain.tg_channel_id?.trim() ?? ''
+    if (isNumericTelegramChatId(channelId)) {
+      ids.add(channelId)
+    }
+    const discussionId = chain.tg_discussion_chat_id?.trim() ?? ''
+    if (isNumericTelegramChatId(discussionId)) {
+      ids.add(discussionId)
+    }
+    if (options.resolveUsernames) {
+      const uname = chain.tg_username?.trim().replace(/^@/, '') ?? ''
+      if (uname && !isNumericTelegramChatId(channelId)) {
+        const resolved = await resolveTelegramChannelChatIdFromKey(token, `@${uname}`)
+        if (resolved && isNumericTelegramChatId(resolved.chatId)) {
+          ids.add(resolved.chatId)
+        }
+      }
+    }
+  }
+
+  return [...ids].map((id) => {
+    const reg = telegramChannelRegistry.getChannel(id)
+    const rawType = reg?.type?.trim() ?? 'channel'
+    const type: TelegramChatType =
+      rawType === 'channel' ||
+      rawType === 'supergroup' ||
+      rawType === 'group' ||
+      rawType === 'private'
+        ? rawType
+        : 'channel'
+    const username =
+      reg?.username && reg.username.trim() !== ''
+        ? reg.username.startsWith('@')
+          ? reg.username
+          : `@${reg.username.replace(/^@/, '')}`
+        : undefined
+    return {
+      id,
+      title: reg?.title?.trim() || id,
+      username,
+      type,
+      botIsAdmin: reg?.bot_is_admin,
+    }
+  })
+}
+
+async function finalizeTelegramLinkedChatsList(options: {
+  token: string
+  existingLinkedChats?: PlatformChannelInfo[]
+  discovered: PlatformChannelInfo[]
+  refresh: boolean
+}): Promise<PlatformChannelInfo[]> {
+  const trimmed = options.token.trim()
+  const registryChannels = listTelegramChannelsFromRegistry()
+  const candidateStubs = await buildTelegramLinkedChatCandidateStubs(trimmed, {
+    existingLinkedChats: options.existingLinkedChats,
+    resolveUsernames: options.refresh,
+  })
+
+  let channels = mergePlatformChannels(
+    mergePlatformChannels(options.existingLinkedChats, options.discovered),
+    mergePlatformChannels(registryChannels, candidateStubs),
+  )
+  if (trimmed !== '') {
+    channels = await enrichTelegramChatsWithBotAdmin(trimmed, channels)
+    if (options.refresh) {
+      persistTelegramChannelsToRegistry(channels)
+    }
+  }
+  return channels
+}
 
 /** Webhook блокирует getUpdates — для опроса и обнаружения чатов нужен polling. */
 export async function ensureTelegramPollingMode(token: string): Promise<void> {
@@ -132,7 +246,10 @@ async function syncTelegramDiscoveryBeforeList(token: string): Promise<void> {
   }
   try {
     const { syncMainTelegramBotDiscoveryUpdates } = await import('./tgChainForwarder')
-    await syncMainTelegramBotDiscoveryUpdates(token, { timeoutSec: 0, maxPages: 8 })
+    await syncMainTelegramBotDiscoveryUpdates(token, {
+      timeoutSec: 0,
+      maxPages: TELEGRAM_DISCOVERY_MAX_PAGES,
+    })
   } catch (err: unknown) {
     logger.warn('syncTelegramDiscoveryBeforeList failed', err)
   }
@@ -147,14 +264,14 @@ export async function buildTelegramLinkedChatsList(options: {
 }): Promise<PlatformChannelInfo[]> {
   const { integrationId, token, existingLinkedChats, refresh } = options
   const trimmed = token.trim()
-  const registryChannels = listTelegramChannelsFromRegistry()
 
   if (!refresh && (existingLinkedChats?.length ?? 0) > 0) {
-    let channels = mergePlatformChannels(existingLinkedChats, registryChannels)
-    if (trimmed !== '') {
-      channels = await enrichTelegramChatsWithBotAdmin(trimmed, channels)
-    }
-    return channels
+    return finalizeTelegramLinkedChatsList({
+      token: trimmed,
+      existingLinkedChats,
+      discovered: [],
+      refresh: false,
+    })
   }
 
   if (refresh && trimmed !== '') {
@@ -163,14 +280,12 @@ export async function buildTelegramLinkedChatsList(options: {
 
   const discovered =
     trimmed !== '' ? await listTelegramBotChats(trimmed, integrationId) : []
-  let channels = mergePlatformChannels(
-    mergePlatformChannels(existingLinkedChats, discovered),
-    registryChannels,
-  )
-  if (trimmed !== '') {
-    channels = await enrichTelegramChatsWithBotAdmin(trimmed, channels)
-  }
-  return channels
+  return finalizeTelegramLinkedChatsList({
+    token: trimmed,
+    existingLinkedChats,
+    discovered,
+    refresh,
+  })
 }
 
 export function mergePlatformChannels(
@@ -240,6 +355,7 @@ async function fetchTelegramChatMemberStatus(
     const status = data.result?.status ?? ''
     const botIsAdmin = status === 'administrator' || status === 'creator'
     if (!data.ok) {
+      logger.debug('fetchTelegramChatMemberStatus: getChatMember not ok', { chatId })
       return { botIsAdmin: false }
     }
     let chatMeta: { ok: boolean; result?: Record<string, unknown> } = { ok: false }
@@ -265,7 +381,8 @@ async function fetchTelegramChatMemberStatus(
           : undefined,
       type: chat ? normalizeTelegramChatType(chat.type) : undefined,
     }
-  } catch {
+  } catch (err: unknown) {
+    logger.debug('fetchTelegramChatMemberStatus failed', { chatId, err })
     return { botIsAdmin: false }
   }
 }
@@ -569,7 +686,7 @@ export async function listTelegramBotChats(
       : undefined
 
   try {
-    for (let page = 0; page < 8; page++) {
+    for (let page = 0; page < TELEGRAM_DISCOVERY_MAX_PAGES; page++) {
       const params: Record<string, number | string> = {
         limit: 100,
         timeout: 0,
