@@ -36,6 +36,8 @@ wait_for_health() {
 echo "==> git pull"
 git fetch origin main
 git checkout main
+git checkout -- dist/ 2>/dev/null || true
+git clean -fd dist/ 2>/dev/null || true
 git pull --ff-only origin main
 
 echo "==> текущий коммит:"
