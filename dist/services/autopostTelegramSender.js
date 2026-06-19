@@ -8,6 +8,7 @@ const node_fs_1 = __importDefault(require("node:fs"));
 const node_path_1 = __importDefault(require("node:path"));
 const axios_1 = __importDefault(require("axios"));
 const form_data_1 = __importDefault(require("form-data"));
+const messengerHtml_1 = require("../utils/messengerHtml");
 const logger_1 = require("../utils/logger");
 const TG_API = 'https://api.telegram.org';
 function buildInlineKeyboard(button) {
@@ -28,10 +29,14 @@ async function tgPost(token, method, body) {
     return data.result;
 }
 async function sendText(token, chatId, text, button) {
+    const prepared = (0, messengerHtml_1.prepareMessengerHtmlText)(text);
     const payload = {
         chat_id: chatId,
-        text: text.slice(0, 4096) || '\u00a0',
+        text: prepared.text.slice(0, 4096) || '\u00a0',
     };
+    if (prepared.parseMode) {
+        payload.parse_mode = prepared.parseMode;
+    }
     if (button) {
         payload.reply_markup = JSON.stringify(buildInlineKeyboard(button));
     }
@@ -43,7 +48,11 @@ async function sendSingleMedia(token, chatId, item, caption, button) {
     const form = new form_data_1.default();
     form.append('chat_id', chatId);
     if (caption.trim()) {
-        form.append('caption', caption.slice(0, 1024));
+        const prepared = (0, messengerHtml_1.prepareMessengerHtmlText)(caption);
+        form.append('caption', prepared.text.slice(0, 1024));
+        if (prepared.parseMode) {
+            form.append('parse_mode', prepared.parseMode);
+        }
     }
     if (button) {
         form.append('reply_markup', JSON.stringify(buildInlineKeyboard(button)));
@@ -62,7 +71,11 @@ async function sendMediaGroup(token, chatId, media, caption) {
             media: `attach://${m.type}_${index}`,
         };
         if (index === 0 && caption.trim()) {
-            entry.caption = caption.slice(0, 1024);
+            const prepared = (0, messengerHtml_1.prepareMessengerHtmlText)(caption);
+            entry.caption = prepared.text.slice(0, 1024);
+            if (prepared.parseMode) {
+                entry.parse_mode = prepared.parseMode;
+            }
         }
         return entry;
     });

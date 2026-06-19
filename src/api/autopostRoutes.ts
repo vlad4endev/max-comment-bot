@@ -131,7 +131,7 @@ async function listTelegramChannelsForAutopost(): Promise<
     refresh: false,
   })
   return channels
-    .filter((c) => c.type === 'channel' || c.type === 'supergroup')
+    .filter((c) => c.type === 'channel')
     .filter((c) => c.botIsAdmin === true)
     .map((c) => ({
       id: c.id,
@@ -144,12 +144,28 @@ async function listTelegramChannelsForAutopost(): Promise<
 
 function syncPostChannelsRegistry(): void {
   for (const ch of channelRegistry.getAllChannels()) {
+    if (ch.type !== 'channel') continue
     upsertPostChannel({
       id: String(ch.chat_id),
       platform: 'max',
       title: ch.title ?? null,
     })
   }
+}
+
+function listMaxChannelsForAutopost(): {
+  id: string
+  title: string
+  platform: 'max'
+}[] {
+  return channelRegistry
+    .getAllChannels()
+    .filter((ch) => ch.type === 'channel')
+    .map((ch) => ({
+      id: String(ch.chat_id),
+      title: ch.title?.trim() || `Канал ${ch.chat_id}`,
+      platform: 'max' as const,
+    }))
 }
 
 function validateScheduleInput(body: Record<string, unknown>): {
@@ -193,17 +209,25 @@ export function createAutopostRouter(): express.Router {
         })
       }
       syncPostChannelsRegistry()
+      const maxChannels = listMaxChannelsForAutopost()
+      const allChannels = [...tgChannels, ...maxChannels]
       const registered = listPostChannels()
       const integ = integrationsStore.getTelegramIntegration()
+      const hints: string[] = []
+      if (!tgChannels.length) {
+        hints.push('Telegram: подключите интеграцию и добавьте бота админом в канал.')
+      }
+      if (!maxChannels.length) {
+        hints.push('MAX: добавьте бота в канал — он появится в списке автоматически.')
+      }
       res.json({
-        connected: !!integ,
-        channels: tgChannels,
+        connected: !!integ || maxChannels.length > 0,
+        channels: allChannels,
+        telegram: tgChannels,
+        max: maxChannels,
         registered,
         db_path: POSTS_DB_PATH,
-        hint:
-          tgChannels.length === 0
-            ? 'Подключите Telegram в «Интеграции» и добавьте бота админом в канал.'
-            : null,
+        hint: hints.length ? hints.join(' ') : null,
       })
     } catch (err: unknown) {
       logger.error('GET /autoposts/channels failed', err)
@@ -314,7 +338,7 @@ export function createAutopostRouter(): express.Router {
       const media = mediaFromUploaded((req.files as Express.Multer.File[]) ?? [])
       const platformRaw = parseNonEmptyString(body.platform)
       const platform = platformRaw === 'max' ? 'max' : 'telegram'
-      if (media.length > 1 && inline_button) {
+      if (media.length > 1 && inline_button && platform === 'telegram') {
         res.status(400).json({
           error: 'album_inline_button',
           message:
@@ -360,6 +384,10 @@ export function createAutopostRouter(): express.Router {
       }
       if (body.channel_title !== undefined) {
         patch.channel_title = parseNonEmptyString(body.channel_title)
+      }
+      if (body.platform !== undefined) {
+        const platformRaw = parseNonEmptyString(body.platform)
+        patch.platform = platformRaw === 'max' ? 'max' : 'telegram'
       }
       if (body.inline_button_text !== undefined || body.inline_button_url !== undefined) {
         patch.inline_button = parseInlineButton(body)

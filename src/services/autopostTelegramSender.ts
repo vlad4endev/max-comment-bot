@@ -4,6 +4,7 @@ import path from 'node:path'
 import axios from 'axios'
 import FormData from 'form-data'
 
+import { prepareMessengerHtmlText } from '../utils/messengerHtml'
 import { logger } from '../utils/logger'
 import type { AutopostInlineButton, AutopostMediaItem, AutopostRecord } from './autopostStore'
 
@@ -47,9 +48,13 @@ async function sendText(
   text: string,
   button: AutopostInlineButton | null,
 ): Promise<void> {
+  const prepared = prepareMessengerHtmlText(text)
   const payload: Record<string, unknown> = {
     chat_id: chatId,
-    text: text.slice(0, 4096) || '\u00a0',
+    text: prepared.text.slice(0, 4096) || '\u00a0',
+  }
+  if (prepared.parseMode) {
+    payload.parse_mode = prepared.parseMode
   }
   if (button) {
     payload.reply_markup = JSON.stringify(buildInlineKeyboard(button))
@@ -69,7 +74,11 @@ async function sendSingleMedia(
   const form = new FormData()
   form.append('chat_id', chatId)
   if (caption.trim()) {
-    form.append('caption', caption.slice(0, 1024))
+    const prepared = prepareMessengerHtmlText(caption)
+    form.append('caption', prepared.text.slice(0, 1024))
+    if (prepared.parseMode) {
+      form.append('parse_mode', prepared.parseMode)
+    }
   }
   if (button) {
     form.append('reply_markup', JSON.stringify(buildInlineKeyboard(button)))
@@ -94,7 +103,11 @@ async function sendMediaGroup(
       media: `attach://${m.type}_${index}`,
     }
     if (index === 0 && caption.trim()) {
-      entry.caption = caption.slice(0, 1024)
+      const prepared = prepareMessengerHtmlText(caption)
+      entry.caption = prepared.text.slice(0, 1024)
+      if (prepared.parseMode) {
+        entry.parse_mode = prepared.parseMode
+      }
     }
     return entry
   })

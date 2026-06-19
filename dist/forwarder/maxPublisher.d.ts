@@ -5,9 +5,15 @@ interface MaxAttachmentFromFile {
     filename?: string;
     contentType?: string;
 }
-export declare function sendTextToMax(token: string, chatId: string, text: string): Promise<void>;
-export declare function sendPhotoFileToMax(token: string, chatId: string, filePath: string, caption: string): Promise<void>;
-export declare function sendVideoFileToMax(token: string, chatId: string, filePath: string, caption: string): Promise<void>;
+export interface MaxSendOptions {
+    button?: {
+        text: string;
+        url: string;
+    };
+}
+export declare function sendTextToMax(token: string, chatId: string, text: string, options?: MaxSendOptions): Promise<void>;
+export declare function sendPhotoFileToMax(token: string, chatId: string, filePath: string, caption: string, options?: MaxSendOptions): Promise<void>;
+export declare function sendVideoFileToMax(token: string, chatId: string, filePath: string, caption: string, options?: MaxSendOptions): Promise<void>;
 export declare function sendDocumentFileToMax(token: string, chatId: string, filePath: string, caption: string, options?: {
     filename?: string;
     contentType?: string;
@@ -18,5 +24,5 @@ export declare function sendDocumentToMax(token: string, chatId: string, documen
     filename?: string;
     contentType?: string;
 }): Promise<void>;
-export declare function sendMediaAlbumFilesToMax(token: string, chatId: string, caption: string, media: MaxAttachmentFromFile[]): Promise<void>;
+export declare function sendMediaAlbumFilesToMax(token: string, chatId: string, caption: string, media: MaxAttachmentFromFile[], options?: MaxSendOptions): Promise<void>;
 export {};

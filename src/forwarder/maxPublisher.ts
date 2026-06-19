@@ -4,6 +4,8 @@ import path from 'node:path'
 import axios from 'axios'
 import FormData from 'form-data'
 
+import { prepareMessengerHtmlText } from '../utils/messengerHtml'
+
 /** Официальный API MAX (как в @maxhub/max-bot-api). Старый botapi.max.ru/messages/sendMessage даёт 404. */
 const MAX_API = 'https://platform-api.max.ru'
 
@@ -74,8 +76,45 @@ async function uploadFileToMaxAttachmentToken(
   return { type: item.type, payload: { token: uploadToken } }
 }
 
-export async function sendTextToMax(token: string, chatId: string, text: string): Promise<void> {
-  await postMessage(token, chatId, { text: text.substring(0, 4096) })
+export interface MaxSendOptions {
+  button?: { text: string; url: string }
+}
+
+function buildMaxTextPayload(text: string, maxLen = 4096): { text: string; format?: 'html' } {
+  const prepared = prepareMessengerHtmlText(text)
+  const payload: { text: string; format?: 'html' } = {
+    text: prepared.text.slice(0, maxLen) || '\u00a0',
+  }
+  if (prepared.parseMode) {
+    payload.format = 'html'
+  }
+  return payload
+}
+
+function maxInlineKeyboardAttachment(button: { text: string; url: string }): {
+  type: 'inline_keyboard'
+  payload: { buttons: [[{ type: 'link'; text: string; url: string }]] }
+} {
+  return {
+    type: 'inline_keyboard',
+    payload: {
+      buttons: [[{ type: 'link', text: button.text.slice(0, 64), url: button.url }]],
+    },
+  }
+}
+
+export async function sendTextToMax(
+  token: string,
+  chatId: string,
+  text: string,
+  options?: MaxSendOptions,
+): Promise<void> {
+  const body = buildMaxTextPayload(text)
+  const attachments = options?.button ? [maxInlineKeyboardAttachment(options.button)] : undefined
+  await postMessage(token, chatId, {
+    ...body,
+    ...(attachments ? { attachments } : {}),
+  })
 }
 
 export async function sendPhotoFileToMax(
@@ -83,13 +122,20 @@ export async function sendPhotoFileToMax(
   chatId: string,
   filePath: string,
   caption: string,
+  options?: MaxSendOptions,
 ): Promise<void> {
   const buffer = await fs.readFile(filePath)
   const name = path.basename(filePath)
   const uploadToken = await uploadBufferToMax(token, 'image', buffer, name, 'image/jpeg')
+  const attachments: Record<string, unknown>[] = [
+    { type: 'image', payload: { token: uploadToken } },
+  ]
+  if (options?.button) {
+    attachments.push(maxInlineKeyboardAttachment(options.button))
+  }
   await postMessage(token, chatId, {
-    text: caption.substring(0, 1024) || '\u00a0',
-    attachments: [{ type: 'image', payload: { token: uploadToken } }],
+    ...buildMaxTextPayload(caption, 1024),
+    attachments,
   })
 }
 
@@ -98,6 +144,7 @@ export async function sendVideoFileToMax(
   chatId: string,
   filePath: string,
   caption: string,
+  options?: MaxSendOptions,
 ): Promise<void> {
   const buffer = await fs.readFile(filePath)
   const name = path.basename(filePath)
@@ -105,9 +152,15 @@ export async function sendVideoFileToMax(
   const contentType =
     ext === '.webm' ? 'video/webm' : ext === '.mov' ? 'video/quicktime' : 'video/mp4'
   const uploadToken = await uploadBufferToMax(token, 'video', buffer, name, contentType)
+  const attachments: Record<string, unknown>[] = [
+    { type: 'video', payload: { token: uploadToken } },
+  ]
+  if (options?.button) {
+    attachments.push(maxInlineKeyboardAttachment(options.button))
+  }
   await postMessage(token, chatId, {
-    text: caption.substring(0, 1024) || '\u00a0',
-    attachments: [{ type: 'video', payload: { token: uploadToken } }],
+    ...buildMaxTextPayload(caption, 1024),
+    attachments,
   })
 }
 
@@ -192,15 +245,19 @@ export async function sendMediaAlbumFilesToMax(
   chatId: string,
   caption: string,
   media: MaxAttachmentFromFile[],
+  options?: MaxSendOptions,
 ): Promise<void> {
   if (media.length === 0) {
     throw new Error('MAX album: empty media list')
   }
-  const attachments = await Promise.all(
+  const attachments: Record<string, unknown>[] = await Promise.all(
     media.map((item) => uploadFileToMaxAttachmentToken(token, item)),
   )
+  if (options?.button) {
+    attachments.push(maxInlineKeyboardAttachment(options.button))
+  }
   await postMessage(token, chatId, {
-    text: caption.substring(0, 1024) || '\u00a0',
+    ...buildMaxTextPayload(caption, 1024),
     attachments,
   })
 }

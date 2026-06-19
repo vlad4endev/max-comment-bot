@@ -886,6 +886,172 @@ body.ap-modal-open .sidebar {
   background: transparent;
 }
 
+.ap-preview-formatted {
+  white-space: normal;
+}
+
+.ap-preview-formatted b,
+.ap-preview-formatted strong {
+  font-weight: 700;
+}
+
+.ap-preview-formatted i,
+.ap-preview-formatted em {
+  font-style: italic;
+}
+
+.ap-preview-formatted u,
+.ap-preview-formatted ins {
+  text-decoration: underline;
+}
+
+.ap-preview-formatted s,
+.ap-preview-formatted strike,
+.ap-preview-formatted del {
+  text-decoration: line-through;
+}
+
+.ap-preview-formatted code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.85em;
+  background: rgba(255, 255, 255, 0.08);
+  padding: 0.1em 0.35em;
+  border-radius: 4px;
+}
+
+.ap-preview-formatted pre {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.85em;
+  background: rgba(255, 255, 255, 0.06);
+  padding: 0.5rem 0.65rem;
+  border-radius: 6px;
+  overflow-x: auto;
+  white-space: pre-wrap;
+}
+
+.ap-preview-formatted blockquote {
+  margin: 0.35rem 0;
+  padding-left: 0.65rem;
+  border-left: 3px solid rgba(127, 119, 221, 0.55);
+  color: var(--text-muted);
+}
+
+.ap-preview-formatted a {
+  color: #8b83f0;
+  text-decoration: underline;
+}
+
+.ap-preview-formatted .ap-spoiler {
+  background: #3a3a42;
+  color: #3a3a42;
+  border-radius: 3px;
+  padding: 0 0.15em;
+  cursor: pointer;
+  transition: color 0.15s, background 0.15s;
+}
+
+.ap-preview-formatted .ap-spoiler:hover,
+.ap-preview-formatted .ap-spoiler.revealed {
+  color: inherit;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+/* Rich text editor (Telegram / MAX HTML) */
+.ap-text-editor-mount {
+  width: 100%;
+}
+
+.ap-editor-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.35rem 0.4rem;
+  background: #222228;
+  border: 1px solid var(--ap-border, rgba(255, 255, 255, 0.1));
+  border-bottom: none;
+  border-radius: 8px 8px 0 0;
+}
+
+.ap-editor-btn {
+  min-width: 2rem;
+  height: 2rem;
+  padding: 0 0.45rem;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: #c8c8d0;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s;
+}
+
+.ap-editor-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.12);
+}
+
+.ap-editor-hint {
+  margin-left: auto;
+  font-size: 0.7rem;
+  color: var(--text-muted, #888);
+  padding-right: 0.25rem;
+}
+
+.ap-editor-surface {
+  min-height: 120px;
+  max-height: 280px;
+  overflow-y: auto;
+  padding: 0.65rem 0.75rem;
+  background: #1a1a1f;
+  border: 1px solid var(--ap-border, rgba(255, 255, 255, 0.1));
+  border-radius: 0 0 8px 8px;
+  font-size: 0.875rem;
+  line-height: 1.5;
+  color: #e8e8ec;
+  outline: none;
+  word-break: break-word;
+}
+
+.ap-editor-surface:empty::before {
+  content: attr(data-placeholder);
+  color: var(--text-muted, #666);
+  pointer-events: none;
+}
+
+.ap-editor-surface:focus {
+  border-color: rgba(127, 119, 221, 0.45);
+  box-shadow: 0 0 0 2px rgba(127, 119, 221, 0.12);
+}
+
+.ap-editor-surface .tg-spoiler {
+  background: #3a3a42;
+  color: #3a3a42;
+  border-radius: 3px;
+  padding: 0 0.15em;
+}
+
+.ap-editor-surface blockquote {
+  margin: 0.35rem 0;
+  padding-left: 0.65rem;
+  border-left: 3px solid rgba(127, 119, 221, 0.55);
+  color: #a8a8b0;
+}
+
+.ap-editor-surface a {
+  color: #8b83f0;
+  text-decoration: underline;
+}
+
+.ap-editor-surface code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.85em;
+  background: rgba(255, 255, 255, 0.08);
+  padding: 0.1em 0.35em;
+  border-radius: 4px;
+}
+
 .ap-char-count {
   text-align: right;
   font-size: 0.72rem;
@@ -1065,4 +1231,62 @@ body.ap-modal-open .sidebar {
 
 .ap-topbar-btn:hover {
   background: var(--ap-accent-hover);
+}
+
+/* Platform selector (Telegram / MAX) */
+.ap-platform-tabs {
+  display: inline-flex;
+  gap: 0.35rem;
+  padding: 0.25rem;
+  background: #222228;
+  border: 1px solid var(--ap-border, rgba(255, 255, 255, 0.1));
+  border-radius: 10px;
+}
+
+.ap-platform-tab {
+  min-width: 7rem;
+  padding: 0.45rem 0.85rem;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: #b8b8c0;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+
+.ap-platform-tab:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.ap-platform-tab.active {
+  background: rgba(127, 119, 221, 0.22);
+  border-color: rgba(127, 119, 221, 0.45);
+  color: #e8e6ff;
+}
+
+.ap-platform-hint {
+  margin: 0.5rem 0 0;
+}
+
+.ap-platform-tag {
+  display: inline-block;
+  padding: 0.1rem 0.4rem;
+  border-radius: 4px;
+  font-size: 0.65rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  vertical-align: middle;
+}
+
+.ap-platform-telegram {
+  background: rgba(59, 130, 246, 0.18);
+  color: #93c5fd;
+}
+
+.ap-platform-max {
+  background: rgba(29, 158, 117, 0.18);
+  color: #6ee7b7;
 }

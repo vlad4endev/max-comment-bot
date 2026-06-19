@@ -5,7 +5,7 @@
 (function () {
   'use strict';
 
-  var AP_UI_BUILD = '20260619-single-form-v3';
+  var AP_UI_BUILD = '20260619-platform-v5';
   var API_BASE = '/api/admin';
   var CHANNEL_COLORS = ['#534AB7', '#1D9E75', '#BA7517', '#7F77DD', '#3B82F6', '#EC4899'];
   var WEEKDAY_LABELS = ['Вс', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб'];
@@ -173,6 +173,20 @@
     return ch.title || ch.id;
   }
 
+  function channelPlatform(ch) {
+    return (ch && ch.platform) || 'telegram';
+  }
+
+  function platformLabel(platform) {
+    return platform === 'max' ? 'MAX' : 'Telegram';
+  }
+
+  function channelsForPlatform(platform) {
+    return state.channels.filter(function (c) {
+      return channelPlatform(c) === platform;
+    });
+  }
+
   function postChannelName(p) {
     return p.channel_title || p.target_channel_id || '—';
   }
@@ -222,6 +236,7 @@
         html += '<div class="ap-channel-item" title="' + esc(channelLabel(c)) + '">';
         html += '<span class="ap-channel-dot" style="background:' + channelColor(c.id, i) + '"></span>';
         html += esc(channelLabel(c));
+        html += ' <span class="ap-platform-tag ap-platform-' + esc(channelPlatform(c)) + '">' + esc(platformLabel(channelPlatform(c))) + '</span>';
         html += '</div>';
       });
     }
@@ -267,14 +282,20 @@
   }
 
   function renderQuickForm() {
-    var opts = state.channels.map(function (c, i) {
+    if (!state.quickPlatform) state.quickPlatform = 'telegram';
+    var quickPlatform = state.quickPlatform;
+    var filtered = channelsForPlatform(quickPlatform);
+    var opts = filtered.map(function (c) {
       return '<option value="' + esc(String(c.id)) + '">' + esc(channelLabel(c)) + '</option>';
     }).join('');
-    if (!opts) opts = '<option value="">— нет каналов —</option>';
+    if (!opts) opts = '<option value="">— нет каналов ' + esc(platformLabel(quickPlatform)) + ' —</option>';
     var now = new Date();
     now.setMinutes(now.getMinutes() + 30);
     var dtLocal = fmtDateInput(now) + 'T' + String(now.getHours()).padStart(2, '0') + ':' + String(now.getMinutes()).padStart(2, '0');
-    return '<div class="form-group"><label>Канал</label><select class="select" id="apQuickChannel">' + opts + '</select></div>' +
+    return '<div class="form-group"><label>Мессенджер</label><div class="ap-platform-tabs" id="apQuickPlatform">' +
+      '<button type="button" class="ap-platform-tab' + (quickPlatform === 'telegram' ? ' active' : '') + '" data-qplatform="telegram">Telegram</button>' +
+      '<button type="button" class="ap-platform-tab' + (quickPlatform === 'max' ? ' active' : '') + '" data-qplatform="max">MAX</button></div></div>' +
+      '<div class="form-group"><label>Канал</label><select class="select" id="apQuickChannel">' + opts + '</select></div>' +
       '<div class="form-group"><label>Текст поста</label><textarea class="textarea" id="apQuickText" rows="4" placeholder="Введите текст…"></textarea></div>' +
       '<label class="muted text-sm">Тип</label>' +
       '<div class="ap-schedule-types" id="apQuickTypes">' +
@@ -394,13 +415,14 @@
       return html;
     }
     html += '<div class="ap-table-wrap"><table class="ap-table"><thead><tr>' +
-      '<th>Текст</th><th>Канал</th><th>Дата и время</th><th>Тип</th><th>Статус</th><th>Действия</th></tr></thead><tbody>';
+      '<th>Платформа</th><th>Текст</th><th>Канал</th><th>Дата и время</th><th>Тип</th><th>Статус</th><th>Действия</th></tr></thead><tbody>';
     page.forEach(function (p) {
       var ci = state.channels.findIndex(function (c) { return String(c.id) === String(p.target_channel_id); });
       var color = channelColor(p.target_channel_id, ci);
       var typeBadge = p.schedule_type === 'recurring' ? 'ap-badge-series' : 'ap-badge-once';
       var typeLabel = p.schedule_type === 'recurring' ? 'Серия' : 'Разово';
       html += '<tr>';
+      html += '<td><span class="ap-platform-tag ap-platform-' + esc(p.platform || 'telegram') + '">' + esc(platformLabel(p.platform || 'telegram')) + '</span></td>';
       html += '<td style="max-width:220px" title="' + esc(p.text) + '">' + esc(truncate(p.text || '—', 50)) + '</td>';
       html += '<td><span class="ap-channel-dot" style="background:' + color + ';display:inline-block;vertical-align:middle"></span> ' + esc(postChannelName(p)) + '</td>';
       html += '<td class="mono text-sm">' + esc(fmtDateTime(p.scheduled_at)) + '</td>';
@@ -506,7 +528,7 @@
         html += '<div class="ap-channel-card">';
         html += '<div class="ap-channel-card-icon"><i data-lucide="send"></i></div>';
         html += '<div style="flex:1;min-width:0"><div style="font-weight:600">' + esc(channelLabel(c)) + '</div>';
-        html += '<div class="text-sm muted">Telegram · Активен</div></div>';
+        html += '<div class="text-sm muted">' + esc(platformLabel(channelPlatform(c))) + ' · Активен</div></div>';
         html += '<button type="button" class="btn btn-ghost btn-sm" data-ap-goto-integrations>Настройки</button>';
         html += '</div>';
       });
@@ -557,7 +579,11 @@
     state.modalOpen = true;
     document.body.classList.add('ap-modal-open');
     var p = editPost || {};
-    var selectedChannels = editPost ? [String(p.target_channel_id)] : (state.channels[0] ? [String(state.channels[0].id)] : []);
+    var initPlatform = p.platform === 'max' ? 'max' : 'telegram';
+    var initPlatformChannels = channelsForPlatform(initPlatform);
+    var selectedChannels = editPost
+      ? [String(p.target_channel_id)]
+      : (initPlatformChannels[0] ? [String(initPlatformChannels[0].id)] : []);
     var today = fmtDateInput(new Date());
     var schedType = 'once';
     if (p.schedule_type === 'recurring') {
@@ -586,7 +612,7 @@
       '<button type="button" class="ap-modal-close" data-ap-modal-close><i data-lucide="x"></i></button></div>' +
       '<div class="ap-modal-body" id="apModalBody"></div>' +
       '<div class="ap-modal-preview-wrap">' +
-      '<div class="ap-modal-preview-label">Как будет выглядеть в Telegram</div>' +
+      '<div class="ap-modal-preview-label" id="apModalPreviewLabel">Как будет выглядеть в Telegram</div>' +
       '<div class="ap-preview-telegram" id="apModalPreview"></div>' +
       '</div>' +
       '<div id="apModalStatus" class="ap-modal-status hidden" role="alert"></div>' +
@@ -602,6 +628,7 @@
     host.appendChild(backdrop);
 
     var modalState = {
+      platform: initPlatform,
       text: p.text || '',
       channels: selectedChannels.slice(),
       scheduleType: schedType,
@@ -637,8 +664,13 @@
     function snapshotFromDom() {
       var body = qs('#apModalBody', modal);
       if (!body) return;
-      var ta = qs('#apModalText', body);
-      if (ta) modalState.text = ta.value;
+      var editorMount = qs('#apTextEditorMount', body);
+      if (editorMount && window.ApTextEditor) {
+        modalState.text = window.ApTextEditor.getHtml(editorMount.querySelector('.ap-editor-surface'));
+      } else {
+        var ta = qs('#apModalText', body);
+        if (ta) modalState.text = ta.value;
+      }
       var st = modalState.scheduleType;
       if (st === 'once') {
         var dateEl = qs('#apModalDate', body);
@@ -667,6 +699,10 @@
       if (btnUrlEl) modalState.btnUrl = btnUrlEl.value;
       var onFail = qs('#apOnFailure', body);
       if (onFail) modalState.onFailure = onFail.value;
+      var activePlatform = qs('[data-ap-platform].active', body);
+      if (activePlatform) {
+        modalState.platform = activePlatform.getAttribute('data-ap-platform') === 'max' ? 'max' : 'telegram';
+      }
     }
 
     function syncWeekdaysFromDom(body) {
@@ -707,8 +743,11 @@
         }
       }
 
-      if (text) {
-        html += '<div class="ap-preview-bubble">' + esc(text) + '</div>';
+      if (text && !(window.ApTextEditor && window.ApTextEditor.isEmpty(text))) {
+        var previewText = window.ApTextEditor
+          ? window.ApTextEditor.previewHtml(text)
+          : esc(text);
+        html += '<div class="ap-preview-bubble ap-preview-formatted">' + previewText + '</div>';
       } else if (!media.length && !(btnText && btnUrl)) {
         html += '<div class="ap-preview-bubble ap-preview-placeholder">Добавьте текст, фото или кнопку</div>';
       }
@@ -720,12 +759,28 @@
       }
 
       wrap.innerHTML = html;
+      qsa('.ap-spoiler', wrap).forEach(function (el) {
+        el.addEventListener('click', function () { el.classList.toggle('revealed'); });
+      });
+    }
+
+    function updatePreviewLabel() {
+      var lbl = qs('#apModalPreviewLabel', modal);
+      if (lbl) lbl.textContent = 'Как будет выглядеть в ' + platformLabel(modalState.platform);
     }
 
     function renderModalForm() {
       var body = qs('#apModalBody', modal);
       if (!body) return;
       var st = modalState.scheduleType;
+      var platformChannels = channelsForPlatform(modalState.platform);
+      modalState.channels = modalState.channels.filter(function (cid) {
+        var ch = state.channels.find(function (c) { return String(c.id) === cid; });
+        return ch && channelPlatform(ch) === modalState.platform;
+      });
+      if (!modalState.channels.length && platformChannels.length) {
+        modalState.channels = [String(platformChannels[0].id)];
+      }
       var chips = modalState.channels.map(function (cid) {
         var c = state.channels.find(function (ch) { return String(ch.id) === cid; });
         var ci = state.channels.findIndex(function (ch) { return String(ch.id) === cid; });
@@ -733,20 +788,27 @@
           esc(c ? channelLabel(c) : cid) +
           '<button type="button" data-rm-ch="' + esc(cid) + '">✕</button></span>';
       }).join('');
-      var addOpts = state.channels.filter(function (c) {
+      var addOpts = platformChannels.filter(function (c) {
         return modalState.channels.indexOf(String(c.id)) < 0;
       }).map(function (c) {
         return '<option value="' + esc(String(c.id)) + '">' + esc(channelLabel(c)) + '</option>';
       }).join('');
 
       body.innerHTML =
-        '<section class="ap-form-section" id="apSecChannels"><h3>Каналы</h3>' +
-        '<div class="ap-channel-chips" id="apModalChips">' + (chips || '<span class="muted text-sm">Выберите канал</span>') + '</div>' +
+        '<section class="ap-form-section" id="apSecPlatform"><h3>Мессенджер</h3>' +
+        '<div class="ap-platform-tabs">' +
+        '<button type="button" class="ap-platform-tab' + (modalState.platform === 'telegram' ? ' active' : '') + '" data-ap-platform="telegram">Telegram</button>' +
+        '<button type="button" class="ap-platform-tab' + (modalState.platform === 'max' ? ' active' : '') + '" data-ap-platform="max">MAX</button>' +
+        '</div>' +
+        '<p class="text-sm muted ap-platform-hint">Пост уйдёт только в выбранный мессенджер</p></section>' +
+        '<section class="ap-form-section" id="apSecChannels"><h3>Каналы · ' + esc(platformLabel(modalState.platform)) + '</h3>' +
+        '<div class="ap-channel-chips" id="apModalChips">' + (chips || '<span class="muted text-sm">Нет каналов ' + esc(platformLabel(modalState.platform)) + '</span>') + '</div>' +
         (addOpts ? '<select class="select" id="apAddChannel"><option value="">+ Добавить канал</option>' + addOpts + '</select>' : '') +
         '</section>' +
         '<section class="ap-form-section" id="apSecText"><h3>Текст</h3>' +
-        '<textarea class="textarea" id="apModalText" rows="4" placeholder="Введите текст публикации…">' + esc(modalState.text) + '</textarea>' +
-        '<div class="ap-char-count"><span id="apCharCount">0</span> символов</div></section>' +
+        '<div id="apTextEditorMount" class="ap-text-editor-mount"></div>' +
+        '<textarea class="textarea hidden" id="apModalText" rows="4">' + esc(modalState.text) + '</textarea>' +
+        '<div class="ap-char-count"><span id="apCharCount">0</span> символов · <span class="muted">Telegram & MAX HTML</span></div></section>' +
         '<section class="ap-form-section" id="apSecSchedule"><h3>Расписание</h3>' +
         '<div class="ap-schedule-types" id="apModalSchedTypes">' +
         '<button type="button" class="ap-schedule-type' + (st === 'once' ? ' active' : '') + '" data-mst="once">📅 Разово</button>' +
@@ -777,20 +839,46 @@
         '</section>';
 
       var ta = qs('#apModalText', body);
+      var editorWrap = qs('#apTextEditorMount', body);
+      var editorSurface = null;
       var previewTimer = null;
       function updateTextField() {
-        modalState.text = ta ? ta.value : '';
-        var cnt = qs('#apCharCount', body);
-        if (cnt) cnt.textContent = String(modalState.text.length);
+        if (editorSurface && window.ApTextEditor) {
+          modalState.text = window.ApTextEditor.getHtml(editorSurface);
+          var cnt = qs('#apCharCount', body);
+          if (cnt) cnt.textContent = String(window.ApTextEditor.getPlainLength(editorSurface));
+        } else if (ta) {
+          modalState.text = ta.value;
+          var cnt2 = qs('#apCharCount', body);
+          if (cnt2) cnt2.textContent = String(modalState.text.length);
+        }
         updateModalPreview();
       }
-      if (ta) {
+      if (editorWrap && window.ApTextEditor) {
+        editorSurface = window.ApTextEditor.mount(editorWrap, {
+          value: modalState.text,
+          placeholder: 'Введите текст публикации…',
+          onChange: updateTextField,
+        });
+        updateTextField();
+      } else if (ta) {
         ta.addEventListener('input', function () {
           if (previewTimer) clearTimeout(previewTimer);
           previewTimer = setTimeout(updateTextField, 150);
         });
         updateTextField();
       }
+
+      qsa('[data-ap-platform]', body).forEach(function (btn) {
+        btn.addEventListener('click', function () {
+          snapshotFromDom();
+          var next = btn.getAttribute('data-ap-platform') === 'max' ? 'max' : 'telegram';
+          if (next === modalState.platform) return;
+          modalState.platform = next;
+          modalState.channels = [];
+          renderModalForm();
+        });
+      });
 
       var addSel = qs('#apAddChannel', body);
       if (addSel) {
@@ -923,6 +1011,7 @@
 
       refreshIcons(body);
       updateModalPreview();
+      updatePreviewLabel();
     }
 
     function closeModal() {
@@ -937,6 +1026,7 @@
       snapshotFromDom();
       hideModalStatus();
       var text = (modalState.text || '').trim();
+      var textEmpty = window.ApTextEditor ? window.ApTextEditor.isEmpty(text) : !text;
       var submitBtn = qs('[data-ap-submit-post]', modal);
       var draftBtn = qs('[data-ap-save-draft]', modal);
       if (!modalState.channels.length) {
@@ -948,14 +1038,14 @@
       var btnText = (modalState.btnText || '').trim();
       var btnUrl = (modalState.btnUrl || '').trim();
       var mediaCount = modalState.mediaFiles.length;
-      if (!text && !mediaCount) {
+      if (textEmpty && !mediaCount) {
         showModalStatus('Введите текст или добавьте фото/видео', 'error');
         var secText = qs('#apSecText', modal);
         if (secText) secText.scrollIntoView({ behavior: 'smooth', block: 'start' });
         return;
       }
-      if (mediaCount > 1 && btnText && btnUrl) {
-        showModalStatus('Инлайн-кнопка недоступна для альбома из нескольких файлов', 'error');
+      if (mediaCount > 1 && btnText && btnUrl && modalState.platform === 'telegram') {
+        showModalStatus('Инлайн-кнопка недоступна для альбома из нескольких файлов в Telegram', 'error');
         return;
       }
 
@@ -978,6 +1068,7 @@
       var promises = modalState.channels.map(function (channelId) {
         var fd = new FormData();
         fd.append('target_channel_id', channelId);
+        fd.append('platform', modalState.platform);
         var ch = state.channels.find(function (c) { return String(c.id) === channelId; });
         if (ch) fd.append('channel_title', channelLabel(ch));
         fd.append('text', text);
@@ -1165,6 +1256,12 @@
           });
         });
       }
+      qsa('[data-qplatform]', root).forEach(function (btn) {
+        btn.addEventListener('click', function () {
+          state.quickPlatform = btn.getAttribute('data-qplatform') === 'max' ? 'max' : 'telegram';
+          renderContentOnly();
+        });
+      });
       var submit = qs('#apQuickSubmit', root);
       if (submit) {
         submit.addEventListener('click', function () {
@@ -1174,6 +1271,7 @@
           if (!text) { toast('Введите текст', 'error'); return; }
           var fd = new FormData();
           fd.append('target_channel_id', channelId);
+          fd.append('platform', state.quickPlatform || 'telegram');
           var ch = state.channels.find(function (c) { return String(c.id) === channelId; });
           if (ch) fd.append('channel_title', channelLabel(ch));
           fd.append('text', text);

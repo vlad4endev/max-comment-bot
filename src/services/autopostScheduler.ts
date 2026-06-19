@@ -8,6 +8,7 @@ import {
   markAutopostSent,
   type AutopostRecord,
 } from './autopostStore'
+import { resolveMaxToken, sendAutopostToMax } from './autopostMaxSender'
 import { sendAutopostToTelegram } from './autopostTelegramSender'
 
 const DEFAULT_TICK_MS = 60_000
@@ -37,35 +38,54 @@ function resolveTelegramToken(): string | null {
   return token || null
 }
 
-async function processDuePost(post: AutopostRecord, token: string): Promise<void> {
+async function afterSuccessfulSend(post: AutopostRecord): Promise<void> {
+  if (post.schedule_type === 'once') {
+    markAutopostSent(post.id, { status: 'sent' })
+    logger.info('autopostScheduler: one-time post sent', { id: post.id, channel: post.target_channel_id })
+    return
+  }
+
+  const recurringTime = post.recurring_time
+  const weekdays = post.weekdays
+  if (!recurringTime || !weekdays?.length) {
+    markAutopostFailed(post.id, 'recurring schedule misconfigured')
+    return
+  }
+  const nextAt = computeNextRecurringAt(recurringTime, weekdays)
+  markAutopostSent(post.id, { nextScheduledAt: nextAt, status: 'active' })
+  logger.info('autopostScheduler: recurring post sent, next scheduled', {
+    id: post.id,
+    nextAt,
+  })
+}
+
+async function processDuePost(post: AutopostRecord): Promise<void> {
   try {
-    const result = await sendAutopostToTelegram(token, post)
+    if (post.platform === 'max') {
+      const maxToken = resolveMaxToken()
+      if (!maxToken) {
+        markAutopostFailed(post.id, 'MAX bot token not configured')
+        return
+      }
+      await sendAutopostToMax(maxToken, post)
+      await afterSuccessfulSend(post)
+      return
+    }
+
+    const tgToken = resolveTelegramToken()
+    if (!tgToken) {
+      markAutopostFailed(post.id, 'Telegram bot token not configured')
+      return
+    }
+    const result = await sendAutopostToTelegram(tgToken, post)
     if (result.warning) {
       logger.info('autopostScheduler: sent with notice', { id: post.id, warning: result.warning })
     }
-
-    if (post.schedule_type === 'once') {
-      markAutopostSent(post.id, { status: 'sent' })
-      logger.info('autopostScheduler: one-time post sent', { id: post.id, channel: post.target_channel_id })
-      return
-    }
-
-    const recurringTime = post.recurring_time
-    const weekdays = post.weekdays
-    if (!recurringTime || !weekdays?.length) {
-      markAutopostFailed(post.id, 'recurring schedule misconfigured')
-      return
-    }
-    const nextAt = computeNextRecurringAt(recurringTime, weekdays)
-    markAutopostSent(post.id, { nextScheduledAt: nextAt, status: 'active' })
-    logger.info('autopostScheduler: recurring post sent, next scheduled', {
-      id: post.id,
-      nextAt,
-    })
+    await afterSuccessfulSend(post)
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err)
     markAutopostFailed(post.id, message)
-    logger.error('autopostScheduler: send failed', { id: post.id, error: message })
+    logger.error('autopostScheduler: send failed', { id: post.id, platform: post.platform, error: message })
   }
 }
 
@@ -75,14 +95,10 @@ async function tick(): Promise<void> {
   }
   ticking = true
   try {
-    const token = resolveTelegramToken()
-    if (!token) {
-      return
-    }
     const nowIso = new Date().toISOString()
-    const due = listDueAutoposts(nowIso).filter((p) => p.platform === 'telegram')
+    const due = listDueAutoposts(nowIso)
     for (const post of due) {
-      await processDuePost(post, token)
+      await processDuePost(post)
     }
   } finally {
     ticking = false
@@ -91,8 +107,6 @@ async function tick(): Promise<void> {
 
 /**
  * Планировщик автопостов: setInterval раз в минуту (AUTOPOST_TICK_MS).
- * В проекте уже используются setInterval-воркеры (channelPoller, flowProcessor) —
- * отдельный node-cron/BullMQ не нужен для одного тика в минуту.
  */
 export function startAutopostScheduler(): void {
   if (intervalHandle) {

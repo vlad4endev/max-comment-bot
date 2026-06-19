@@ -103,7 +103,7 @@ async function listTelegramChannelsForAutopost() {
         refresh: false,
     });
     return channels
-        .filter((c) => c.type === 'channel' || c.type === 'supergroup')
+        .filter((c) => c.type === 'channel')
         .filter((c) => c.botIsAdmin === true)
         .map((c) => ({
         id: c.id,
@@ -115,12 +115,24 @@ async function listTelegramChannelsForAutopost() {
 }
 function syncPostChannelsRegistry() {
     for (const ch of channelRegistry_1.channelRegistry.getAllChannels()) {
+        if (ch.type !== 'channel')
+            continue;
         (0, autopostStore_1.upsertPostChannel)({
             id: String(ch.chat_id),
             platform: 'max',
             title: ch.title ?? null,
         });
     }
+}
+function listMaxChannelsForAutopost() {
+    return channelRegistry_1.channelRegistry
+        .getAllChannels()
+        .filter((ch) => ch.type === 'channel')
+        .map((ch) => ({
+        id: String(ch.chat_id),
+        title: ch.title?.trim() || `Канал ${ch.chat_id}`,
+        platform: 'max',
+    }));
 }
 function validateScheduleInput(body) {
     const scheduleTypeRaw = parseNonEmptyString(body.schedule_type) ?? 'once';
@@ -154,16 +166,25 @@ function createAutopostRouter() {
                 });
             }
             syncPostChannelsRegistry();
+            const maxChannels = listMaxChannelsForAutopost();
+            const allChannels = [...tgChannels, ...maxChannels];
             const registered = (0, autopostStore_1.listPostChannels)();
             const integ = integrationsStore_1.integrationsStore.getTelegramIntegration();
+            const hints = [];
+            if (!tgChannels.length) {
+                hints.push('Telegram: подключите интеграцию и добавьте бота админом в канал.');
+            }
+            if (!maxChannels.length) {
+                hints.push('MAX: добавьте бота в канал — он появится в списке автоматически.');
+            }
             res.json({
-                connected: !!integ,
-                channels: tgChannels,
+                connected: !!integ || maxChannels.length > 0,
+                channels: allChannels,
+                telegram: tgChannels,
+                max: maxChannels,
                 registered,
                 db_path: postsDatabase_1.POSTS_DB_PATH,
-                hint: tgChannels.length === 0
-                    ? 'Подключите Telegram в «Интеграции» и добавьте бота админом в канал.'
-                    : null,
+                hint: hints.length ? hints.join(' ') : null,
             });
         }
         catch (err) {
@@ -267,7 +288,7 @@ function createAutopostRouter() {
             const media = mediaFromUploaded(req.files ?? []);
             const platformRaw = parseNonEmptyString(body.platform);
             const platform = platformRaw === 'max' ? 'max' : 'telegram';
-            if (media.length > 1 && inline_button) {
+            if (media.length > 1 && inline_button && platform === 'telegram') {
                 res.status(400).json({
                     error: 'album_inline_button',
                     message: 'Инлайн-кнопка не поддерживается в альбоме Telegram. Используйте одно медиа или кнопку без альбома.',
@@ -312,6 +333,10 @@ function createAutopostRouter() {
             }
             if (body.channel_title !== undefined) {
                 patch.channel_title = parseNonEmptyString(body.channel_title);
+            }
+            if (body.platform !== undefined) {
+                const platformRaw = parseNonEmptyString(body.platform);
+                patch.platform = platformRaw === 'max' ? 'max' : 'telegram';
             }
             if (body.inline_button_text !== undefined || body.inline_button_url !== undefined) {
                 patch.inline_button = parseInlineButton(body);
