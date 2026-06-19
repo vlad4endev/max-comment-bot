@@ -55,7 +55,25 @@ export declare function resolveTelegramChannelChatIdFromKey(token: string, chann
 export declare function listTelegramBotChats(token: string, integrationId?: string): Promise<PlatformChannelInfo[]>;
 export declare function listTelegramAdminChannels(token: string): Promise<PlatformChannelInfo[]>;
 export declare function listTelegramChatAdministrators(token: string, chatId: string): Promise<TelegramChatAdminInfo[]>;
+export interface VkGroupInfo {
+    /** Числовой ID без минуса */
+    id: string;
+    name: string;
+    screenName: string;
+    /** Правильная ссылка vk.com/{screenName} */
+    url: string;
+    photo?: string;
+}
 export declare function listVkGroups(token: string, groupId?: string): Promise<PlatformChannelInfo[]>;
+/**
+ * Разрешает VK-сообщество из любого формата ввода:
+ * числовой ID, -ID, URL (vk.com/...), slug (ostrovskidok).
+ */
+export declare function resolveVkGroup(token: string, input: string): Promise<VkGroupInfo | null>;
+/**
+ * Список сообществ, где токен имеет права администратора/редактора.
+ */
+export declare function listVkManagedGroups(token: string): Promise<VkGroupInfo[]>;
 export interface ExternalPost {
     externalId: string;
     text: string;

@@ -3616,29 +3616,39 @@
 
   function submitVkChainFromForm(root) {
     var maxId = Number(qs('#vc_max', root) ? qs('#vc_max', root).value : '');
-    var groupEl = qs('#vc_group', root);
+    var groupIdEl = qs('#vc_group_id', root);
     var tokenEl = qs('#vc_token', root);
-    var vkGroup = groupEl ? String(groupEl.value || '').trim().replace(/^-/, '') : '';
+    var vkGroup = groupIdEl ? String(groupIdEl.value || '').trim().replace(/^-/, '') : '';
     var vkToken = tokenEl ? String(tokenEl.value || '').trim() : '';
     var vkInt = integrationsCache.find(function (i) {
       return i.platform === 'vk' && i.status === 'connected';
     });
+    // Токен берём из формы или из сохранённой интеграции (сервер тоже это сделает, но проверяем на клиенте)
     if (!vkToken && vkInt && vkInt.token) vkToken = String(vkInt.token).trim();
-    if (!vkGroup && vkInt && vkInt.groupId) vkGroup = String(vkInt.groupId).trim().replace(/^-/, '');
     var sw = readSwitches(root);
-    if (!maxId || !vkGroup || !vkToken) {
-      showToast('Укажите канал MAX, ID сообщества VK и токен', 'error');
+    if (!maxId) {
+      showToast('Выберите канал MAX', 'error');
+      return;
+    }
+    if (!vkGroup) {
+      showToast('Выберите сообщество ВКонтакте: введите ссылку и нажмите «Найти» или загрузите список', 'error');
+      return;
+    }
+    if (!vkToken) {
+      showToast('Укажите токен VK или подключите VK в «Интеграциях»', 'error');
       return;
     }
     var btn = qs('#vc_submit', root);
     if (btn) btn.disabled = true;
-    postJson('/vk-chains', {
+    var body = {
       max_chat_id: maxId,
       vk_group_id: vkGroup,
-      vk_token: vkToken,
       forward_posts: sw.forward_posts !== false,
       sync_comments: !!sw.sync_comments,
-    })
+    };
+    // Передаём токен только если он явно введён (иначе сервер возьмёт из интеграции)
+    if (tokenEl && tokenEl.value.trim()) body.vk_token = tokenEl.value.trim();
+    postJson('/vk-chains', body)
       .then(function () {
         showToast('VK-связка создана', 'success');
         renderTgChains();

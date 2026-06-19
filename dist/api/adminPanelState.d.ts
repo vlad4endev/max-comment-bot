@@ -34,6 +34,10 @@ export interface VkChainRecord {
     max_title: string | null;
     /** ID сообщества VK (без минуса, например "12345678"). */
     vk_group_id: string;
+    /** Короткий адрес сообщества (screen_name), например "ostrovskidok". */
+    vk_screen_name?: string;
+    /** Название сообщества из VK API. */
+    vk_name?: string;
     /** Токен сообщества VK с правами wall и comments. */
     vk_token: string;
     /** Пересылать посты из MAX → VK (вызывается хуком из tgChainForwarder). */

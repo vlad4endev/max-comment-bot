@@ -68,6 +68,7 @@ const analyticsService_1 = require("../services/analyticsService");
 const integrationsStore_1 = require("../services/integrationsStore");
 const adminLogFormat_1 = require("../utils/adminLogFormat");
 const tgChainChannelRef_1 = require("../services/tgChainChannelRef");
+const integrationPlatformClient_1 = require("../services/integrationPlatformClient");
 const mtprotoConfigStore_1 = require("../services/mtprotoConfigStore");
 const tgChainPair_1 = require("../utils/tgChainPair");
 const logger_1 = require("../utils/logger");
@@ -1244,21 +1245,74 @@ function createAdminRouter(deps) {
             stats: { active, forwarded_today: forwardedToday, errors_today: errorsToday },
         });
     });
+    /** Список сообществ VK, где токен имеет права модератора/редактора/администратора. */
+    secured.get('/vk-groups', async (req, res) => {
+        await integrationsStore_1.integrationsStore.load();
+        const vkInt = integrationsStore_1.integrationsStore.getIntegrations().find((i) => i.platform === 'vk' && i.status === 'connected');
+        const token = parseNonEmptyString(String(req.query.token ?? '')) ?? vkInt?.token ?? '';
+        if (!token) {
+            res.status(400).json({ error: 'VK не подключён — укажите токен' });
+            return;
+        }
+        const groups = await (0, integrationPlatformClient_1.listVkManagedGroups)(token);
+        res.json({ groups });
+    });
+    /** Разрешить VK-сообщество по URL, slug или числовому ID. */
+    secured.post('/vk-resolve-group', async (req, res) => {
+        if (!isRecord(req.body)) {
+            res.status(400).json({ error: 'invalid body' });
+            return;
+        }
+        await integrationsStore_1.integrationsStore.load();
+        const vkInt = integrationsStore_1.integrationsStore.getIntegrations().find((i) => i.platform === 'vk' && i.status === 'connected');
+        const token = parseNonEmptyString(req.body.vk_token) ?? vkInt?.token ?? '';
+        const input = parseNonEmptyString(req.body.input);
+        if (!token || !input) {
+            res.status(400).json({ error: 'token and input required' });
+            return;
+        }
+        const group = await (0, integrationPlatformClient_1.resolveVkGroup)(token, input);
+        if (!group) {
+            res.status(404).json({ error: 'Сообщество не найдено. Проверьте ссылку или ID.' });
+            return;
+        }
+        res.json({ group });
+    });
     secured.post('/vk-chains', async (req, res) => {
         if (!isRecord(req.body)) {
             res.status(400).json({ error: 'invalid body' });
             return;
         }
         const maxChatId = parseNonZeroInt(req.body.max_chat_id);
-        const vkGroupId = parseNonEmptyString(req.body.vk_group_id);
-        const vkToken = parseNonEmptyString(req.body.vk_token);
-        if (maxChatId === null || !vkGroupId || !vkToken) {
-            res.status(400).json({ error: 'max_chat_id, vk_group_id and vk_token required' });
+        const vkGroupIdRaw = parseNonEmptyString(req.body.vk_group_id);
+        if (maxChatId === null || !vkGroupIdRaw) {
+            res.status(400).json({ error: 'max_chat_id and vk_group_id required' });
             return;
+        }
+        await integrationsStore_1.integrationsStore.load();
+        const vkInt = integrationsStore_1.integrationsStore.getIntegrations().find((i) => i.platform === 'vk' && i.status === 'connected');
+        const vkToken = parseNonEmptyString(req.body.vk_token) ?? vkInt?.token ?? '';
+        if (!vkToken) {
+            res.status(400).json({ error: 'Токен VK не найден: укажите vk_token или подключите VK в Интеграциях' });
+            return;
+        }
+        const vkGroupId = vkGroupIdRaw.replace(/^-/, '');
+        // Резолвим сообщество, чтобы сохранить имя и screen_name
+        let vkScreenName;
+        let vkName;
+        try {
+            const info = await (0, integrationPlatformClient_1.resolveVkGroup)(vkToken, vkGroupId);
+            if (info) {
+                vkScreenName = info.screenName;
+                vkName = info.name;
+            }
+        }
+        catch {
+            // не блокируем создание, если API недоступен
         }
         const existing = (await (0, adminPanelState_1.listVkChains)()).find((c) => c.active &&
             Math.abs(c.max_chat_id) === Math.abs(maxChatId) &&
-            c.vk_group_id.replace(/^-/, '') === vkGroupId.replace(/^-/, ''));
+            c.vk_group_id.replace(/^-/, '') === vkGroupId);
         if (existing) {
             res.status(400).json({ error: 'Активная VK-связка для этой пары MAX ↔ VK уже есть' });
             return;
@@ -1267,7 +1321,9 @@ function createAdminRouter(deps) {
         const row = await (0, adminPanelState_1.createVkChain)({
             max_chat_id: maxChatId,
             max_title: ch?.title ?? null,
-            vk_group_id: vkGroupId.replace(/^-/, ''),
+            vk_group_id: vkGroupId,
+            vk_screen_name: vkScreenName,
+            vk_name: vkName,
             vk_token: vkToken,
             forward_posts: req.body.forward_posts !== false,
             sync_comments: Boolean(req.body.sync_comments),

@@ -66,6 +66,7 @@ import { buildDashboardAnalytics, parseDashboardPeriodDays } from '../services/a
 import { integrationsStore } from '../services/integrationsStore'
 import { parseAdminLogLine, type AdminLogEntry, type AdminLogLevel } from '../utils/adminLogFormat'
 import { resolveTgChainChannelFields } from '../services/tgChainChannelRef'
+import { resolveVkGroup, listVkManagedGroups } from '../services/integrationPlatformClient'
 import { isMtprotoSessionReady, resolveMtprotoCredentials } from '../services/mtprotoConfigStore'
 import { findActiveTgChainForPair } from '../utils/tgChainPair'
 import { getAdminLogTail, logger } from '../utils/logger'
@@ -1363,23 +1364,85 @@ export function createAdminRouter(deps: AdminRouterDeps): express.Router {
     })
   })
 
+  /** Список сообществ VK, где токен имеет права модератора/редактора/администратора. */
+  secured.get('/vk-groups', async (req, res) => {
+    await integrationsStore.load()
+    const vkInt = integrationsStore.getIntegrations().find(
+      (i) => i.platform === 'vk' && i.status === 'connected',
+    )
+    const token = parseNonEmptyString(String(req.query.token ?? '')) ?? vkInt?.token ?? ''
+    if (!token) {
+      res.status(400).json({ error: 'VK не подключён — укажите токен' })
+      return
+    }
+    const groups = await listVkManagedGroups(token)
+    res.json({ groups })
+  })
+
+  /** Разрешить VK-сообщество по URL, slug или числовому ID. */
+  secured.post('/vk-resolve-group', async (req, res) => {
+    if (!isRecord(req.body)) {
+      res.status(400).json({ error: 'invalid body' })
+      return
+    }
+    await integrationsStore.load()
+    const vkInt = integrationsStore.getIntegrations().find(
+      (i) => i.platform === 'vk' && i.status === 'connected',
+    )
+    const token = parseNonEmptyString(req.body.vk_token) ?? vkInt?.token ?? ''
+    const input = parseNonEmptyString(req.body.input)
+    if (!token || !input) {
+      res.status(400).json({ error: 'token and input required' })
+      return
+    }
+    const group = await resolveVkGroup(token, input)
+    if (!group) {
+      res.status(404).json({ error: 'Сообщество не найдено. Проверьте ссылку или ID.' })
+      return
+    }
+    res.json({ group })
+  })
+
   secured.post('/vk-chains', async (req, res) => {
     if (!isRecord(req.body)) {
       res.status(400).json({ error: 'invalid body' })
       return
     }
     const maxChatId = parseNonZeroInt(req.body.max_chat_id)
-    const vkGroupId = parseNonEmptyString(req.body.vk_group_id)
-    const vkToken = parseNonEmptyString(req.body.vk_token)
-    if (maxChatId === null || !vkGroupId || !vkToken) {
-      res.status(400).json({ error: 'max_chat_id, vk_group_id and vk_token required' })
+    const vkGroupIdRaw = parseNonEmptyString(req.body.vk_group_id)
+    if (maxChatId === null || !vkGroupIdRaw) {
+      res.status(400).json({ error: 'max_chat_id and vk_group_id required' })
       return
     }
+    await integrationsStore.load()
+    const vkInt = integrationsStore.getIntegrations().find(
+      (i) => i.platform === 'vk' && i.status === 'connected',
+    )
+    const vkToken = parseNonEmptyString(req.body.vk_token) ?? vkInt?.token ?? ''
+    if (!vkToken) {
+      res.status(400).json({ error: 'Токен VK не найден: укажите vk_token или подключите VK в Интеграциях' })
+      return
+    }
+    const vkGroupId = vkGroupIdRaw.replace(/^-/, '')
+
+    // Резолвим сообщество, чтобы сохранить имя и screen_name
+    let vkScreenName: string | undefined
+    let vkName: string | undefined
+    try {
+      const info = await resolveVkGroup(vkToken, vkGroupId)
+      if (info) {
+        vkScreenName = info.screenName
+        vkName = info.name
+      }
+    } catch {
+      // не блокируем создание, если API недоступен
+    }
+
     const existing = (await listVkChains()).find(
       (c) =>
         c.active &&
         Math.abs(c.max_chat_id) === Math.abs(maxChatId) &&
-        c.vk_group_id.replace(/^-/, '') === vkGroupId.replace(/^-/, ''),
+        c.vk_group_id.replace(/^-/, '') === vkGroupId,
     )
     if (existing) {
       res.status(400).json({ error: 'Активная VK-связка для этой пары MAX ↔ VK уже есть' })
@@ -1389,7 +1452,9 @@ export function createAdminRouter(deps: AdminRouterDeps): express.Router {
     const row = await createVkChain({
       max_chat_id: maxChatId,
       max_title: ch?.title ?? null,
-      vk_group_id: vkGroupId.replace(/^-/, ''),
+      vk_group_id: vkGroupId,
+      vk_screen_name: vkScreenName,
+      vk_name: vkName,
       vk_token: vkToken,
       forward_posts: req.body.forward_posts !== false,
       sync_comments: Boolean(req.body.sync_comments),

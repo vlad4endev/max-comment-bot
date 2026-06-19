@@ -51,6 +51,8 @@ exports.listTelegramBotChats = listTelegramBotChats;
 exports.listTelegramAdminChannels = listTelegramAdminChannels;
 exports.listTelegramChatAdministrators = listTelegramChatAdministrators;
 exports.listVkGroups = listVkGroups;
+exports.resolveVkGroup = resolveVkGroup;
+exports.listVkManagedGroups = listVkManagedGroups;
 exports.fetchTelegramChannelPosts = fetchTelegramChannelPosts;
 exports.fetchVkWallPosts = fetchVkWallPosts;
 exports.publishVkWallPost = publishVkWallPost;
@@ -708,6 +710,80 @@ async function listVkGroups(token, groupId) {
     }
     catch (err) {
         logger_1.logger.debug('listVkGroups failed', err);
+        return [];
+    }
+}
+/**
+ * Разрешает VK-сообщество из любого формата ввода:
+ * числовой ID, -ID, URL (vk.com/...), slug (ostrovskidok).
+ */
+async function resolveVkGroup(token, input) {
+    const raw = input.trim();
+    if (!raw)
+        return null;
+    // Извлекаем slug/id из URL: vk.com/club123, vk.com/public123, vk.com/slug
+    const urlMatch = /(?:https?:\/\/)?(?:www\.)?vk\.com\/([a-zA-Z0-9_.-]+)/i.exec(raw);
+    let lookup = urlMatch ? urlMatch[1] : raw;
+    // Убираем минус в начале, чтобы VK API принял ID без знака
+    lookup = lookup.replace(/^-/, '');
+    try {
+        const { data } = await axios_1.default.get('https://api.vk.com/method/groups.getById', {
+            params: {
+                access_token: token,
+                group_id: lookup,
+                fields: 'screen_name,photo_50,photo_100',
+                v: '5.199',
+            },
+            timeout: 15_000,
+        });
+        if (data.error || !data.response?.length) {
+            return null;
+        }
+        const g = data.response[0];
+        const screenName = g.screen_name ?? `club${g.id}`;
+        return {
+            id: String(g.id),
+            name: g.name?.trim() || `club${g.id}`,
+            screenName,
+            url: `https://vk.com/${screenName}`,
+            photo: g.photo_100 ?? g.photo_50,
+        };
+    }
+    catch (err) {
+        logger_1.logger.debug('resolveVkGroup failed', { input, err });
+        return null;
+    }
+}
+/**
+ * Список сообществ, где токен имеет права администратора/редактора.
+ */
+async function listVkManagedGroups(token) {
+    try {
+        const { data } = await axios_1.default.get('https://api.vk.com/method/groups.get', {
+            params: {
+                access_token: token,
+                filter: 'moder',
+                fields: 'screen_name,photo_50,photo_100',
+                count: 100,
+                v: '5.199',
+            },
+            timeout: 15_000,
+        });
+        if (data.error || !data.response?.items)
+            return [];
+        return data.response.items.map((g) => {
+            const screenName = g.screen_name ?? `club${g.id}`;
+            return {
+                id: String(g.id),
+                name: g.name?.trim() || `club${g.id}`,
+                screenName,
+                url: `https://vk.com/${screenName}`,
+                photo: g.photo_100 ?? g.photo_50,
+            };
+        });
+    }
+    catch (err) {
+        logger_1.logger.debug('listVkManagedGroups failed', err);
         return [];
     }
 }

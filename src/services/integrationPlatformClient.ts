@@ -808,6 +808,16 @@ export async function listTelegramChatAdministrators(
   }
 }
 
+export interface VkGroupInfo {
+  /** Числовой ID без минуса */
+  id: string
+  name: string
+  screenName: string
+  /** Правильная ссылка vk.com/{screenName} */
+  url: string
+  photo?: string
+}
+
 export async function listVkGroups(token: string, groupId?: string): Promise<PlatformChannelInfo[]> {
   if (!groupId || groupId.trim() === '') {
     return []
@@ -832,6 +842,102 @@ export async function listVkGroups(token: string, groupId?: string): Promise<Pla
     }))
   } catch (err: unknown) {
     logger.debug('listVkGroups failed', err)
+    return []
+  }
+}
+
+/**
+ * Разрешает VK-сообщество из любого формата ввода:
+ * числовой ID, -ID, URL (vk.com/...), slug (ostrovskidok).
+ */
+export async function resolveVkGroup(token: string, input: string): Promise<VkGroupInfo | null> {
+  const raw = input.trim()
+  if (!raw) return null
+
+  // Извлекаем slug/id из URL: vk.com/club123, vk.com/public123, vk.com/slug
+  const urlMatch = /(?:https?:\/\/)?(?:www\.)?vk\.com\/([a-zA-Z0-9_.-]+)/i.exec(raw)
+  let lookup = urlMatch ? urlMatch[1] : raw
+
+  // Убираем минус в начале, чтобы VK API принял ID без знака
+  lookup = lookup.replace(/^-/, '')
+
+  try {
+    const { data } = await axios.get<{
+      response?: Array<{
+        id: number
+        name?: string
+        screen_name?: string
+        photo_50?: string
+        photo_100?: string
+      }>
+      error?: { error_msg?: string }
+    }>('https://api.vk.com/method/groups.getById', {
+      params: {
+        access_token: token,
+        group_id: lookup,
+        fields: 'screen_name,photo_50,photo_100',
+        v: '5.199',
+      },
+      timeout: 15_000,
+    })
+    if (data.error || !data.response?.length) {
+      return null
+    }
+    const g = data.response[0]!
+    const screenName = g.screen_name ?? `club${g.id}`
+    return {
+      id: String(g.id),
+      name: g.name?.trim() || `club${g.id}`,
+      screenName,
+      url: `https://vk.com/${screenName}`,
+      photo: g.photo_100 ?? g.photo_50,
+    }
+  } catch (err: unknown) {
+    logger.debug('resolveVkGroup failed', { input, err })
+    return null
+  }
+}
+
+/**
+ * Список сообществ, где токен имеет права администратора/редактора.
+ */
+export async function listVkManagedGroups(token: string): Promise<VkGroupInfo[]> {
+  try {
+    const { data } = await axios.get<{
+      response?: {
+        count?: number
+        items?: Array<{
+          id: number
+          name?: string
+          screen_name?: string
+          photo_50?: string
+          photo_100?: string
+        }>
+      }
+      error?: { error_msg?: string }
+    }>('https://api.vk.com/method/groups.get', {
+      params: {
+        access_token: token,
+        filter: 'moder',
+        fields: 'screen_name,photo_50,photo_100',
+        count: 100,
+        v: '5.199',
+      },
+      timeout: 15_000,
+    })
+    if (data.error || !data.response?.items) return []
+    return data.response.items.map((g) => {
+      const screenName = g.screen_name ?? `club${g.id}`
+      return {
+        id: String(g.id),
+        name: g.name?.trim() || `club${g.id}`,
+        screenName,
+        url: `https://vk.com/${screenName}`,
+        photo: g.photo_100 ?? g.photo_50,
+      }
+    })
+  } catch (err: unknown) {
+    logger.debug('listVkManagedGroups failed', err)
     return []
   }
 }
