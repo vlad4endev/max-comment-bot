@@ -1,4 +1,14 @@
-/** База стоп-слов с весами (antispam_v16 / v15b из n8n). */
+/** База стоп-слов с весами (antispam_v16 / v15b из n8n).
+ *
+ * Уровни:
+ * - 100 — мгновенный бан-скор (спам/мат/рекрутинг)
+ * - 80  — сильный сигнал
+ * - 10–9 — финансовый/казино спам
+ * - 8–7 — вакансии, ссылки, «пиши в лс»
+ * - 5–4 — широкие маркеры заработка/рекламы
+ * - 3   — слабые маркеры
+ * - 0   — безопасные фразы (снижают итоговый score, не блокируют сами по себе)
+ */
 
 export const STOP_WORDS_BY_SCORE: Record<number, string[]> = {
   100: [
@@ -399,6 +409,14 @@ export const STOP_WORDS_BY_SCORE: Record<number, string[]> = {
   0: ['хорошо', 'договорились', 'диагностика', 'ремонт', 'цена', 'сколько', 'перенести'],
 }
 
+/** Фразы с весом 0 — легитимная тематика, снижают spam score. */
+export const SAFE_PHRASES: string[] = STOP_WORDS_BY_SCORE[0] ?? []
+
+/** Словарь для скоринга без нулевого уровня (только штрафы). */
+export const SPAM_WORDS_BY_SCORE: Record<number, string[]> = Object.fromEntries(
+  Object.entries(STOP_WORDS_BY_SCORE).filter(([score]) => Number(score) > 0),
+) as Record<number, string[]>
+
 export interface StopWordIndex {
   exact: Map<string, number>
   partial: Array<[string, number]>
@@ -450,4 +468,30 @@ export function checkStopWords(tokens: string[], index: StopWordIndex): number {
     }
   }
   return total
+}
+
+const SAFE_PHRASE_REDUCTION = 15
+
+/** Снижение score за безопасные фразы (уровень 0). */
+export function checkSafePhraseReduction(tokens: string[]): number {
+  let count = 0
+  const found = new Set<string>()
+  const exact = new Set(SAFE_PHRASES.map((w) => w.toLowerCase().trim()).filter((w) => !w.includes(' ')))
+  for (const t of tokens) {
+    if (exact.has(t) && !found.has(t)) {
+      found.add(t)
+      count += 1
+    }
+  }
+  for (let i = 0; i < tokens.length - 1; i++) {
+    const bg = `${tokens[i]} ${tokens[i + 1]}`
+    for (const sw of SAFE_PHRASES) {
+      const phrase = sw.toLowerCase().trim()
+      if (phrase.includes(' ') && bg.includes(phrase) && !found.has(phrase)) {
+        found.add(phrase)
+        count += 1
+      }
+    }
+  }
+  return count * SAFE_PHRASE_REDUCTION
 }

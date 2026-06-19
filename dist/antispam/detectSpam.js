@@ -34,7 +34,7 @@ function isPureEmoji(text, maxTextLength) {
 let baseStopIndex = null;
 function getBaseStopIndex() {
     if (!baseStopIndex) {
-        baseStopIndex = (0, stopWords_1.buildStopWordIndexes)(stopWords_1.STOP_WORDS_BY_SCORE);
+        baseStopIndex = (0, stopWords_1.buildStopWordIndexes)(stopWords_1.SPAM_WORDS_BY_SCORE);
     }
     return baseStopIndex;
 }
@@ -118,6 +118,11 @@ function detectSpam(text, config) {
     if (/\b(мені|допоможу|гривн|₴|виграй|заробляй)\b/u.test(norm)) {
         spamScore += 45;
         categories.add('uk');
+    }
+    const safeReduction = (0, stopWords_1.checkSafePhraseReduction)(tokens);
+    if (safeReduction > 0) {
+        spamScore = Math.max(0, spamScore - safeReduction);
+        categories.add('safe');
     }
     let action = 'leave';
     if (spamScore >= config.banThreshold) {

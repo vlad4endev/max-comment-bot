@@ -1,9 +1,20 @@
 "use strict";
-/** База стоп-слов с весами (antispam_v16 / v15b из n8n). */
+/** База стоп-слов с весами (antispam_v16 / v15b из n8n).
+ *
+ * Уровни:
+ * - 100 — мгновенный бан-скор (спам/мат/рекрутинг)
+ * - 80  — сильный сигнал
+ * - 10–9 — финансовый/казино спам
+ * - 8–7 — вакансии, ссылки, «пиши в лс»
+ * - 5–4 — широкие маркеры заработка/рекламы
+ * - 3   — слабые маркеры
+ * - 0   — безопасные фразы (снижают итоговый score, не блокируют сами по себе)
+ */
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.STOP_WORDS_BY_SCORE = void 0;
+exports.SPAM_WORDS_BY_SCORE = exports.SAFE_PHRASES = exports.STOP_WORDS_BY_SCORE = void 0;
 exports.buildStopWordIndexes = buildStopWordIndexes;
 exports.checkStopWords = checkStopWords;
+exports.checkSafePhraseReduction = checkSafePhraseReduction;
 exports.STOP_WORDS_BY_SCORE = {
     100: [
         'че',
@@ -402,6 +413,10 @@ exports.STOP_WORDS_BY_SCORE = {
     ],
     0: ['хорошо', 'договорились', 'диагностика', 'ремонт', 'цена', 'сколько', 'перенести'],
 };
+/** Фразы с весом 0 — легитимная тематика, снижают spam score. */
+exports.SAFE_PHRASES = exports.STOP_WORDS_BY_SCORE[0] ?? [];
+/** Словарь для скоринга без нулевого уровня (только штрафы). */
+exports.SPAM_WORDS_BY_SCORE = Object.fromEntries(Object.entries(exports.STOP_WORDS_BY_SCORE).filter(([score]) => Number(score) > 0));
 function buildStopWordIndexes(dict, extraExact) {
     const exact = new Map(extraExact);
     const partial = [];
@@ -445,5 +460,29 @@ function checkStopWords(tokens, index) {
         }
     }
     return total;
+}
+const SAFE_PHRASE_REDUCTION = 15;
+/** Снижение score за безопасные фразы (уровень 0). */
+function checkSafePhraseReduction(tokens) {
+    let count = 0;
+    const found = new Set();
+    const exact = new Set(exports.SAFE_PHRASES.map((w) => w.toLowerCase().trim()).filter((w) => !w.includes(' ')));
+    for (const t of tokens) {
+        if (exact.has(t) && !found.has(t)) {
+            found.add(t);
+            count += 1;
+        }
+    }
+    for (let i = 0; i < tokens.length - 1; i++) {
+        const bg = `${tokens[i]} ${tokens[i + 1]}`;
+        for (const sw of exports.SAFE_PHRASES) {
+            const phrase = sw.toLowerCase().trim();
+            if (phrase.includes(' ') && bg.includes(phrase) && !found.has(phrase)) {
+                found.add(phrase);
+                count += 1;
+            }
+        }
+    }
+    return count * SAFE_PHRASE_REDUCTION;
 }
 //# sourceMappingURL=stopWords.js.map

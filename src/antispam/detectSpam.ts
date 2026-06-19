@@ -1,7 +1,8 @@
 import { normalizeAndStemWords, normalizeObfuscation } from './normalize'
 import {
-  STOP_WORDS_BY_SCORE,
+  SPAM_WORDS_BY_SCORE,
   buildStopWordIndexes,
+  checkSafePhraseReduction,
   checkStopWords,
   type StopWordIndex,
 } from './stopWords'
@@ -66,7 +67,7 @@ let baseStopIndex: StopWordIndex | null = null
 
 function getBaseStopIndex(): StopWordIndex {
   if (!baseStopIndex) {
-    baseStopIndex = buildStopWordIndexes(STOP_WORDS_BY_SCORE)
+    baseStopIndex = buildStopWordIndexes(SPAM_WORDS_BY_SCORE)
   }
   return baseStopIndex
 }
@@ -159,6 +160,12 @@ export function detectSpam(text: string, config: AntispamDetectConfig): Antispam
   if (/\b(мені|допоможу|гривн|₴|виграй|заробляй)\b/u.test(norm)) {
     spamScore += 45
     categories.add('uk')
+  }
+
+  const safeReduction = checkSafePhraseReduction(tokens)
+  if (safeReduction > 0) {
+    spamScore = Math.max(0, spamScore - safeReduction)
+    categories.add('safe')
   }
 
   let action: AntispamDetectAction = 'leave'
