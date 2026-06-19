@@ -13,6 +13,7 @@ exports.onMaxPostPublished = onMaxPostPublished;
 exports.startVkChainForwarder = startVkChainForwarder;
 exports.stopVkChainForwarder = stopVkChainForwarder;
 const adminPanelState_1 = require("../api/adminPanelState");
+const antispamService_1 = require("./antispamService");
 const commentStore_1 = require("./commentStore");
 const postStore_1 = require("./postStore");
 const resolveChannelChatId_1 = require("./resolveChannelChatId");
@@ -116,6 +117,23 @@ async function syncVkCommentsForChain(chain) {
                 continue;
             }
             const username = `${VK_USER_PREFIX}${vkComment.from_id}`;
+            const antispam = (0, antispamService_1.evaluateComment)({
+                text: vkComment.text,
+                userId: vkComment.from_id,
+                username,
+                channelChatId: mapping.maxChatId,
+                source: 'vk',
+            });
+            if (!antispam.allowed) {
+                (0, commentSyncGuard_1.markCommentSynced)(guardKey);
+                logger_1.logger.info('[vkChain] blocked VK comment by antispam', {
+                    chainId: chain.id,
+                    vkCommentId: vkComment.id,
+                    spamScore: antispam.spamScore,
+                    reason: antispam.reason,
+                });
+                continue;
+            }
             const saved = commentStore_1.commentStore.saveTelegramThreadComment({
                 post_id: post.post_id,
                 user_id: vkComment.from_id,

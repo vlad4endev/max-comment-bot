@@ -26,6 +26,7 @@ import {
 } from './postCommentMappingStore'
 import { postStore } from './postStore'
 import type { Post } from './postStore'
+import { evaluateComment } from './antispamService'
 import { resolveCanonicalChannelChatId } from './resolveChannelChatId'
 import { resolveTelegramBotToken } from './resolveTelegramBotToken'
 import { isCommentSynced, markCommentSynced } from '../utils/commentSyncGuard'
@@ -309,6 +310,26 @@ export async function handleTgComment(
       chain,
       discussionChatId,
     )
+
+    const antispam = evaluateComment({
+      text,
+      userId,
+      username: authorName,
+      channelChatId: maxChatId,
+      source: 'telegram',
+      isChannelAdmin: isAdmin,
+    })
+    if (!antispam.allowed) {
+      markCommentSynced(`tg:${tgCommentId}`)
+      logger.info('[tgCommentSync] blocked by antispam', {
+        chainId: chain.id,
+        tgCommentId,
+        spamScore: antispam.spamScore,
+        reason: antispam.reason,
+      })
+      return
+    }
+
     const saved = commentStore.saveTelegramThreadComment(
       {
         post_id: post.post_id,

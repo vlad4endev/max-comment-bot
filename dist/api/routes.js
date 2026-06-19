@@ -20,6 +20,7 @@ const channelSettingsStore_1 = require("../services/channelSettingsStore");
 const disabledAdminStore_1 = require("../services/disabledAdminStore");
 const resolveChannelChatId_1 = require("../services/resolveChannelChatId");
 const channelPostActions_1 = require("../services/channelPostActions");
+const antispamService_1 = require("../services/antispamService");
 const commentStore_1 = require("../services/commentStore");
 const subscriberStore_1 = require("../services/subscriberStore");
 const notificationService_1 = require("../services/notificationService");
@@ -1737,6 +1738,24 @@ function createCommentApiRouter(deps) {
         else if (!avatarUrl) {
             const resolved = await (0, memberAvatar_1.resolveMemberAvatarUrls)(deps.bot, chatId, [userId]);
             avatarUrl = resolved.get(userId) ?? null;
+        }
+        if (text) {
+            const antispam = (0, antispamService_1.evaluateComment)({
+                text,
+                userId,
+                username: saveUsername,
+                channelChatId: chatId,
+                source: 'max',
+                isChannelAdmin: postAsChannel,
+            });
+            if (!antispam.allowed) {
+                res.status(403).json({
+                    error: 'spam_blocked',
+                    message: antispam.userMessage ?? 'Комментарий не прошёл проверку на спам.',
+                    spam_score: antispam.spamScore,
+                });
+                return;
+            }
         }
         const saved = commentStore_1.commentStore.saveComment({
             post_id: postId,

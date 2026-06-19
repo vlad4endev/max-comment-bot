@@ -13,6 +13,30 @@ export interface AntispamRules {
   emoji_spam: boolean
 }
 
+/** Параметры скорингового движка (порт antispam_v16 из n8n). */
+export interface AntispamEngineConfig {
+  /** true = только журнал, комментарии не блокируются */
+  soft_mode: boolean
+  enabled: boolean
+  spam_threshold: number
+  ban_threshold: number
+  captcha_required_score: number
+  emoji_overuse_limit: number
+  whitelist_user_ids: number[]
+  blacklist_user_ids: number[]
+}
+
+const DEFAULT_ENGINE_CONFIG: AntispamEngineConfig = {
+  soft_mode: false,
+  enabled: true,
+  spam_threshold: 20,
+  ban_threshold: 100,
+  captcha_required_score: 15,
+  emoji_overuse_limit: 20,
+  whitelist_user_ids: [685859062],
+  blacklist_user_ids: [],
+}
+
 export interface ChannelAdminExtras {
   button_text: string
   welcome_message: string
@@ -98,11 +122,18 @@ export interface AntispamLogEntry {
   reason: string
   text: string
   created_at: string
+  spam_score?: number
+  action?: string
+  source?: string
+  categories?: string[]
 }
 
 interface StateFile {
   global_stopwords: string[]
   antispam_rules: AntispamRules
+  antispam_engine: AntispamEngineConfig
+  /** Пользователи, заблокированные антиспамом (auto_mute / ban). */
+  antispam_restricted_users: number[]
   antispam_log: AntispamLogEntry[]
   channel_extras: Record<string, ChannelAdminExtras>
   tg_chains: TgChainRecord[]
@@ -133,11 +164,44 @@ function defaultState(): StateFile {
   return {
     global_stopwords: [],
     antispam_rules: { ...DEFAULT_RULES },
+    antispam_engine: { ...DEFAULT_ENGINE_CONFIG },
+    antispam_restricted_users: [],
     antispam_log: [],
     channel_extras: {},
     tg_chains: [],
     vk_chains: [],
     autoposts: [],
+  }
+}
+
+function parseEngineConfig(raw: unknown): AntispamEngineConfig {
+  if (typeof raw !== 'object' || raw === null) {
+    return { ...DEFAULT_ENGINE_CONFIG }
+  }
+  const o = raw as Record<string, unknown>
+  const whitelist = Array.isArray(o.whitelist_user_ids)
+    ? o.whitelist_user_ids.filter((id): id is number => typeof id === 'number' && id > 0)
+    : DEFAULT_ENGINE_CONFIG.whitelist_user_ids
+  const blacklist = Array.isArray(o.blacklist_user_ids)
+    ? o.blacklist_user_ids.filter((id): id is number => typeof id === 'number' && id > 0)
+    : []
+  return {
+    soft_mode: typeof o.soft_mode === 'boolean' ? o.soft_mode : DEFAULT_ENGINE_CONFIG.soft_mode,
+    enabled: typeof o.enabled === 'boolean' ? o.enabled : DEFAULT_ENGINE_CONFIG.enabled,
+    spam_threshold:
+      typeof o.spam_threshold === 'number' ? o.spam_threshold : DEFAULT_ENGINE_CONFIG.spam_threshold,
+    ban_threshold:
+      typeof o.ban_threshold === 'number' ? o.ban_threshold : DEFAULT_ENGINE_CONFIG.ban_threshold,
+    captcha_required_score:
+      typeof o.captcha_required_score === 'number'
+        ? o.captcha_required_score
+        : DEFAULT_ENGINE_CONFIG.captcha_required_score,
+    emoji_overuse_limit:
+      typeof o.emoji_overuse_limit === 'number'
+        ? o.emoji_overuse_limit
+        : DEFAULT_ENGINE_CONFIG.emoji_overuse_limit,
+    whitelist_user_ids: whitelist,
+    blacklist_user_ids: blacklist,
   }
 }
 
@@ -159,6 +223,12 @@ async function loadState(): Promise<StateFile> {
         ...defaultState(),
         ...parsed,
         antispam_rules: { ...DEFAULT_RULES, ...(parsed.antispam_rules ?? {}) },
+        antispam_engine: parseEngineConfig(parsed.antispam_engine),
+        antispam_restricted_users: Array.isArray(parsed.antispam_restricted_users)
+          ? parsed.antispam_restricted_users.filter(
+              (id): id is number => typeof id === 'number' && id > 0,
+            )
+          : [],
         global_stopwords: Array.isArray(parsed.global_stopwords) ? parsed.global_stopwords : [],
         antispam_log: Array.isArray(parsed.antispam_log) ? parsed.antispam_log : [],
         channel_extras:
@@ -197,13 +267,88 @@ export async function getAntispamWords(): Promise<{
   global: string[]
   byChannel: Record<string, string[]>
   rules: AntispamRules
+  engine: AntispamEngineConfig
+  restricted_users: number[]
 }> {
   const s = await loadState()
   const byChannel: Record<string, string[]> = {}
   for (const [k, v] of Object.entries(s.channel_extras)) {
     byChannel[k] = [...(v.stopwords ?? [])]
   }
-  return { global: [...s.global_stopwords], byChannel, rules: { ...s.antispam_rules } }
+  return {
+    global: [...s.global_stopwords],
+    byChannel,
+    rules: { ...s.antispam_rules },
+    engine: { ...s.antispam_engine },
+    restricted_users: [...s.antispam_restricted_users],
+  }
+}
+
+export function getAntispamEngineSync(): AntispamEngineConfig {
+  if (!cache) {
+    return { ...DEFAULT_ENGINE_CONFIG }
+  }
+  return { ...cache.antispam_engine }
+}
+
+export function getAntispamRulesSync(): AntispamRules {
+  if (!cache) {
+    return { ...DEFAULT_RULES }
+  }
+  return { ...cache.antispam_rules }
+}
+
+export function getGlobalStopwordsSync(): string[] {
+  if (!cache) {
+    return []
+  }
+  return [...cache.global_stopwords]
+}
+
+export function getChannelExtrasSync(chatId: number): ChannelAdminExtras {
+  if (!cache) {
+    return { ...DEFAULT_CHANNEL_EXTRAS }
+  }
+  const row = cache.channel_extras[String(chatId)]
+  if (!row) {
+    return { ...DEFAULT_CHANNEL_EXTRAS }
+  }
+  return {
+    ...DEFAULT_CHANNEL_EXTRAS,
+    ...row,
+    stopwords: [...(row.stopwords ?? [])],
+  }
+}
+
+export function isAntispamRestrictedUserSync(userId: number): boolean {
+  if (!cache || !Number.isInteger(userId) || userId <= 0) {
+    return false
+  }
+  return cache.antispam_restricted_users.includes(userId)
+}
+
+export async function saveAntispamEngine(patch: Partial<AntispamEngineConfig>): Promise<AntispamEngineConfig> {
+  const s = await loadState()
+  s.antispam_engine = { ...s.antispam_engine, ...patch }
+  if (patch.whitelist_user_ids) {
+    s.antispam_engine.whitelist_user_ids = patch.whitelist_user_ids.filter((id) => id > 0)
+  }
+  if (patch.blacklist_user_ids) {
+    s.antispam_engine.blacklist_user_ids = patch.blacklist_user_ids.filter((id) => id > 0)
+  }
+  await persist()
+  return { ...s.antispam_engine }
+}
+
+export async function restrictAntispamUser(userId: number): Promise<void> {
+  if (!Number.isInteger(userId) || userId <= 0) {
+    return
+  }
+  const s = await loadState()
+  if (!s.antispam_restricted_users.includes(userId)) {
+    s.antispam_restricted_users.push(userId)
+    await persist()
+  }
 }
 
 export async function saveAntispamWords(input: {

@@ -10,6 +10,7 @@
 import type { Bot } from '@maxhub/max-bot-api'
 
 import { listVkChainsSync, updateVkChain, type VkChainRecord } from '../api/adminPanelState'
+import { evaluateComment } from './antispamService'
 import { commentStore } from './commentStore'
 import { postStore } from './postStore'
 import { resolveCanonicalChannelChatId } from './resolveChannelChatId'
@@ -143,6 +144,25 @@ async function syncVkCommentsForChain(chain: VkChainRecord): Promise<void> {
       }
 
       const username = `${VK_USER_PREFIX}${vkComment.from_id}`
+
+      const antispam = evaluateComment({
+        text: vkComment.text,
+        userId: vkComment.from_id,
+        username,
+        channelChatId: mapping.maxChatId,
+        source: 'vk',
+      })
+      if (!antispam.allowed) {
+        markCommentSynced(guardKey)
+        logger.info('[vkChain] blocked VK comment by antispam', {
+          chainId: chain.id,
+          vkCommentId: vkComment.id,
+          spamScore: antispam.spamScore,
+          reason: antispam.reason,
+        })
+        continue
+      }
+
       const saved = commentStore.saveTelegramThreadComment(
         {
           post_id: post.post_id,

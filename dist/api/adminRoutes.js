@@ -1,4 +1,37 @@
 "use strict";
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
@@ -929,6 +962,8 @@ function createAdminRouter(deps) {
             global: data.global,
             byChannel: data.byChannel,
             rules: data.rules,
+            engine: data.engine,
+            restricted_users: data.restricted_users,
             blocked_today: (0, adminPanelState_1.countAntispamBlocksToday)(log),
         });
     });
@@ -960,7 +995,54 @@ function createAdminRouter(deps) {
             global,
             rules: Object.keys(rulesPatch).length > 0 ? rulesPatch : undefined,
         });
+        if (isRecord(req.body.engine)) {
+            const eng = req.body.engine;
+            const enginePatch = {};
+            if (typeof eng.soft_mode === 'boolean')
+                enginePatch.soft_mode = eng.soft_mode;
+            if (typeof eng.enabled === 'boolean')
+                enginePatch.enabled = eng.enabled;
+            if (typeof eng.spam_threshold === 'number')
+                enginePatch.spam_threshold = eng.spam_threshold;
+            if (typeof eng.ban_threshold === 'number')
+                enginePatch.ban_threshold = eng.ban_threshold;
+            if (typeof eng.captcha_required_score === 'number') {
+                enginePatch.captcha_required_score = eng.captcha_required_score;
+            }
+            if (typeof eng.emoji_overuse_limit === 'number') {
+                enginePatch.emoji_overuse_limit = eng.emoji_overuse_limit;
+            }
+            if (Array.isArray(eng.whitelist_user_ids)) {
+                enginePatch.whitelist_user_ids = eng.whitelist_user_ids.filter((id) => typeof id === 'number' && id > 0);
+            }
+            if (Array.isArray(eng.blacklist_user_ids)) {
+                enginePatch.blacklist_user_ids = eng.blacklist_user_ids.filter((id) => typeof id === 'number' && id > 0);
+            }
+            if (Object.keys(enginePatch).length > 0) {
+                await (0, adminPanelState_1.saveAntispamEngine)(enginePatch);
+            }
+        }
         res.json({ ok: true });
+    });
+    secured.post('/antispam/test', async (req, res) => {
+        if (!isRecord(req.body)) {
+            res.status(400).json({ error: 'invalid body' });
+            return;
+        }
+        const text = typeof req.body.text === 'string' ? req.body.text : '';
+        const chatIdRaw = req.body.chat_id;
+        const chatId = typeof chatIdRaw === 'number' && Number.isInteger(chatIdRaw) && chatIdRaw !== 0
+            ? chatIdRaw
+            : 0;
+        const { evaluateComment } = await Promise.resolve().then(() => __importStar(require('../services/antispamService')));
+        const result = evaluateComment({
+            text,
+            userId: 0,
+            username: 'test',
+            channelChatId: chatId,
+            source: 'max',
+        });
+        res.json({ ok: true, result });
     });
     secured.post('/antispam/channel/:chatId', async (req, res) => {
         const chatId = parseNonZeroInt(req.params.chatId);

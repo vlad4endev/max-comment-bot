@@ -26,6 +26,7 @@
   var channelAntispamEditing = false;
   var commentsChatId = null;
   var commentsQuery = '';
+  var commentsStatusFilter = '';
   var usersCache = [];
   var selectedUserId = null;
   var userDetailCache = {};
@@ -1534,6 +1535,38 @@
     );
   }
 
+  function emptyState(iconName, title, desc, btnHtml) {
+    return (
+      '<div class="empty-state">' +
+      '<i data-lucide="' +
+      esc(iconName) +
+      '" style="width:40px;height:40px;opacity:0.35"></i>' +
+      '<h3>' +
+      esc(title) +
+      '</h3>' +
+      '<p>' +
+      esc(desc) +
+      '</p>' +
+      (btnHtml || '') +
+      '</div>'
+    );
+  }
+
+  function skeletonPage(rows) {
+    var n = rows || 4;
+    var cards = '';
+    for (var i = 0; i < (n > 4 ? 4 : n); i++) {
+      cards +=
+        '<div class="metric-card"><div class="skeleton skeleton-text" style="width:55%;margin-bottom:0.5rem"></div><div class="skeleton skeleton-title"></div></div>';
+    }
+    return (
+      '<div class="metrics-grid">' +
+      cards +
+      '</div>' +
+      '<div class="panel"><div class="skeleton skeleton-text"></div><div class="skeleton skeleton-text" style="width:80%"></div><div class="skeleton skeleton-text" style="width:60%"></div></div>'
+    );
+  }
+
   function setTopbarActions(html) {
     var el = qs('#topbarActions');
     if (el) el.innerHTML = html || '';
@@ -1697,30 +1730,39 @@
           '</span></div>';
         html += '</div></div>';
         html += '<div class="stats-grid">';
-        html +=
-          '<div class="stat-card"><div class="label">Каналы</div><div class="value">' +
-          esc(fmtNum(totals.channels)) +
-          '</div><div class="sub">активных: ' +
-          esc(fmtNum(totals.channels_active)) +
-          '</div></div>';
-        html +=
-          '<div class="stat-card"><div class="label">Подписчики бота</div><div class="value">' +
-          esc(fmtNum(totals.bot_subscribers)) +
-          '</div><div class="sub">за период: +' +
-          esc(fmtNum(totals.subscribers_in_period)) +
-          '</div></div>';
-        html +=
-          '<div class="stat-card"><div class="label">Посты</div><div class="value">' +
-          esc(fmtNum(totals.posts)) +
-          '</div><div class="sub">в периоде: ' +
-          esc(fmtNum(totals.posts_in_period)) +
-          '</div></div>';
-        html +=
-          '<div class="stat-card"><div class="label">Комментарии</div><div class="value">' +
-          esc(fmtNum(totals.comments)) +
-          '</div><div class="sub">в периоде: ' +
-          esc(fmtNum(totals.comments_in_period)) +
-          '</div></div>';
+        html += '<div class="metric-card">';
+        html += '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0.4rem">';
+        html += '<div class="metric-card-icon" style="color:var(--text-muted)"><i data-lucide="radio" style="width:16px;height:16px"></i></div>';
+        html += '</div>';
+        html += '<div class="label">Каналы</div><div class="value">' + esc(fmtNum(totals.channels)) + '</div>';
+        html += '<div class="sub">активных: ' + esc(fmtNum(totals.channels_active)) + '</div></div>';
+        html += '<div class="metric-card">';
+        html += '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0.4rem">';
+        html += '<div class="metric-card-icon" style="color:var(--text-muted)"><i data-lucide="users" style="width:16px;height:16px"></i></div>';
+        if (totals.subscribers_in_period) {
+          html += '<span class="delta positive">+' + esc(fmtNum(totals.subscribers_in_period)) + '</span>';
+        }
+        html += '</div>';
+        html += '<div class="label">Подписчики бота</div><div class="value">' + esc(fmtNum(totals.bot_subscribers)) + '</div>';
+        html += '<div class="sub">за период: +' + esc(fmtNum(totals.subscribers_in_period)) + '</div></div>';
+        html += '<div class="metric-card">';
+        html += '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0.4rem">';
+        html += '<div class="metric-card-icon" style="color:var(--text-muted)"><i data-lucide="file-text" style="width:16px;height:16px"></i></div>';
+        if (totals.posts_in_period) {
+          html += '<span class="delta positive">+' + esc(fmtNum(totals.posts_in_period)) + '</span>';
+        }
+        html += '</div>';
+        html += '<div class="label">Посты</div><div class="value">' + esc(fmtNum(totals.posts)) + '</div>';
+        html += '<div class="sub">в периоде: ' + esc(fmtNum(totals.posts_in_period)) + '</div></div>';
+        html += '<div class="metric-card">';
+        html += '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0.4rem">';
+        html += '<div class="metric-card-icon" style="color:var(--text-muted)"><i data-lucide="message-square" style="width:16px;height:16px"></i></div>';
+        if (totals.comments_in_period) {
+          html += '<span class="delta positive">+' + esc(fmtNum(totals.comments_in_period)) + '</span>';
+        }
+        html += '</div>';
+        html += '<div class="label">Комментарии</div><div class="value">' + esc(fmtNum(totals.comments)) + '</div>';
+        html += '<div class="sub">в периоде: ' + esc(fmtNum(totals.comments_in_period)) + '</div></div>';
         html +=
           '<div class="stat-card"><div class="label">Уникальные авторы</div><div class="value">' +
           esc(fmtNum(totals.unique_commenters_in_period)) +
@@ -1945,7 +1987,7 @@
     if (!main) return;
     var seq = ++dashLoadSeq;
     if (showLoading !== false) {
-      main.innerHTML = '<div class="dash-loading muted">Загрузка дашборда…</div>';
+      main.innerHTML = skeletonPage();
     }
     var periodLabel =
       dashPeriodDays === 0 ? 'всё время' : dashPeriodDays === 30 ? '30 дней' : '7 дней';
@@ -2056,7 +2098,7 @@
     var main = qs('#mainContent');
     if (!main) return;
     if (forceReload !== false || !channelsCache.length || channelsCacheLight) {
-      main.innerHTML = '<div class="dash-loading muted">Загрузка каналов…</div>';
+      main.innerHTML = skeletonPage();
       getJson('/channels')
         .then(function (data) {
           if (currentRoute !== 'channels') return;
@@ -2911,7 +2953,7 @@
   function renderTgChains() {
     var main = qs('#mainContent');
     if (!main) return;
-    main.innerHTML = '<div class="dash-loading muted">Загрузка…</div>';
+    main.innerHTML = skeletonPage();
     ensureIntegrationsCache().then(function () {
       if (chainsPlatformTab === 'vk') {
         renderVkChainsPage(main);
@@ -3602,7 +3644,7 @@
     if (!main) return;
     clearChannelImportPoll();
     channelImportJobId = null;
-    main.innerHTML = '<div class="dash-loading muted">Загрузка каналов…</div>';
+    main.innerHTML = skeletonPage();
 
     Promise.all([
       fetchMaxLinkedChannels(false).catch(function () {
@@ -3990,7 +4032,7 @@
   function renderAutoposts() {
     var main = qs('#mainContent');
     if (!main) return;
-    main.innerHTML = '<div class="dash-loading muted">Загрузка…</div>';
+    main.innerHTML = skeletonPage();
     Promise.all([
       getJson('/autoposts'),
       getJson('/autoposts/channels').catch(function () {
@@ -4028,6 +4070,18 @@
         var html = '<h2>Автопосты</h2>';
         html +=
           '<p class="muted text-sm mb-md">Отложенная публикация в Telegram-каналы из раздела «Интеграции». Альбомы не поддерживают инлайн-кнопку — используйте одно фото/видео или кнопку без альбома.</p>';
+        var totalPosts = posts.length;
+        var activePosts = posts.filter(function (p) {
+          return p.status === 'active' || p.schedule_type === 'recurring';
+        }).length;
+        var sentPosts = posts.filter(function (p) {
+          return p.status === 'sent';
+        }).length;
+        html += '<div class="metrics-grid" style="margin-bottom:1rem">';
+        html += '<div class="metric-card"><div class="label">Всего постов</div><div class="value">' + totalPosts + '</div></div>';
+        html += '<div class="metric-card"><div class="label">Активных серий</div><div class="value">' + activePosts + '</div></div>';
+        html += '<div class="metric-card"><div class="label">Отправлено</div><div class="value">' + sentPosts + '</div></div>';
+        html += '</div>';
         if (hint) {
           html += '<p class="text-sm" style="color:var(--warning,#e6a700)">' + esc(hint) + '</p>';
         }
@@ -4059,48 +4113,59 @@
           '<div class="form-group"><label>Кнопка — URL</label><input class="input" id="ap_btn_url" placeholder="https://"/></div>';
         html += '</div>';
         html += '<button type="button" class="btn btn-primary" id="ap_create">Запланировать</button></div>';
-        html += '<div class="table-wrap"><table><thead><tr>';
-        html +=
-          '<th>Канал</th><th>Текст</th><th>След. запуск</th><th>Расписание</th><th>Статус</th><th></th>';
-        html += '</tr></thead><tbody>';
-        posts.forEach(function (p) {
-          var sched =
-            p.schedule_type === 'recurring'
-              ? (p.recurring_time || '—') + ' · дни ' + (p.weekdays ? p.weekdays.join(',') : '—')
-              : 'единоразово';
-          html += '<tr>';
-          html += '<td>' + esc(p.channel_title || p.target_channel_id) + '</td>';
+        if (!posts.length) {
+          html += emptyState('calendar-off', 'Нет запланированных постов', 'Создайте первый автопост, заполнив форму выше');
+        } else {
+          html += '<div class="table-wrap"><table><thead><tr>';
           html +=
-            '<td style="max-width:200px;overflow:hidden;text-overflow:ellipsis" title="' +
-            esc(p.text) +
-            '">' +
-            esc(p.text || '—') +
-            (p.media && p.media.length ? ' 📎' + p.media.length : '') +
-            '</td>';
-          html += '<td class="mono text-sm">' + esc(p.scheduled_at) + '</td>';
-          html += '<td class="text-sm">' + esc(sched) + '</td>';
-          html += '<td>' + esc(apStatusLabel(p.status)) + '</td>';
-          html += '<td class="flex gap-xs" style="flex-wrap:wrap">';
-          if (p.status === 'active') {
+            '<th>Канал</th><th>Текст</th><th>Тип</th><th>След. запуск</th><th>Расписание</th><th>Статус</th><th></th>';
+          html += '</tr></thead><tbody>';
+          posts.forEach(function (p) {
+            var sched =
+              p.schedule_type === 'recurring'
+                ? (p.recurring_time || '—') + ' · дни ' + (p.weekdays ? p.weekdays.join(',') : '—')
+                : 'единоразово';
+            var typeLabel = p.schedule_type === 'recurring' ? 'Серия' : 'Разово';
+            var typeCls = p.schedule_type === 'recurring' ? 'badge-accent' : 'badge-muted';
+            var statusLabel =
+              p.status === 'active' ? 'Активен' : p.status === 'sent' ? 'Отправлен' : apStatusLabel(p.status);
+            html += '<tr>';
+            html += '<td>' + esc(p.channel_title || p.target_channel_id) + '</td>';
             html +=
-              '<button type="button" class="btn btn-ghost btn-sm" data-pause-ap="' +
-              esc(p.id) +
-              '">Пауза</button>';
-          }
-          if (p.status === 'paused' || p.status === 'failed') {
+              '<td style="max-width:200px;overflow:hidden;text-overflow:ellipsis" title="' +
+              esc(p.text) +
+              '">' +
+              esc(p.text || '—') +
+              (p.media && p.media.length ? ' 📎' + p.media.length : '') +
+              '</td>';
+            html += '<td><span class="badge ' + typeCls + '">' + esc(typeLabel) + '</span></td>';
             html +=
-              '<button type="button" class="btn btn-ghost btn-sm" data-resume-ap="' +
+              '<td class="mono text-sm muted">' +
+              esc(fmtDateTime(p.scheduled_at || p.next_run)) +
+              '</td>';
+            html += '<td class="text-sm">' + esc(sched) + '</td>';
+            html += '<td>' + esc(statusLabel) + '</td>';
+            html += '<td class="flex gap-xs" style="flex-wrap:wrap">';
+            if (p.status === 'active') {
+              html +=
+                '<button type="button" class="btn btn-ghost btn-sm" data-pause-ap="' +
+                esc(p.id) +
+                '">Пауза</button>';
+            }
+            if (p.status === 'paused' || p.status === 'failed') {
+              html +=
+                '<button type="button" class="btn btn-ghost btn-sm" data-resume-ap="' +
+                esc(p.id) +
+                '">Возобновить</button>';
+            }
+            html +=
+              '<button type="button" class="btn btn-danger btn-sm" data-del-ap="' +
               esc(p.id) +
-              '">Возобновить</button>';
-          }
-          html +=
-            '<button type="button" class="btn btn-danger btn-sm" data-del-ap="' +
-            esc(p.id) +
-            '">Удалить</button></td>';
-          html += '</tr>';
-        });
-        if (!posts.length) html += '<tr><td colspan="6" class="muted">Нет запланированных постов</td></tr>';
-        html += '</tbody></table></div>';
+              '">Удалить</button></td>';
+            html += '</tr>';
+          });
+          html += '</tbody></table></div>';
+        }
         main.innerHTML = html;
 
         var scheduleTypeEl = qs('#ap_schedule_type', main);
@@ -4235,7 +4300,7 @@
   function renderIntegrations() {
     var main = qs('#mainContent');
     if (!main) return;
-    main.innerHTML = '<div class="dash-loading muted">Загрузка…</div>';
+    main.innerHTML = skeletonPage();
     Promise.all([
       getJson('/channels').catch(function () { return { channels: [] }; }),
       getJsonAbs(API_INTEGRATIONS),
@@ -4806,41 +4871,109 @@
   function renderAntispam() {
     var main = qs('#mainContent');
     if (!main) return;
-    main.innerHTML = '<div class="dash-loading muted">Загрузка…</div>';
+    main.innerHTML = skeletonPage();
     Promise.all([getJson('/antispam/words'), getJson('/antispam/log?limit=100')])
       .then(function (pair) {
         if (currentRoute !== 'antispam') return;
         var w = pair[0];
         var log = pair[1].entries || [];
         var rules = w.rules || {};
+        var engine = w.engine || {};
         var html = '<div class="panel">';
-        html += '<div class="content-block-head"><div><h2 style="margin:0;font-size:1rem">Глобальные правила</h2>';
-        html += '<p class="block-desc">Стоп-слова и фильтры применяются ко всем каналам, если не переопределены локально</p></div></div>';
+        html += '<div class="content-block-head"><div><h2 style="margin:0;font-size:1rem">Движок antispam_v16</h2>';
+        html += '<p class="block-desc">Скоринговая система из n8n: стоп-слова, ссылки, эмодзи, пороги блокировки</p></div></div>';
         html += '<p class="text-sm muted">Заблокировано сегодня: <strong>' + esc(String(w.blocked_today || 0)) + '</strong></p>';
+        html += '<div id="engineToggles">';
+        html += toggleRow('antispam_enabled', 'Антиспам включён', '', engine.enabled !== false);
+        html += toggleRow('soft_mode', 'Только журнал (без блокировки)', 'Режим тестирования', !!engine.soft_mode);
+        html += '</div>';
+        html += '<div class="form-row mt-sm">';
+        html += '<div class="form-group"><label>Порог спама</label><input class="input" id="as_spam_threshold" type="number" value="' + esc(String(engine.spam_threshold != null ? engine.spam_threshold : 20)) + '"></div>';
+        html += '<div class="form-group"><label>Порог бана</label><input class="input" id="as_ban_threshold" type="number" value="' + esc(String(engine.ban_threshold != null ? engine.ban_threshold : 100)) + '"></div>';
+        html += '<div class="form-group"><label>Порог captcha</label><input class="input" id="as_captcha_score" type="number" value="' + esc(String(engine.captcha_required_score != null ? engine.captcha_required_score : 15)) + '"></div>';
+        html += '</div>';
+        html += '<div class="form-group"><label>Whitelist user ID (через запятую)</label><input class="input" id="as_whitelist" value="' + esc((engine.whitelist_user_ids || []).join(', ')) + '"></div>';
+        html += '<div class="form-group"><label>Blacklist user ID (через запятую)</label><input class="input" id="as_blacklist" value="' + esc((engine.blacklist_user_ids || []).join(', ')) + '"></div>';
+        html += sectionHead('Глобальные правила', 'Дополнительные стоп-слова и переключатели');
         html += '<div class="form-group"><label>Глобальные стоп-слова</label><div class="tags-input-wrap" id="g_stop"></div></div>';
         html += '<div id="gRules">';
-        html += toggleRow('block_links', 'Блокировать ссылки', 'Глобально', !!rules.block_links);
-        html += toggleRow('flood_protection', 'Антифлуд', '', !!rules.flood_protection);
-        html += toggleRow('caps_protection', 'КАПС', '', !!rules.caps_protection);
-        html += toggleRow('emoji_spam', 'Спам эмодзи', '', !!rules.emoji_spam);
+        html += '<div class="toggle-grid">';
+        html += '<div class="toggle-grid-item">' + toggleRow('block_links', 'Блокировать ссылки', '', !!rules.block_links) + '</div>';
+        html += '<div class="toggle-grid-item">' + toggleRow('flood_protection', 'Антифлуд', '', !!rules.flood_protection) + '</div>';
+        html += '<div class="toggle-grid-item">' + toggleRow('caps_protection', 'КАПС защита', '', !!rules.caps_protection) + '</div>';
+        html += '<div class="toggle-grid-item">' + toggleRow('emoji_spam', 'Спам эмодзи', '', !!rules.emoji_spam) + '</div>';
         html += '</div>';
-        html += '<button type="button" class="btn btn-primary mt-sm" id="btnSaveGlobalAs">Сохранить слова и правила</button>';
+        html += '</div>';
+        html += '<button type="button" class="btn btn-primary mt-sm" id="btnSaveGlobalAs">Сохранить настройки</button>';
+        html += sectionHead('Проверка текста', 'Тест без публикации комментария');
+        html += '<div class="form-group"><textarea class="input" id="as_test_text" rows="3" placeholder="Вставьте текст комментария…"></textarea></div>';
+        html += '<button type="button" class="btn btn-ghost mt-sm" id="btnTestAntispam">Проверить</button>';
+        html += '<pre class="mono text-sm mt-sm" id="as_test_result" style="white-space:pre-wrap"></pre>';
         html += sectionHead('Журнал блокировок', 'Последние срабатывания антиспама');
-        html += '<div class="table-wrap"><table><thead><tr>';
-        html += '<th>Время</th><th>Канал</th><th>Пользователь</th><th>Причина</th><th>Текст</th>';
-        html += '</tr></thead><tbody>';
-        log.forEach(function (e) {
-          html += '<tr>';
-          html += '<td class="mono text-sm">' + esc(e.created_at) + '</td>';
-          html += '<td>' + esc(e.channel_title || String(e.channel_chat_id)) + '</td>';
-          html += '<td>' + esc(e.username || String(e.user_id)) + '</td>';
-          html += '<td>' + esc(e.reason) + '</td>';
-          html += '<td style="max-width:200px">' + esc(e.text) + '</td>';
-          html += '</tr>';
-        });
-        if (!log.length) html += '<tr><td colspan="5" class="muted">Пусто</td></tr>';
-        html += '</tbody></table></div></div>';
+        html += '<div class="search-bar" style="margin-bottom:0.75rem">';
+        html += '<select class="select" id="asp_filter_chan" style="max-width:200px"><option value="">Все каналы</option></select>';
+        html += '<select class="select" id="asp_filter_reason" style="max-width:160px"><option value="">Все причины</option></select>';
+        html += '<button type="button" class="btn btn-danger btn-sm" style="margin-left:auto" id="asp_clear_log"><i data-lucide="trash-2"></i> Очистить журнал</button>';
+        html += '</div>';
+        if (!log.length) {
+          html += emptyState('shield-check', 'Блокировок нет', 'Антиспам не срабатывал за выбранный период');
+        } else {
+          html += '<div class="table-wrap"><table><thead><tr>';
+          html += '<th>Время</th><th>Канал</th><th>Пользователь</th><th>Score</th><th>Причина</th><th>Текст</th>';
+          html += '</tr></thead><tbody>';
+          log.forEach(function (e) {
+            html += '<tr>';
+            html += '<td class="mono text-sm">' + esc(fmtDateTime(e.created_at)) + '</td>';
+            html += '<td>' + esc(e.channel_title || String(e.channel_chat_id)) + '</td>';
+            html += '<td>' + esc(e.username || String(e.user_id)) + '</td>';
+            html += '<td>' + esc(e.spam_score != null ? String(e.spam_score) : '—') + '</td>';
+            html += '<td>' + esc(e.reason) + '</td>';
+            html +=
+              '<td style="max-width:200px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="' +
+              esc(e.text) +
+              '">' +
+              esc(truncateText(e.text, 80)) +
+              '</td>';
+            html += '</tr>';
+          });
+          html += '</tbody></table></div>';
+        }
+        html += '</div>';
         main.innerHTML = html;
+        var clearBtn = qs('#asp_clear_log', main);
+        if (clearBtn) {
+          clearBtn.addEventListener('click', function () {
+            showConfirm('Очистить журнал?', 'Все записи журнала блокировок будут удалены.', function () {
+              postJson('/antispam/log/clear', {})
+                .then(function () {
+                  showToast('Журнал очищен', 'success');
+                  renderAntispam();
+                })
+                .catch(function (e) {
+                  showToast(e.message || 'Ошибка', 'error');
+                });
+            });
+          });
+        }
+        var chanSel = qs('#asp_filter_chan', main);
+        var reasonSel = qs('#asp_filter_reason', main);
+        if (chanSel && log.length) {
+          var chans = [];
+          var reasons = [];
+          log.forEach(function (e) {
+            var ch = e.channel_title || String(e.channel_chat_id);
+            if (chans.indexOf(ch) === -1) chans.push(ch);
+            if (e.reason && reasons.indexOf(e.reason) === -1) reasons.push(e.reason);
+          });
+          chans.forEach(function (ch) {
+            chanSel.innerHTML += '<option value="' + esc(ch) + '">' + esc(ch) + '</option>';
+          });
+          if (reasonSel) {
+            reasons.forEach(function (r) {
+              reasonSel.innerHTML += '<option value="' + esc(r) + '">' + esc(r) + '</option>';
+            });
+          }
+        }
         var wrap = qs('#g_stop', main);
         if (wrap) bindTagsInput(wrap, w.global || [], function () {});
         bindToggleRows(main, null);
@@ -4851,6 +4984,14 @@
             if (txt && txt.nodeType === 3) tags.push(String(txt.textContent || '').trim());
           });
           var sw = readSwitches(main);
+          var wl = String(qs('#as_whitelist', main).value || '')
+            .split(',')
+            .map(function (s) { return parseInt(s.trim(), 10); })
+            .filter(function (n) { return !isNaN(n) && n > 0; });
+          var bl = String(qs('#as_blacklist', main).value || '')
+            .split(',')
+            .map(function (s) { return parseInt(s.trim(), 10); })
+            .filter(function (n) { return !isNaN(n) && n > 0; });
           postJson('/antispam/words', {
             global: tags,
             rules: {
@@ -4858,6 +4999,15 @@
               flood_protection: !!sw.flood_protection,
               caps_protection: !!sw.caps_protection,
               emoji_spam: !!sw.emoji_spam,
+            },
+            engine: {
+              enabled: !!sw.antispam_enabled,
+              soft_mode: !!sw.soft_mode,
+              spam_threshold: parseInt(qs('#as_spam_threshold', main).value, 10) || 20,
+              ban_threshold: parseInt(qs('#as_ban_threshold', main).value, 10) || 100,
+              captcha_required_score: parseInt(qs('#as_captcha_score', main).value, 10) || 15,
+              whitelist_user_ids: wl,
+              blacklist_user_ids: bl,
             },
           })
             .then(function () {
@@ -4868,6 +5018,33 @@
               showToast(e.message || 'Ошибка', 'error');
             });
         });
+        var btnTest = qs('#btnTestAntispam', main);
+        if (btnTest) {
+          btnTest.addEventListener('click', function () {
+            var text = String(qs('#as_test_text', main).value || '');
+            postJson('/antispam/test', { text: text, chat_id: 0 })
+              .then(function (data) {
+                var r = data.result || {};
+                var out = qs('#as_test_result', main);
+                if (out) {
+                  out.textContent =
+                    'action: ' +
+                    (r.action || '—') +
+                    '\nallowed: ' +
+                    String(r.allowed) +
+                    '\nscore: ' +
+                    String(r.spamScore != null ? r.spamScore : '—') +
+                    '\ncategories: ' +
+                    (r.categories && r.categories.length ? r.categories.join(', ') : '—') +
+                    '\nreason: ' +
+                    (r.reason || '—');
+                }
+              })
+              .catch(function (e) {
+                showToast(e.message || 'Ошибка', 'error');
+              });
+          });
+        }
         refreshIcons();
       })
       .catch(function (err) {
@@ -4885,6 +5062,11 @@
       '<input class="input" id="com_q" placeholder="Поиск" value="' +
       esc(commentsQuery) +
       '"/>' +
+      '<select class="select" id="cm_filter_status" style="max-width:160px">' +
+      '<option value="">Все статусы</option>' +
+      '<option value="answered">Отвечено</option>' +
+      '<option value="pending">Ожидает</option>' +
+      '</select>' +
       '<button type="button" class="btn btn-primary" id="com_load">Показать</button></div>' +
       '<div id="com_list" class="muted">Загрузка…</div>';
     getJson('/channels?summary=1')
@@ -4921,6 +5103,14 @@
             loadCommentsList();
           });
         }
+        var statusSel = qs('#cm_filter_status', main);
+        if (statusSel) {
+          statusSel.value = commentsStatusFilter || '';
+          statusSel.addEventListener('change', function () {
+            commentsStatusFilter = statusSel.value;
+            loadCommentsList();
+          });
+        }
         if (commentsChatId) {
           loadCommentsList();
         } else {
@@ -4939,7 +5129,8 @@
     if (!host || !commentsChatId) return;
     host.innerHTML = 'Загрузка…';
     var q = commentsQuery ? '&q=' + encodeURIComponent(commentsQuery) : '';
-    getJson('/comments?chat_id=' + encodeURIComponent(String(commentsChatId)) + q + '&limit=150')
+    var statusQ = commentsStatusFilter ? '&status=' + encodeURIComponent(commentsStatusFilter) : '';
+    getJson('/comments?chat_id=' + encodeURIComponent(String(commentsChatId)) + q + statusQ + '&limit=150')
       .then(function (data) {
         var list = data.comments || [];
         var html = '';
@@ -4951,22 +5142,25 @@
             esc(String(data.total_in_channel || list.length)) +
             ' комментариев. Уточните поиск, чтобы найти остальные.</p>';
         }
-        html += '<div class="table-wrap"><table><thead><tr>';
-        html += '<th>Пост</th><th>Автор</th><th>Текст</th><th>Время</th><th></th></tr></thead><tbody>';
-        list.forEach(function (c) {
-          html += '<tr>';
-          html += '<td style="max-width:160px">' + esc(c.post_preview || c.post_id) + '</td>';
-          html += '<td>' + esc(c.username) + '<div class="mono text-sm muted">' + esc(String(c.user_id)) + '</div></td>';
-          html += '<td>' + esc(c.text) + '</td>';
-          html += '<td class="text-sm">' + esc(c.timestamp) + '</td>';
-          html +=
-            '<td><button type="button" class="btn btn-danger btn-sm" data-del-com="' +
-            esc(c.comment_id) +
-            '">Удалить</button></td>';
-          html += '</tr>';
-        });
-        if (!list.length) html += '<tr><td colspan="5" class="muted">Нет комментариев</td></tr>';
-        html += '</tbody></table></div>';
+        if (!list.length) {
+          html += emptyState('message-square-off', 'Нет комментариев', 'Попробуйте изменить фильтры или выбрать другой канал');
+        } else {
+          html += '<div class="table-wrap"><table><thead><tr>';
+          html += '<th>Пост</th><th>Автор</th><th>Текст</th><th>Время</th><th></th></tr></thead><tbody>';
+          list.forEach(function (c) {
+            html += '<tr>';
+            html += '<td style="max-width:160px">' + esc(c.post_preview || c.post_id) + '</td>';
+            html += '<td>' + esc(c.username) + '<div class="mono text-sm muted">' + esc(String(c.user_id)) + '</div></td>';
+            html += '<td>' + esc(c.text) + '</td>';
+            html += '<td class="text-sm">' + esc(c.timestamp) + '</td>';
+            html +=
+              '<td><button type="button" class="btn btn-danger btn-sm" data-del-com="' +
+              esc(c.comment_id) +
+              '">Удалить</button></td>';
+            html += '</tr>';
+          });
+          html += '</tbody></table></div>';
+        }
         host.innerHTML = html;
         qsa('[data-del-com]', host).forEach(function (b) {
           b.addEventListener('click', function () {
@@ -5079,7 +5273,7 @@
 
   function usersListHtml(list) {
     if (!list.length) {
-      return '<div class="empty-state"><i data-lucide="users"></i><h3>Пользователи не найдены</h3><p>Измените фильтр или дождитесь новых подписчиков.</p></div>';
+      return emptyState('users', 'Нет пользователей', 'Пользователи появятся после первых взаимодействий с ботом');
     }
     var html = '';
     list.forEach(function (u) {
@@ -5406,7 +5600,7 @@
   function renderUsers() {
     var main = qs('#mainContent');
     if (!main) return;
-    main.innerHTML = '<div class="dash-loading muted">Загрузка пользователей…</div>';
+    main.innerHTML = skeletonPage();
     getJson('/users')
       .then(function (data) {
         if (currentRoute !== 'users') return;
@@ -5813,25 +6007,57 @@
   function renderSettings() {
     var main = qs('#mainContent');
     if (!main) return;
-    main.innerHTML = '<div class="dash-loading muted">Загрузка…</div>';
+    main.innerHTML = skeletonPage();
     getJson('/settings')
       .then(function (s) {
         if (currentRoute !== 'settings') return;
         var sec = s.poll_interval_sec != null ? s.poll_interval_sec : 30;
-        var html = '<h2>Настройки</h2>';
-        html += '<div class="form-group"><label>Интервал опроса (сек)</label>';
+        var html = '<div class="two-col">';
+
+        html += '<div>';
+        html += '<div class="panel" style="margin-bottom:0.75rem">';
+        html += sectionHead('Основные', 'Параметры работы бота');
+        html += '<div class="form-group"><label>Интервал опроса каналов (сек)</label>';
         html +=
-          '<input class="input mono" id="set_poll" type="number" step="1" min="1" value="' +
+          '<input class="input" id="set_poll" type="number" step="1" min="1" value="' +
           esc(String(sec)) +
           '"/></div>';
-        html += '<button type="button" class="btn btn-primary" id="set_save_poll">Сохранить интервал</button>';
-        html += '<h3 class="mt-md">Сброс данных</h3><p class="text-sm muted">Опасные операции — только при необходимости.</p>';
-        html += '<div class="flex gap-sm mt-sm">';
-        html += '<button type="button" class="btn btn-danger" id="set_reset_posts">Сбросить посты и комментарии</button>';
-        html += '<button type="button" class="btn btn-danger" id="set_reset_subs">Сбросить подписчиков</button>';
+        html += '<div class="form-group"><label>Никнейм бота</label>';
+        html +=
+          '<input class="input" value="' +
+          esc(s.bot_nickname || '—') +
+          '" readonly style="color:var(--text-muted);cursor:default"/></div>';
+        html += '<button type="button" class="btn btn-primary" id="set_save_poll"><i data-lucide="save"></i> Сохранить</button>';
         html += '</div>';
-        html += '<p class="text-sm mt-md muted">Бот: ' + esc(s.bot_nickname || '') + '</p>';
+
+        html += '<div class="panel">';
+        html += sectionHead('Уведомления', 'Когда получать оповещения');
+        html += toggleRow('notify_errors', 'Уведомлять об ошибках', 'Критические сбои в работе бота', true);
+        html += toggleRow('notify_antispam', 'Блокировки антиспама', 'При срабатывании фильтров', false);
+        html += toggleRow('notify_subscribers', 'Новые подписчики', 'Каждый новый пользователь', false);
+        html += '</div>';
+        html += '</div>';
+
+        html += '<div class="panel panel-danger" style="border-color:rgba(239,68,68,0.3)">';
+        html += '<div class="content-block-head"><div><h3 style="color:var(--danger)"><i data-lucide="alert-triangle" style="width:14px;height:14px;vertical-align:-2px;margin-right:4px"></i>Опасная зона</h3>';
+        html += '<p class="block-desc">Необратимые операции — только при необходимости</p></div></div>';
+
+        html += '<div class="danger-zone-item">';
+        html += '<div class="danger-zone-item-title">Сбросить посты и комментарии</div>';
+        html += '<div class="danger-zone-item-desc">Удалятся все посты и комментарии из локальной базы.</div>';
+        html += '<button type="button" class="btn btn-danger btn-sm" id="set_reset_posts"><i data-lucide="trash-2"></i> Сбросить посты</button>';
+        html += '</div>';
+
+        html += '<div class="danger-zone-item">';
+        html += '<div class="danger-zone-item-title">Сбросить подписчиков</div>';
+        html += '<div class="danger-zone-item-desc">Список подписчиков бота будет очищен.</div>';
+        html += '<button type="button" class="btn btn-danger btn-sm" id="set_reset_subs"><i data-lucide="trash-2"></i> Сбросить подписчиков</button>';
+        html += '</div>';
+        html += '</div>';
+
+        html += '</div>';
         main.innerHTML = html;
+        bindToggleRows(main, null);
         qs('#set_save_poll', main).addEventListener('click', function () {
           var v = Number(qs('#set_poll', main).value);
           postJson('/settings', { poll_interval: v })

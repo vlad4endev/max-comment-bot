@@ -24,6 +24,7 @@ import {
   resolveChannelChatIdFromInviteParam,
 } from '../services/resolveChannelChatId'
 import { ensurePostFromChannelMessage, isUserChannelAdmin } from '../services/channelPostActions'
+import { evaluateComment } from '../services/antispamService'
 import type { Comment } from '../services/commentStore'
 import { commentStore } from '../services/commentStore'
 import { subscriberStore } from '../services/subscriberStore'
@@ -1976,6 +1977,25 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
     } else if (!avatarUrl) {
       const resolved = await resolveMemberAvatarUrls(deps.bot, chatId, [userId])
       avatarUrl = resolved.get(userId) ?? null
+    }
+
+    if (text) {
+      const antispam = evaluateComment({
+        text,
+        userId,
+        username: saveUsername,
+        channelChatId: chatId,
+        source: 'max',
+        isChannelAdmin: postAsChannel,
+      })
+      if (!antispam.allowed) {
+        res.status(403).json({
+          error: 'spam_blocked',
+          message: antispam.userMessage ?? 'Комментарий не прошёл проверку на спам.',
+          spam_score: antispam.spamScore,
+        })
+        return
+      }
     }
 
     const saved = commentStore.saveComment({

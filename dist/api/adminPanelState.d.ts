@@ -4,6 +4,18 @@ export interface AntispamRules {
     caps_protection: boolean;
     emoji_spam: boolean;
 }
+/** Параметры скорингового движка (порт antispam_v16 из n8n). */
+export interface AntispamEngineConfig {
+    /** true = только журнал, комментарии не блокируются */
+    soft_mode: boolean;
+    enabled: boolean;
+    spam_threshold: number;
+    ban_threshold: number;
+    captcha_required_score: number;
+    emoji_overuse_limit: number;
+    whitelist_user_ids: number[];
+    blacklist_user_ids: number[];
+}
 export interface ChannelAdminExtras {
     button_text: string;
     welcome_message: string;
@@ -85,10 +97,17 @@ export interface AntispamLogEntry {
     reason: string;
     text: string;
     created_at: string;
+    spam_score?: number;
+    action?: string;
+    source?: string;
+    categories?: string[];
 }
 interface StateFile {
     global_stopwords: string[];
     antispam_rules: AntispamRules;
+    antispam_engine: AntispamEngineConfig;
+    /** Пользователи, заблокированные антиспамом (auto_mute / ban). */
+    antispam_restricted_users: number[];
     antispam_log: AntispamLogEntry[];
     channel_extras: Record<string, ChannelAdminExtras>;
     tg_chains: TgChainRecord[];
@@ -100,7 +119,16 @@ export declare function getAntispamWords(): Promise<{
     global: string[];
     byChannel: Record<string, string[]>;
     rules: AntispamRules;
+    engine: AntispamEngineConfig;
+    restricted_users: number[];
 }>;
+export declare function getAntispamEngineSync(): AntispamEngineConfig;
+export declare function getAntispamRulesSync(): AntispamRules;
+export declare function getGlobalStopwordsSync(): string[];
+export declare function getChannelExtrasSync(chatId: number): ChannelAdminExtras;
+export declare function isAntispamRestrictedUserSync(userId: number): boolean;
+export declare function saveAntispamEngine(patch: Partial<AntispamEngineConfig>): Promise<AntispamEngineConfig>;
+export declare function restrictAntispamUser(userId: number): Promise<void>;
 export declare function saveAntispamWords(input: {
     global?: string[];
     rules?: Partial<AntispamRules>;

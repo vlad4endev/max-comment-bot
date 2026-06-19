@@ -2,6 +2,13 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.getAdminPanelState = getAdminPanelState;
 exports.getAntispamWords = getAntispamWords;
+exports.getAntispamEngineSync = getAntispamEngineSync;
+exports.getAntispamRulesSync = getAntispamRulesSync;
+exports.getGlobalStopwordsSync = getGlobalStopwordsSync;
+exports.getChannelExtrasSync = getChannelExtrasSync;
+exports.isAntispamRestrictedUserSync = isAntispamRestrictedUserSync;
+exports.saveAntispamEngine = saveAntispamEngine;
+exports.restrictAntispamUser = restrictAntispamUser;
 exports.saveAntispamWords = saveAntispamWords;
 exports.getAntispamLog = getAntispamLog;
 exports.pushAntispamLog = pushAntispamLog;
@@ -28,6 +35,16 @@ const node_path_1 = require("node:path");
 const node_crypto_1 = require("node:crypto");
 const logger_1 = require("../utils/logger");
 const STATE_PATH = (0, node_path_1.join)(process.cwd(), 'data', 'admin-panel-state.json');
+const DEFAULT_ENGINE_CONFIG = {
+    soft_mode: false,
+    enabled: true,
+    spam_threshold: 20,
+    ban_threshold: 100,
+    captcha_required_score: 15,
+    emoji_overuse_limit: 20,
+    whitelist_user_ids: [685859062],
+    blacklist_user_ids: [],
+};
 const DEFAULT_RULES = {
     block_links: true,
     flood_protection: true,
@@ -49,11 +66,39 @@ function defaultState() {
     return {
         global_stopwords: [],
         antispam_rules: { ...DEFAULT_RULES },
+        antispam_engine: { ...DEFAULT_ENGINE_CONFIG },
+        antispam_restricted_users: [],
         antispam_log: [],
         channel_extras: {},
         tg_chains: [],
         vk_chains: [],
         autoposts: [],
+    };
+}
+function parseEngineConfig(raw) {
+    if (typeof raw !== 'object' || raw === null) {
+        return { ...DEFAULT_ENGINE_CONFIG };
+    }
+    const o = raw;
+    const whitelist = Array.isArray(o.whitelist_user_ids)
+        ? o.whitelist_user_ids.filter((id) => typeof id === 'number' && id > 0)
+        : DEFAULT_ENGINE_CONFIG.whitelist_user_ids;
+    const blacklist = Array.isArray(o.blacklist_user_ids)
+        ? o.blacklist_user_ids.filter((id) => typeof id === 'number' && id > 0)
+        : [];
+    return {
+        soft_mode: typeof o.soft_mode === 'boolean' ? o.soft_mode : DEFAULT_ENGINE_CONFIG.soft_mode,
+        enabled: typeof o.enabled === 'boolean' ? o.enabled : DEFAULT_ENGINE_CONFIG.enabled,
+        spam_threshold: typeof o.spam_threshold === 'number' ? o.spam_threshold : DEFAULT_ENGINE_CONFIG.spam_threshold,
+        ban_threshold: typeof o.ban_threshold === 'number' ? o.ban_threshold : DEFAULT_ENGINE_CONFIG.ban_threshold,
+        captcha_required_score: typeof o.captcha_required_score === 'number'
+            ? o.captcha_required_score
+            : DEFAULT_ENGINE_CONFIG.captcha_required_score,
+        emoji_overuse_limit: typeof o.emoji_overuse_limit === 'number'
+            ? o.emoji_overuse_limit
+            : DEFAULT_ENGINE_CONFIG.emoji_overuse_limit,
+        whitelist_user_ids: whitelist,
+        blacklist_user_ids: blacklist,
     };
 }
 let cache = null;
@@ -73,6 +118,10 @@ async function loadState() {
                 ...defaultState(),
                 ...parsed,
                 antispam_rules: { ...DEFAULT_RULES, ...(parsed.antispam_rules ?? {}) },
+                antispam_engine: parseEngineConfig(parsed.antispam_engine),
+                antispam_restricted_users: Array.isArray(parsed.antispam_restricted_users)
+                    ? parsed.antispam_restricted_users.filter((id) => typeof id === 'number' && id > 0)
+                    : [],
                 global_stopwords: Array.isArray(parsed.global_stopwords) ? parsed.global_stopwords : [],
                 antispam_log: Array.isArray(parsed.antispam_log) ? parsed.antispam_log : [],
                 channel_extras: typeof parsed.channel_extras === 'object' && parsed.channel_extras !== null
@@ -110,7 +159,73 @@ async function getAntispamWords() {
     for (const [k, v] of Object.entries(s.channel_extras)) {
         byChannel[k] = [...(v.stopwords ?? [])];
     }
-    return { global: [...s.global_stopwords], byChannel, rules: { ...s.antispam_rules } };
+    return {
+        global: [...s.global_stopwords],
+        byChannel,
+        rules: { ...s.antispam_rules },
+        engine: { ...s.antispam_engine },
+        restricted_users: [...s.antispam_restricted_users],
+    };
+}
+function getAntispamEngineSync() {
+    if (!cache) {
+        return { ...DEFAULT_ENGINE_CONFIG };
+    }
+    return { ...cache.antispam_engine };
+}
+function getAntispamRulesSync() {
+    if (!cache) {
+        return { ...DEFAULT_RULES };
+    }
+    return { ...cache.antispam_rules };
+}
+function getGlobalStopwordsSync() {
+    if (!cache) {
+        return [];
+    }
+    return [...cache.global_stopwords];
+}
+function getChannelExtrasSync(chatId) {
+    if (!cache) {
+        return { ...DEFAULT_CHANNEL_EXTRAS };
+    }
+    const row = cache.channel_extras[String(chatId)];
+    if (!row) {
+        return { ...DEFAULT_CHANNEL_EXTRAS };
+    }
+    return {
+        ...DEFAULT_CHANNEL_EXTRAS,
+        ...row,
+        stopwords: [...(row.stopwords ?? [])],
+    };
+}
+function isAntispamRestrictedUserSync(userId) {
+    if (!cache || !Number.isInteger(userId) || userId <= 0) {
+        return false;
+    }
+    return cache.antispam_restricted_users.includes(userId);
+}
+async function saveAntispamEngine(patch) {
+    const s = await loadState();
+    s.antispam_engine = { ...s.antispam_engine, ...patch };
+    if (patch.whitelist_user_ids) {
+        s.antispam_engine.whitelist_user_ids = patch.whitelist_user_ids.filter((id) => id > 0);
+    }
+    if (patch.blacklist_user_ids) {
+        s.antispam_engine.blacklist_user_ids = patch.blacklist_user_ids.filter((id) => id > 0);
+    }
+    await persist();
+    return { ...s.antispam_engine };
+}
+async function restrictAntispamUser(userId) {
+    if (!Number.isInteger(userId) || userId <= 0) {
+        return;
+    }
+    const s = await loadState();
+    if (!s.antispam_restricted_users.includes(userId)) {
+        s.antispam_restricted_users.push(userId);
+        await persist();
+    }
 }
 async function saveAntispamWords(input) {
     const s = await loadState();

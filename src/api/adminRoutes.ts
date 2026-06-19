@@ -55,6 +55,7 @@ import {
   listTgChains,
   listVkChains,
   saveAntispamWords,
+  saveAntispamEngine,
   saveChannelExtras,
   updateTgChain,
   updateVkChain,
@@ -1060,6 +1061,8 @@ export function createAdminRouter(deps: AdminRouterDeps): express.Router {
       global: data.global,
       byChannel: data.byChannel,
       rules: data.rules,
+      engine: data.engine,
+      restricted_users: data.restricted_users,
       blocked_today: countAntispamBlocksToday(log),
     })
   })
@@ -1090,7 +1093,56 @@ export function createAdminRouter(deps: AdminRouterDeps): express.Router {
       global,
       rules: Object.keys(rulesPatch).length > 0 ? rulesPatch : undefined,
     })
+    if (isRecord(req.body.engine)) {
+      const eng = req.body.engine as Record<string, unknown>
+      const enginePatch: Partial<import('./adminPanelState').AntispamEngineConfig> = {}
+      if (typeof eng.soft_mode === 'boolean') enginePatch.soft_mode = eng.soft_mode
+      if (typeof eng.enabled === 'boolean') enginePatch.enabled = eng.enabled
+      if (typeof eng.spam_threshold === 'number') enginePatch.spam_threshold = eng.spam_threshold
+      if (typeof eng.ban_threshold === 'number') enginePatch.ban_threshold = eng.ban_threshold
+      if (typeof eng.captcha_required_score === 'number') {
+        enginePatch.captcha_required_score = eng.captcha_required_score
+      }
+      if (typeof eng.emoji_overuse_limit === 'number') {
+        enginePatch.emoji_overuse_limit = eng.emoji_overuse_limit
+      }
+      if (Array.isArray(eng.whitelist_user_ids)) {
+        enginePatch.whitelist_user_ids = eng.whitelist_user_ids.filter(
+          (id): id is number => typeof id === 'number' && id > 0,
+        )
+      }
+      if (Array.isArray(eng.blacklist_user_ids)) {
+        enginePatch.blacklist_user_ids = eng.blacklist_user_ids.filter(
+          (id): id is number => typeof id === 'number' && id > 0,
+        )
+      }
+      if (Object.keys(enginePatch).length > 0) {
+        await saveAntispamEngine(enginePatch)
+      }
+    }
     res.json({ ok: true })
+  })
+
+  secured.post('/antispam/test', async (req, res) => {
+    if (!isRecord(req.body)) {
+      res.status(400).json({ error: 'invalid body' })
+      return
+    }
+    const text = typeof req.body.text === 'string' ? req.body.text : ''
+    const chatIdRaw = req.body.chat_id
+    const chatId =
+      typeof chatIdRaw === 'number' && Number.isInteger(chatIdRaw) && chatIdRaw !== 0
+        ? chatIdRaw
+        : 0
+    const { evaluateComment } = await import('../services/antispamService')
+    const result = evaluateComment({
+      text,
+      userId: 0,
+      username: 'test',
+      channelChatId: chatId,
+      source: 'max',
+    })
+    res.json({ ok: true, result })
   })
 
   secured.post('/antispam/channel/:chatId', async (req, res) => {
