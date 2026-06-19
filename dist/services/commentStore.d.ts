@@ -57,8 +57,8 @@ export interface Comment {
     tg_comment_id?: number;
     /** Дублирует comment_id для индекса max_comment_id в SQLite. */
     max_comment_id?: string;
-    /** Источник комментария: miniapp/max или telegram thread. */
-    source?: 'telegram' | 'max';
+    /** Источник комментария: miniapp/max, telegram thread или VK. */
+    source?: 'telegram' | 'max' | 'vk';
     /** Синхронизирован с другой платформой. */
     synced?: boolean;
     /** ID ответа администратора, отправленного в TG-тред. */
@@ -162,9 +162,15 @@ export declare class CommentStore {
     private saveRow;
     findCommentByTgMessageId(tgCommentId: number): Comment | null;
     /**
+     * Сохраняет комментарий из внешней платформы (TG/VK) в miniapp с метаданными синхронизации.
+     */
+    saveExternalThreadComment(input: Omit<Comment, 'comment_id' | 'timestamp' | 'source' | 'synced'>, externalCommentId: number, source: 'telegram' | 'vk'): Comment;
+    /**
      * Сохраняет комментарий из TG-треда в miniapp БД с метаданными синхронизации.
      */
     saveTelegramThreadComment(input: Omit<Comment, 'comment_id' | 'timestamp' | 'source' | 'synced'>, tgCommentId: number): Comment;
+    /** Сохраняет комментарий из VK в miniapp. */
+    saveVkThreadComment(input: Omit<Comment, 'comment_id' | 'timestamp' | 'source' | 'synced'>, vkCommentId: number): Comment;
     setTgThreadReplyId(commentId: string, tgMessageId: number): Comment | null;
     setTgCommentId(commentId: string, tgMessageId: number, tgMessageText?: string): Comment | null;
     markBookedInMaxTelegram(commentId: string): Comment | null;

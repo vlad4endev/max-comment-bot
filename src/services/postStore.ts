@@ -17,11 +17,12 @@ import {
 } from '../utils/startappPayload'
 import {
   formatMaxBookedInTgButtonLabel,
+  formatMaxBookedInVkButtonLabel,
 } from '../utils/commentSyncFilter'
 import { logger } from '../utils/logger'
 import { apiCallWithRetry } from '../utils/maxApiRetry'
 
-export type CommentsBookedBy = 'telegram' | 'max'
+export type CommentsBookedBy = 'telegram' | 'max' | 'vk'
 
 /**
  * Channel post tracked for Mini App comments (MAX message id is {@link Post.message_mid}).
@@ -345,7 +346,9 @@ export class PostStore {
    */
   async updateButtonCaption(bot: Bot, post: Post): Promise<boolean> {
     const fresh = this.getPost(post.post_id) ?? post
-    const bookedByTelegram = fresh.comments_booked_by === 'telegram'
+    const bookedBy = fresh.comments_booked_by
+    const bookedByTelegram = bookedBy === 'telegram'
+    const bookedByVk = bookedBy === 'vk'
     if (!isMiniAppOpenUrlConfigured()) {
       logger.warn('postStore.updateButtonCaption: BOT_NICKNAME / MINI_APP_URL not usable for links')
       return false
@@ -359,7 +362,11 @@ export class PostStore {
       }
     })()
     logger.info(
-      bookedByTelegram ? 'commentButton: booked-by-TG button' : 'commentButton: creating button',
+      bookedByTelegram
+        ? 'commentButton: booked-by-TG button'
+        : bookedByVk
+          ? 'commentButton: booked-by-VK button'
+          : 'commentButton: creating button',
       {
         postId: fresh.post_id,
         chatId: fresh.chat_id,
@@ -841,17 +848,22 @@ export function buildMiniAppUrl(
   return buttonUrl
 }
 
-/** Новые комментарии в MAX miniapp закрыты — обсуждение в Telegram. */
+/** Новые комментарии в MAX miniapp закрыты — обсуждение на другой платформе. */
 export function isPostCommentsClosedInMax(post: Post): boolean {
-  return post.comments_booked_by === 'telegram'
+  return post.comments_booked_by === 'telegram' || post.comments_booked_by === 'vk'
 }
 
-/** Inline-клавиатура под постом: комментарии или «Забронировано в ТГ» с той же ссылкой в miniapp. */
+/** Inline-клавиатура под постом: комментарии или «Забронировано в …» с той же ссылкой в miniapp. */
 export function buildPostCommentKeyboard(post: Post): InlineKeyboardAttachmentRequest {
   const url = buildCommentMiniAppUrl(post.post_id, post.chat_id, post.message_mid)
   if (post.comments_booked_by === 'telegram') {
     return Keyboard.inlineKeyboard([
       [Keyboard.button.link(formatMaxBookedInTgButtonLabel(post.comment_count), url)],
+    ])
+  }
+  if (post.comments_booked_by === 'vk') {
+    return Keyboard.inlineKeyboard([
+      [Keyboard.button.link(formatMaxBookedInVkButtonLabel(post.comment_count), url)],
     ])
   }
   return Keyboard.inlineKeyboard([

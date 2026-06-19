@@ -20,6 +20,7 @@ const postStore_1 = require("./postStore");
 const resolveTelegramBotToken_1 = require("./resolveTelegramBotToken");
 const commentSyncGuard_1 = require("../utils/commentSyncGuard");
 const commentSyncFilter_1 = require("../utils/commentSyncFilter");
+const commentsBookingService_1 = require("./commentsBookingService");
 const logger_1 = require("../utils/logger");
 const telegramMtprotoDiscussionSender_1 = require("./telegramMtprotoDiscussionSender");
 const TG_API = 'https://api.telegram.org';
@@ -200,57 +201,6 @@ async function tryEditTelegramPostBody(target, markedText) {
     return ((await tryEditTelegramMessageCaption(target, markedText)) ||
         (await tryEditTelegramMessageText(target, markedText)));
 }
-async function applyPostBookedInMaxMarker(target, post) {
-    const freshPost = postStore_1.postStore.getPost(post.post_id) ?? post;
-    if (freshPost.tg_booked_in_max_applied) {
-        return;
-    }
-    const baseText = freshPost.text?.trim() || '';
-    if (!baseText) {
-        logger_1.logger.warn('[telegramThreadReplySync] empty post text for booked marker', {
-            postId: freshPost.post_id,
-        });
-        return;
-    }
-    if ((0, commentSyncFilter_1.isTelegramPostMarkedBookedInMax)(baseText)) {
-        postStore_1.postStore.markTgBookedInMaxApplied(freshPost.post_id);
-        return;
-    }
-    const markedText = (0, commentSyncFilter_1.appendTgBookedInMaxMarker)(baseText);
-    const mapping = (0, postCommentMappingStore_1.findMappingByMaxMid)(freshPost.message_mid);
-    const editTargets = [];
-    if (typeof mapping?.tg_chat_id === 'number' && mapping.tg_msg_id > 0) {
-        editTargets.push({
-            token: target.token,
-            chatId: mapping.tg_chat_id,
-            messageId: mapping.tg_msg_id,
-        });
-    }
-    editTargets.push({
-        token: target.token,
-        chatId: target.threadChatId,
-        messageId: target.threadMsgId,
-        messageThreadId: target.threadMsgId,
-    });
-    for (const editTarget of editTargets) {
-        if (await tryEditTelegramPostBody(editTarget, markedText)) {
-            postStore_1.postStore.markTgBookedInMaxApplied(freshPost.post_id);
-            logger_1.logger.info('[telegramThreadReplySync] appended booked-in-MAX marker to TG post text', {
-                postId: freshPost.post_id,
-                chatId: editTarget.chatId,
-                messageId: editTarget.messageId,
-            });
-            return;
-        }
-    }
-    logger_1.logger.warn('[telegramThreadReplySync] failed to append booked-in-MAX marker to TG post', {
-        postId: freshPost.post_id,
-        threadChatId: target.threadChatId,
-        threadMsgId: target.threadMsgId,
-        channelChatId: mapping?.tg_chat_id ?? null,
-        channelMsgId: mapping?.tg_msg_id ?? null,
-    });
-}
 /**
  * Помечает исходный комментарий в TG-треде как отвеченный в MAX.
  * @returns true если сообщение успешно помечено (edit или reaction)
@@ -341,11 +291,12 @@ async function markTelegramCommentAnsweredInMax(token, chatId, tgCommentId, comm
  */
 async function syncMaxCommentToTelegramThread(_bot, comment, post) {
     const freshPost = postStore_1.postStore.getPost(post.post_id) ?? post;
-    if (freshPost.comments_booked_by === 'telegram') {
+    if ((0, commentsBookingService_1.isCommentSyncBlockedByBooking)(freshPost.comments_booked_by, 'max')) {
         (0, commentSyncGuard_1.markCommentSynced)(`max-comment-tg-blocked:${comment.comment_id}`);
-        logger_1.logger.debug('[telegramThreadReplySync] skip MAX→TG: post booked by Telegram', {
+        logger_1.logger.debug('[telegramThreadReplySync] skip MAX→TG: post booked elsewhere', {
             commentId: comment.comment_id,
             postId: freshPost.post_id,
+            bookedBy: freshPost.comments_booked_by,
         });
         return;
     }
@@ -378,11 +329,7 @@ async function syncMaxCommentToTelegramThread(_bot, comment, post) {
         (0, commentSyncGuard_1.markCommentSynced)(`tg:${tgMsgId}`);
         (0, commentSyncGuard_1.markCommentSynced)(guardKey);
         commentStore_1.commentStore.setTgCommentId(freshComment.comment_id, tgMsgId, body);
-        const claimed = postStore_1.postStore.tryClaimCommentsBooking(freshPost.post_id, 'max');
-        if (claimed) {
-            const postForMarker = postStore_1.postStore.getPost(freshPost.post_id) ?? freshPost;
-            await applyPostBookedInMaxMarker(target, postForMarker);
-        }
+        await (0, commentsBookingService_1.claimAndPropagateCommentsBooking)(freshPost.post_id, 'max', _bot);
         logger_1.logger.info('[telegramThreadReplySync] delivered MAX comment to TG thread', {
             commentId: freshComment.comment_id,
             tgMsgId,
@@ -404,10 +351,11 @@ async function syncMaxCommentToTelegramThread(_bot, comment, post) {
  */
 async function syncAdminReplyToTelegramThread(_bot, comment, post) {
     const freshPost = postStore_1.postStore.getPost(post.post_id) ?? post;
-    if (freshPost.comments_booked_by === 'telegram') {
-        logger_1.logger.debug('[telegramThreadReplySync] skip admin MAX→TG: post booked by Telegram', {
+    if ((0, commentsBookingService_1.isCommentSyncBlockedByBooking)(freshPost.comments_booked_by, 'max')) {
+        logger_1.logger.debug('[telegramThreadReplySync] skip admin MAX→TG: post booked elsewhere', {
             commentId: comment.comment_id,
             postId: freshPost.post_id,
+            bookedBy: freshPost.comments_booked_by,
         });
         return;
     }

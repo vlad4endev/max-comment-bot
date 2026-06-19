@@ -12,6 +12,10 @@ import type { Bot } from '@maxhub/max-bot-api'
 import { listVkChainsSync, updateVkChain, type VkChainRecord } from '../api/adminPanelState'
 import { evaluateComment } from './antispamService'
 import { commentStore } from './commentStore'
+import {
+  claimAndPropagateCommentsBooking,
+  isCommentSyncBlockedByBooking,
+} from './commentsBookingService'
 import { postStore } from './postStore'
 import { resolveCanonicalChannelChatId } from './resolveChannelChatId'
 import {
@@ -125,6 +129,10 @@ async function syncVkCommentsForChain(chain: VkChainRecord): Promise<void> {
     const post = postStore.findPostByChannelMessage(mapping.maxChatId, mapping.maxMid)
     if (!post) continue
 
+    if (isCommentSyncBlockedByBooking(post.comments_booked_by, 'vk')) {
+      continue
+    }
+
     const { comments, lastCommentId } = await fetchVkWallComments(
       chain.vk_token,
       chain.vk_group_id,
@@ -182,6 +190,15 @@ async function syncVkCommentsForChain(chain: VkChainRecord): Promise<void> {
       markCommentSynced(guardKey)
       markCommentSynced(`max:${saved.comment_id}`)
 
+      const claimed = await claimAndPropagateCommentsBooking(post.post_id, 'vk', bot ?? undefined)
+      if (claimed) {
+        logger.info('[vkChain] post booked by VK (cross-platform markers applied)', {
+          chainId: chain.id,
+          postId: post.post_id,
+          vkCommentId: vkComment.id,
+        })
+      }
+
       const newCount = postStore.incrementCommentCount(post.post_id)
       if (newCount !== null && bot) {
         const updatedPost = postStore.getPost(post.post_id)
@@ -224,6 +241,10 @@ async function syncMaxCommentsToVk(): Promise<void> {
   for (const comment of pendingComments) {
     const post = postStore.getPost(comment.post_id)
     if (!post) continue
+
+    if (isCommentSyncBlockedByBooking(post.comments_booked_by, 'max')) {
+      continue
+    }
 
     for (const chain of chains) {
       if (Math.abs(chain.max_chat_id) !== Math.abs(post.chat_id)) continue

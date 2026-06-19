@@ -53,6 +53,7 @@ import { telegramChannelRegistry } from '../services/telegramChannelRegistry'
 import { telegramChannelNotifyLinkStore } from '../services/telegramChannelNotifyLinkStore'
 import type { Post } from '../services/postStore'
 import { isPostCommentsClosedInMax, postStore, resolveChannelPostUrl } from '../services/postStore'
+import { commentsClosedInMaxMessage } from '../services/commentsBookingService'
 import { rememberPostIdAlias } from '../services/postIdAliasStore'
 import { resolveMiniappPostOpen } from '../services/miniappPostRecovery'
 import { parseStartappPayload } from '../utils/startappPayload'
@@ -1969,7 +1970,7 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
     if (isPostCommentsClosedInMax(post)) {
       res.status(403).json({
         error: 'comments_closed',
-        message: 'Комментарии закрыты. Обсуждение ведётся в Telegram.',
+        message: commentsClosedInMaxMessage(post.comments_booked_by),
       })
       return
     }
@@ -2101,7 +2102,7 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
     if (isPostCommentsClosedInMax(post)) {
       res.status(403).json({
         error: 'comments_closed',
-        message: 'Комментарии закрыты. Обсуждение ведётся в Telegram.',
+        message: commentsClosedInMaxMessage(post.comments_booked_by),
       })
       return
     }

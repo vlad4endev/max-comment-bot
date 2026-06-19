@@ -56,6 +56,9 @@ exports.listVkManagedGroups = listVkManagedGroups;
 exports.fetchTelegramChannelPosts = fetchTelegramChannelPosts;
 exports.fetchVkWallPosts = fetchVkWallPosts;
 exports.publishVkWallPost = publishVkWallPost;
+exports.fetchVkWallPostText = fetchVkWallPostText;
+exports.editVkWallPostMessage = editVkWallPostMessage;
+exports.appendMarkerToVkWallPost = appendMarkerToVkWallPost;
 exports.fetchVkWallComments = fetchVkWallComments;
 exports.publishVkWallComment = publishVkWallComment;
 const axios_1 = __importDefault(require("axios"));
@@ -1078,6 +1081,72 @@ async function publishVkWallPost(token, groupId, message) {
         throw new Error(data.error.error_msg ?? 'VK wall.post failed');
     }
     return data.response?.post_id ?? null;
+}
+function vkOwnerId(groupId) {
+    return groupId.startsWith('-') ? groupId : `-${groupId.replace(/^public/, '')}`;
+}
+/** Текущий текст VK-поста на стене. */
+async function fetchVkWallPostText(token, groupId, postId) {
+    const ownerId = vkOwnerId(groupId);
+    try {
+        const { data } = await axios_1.default.get('https://api.vk.com/method/wall.getById', {
+            params: {
+                access_token: token,
+                posts: `${ownerId}_${postId}`,
+                v: '5.199',
+            },
+            timeout: 15_000,
+        });
+        if (data.error)
+            return null;
+        const response = data.response;
+        const items = Array.isArray(response)
+            ? response
+            : typeof response === 'object' && response !== null && Array.isArray(response.items)
+                ? response.items
+                : [];
+        const text = items[0]?.text;
+        return typeof text === 'string' ? text : '';
+    }
+    catch (err) {
+        logger_1.logger.debug('fetchVkWallPostText failed', { groupId, postId, err });
+        return null;
+    }
+}
+async function editVkWallPostMessage(token, groupId, postId, message) {
+    const ownerId = vkOwnerId(groupId);
+    try {
+        const { data } = await axios_1.default.get('https://api.vk.com/method/wall.edit', {
+            params: {
+                access_token: token,
+                owner_id: ownerId,
+                post_id: postId,
+                message,
+                v: '5.199',
+            },
+            timeout: 15_000,
+        });
+        if (data.error) {
+            logger_1.logger.warn('editVkWallPostMessage vk error', { groupId, postId, error: data.error });
+            return false;
+        }
+        return true;
+    }
+    catch (err) {
+        logger_1.logger.warn('editVkWallPostMessage failed', { groupId, postId, err });
+        return false;
+    }
+}
+/** Дописывает маркер брони к тексту VK-поста, если его ещё нет. */
+async function appendMarkerToVkWallPost(token, groupId, postId, marker) {
+    const current = await fetchVkWallPostText(token, groupId, postId);
+    if (current == null)
+        return false;
+    if (current.includes(marker))
+        return true;
+    const base = current.trim();
+    const next = base ? `${base}\n\n${marker}` : marker;
+    return editVkWallPostMessage(token, groupId, postId, next);
 }
 async function fetchVkWallComments(token, groupId, postId, afterCommentId) {
     const ownerId = groupId.startsWith('-') ? groupId : `-${groupId.replace(/^public/, '')}`;

@@ -234,12 +234,12 @@ async function tryAttachCommentsToChannelPost(bot, message, options = {}) {
     const existingPost = postStore_1.postStore.findPostByChannelMessage(chatId, mid);
     if (existingPost) {
         const freshPost = postStore_1.postStore.getPost(existingPost.post_id) ?? existingPost;
-        /** Пост забронирован TG — не перепривязываем ссылку «Комментарии», только обновляем подпись. */
-        if (freshPost.comments_booked_by === 'telegram') {
+        /** Пост забронирован в TG или VK — не перепривязываем ссылку «Комментарии», только обновляем подпись. */
+        if ((0, postStore_1.isPostCommentsClosedInMax)(freshPost)) {
             const captionOk = await postStore_1.postStore.updateButtonCaption(bot, freshPost);
             logCommentButton(captionOk ? 'info' : 'warn', captionOk
-                ? 'commentButton: пост забронирован в TG — обновлена кнопка'
-                : 'commentButton: пост забронирован в TG — не удалось обновить кнопку', {
+                ? 'commentButton: пост забронирован на другой платформе — обновлена кнопка'
+                : 'commentButton: пост забронирован на другой платформе — не удалось обновить кнопку', {
                 source: source ?? 'unknown',
                 chatId,
                 messageMid: mid,

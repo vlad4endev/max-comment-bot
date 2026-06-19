@@ -17,6 +17,7 @@ const telegramAdminNotificationService_1 = require("./telegramAdminNotificationS
 const channelRegistry_1 = require("./channelRegistry");
 const postCommentMappingStore_1 = require("./postCommentMappingStore");
 const postStore_1 = require("./postStore");
+const commentsBookingService_1 = require("./commentsBookingService");
 const antispamService_1 = require("./antispamService");
 const resolveChannelChatId_1 = require("./resolveChannelChatId");
 const resolveTelegramBotToken_1 = require("./resolveTelegramBotToken");
@@ -250,9 +251,9 @@ async function handleTgComment(message, chain, bot, discussionChatId) {
             text,
         }, tgCommentId);
         (0, commentSyncGuard_1.markCommentSynced)(`max:${saved.comment_id}`);
-        const claimed = postStore_1.postStore.tryClaimCommentsBooking(post.post_id, 'telegram');
+        const claimed = await (0, commentsBookingService_1.claimAndPropagateCommentsBooking)(post.post_id, 'telegram', bot);
         if (claimed) {
-            logger_1.logger.info('[tgCommentSync] post booked by Telegram', {
+            logger_1.logger.info('[tgCommentSync] post booked by Telegram (cross-platform markers applied)', {
                 chainId: chain.id,
                 postId: post.post_id,
                 tgCommentId,

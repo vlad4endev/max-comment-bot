@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.MAX_COMMENT_TG_PREFIX = exports.MAX_REPLY_TG_PREFIX = exports.MAX_BOOKED_IN_TG_CALLBACK = exports.TG_BOOKED_IN_MAX_MARKER = exports.MAX_ANSWERED_IN_TELEGRAM_LABEL = exports.LEGACY_ANSWERED_IN_MAX_MARKER = exports.MAX_ANSWERED_IN_MAX_MARKER = void 0;
+exports.MAX_COMMENT_TG_PREFIX = exports.MAX_REPLY_TG_PREFIX = exports.MAX_BOOKED_IN_TG_CALLBACK = exports.VK_BOOKED_IN_TG_MARKER = exports.VK_BOOKED_IN_MAX_MARKER = exports.TG_BOOKED_IN_VK_MARKER = exports.TG_BOOKED_IN_MAX_MARKER = exports.MAX_ANSWERED_IN_TELEGRAM_LABEL = exports.LEGACY_ANSWERED_IN_MAX_MARKER = exports.MAX_ANSWERED_IN_MAX_MARKER = void 0;
 exports.normalizeCommentSyncMatchMode = normalizeCommentSyncMatchMode;
 exports.normalizeCommentSyncKeywords = normalizeCommentSyncKeywords;
 exports.parseCommentSyncKeyword = parseCommentSyncKeyword;
@@ -13,6 +13,12 @@ exports.resolveChannelMsgIdFromThreadRoot = resolveChannelMsgIdFromThreadRoot;
 exports.resolveTgCommentAuthor = resolveTgCommentAuthor;
 exports.isTelegramOriginComment = isTelegramOriginComment;
 exports.formatMaxBookedInTgButtonLabel = formatMaxBookedInTgButtonLabel;
+exports.formatMaxBookedInVkButtonLabel = formatMaxBookedInVkButtonLabel;
+exports.commentsBookedByLabel = commentsBookedByLabel;
+exports.bookingMarkerForTelegram = bookingMarkerForTelegram;
+exports.bookingMarkerForVk = bookingMarkerForVk;
+exports.postTextHasBookingMarker = postTextHasBookingMarker;
+exports.appendBookingMarker = appendBookingMarker;
 exports.isTelegramPostMarkedBookedInMax = isTelegramPostMarkedBookedInMax;
 exports.appendTgBookedInMaxMarker = appendTgBookedInMaxMarker;
 exports.isTelegramCommentMarkedAnsweredInMax = isTelegramCommentMarkedAnsweredInMax;
@@ -216,21 +222,58 @@ exports.LEGACY_ANSWERED_IN_MAX_MARKER = '✅ Отвечено в MAX';
 exports.MAX_ANSWERED_IN_TELEGRAM_LABEL = '✅ Отвечено в Telegram';
 /** Служебное сообщение в TG-треде: пост забронирован первым комментарием из MAX. */
 exports.TG_BOOKED_IN_MAX_MARKER = '🔒 Забронировано в МАКСе';
+/** Маркер на TG-посте: обсуждение забронировано в ВКонтакте. */
+exports.TG_BOOKED_IN_VK_MARKER = '🔒 Забронировано в ВКонтакте';
+/** Маркер на VK-посте: обсуждение забронировано в MAX. */
+exports.VK_BOOKED_IN_MAX_MARKER = '🔒 Забронировано в MAX';
+/** Маркер на VK-посте: обсуждение забронировано в Telegram. */
+exports.VK_BOOKED_IN_TG_MARKER = '🔒 Забронировано в Telegram';
 /** MAX inline callback для неактивной кнопки «Забронировано в ТГ». */
 exports.MAX_BOOKED_IN_TG_CALLBACK = 'max:booked_tg';
 function formatMaxBookedInTgButtonLabel(commentCount) {
     const n = Math.max(0, commentCount);
     return `🔒 Забронировано в ТГ (${n})`;
 }
+function formatMaxBookedInVkButtonLabel(commentCount) {
+    const n = Math.max(0, commentCount);
+    return `🔒 Забронировано в ВК (${n})`;
+}
+function commentsBookedByLabel(by) {
+    if (by === 'telegram')
+        return 'Telegram';
+    if (by === 'vk')
+        return 'ВКонтакте';
+    return 'MAX';
+}
+function bookingMarkerForTelegram(bookedBy) {
+    if (bookedBy === 'max')
+        return exports.TG_BOOKED_IN_MAX_MARKER;
+    if (bookedBy === 'vk')
+        return exports.TG_BOOKED_IN_VK_MARKER;
+    return null;
+}
+function bookingMarkerForVk(bookedBy) {
+    if (bookedBy === 'max')
+        return exports.VK_BOOKED_IN_MAX_MARKER;
+    if (bookedBy === 'telegram')
+        return exports.VK_BOOKED_IN_TG_MARKER;
+    return null;
+}
+function postTextHasBookingMarker(text, marker) {
+    return text.includes(marker);
+}
+function appendBookingMarker(text, marker) {
+    const base = text.trim();
+    if (!base || base.includes(marker)) {
+        return base;
+    }
+    return `${base}\n\n${marker}`;
+}
 function isTelegramPostMarkedBookedInMax(text) {
     return text.includes(exports.TG_BOOKED_IN_MAX_MARKER);
 }
 function appendTgBookedInMaxMarker(text) {
-    const base = text.trim();
-    if (!base || isTelegramPostMarkedBookedInMax(base)) {
-        return base;
-    }
-    return `${base}\n\n${exports.TG_BOOKED_IN_MAX_MARKER}`;
+    return appendBookingMarker(text, exports.TG_BOOKED_IN_MAX_MARKER);
 }
 function isTelegramCommentMarkedAnsweredInMax(text) {
     return (text.includes(exports.MAX_ANSWERED_IN_MAX_MARKER) ||
@@ -259,7 +302,7 @@ function formatMaxCommentForTelegram(username, text) {
     return `${exports.MAX_COMMENT_TG_PREFIX} ${name}`;
 }
 async function shouldSyncTgCommentToMax(params) {
-    if (params.commentsBookedBy === 'max') {
+    if (params.commentsBookedBy === 'max' || params.commentsBookedBy === 'vk') {
         return false;
     }
     const text = (params.message.text || params.message.caption || '').trim();
@@ -267,7 +310,8 @@ async function shouldSyncTgCommentToMax(params) {
         isMaxAdminReplyInTelegram(text) ||
         isMaxCommentInTelegram(text) ||
         isTelegramCommentMarkedAnsweredInMax(text) ||
-        text.includes(exports.TG_BOOKED_IN_MAX_MARKER)) {
+        text.includes(exports.TG_BOOKED_IN_MAX_MARKER) ||
+        text.includes(exports.TG_BOOKED_IN_VK_MARKER)) {
         return false;
     }
     const keywords = normalizeCommentSyncKeywords(params.chain.comment_sync_keywords);

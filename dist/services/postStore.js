@@ -245,7 +245,9 @@ class PostStore {
      */
     async updateButtonCaption(bot, post) {
         const fresh = this.getPost(post.post_id) ?? post;
-        const bookedByTelegram = fresh.comments_booked_by === 'telegram';
+        const bookedBy = fresh.comments_booked_by;
+        const bookedByTelegram = bookedBy === 'telegram';
+        const bookedByVk = bookedBy === 'vk';
         if (!isMiniAppOpenUrlConfigured()) {
             logger_1.logger.warn('postStore.updateButtonCaption: BOT_NICKNAME / MINI_APP_URL not usable for links');
             return false;
@@ -259,7 +261,11 @@ class PostStore {
                 return null;
             }
         })();
-        logger_1.logger.info(bookedByTelegram ? 'commentButton: booked-by-TG button' : 'commentButton: creating button', {
+        logger_1.logger.info(bookedByTelegram
+            ? 'commentButton: booked-by-TG button'
+            : bookedByVk
+                ? 'commentButton: booked-by-VK button'
+                : 'commentButton: creating button', {
             postId: fresh.post_id,
             chatId: fresh.chat_id,
             messageMid: fresh.message_mid,
@@ -679,16 +685,21 @@ function buildMiniAppUrl(postId, chatId, extra, messageMid) {
     }
     return buttonUrl;
 }
-/** Новые комментарии в MAX miniapp закрыты — обсуждение в Telegram. */
+/** Новые комментарии в MAX miniapp закрыты — обсуждение на другой платформе. */
 function isPostCommentsClosedInMax(post) {
-    return post.comments_booked_by === 'telegram';
+    return post.comments_booked_by === 'telegram' || post.comments_booked_by === 'vk';
 }
-/** Inline-клавиатура под постом: комментарии или «Забронировано в ТГ» с той же ссылкой в miniapp. */
+/** Inline-клавиатура под постом: комментарии или «Забронировано в …» с той же ссылкой в miniapp. */
 function buildPostCommentKeyboard(post) {
     const url = buildCommentMiniAppUrl(post.post_id, post.chat_id, post.message_mid);
     if (post.comments_booked_by === 'telegram') {
         return max_bot_api_1.Keyboard.inlineKeyboard([
             [max_bot_api_1.Keyboard.button.link((0, commentSyncFilter_1.formatMaxBookedInTgButtonLabel)(post.comment_count), url)],
+        ]);
+    }
+    if (post.comments_booked_by === 'vk') {
+        return max_bot_api_1.Keyboard.inlineKeyboard([
+            [max_bot_api_1.Keyboard.button.link((0, commentSyncFilter_1.formatMaxBookedInVkButtonLabel)(post.comment_count), url)],
         ]);
     }
     return max_bot_api_1.Keyboard.inlineKeyboard([

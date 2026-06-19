@@ -1317,6 +1317,91 @@ export async function publishVkWallPost(
   return data.response?.post_id ?? null
 }
 
+function vkOwnerId(groupId: string): string {
+  return groupId.startsWith('-') ? groupId : `-${groupId.replace(/^public/, '')}`
+}
+
+/** Текущий текст VK-поста на стене. */
+export async function fetchVkWallPostText(
+  token: string,
+  groupId: string,
+  postId: number,
+): Promise<string | null> {
+  const ownerId = vkOwnerId(groupId)
+  try {
+    const { data } = await axios.get<{
+      response?: Array<{ text?: string }> | { items?: Array<{ text?: string }> }
+      error?: { error_msg?: string }
+    }>('https://api.vk.com/method/wall.getById', {
+      params: {
+        access_token: token,
+        posts: `${ownerId}_${postId}`,
+        v: '5.199',
+      },
+      timeout: 15_000,
+    })
+    if (data.error) return null
+    const response = data.response
+    const items = Array.isArray(response)
+      ? response
+      : typeof response === 'object' && response !== null && Array.isArray(response.items)
+        ? response.items
+        : []
+    const text = items[0]?.text
+    return typeof text === 'string' ? text : ''
+  } catch (err: unknown) {
+    logger.debug('fetchVkWallPostText failed', { groupId, postId, err })
+    return null
+  }
+}
+
+export async function editVkWallPostMessage(
+  token: string,
+  groupId: string,
+  postId: number,
+  message: string,
+): Promise<boolean> {
+  const ownerId = vkOwnerId(groupId)
+  try {
+    const { data } = await axios.get<{
+      response?: { post_id?: number }
+      error?: { error_msg?: string }
+    }>('https://api.vk.com/method/wall.edit', {
+      params: {
+        access_token: token,
+        owner_id: ownerId,
+        post_id: postId,
+        message,
+        v: '5.199',
+      },
+      timeout: 15_000,
+    })
+    if (data.error) {
+      logger.warn('editVkWallPostMessage vk error', { groupId, postId, error: data.error })
+      return false
+    }
+    return true
+  } catch (err: unknown) {
+    logger.warn('editVkWallPostMessage failed', { groupId, postId, err })
+    return false
+  }
+}
+
+/** Дописывает маркер брони к тексту VK-поста, если его ещё нет. */
+export async function appendMarkerToVkWallPost(
+  token: string,
+  groupId: string,
+  postId: number,
+  marker: string,
+): Promise<boolean> {
+  const current = await fetchVkWallPostText(token, groupId, postId)
+  if (current == null) return false
+  if (current.includes(marker)) return true
+  const base = current.trim()
+  const next = base ? `${base}\n\n${marker}` : marker
+  return editVkWallPostMessage(token, groupId, postId, next)
+}
+
 export interface VkComment {
   id: number
   from_id: number

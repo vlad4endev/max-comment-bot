@@ -6993,8 +6993,8 @@
     var presets = (ai && ai.presets) || {};
     var preset = presets[provider] || presets.openrouter || {};
     var configured = !!(ai && ai.configured);
-    var html = '<div class="panel ai-operator-panel" id="ai_operator_panel">';
-    html += sectionHead('Оператор ИИ', 'Ключ и модель для ИИ-анализа логов — только через эту панель');
+    var html = '<div class="panel ai-operator-panel" id="ai_operator_panel" style="margin-bottom:0.75rem">';
+    html += sectionHead('OpenRouter / ИИ', 'Ключ и модель для ИИ-анализа логов (раздел «ИИ-анализ»)');
     html +=
       '<div class="ai-operator-status ' +
       (configured ? 'is-ok' : 'is-off') +
@@ -7567,16 +7567,28 @@
     var main = qs('#mainContent');
     if (!main) return;
     main.innerHTML = skeletonPage();
-    Promise.all([
-      getJson('/settings'),
-      getJson('/logs/ai-config').catch(function () {
-        return {};
-      }),
-    ])
-      .then(function (results) {
+    getJson('/settings')
+      .then(function (s) {
         if (currentRoute !== 'settings') return;
-        var s = results[0] || {};
-        s.log_ai = results[1] && results[1].provider ? results[1] : s.log_ai || results[1] || {};
+        var logAi = (s && s.log_ai) || {};
+        if (!logAi.presets) {
+          return getJson('/logs/ai-config')
+            .catch(function () {
+              return logAi;
+            })
+            .then(function (aiCfg) {
+              if (currentRoute !== 'settings') return;
+              paintSettingsPage(main, s, aiCfg && aiCfg.presets ? aiCfg : logAi);
+            });
+        }
+        paintSettingsPage(main, s, logAi);
+      })
+      .catch(function () {
+        main.innerHTML = '<p class="muted">Ошибка загрузки</p>';
+      });
+  }
+
+  function paintSettingsPage(main, s, logAi) {
         var sec = s.poll_interval_sec != null ? s.poll_interval_sec : 30;
         var html = '<div class="two-col">';
 
@@ -7596,7 +7608,9 @@
         html += '<button type="button" class="btn btn-primary" id="set_save_poll"><i data-lucide="save"></i> Сохранить</button>';
         html += '</div>';
 
-        html += '<div class="panel">';
+        html += renderAiOperatorPanel(logAi);
+
+        html += '<div class="panel" style="margin-top:0.75rem">';
         html += sectionHead('Уведомления', 'Когда получать оповещения');
         html += toggleRow('notify_errors', 'Уведомлять об ошибках', 'Критические сбои в работе бота', true);
         html += toggleRow('notify_antispam', 'Блокировки антиспама', 'При срабатывании фильтров', false);
@@ -7605,9 +7619,7 @@
         html += '</div>';
 
         html += '<div>';
-        html += renderAiOperatorPanel(s.log_ai || {});
-
-        html += '<div class="panel panel-danger" style="border-color:rgba(239,68,68,0.3);margin-top:0.75rem">';
+        html += '<div class="panel panel-danger" style="border-color:rgba(239,68,68,0.3)">';
         html += '<div class="content-block-head"><div><h3 style="color:var(--danger)"><i data-lucide="alert-triangle" style="width:14px;height:14px;vertical-align:-2px;margin-right:4px"></i>Опасная зона</h3>';
         html += '<p class="block-desc">Необратимые операции — только при необходимости</p></div></div>';
 
@@ -7627,7 +7639,7 @@
         html += '</div>';
         main.innerHTML = html;
         bindToggleRows(main, null);
-        bindAiOperatorPanel(main, s.log_ai || {});
+        bindAiOperatorPanel(main, logAi);
         qs('#set_save_poll', main).addEventListener('click', function () {
           var v = Number(qs('#set_poll', main).value);
           postJson('/settings', { poll_interval: v })
@@ -7661,10 +7673,6 @@
           });
         });
         refreshIcons();
-      })
-      .catch(function () {
-        main.innerHTML = '<p class="muted">Ошибка загрузки</p>';
-      });
   }
 
   function renderTopbarForRoute() {

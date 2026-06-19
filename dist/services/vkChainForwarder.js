@@ -15,6 +15,7 @@ exports.stopVkChainForwarder = stopVkChainForwarder;
 const adminPanelState_1 = require("../api/adminPanelState");
 const antispamService_1 = require("./antispamService");
 const commentStore_1 = require("./commentStore");
+const commentsBookingService_1 = require("./commentsBookingService");
 const postStore_1 = require("./postStore");
 const resolveChannelChatId_1 = require("./resolveChannelChatId");
 const integrationPlatformClient_1 = require("./integrationPlatformClient");
@@ -106,6 +107,9 @@ async function syncVkCommentsForChain(chain) {
         const post = postStore_1.postStore.findPostByChannelMessage(mapping.maxChatId, mapping.maxMid);
         if (!post)
             continue;
+        if ((0, commentsBookingService_1.isCommentSyncBlockedByBooking)(post.comments_booked_by, 'vk')) {
+            continue;
+        }
         const { comments, lastCommentId } = await (0, integrationPlatformClient_1.fetchVkWallComments)(chain.vk_token, chain.vk_group_id, mapping.vkPostId, mapping.lastVkCommentId);
         if (lastCommentId > mapping.lastVkCommentId) {
             await vkPostMappingStore_1.vkPostMappingStore.updateLastCommentId(chain.id, mapping.vkPostId, lastCommentId);
@@ -148,6 +152,14 @@ async function syncVkCommentsForChain(chain) {
             }, vkComment.id);
             (0, commentSyncGuard_1.markCommentSynced)(guardKey);
             (0, commentSyncGuard_1.markCommentSynced)(`max:${saved.comment_id}`);
+            const claimed = await (0, commentsBookingService_1.claimAndPropagateCommentsBooking)(post.post_id, 'vk', bot ?? undefined);
+            if (claimed) {
+                logger_1.logger.info('[vkChain] post booked by VK (cross-platform markers applied)', {
+                    chainId: chain.id,
+                    postId: post.post_id,
+                    vkCommentId: vkComment.id,
+                });
+            }
             const newCount = postStore_1.postStore.incrementCommentCount(post.post_id);
             if (newCount !== null && bot) {
                 const updatedPost = postStore_1.postStore.getPost(post.post_id);
@@ -187,6 +199,9 @@ async function syncMaxCommentsToVk() {
         const post = postStore_1.postStore.getPost(comment.post_id);
         if (!post)
             continue;
+        if ((0, commentsBookingService_1.isCommentSyncBlockedByBooking)(post.comments_booked_by, 'max')) {
+            continue;
+        }
         for (const chain of chains) {
             if (Math.abs(chain.max_chat_id) !== Math.abs(post.chat_id))
                 continue;

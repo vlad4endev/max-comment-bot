@@ -33,6 +33,7 @@ const telegramMiniappService_1 = require("../services/telegramMiniappService");
 const telegramChannelRegistry_1 = require("../services/telegramChannelRegistry");
 const telegramChannelNotifyLinkStore_1 = require("../services/telegramChannelNotifyLinkStore");
 const postStore_1 = require("../services/postStore");
+const commentsBookingService_1 = require("../services/commentsBookingService");
 const postIdAliasStore_1 = require("../services/postIdAliasStore");
 const miniappPostRecovery_1 = require("../services/miniappPostRecovery");
 const startappPayload_1 = require("../utils/startappPayload");
@@ -1730,7 +1731,7 @@ function createCommentApiRouter(deps) {
         if ((0, postStore_1.isPostCommentsClosedInMax)(post)) {
             res.status(403).json({
                 error: 'comments_closed',
-                message: 'Комментарии закрыты. Обсуждение ведётся в Telegram.',
+                message: (0, commentsBookingService_1.commentsClosedInMaxMessage)(post.comments_booked_by),
             });
             return;
         }
@@ -1858,7 +1859,7 @@ function createCommentApiRouter(deps) {
         if ((0, postStore_1.isPostCommentsClosedInMax)(post)) {
             res.status(403).json({
                 error: 'comments_closed',
-                message: 'Комментарии закрыты. Обсуждение ведётся в Telegram.',
+                message: (0, commentsBookingService_1.commentsClosedInMaxMessage)(post.comments_booked_by),
             });
             return;
         }

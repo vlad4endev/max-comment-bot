@@ -1,6 +1,6 @@
 import type { Bot } from '@maxhub/max-bot-api';
 import type { Attachment, AttachmentRequest, InlineKeyboardAttachmentRequest } from '@maxhub/max-bot-api/types';
-export type CommentsBookedBy = 'telegram' | 'max';
+export type CommentsBookedBy = 'telegram' | 'max' | 'vk';
 /**
  * Channel post tracked for Mini App comments (MAX message id is {@link Post.message_mid}).
  */
@@ -111,8 +111,8 @@ export declare function resolveChannelPostUrl(bot: Bot, post: Post): Promise<str
 export declare function buildCommentMiniAppUrl(postId: string, chatId: number, messageMid: string): string;
 export declare function commentButtonStartappHasMid(postId: string, chatId: number, messageMid: string): boolean;
 export declare function buildMiniAppUrl(postId: string, chatId: number, extra?: Record<string, string>, messageMid?: string): string;
-/** Новые комментарии в MAX miniapp закрыты — обсуждение в Telegram. */
+/** Новые комментарии в MAX miniapp закрыты — обсуждение на другой платформе. */
 export declare function isPostCommentsClosedInMax(post: Post): boolean;
-/** Inline-клавиатура под постом: комментарии или «Забронировано в ТГ» с той же ссылкой в miniapp. */
+/** Inline-клавиатура под постом: комментарии или «Забронировано в …» с той же ссылкой в miniapp. */
 export declare function buildPostCommentKeyboard(post: Post): InlineKeyboardAttachmentRequest;
 export declare const postStore: PostStore;

@@ -26,6 +26,7 @@ import {
 } from './postCommentMappingStore'
 import { postStore } from './postStore'
 import type { Post } from './postStore'
+import { claimAndPropagateCommentsBooking } from './commentsBookingService'
 import { evaluateComment } from './antispamService'
 import { resolveCanonicalChannelChatId } from './resolveChannelChatId'
 import { resolveTelegramBotToken } from './resolveTelegramBotToken'
@@ -342,9 +343,9 @@ export async function handleTgComment(
 
     markCommentSynced(`max:${saved.comment_id}`)
 
-    const claimed = postStore.tryClaimCommentsBooking(post.post_id, 'telegram')
+    const claimed = await claimAndPropagateCommentsBooking(post.post_id, 'telegram', bot)
     if (claimed) {
-      logger.info('[tgCommentSync] post booked by Telegram', {
+      logger.info('[tgCommentSync] post booked by Telegram (cross-platform markers applied)', {
         chainId: chain.id,
         postId: post.post_id,
         tgCommentId,

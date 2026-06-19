@@ -261,6 +261,17 @@ export const MAX_ANSWERED_IN_TELEGRAM_LABEL = '✅ Отвечено в Telegram'
 /** Служебное сообщение в TG-треде: пост забронирован первым комментарием из MAX. */
 export const TG_BOOKED_IN_MAX_MARKER = '🔒 Забронировано в МАКСе'
 
+/** Маркер на TG-посте: обсуждение забронировано в ВКонтакте. */
+export const TG_BOOKED_IN_VK_MARKER = '🔒 Забронировано в ВКонтакте'
+
+/** Маркер на VK-посте: обсуждение забронировано в MAX. */
+export const VK_BOOKED_IN_MAX_MARKER = '🔒 Забронировано в MAX'
+
+/** Маркер на VK-посте: обсуждение забронировано в Telegram. */
+export const VK_BOOKED_IN_TG_MARKER = '🔒 Забронировано в Telegram'
+
+export type CommentsBookedPlatform = 'telegram' | 'max' | 'vk'
+
 /** MAX inline callback для неактивной кнопки «Забронировано в ТГ». */
 export const MAX_BOOKED_IN_TG_CALLBACK = 'max:booked_tg'
 
@@ -269,16 +280,47 @@ export function formatMaxBookedInTgButtonLabel(commentCount: number): string {
   return `🔒 Забронировано в ТГ (${n})`
 }
 
+export function formatMaxBookedInVkButtonLabel(commentCount: number): string {
+  const n = Math.max(0, commentCount)
+  return `🔒 Забронировано в ВК (${n})`
+}
+
+export function commentsBookedByLabel(by: CommentsBookedPlatform): string {
+  if (by === 'telegram') return 'Telegram'
+  if (by === 'vk') return 'ВКонтакте'
+  return 'MAX'
+}
+
+export function bookingMarkerForTelegram(bookedBy: CommentsBookedPlatform): string | null {
+  if (bookedBy === 'max') return TG_BOOKED_IN_MAX_MARKER
+  if (bookedBy === 'vk') return TG_BOOKED_IN_VK_MARKER
+  return null
+}
+
+export function bookingMarkerForVk(bookedBy: CommentsBookedPlatform): string | null {
+  if (bookedBy === 'max') return VK_BOOKED_IN_MAX_MARKER
+  if (bookedBy === 'telegram') return VK_BOOKED_IN_TG_MARKER
+  return null
+}
+
+export function postTextHasBookingMarker(text: string, marker: string): boolean {
+  return text.includes(marker)
+}
+
+export function appendBookingMarker(text: string, marker: string): string {
+  const base = text.trim()
+  if (!base || base.includes(marker)) {
+    return base
+  }
+  return `${base}\n\n${marker}`
+}
+
 export function isTelegramPostMarkedBookedInMax(text: string): boolean {
   return text.includes(TG_BOOKED_IN_MAX_MARKER)
 }
 
 export function appendTgBookedInMaxMarker(text: string): string {
-  const base = text.trim()
-  if (!base || isTelegramPostMarkedBookedInMax(base)) {
-    return base
-  }
-  return `${base}\n\n${TG_BOOKED_IN_MAX_MARKER}`
+  return appendBookingMarker(text, TG_BOOKED_IN_MAX_MARKER)
 }
 
 export function isTelegramCommentMarkedAnsweredInMax(text: string): boolean {
@@ -325,9 +367,9 @@ export async function shouldSyncTgCommentToMax(params: {
   discussionChatId: number
   postCommentCount: number
   threadRootMsgId: number
-  commentsBookedBy?: 'telegram' | 'max' | null
+  commentsBookedBy?: 'telegram' | 'max' | 'vk' | null
 }): Promise<boolean> {
-  if (params.commentsBookedBy === 'max') {
+  if (params.commentsBookedBy === 'max' || params.commentsBookedBy === 'vk') {
     return false
   }
 
@@ -337,7 +379,8 @@ export async function shouldSyncTgCommentToMax(params: {
     isMaxAdminReplyInTelegram(text) ||
     isMaxCommentInTelegram(text) ||
     isTelegramCommentMarkedAnsweredInMax(text) ||
-    text.includes(TG_BOOKED_IN_MAX_MARKER)
+    text.includes(TG_BOOKED_IN_MAX_MARKER) ||
+    text.includes(TG_BOOKED_IN_VK_MARKER)
   ) {
     return false
   }

@@ -105,6 +105,11 @@ export declare function fetchVkWallPosts(token: string, groupId: string, afterPo
     lastPostId: number;
 }>;
 export declare function publishVkWallPost(token: string, groupId: string, message: string): Promise<number | null>;
+/** Текущий текст VK-поста на стене. */
+export declare function fetchVkWallPostText(token: string, groupId: string, postId: number): Promise<string | null>;
+export declare function editVkWallPostMessage(token: string, groupId: string, postId: number, message: string): Promise<boolean>;
+/** Дописывает маркер брони к тексту VK-поста, если его ещё нет. */
+export declare function appendMarkerToVkWallPost(token: string, groupId: string, postId: number, marker: string): Promise<boolean>;
 export interface VkComment {
     id: number;
     from_id: number;

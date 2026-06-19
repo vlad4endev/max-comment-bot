@@ -34,9 +34,22 @@ export declare const LEGACY_ANSWERED_IN_MAX_MARKER = "\u2705 \u041E\u0442\u0432\
 export declare const MAX_ANSWERED_IN_TELEGRAM_LABEL = "\u2705 \u041E\u0442\u0432\u0435\u0447\u0435\u043D\u043E \u0432 Telegram";
 /** Служебное сообщение в TG-треде: пост забронирован первым комментарием из MAX. */
 export declare const TG_BOOKED_IN_MAX_MARKER = "\uD83D\uDD12 \u0417\u0430\u0431\u0440\u043E\u043D\u0438\u0440\u043E\u0432\u0430\u043D\u043E \u0432 \u041C\u0410\u041A\u0421\u0435";
+/** Маркер на TG-посте: обсуждение забронировано в ВКонтакте. */
+export declare const TG_BOOKED_IN_VK_MARKER = "\uD83D\uDD12 \u0417\u0430\u0431\u0440\u043E\u043D\u0438\u0440\u043E\u0432\u0430\u043D\u043E \u0432 \u0412\u041A\u043E\u043D\u0442\u0430\u043A\u0442\u0435";
+/** Маркер на VK-посте: обсуждение забронировано в MAX. */
+export declare const VK_BOOKED_IN_MAX_MARKER = "\uD83D\uDD12 \u0417\u0430\u0431\u0440\u043E\u043D\u0438\u0440\u043E\u0432\u0430\u043D\u043E \u0432 MAX";
+/** Маркер на VK-посте: обсуждение забронировано в Telegram. */
+export declare const VK_BOOKED_IN_TG_MARKER = "\uD83D\uDD12 \u0417\u0430\u0431\u0440\u043E\u043D\u0438\u0440\u043E\u0432\u0430\u043D\u043E \u0432 Telegram";
+export type CommentsBookedPlatform = 'telegram' | 'max' | 'vk';
 /** MAX inline callback для неактивной кнопки «Забронировано в ТГ». */
 export declare const MAX_BOOKED_IN_TG_CALLBACK = "max:booked_tg";
 export declare function formatMaxBookedInTgButtonLabel(commentCount: number): string;
+export declare function formatMaxBookedInVkButtonLabel(commentCount: number): string;
+export declare function commentsBookedByLabel(by: CommentsBookedPlatform): string;
+export declare function bookingMarkerForTelegram(bookedBy: CommentsBookedPlatform): string | null;
+export declare function bookingMarkerForVk(bookedBy: CommentsBookedPlatform): string | null;
+export declare function postTextHasBookingMarker(text: string, marker: string): boolean;
+export declare function appendBookingMarker(text: string, marker: string): string;
 export declare function isTelegramPostMarkedBookedInMax(text: string): boolean;
 export declare function appendTgBookedInMaxMarker(text: string): string;
 export declare function isTelegramCommentMarkedAnsweredInMax(text: string): boolean;
@@ -55,5 +68,5 @@ export declare function shouldSyncTgCommentToMax(params: {
     discussionChatId: number;
     postCommentCount: number;
     threadRootMsgId: number;
-    commentsBookedBy?: 'telegram' | 'max' | null;
+    commentsBookedBy?: 'telegram' | 'max' | 'vk' | null;
 }): Promise<boolean>;
