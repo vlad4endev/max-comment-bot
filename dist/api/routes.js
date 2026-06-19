@@ -1601,6 +1601,8 @@ function createCommentApiRouter(deps) {
             chat_id: post.chat_id,
             message_mid: post.message_mid,
             comment_count: post.comment_count,
+            comments_booked_by: post.comments_booked_by ?? null,
+            comments_closed: (0, postStore_1.isPostCommentsClosedInMax)(post),
             channel_title: channelBranding.title,
             channel_avatar_url: channelBranding.avatar_url,
         });
@@ -1725,6 +1727,13 @@ function createCommentApiRouter(deps) {
             res.status(403).json({ error: 'Доступ запрещён' });
             return;
         }
+        if ((0, postStore_1.isPostCommentsClosedInMax)(post)) {
+            res.status(403).json({
+                error: 'comments_closed',
+                message: 'Комментарии закрыты. Обсуждение ведётся в Telegram.',
+            });
+            return;
+        }
         const postAsChannel = await (0, channelPostActions_1.isUserChannelAdmin)(deps.bot, chatId, userId);
         let saveUsername = username;
         let avatarUrl = avatarFromClient;
@@ -1844,6 +1853,13 @@ function createCommentApiRouter(deps) {
         const post = postStore_1.postStore.getPost(postId);
         if (!post || post.chat_id !== chatId) {
             res.status(404).json({ error: 'post not found' });
+            return;
+        }
+        if ((0, postStore_1.isPostCommentsClosedInMax)(post)) {
+            res.status(403).json({
+                error: 'comments_closed',
+                message: 'Комментарии закрыты. Обсуждение ведётся в Telegram.',
+            });
             return;
         }
         const channelReplyName = (await resolveChannelBranding(deps.bot, chatId)).title;

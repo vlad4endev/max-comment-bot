@@ -111,6 +111,8 @@ export declare function resolveChannelPostUrl(bot: Bot, post: Post): Promise<str
 export declare function buildCommentMiniAppUrl(postId: string, chatId: number, messageMid: string): string;
 export declare function commentButtonStartappHasMid(postId: string, chatId: number, messageMid: string): boolean;
 export declare function buildMiniAppUrl(postId: string, chatId: number, extra?: Record<string, string>, messageMid?: string): string;
+/** Новые комментарии в MAX miniapp закрыты — обсуждение в Telegram. */
+export declare function isPostCommentsClosedInMax(post: Post): boolean;
 /** Inline-клавиатура под постом: комментарии или «Забронировано в ТГ» с той же ссылкой в miniapp. */
 export declare function buildPostCommentKeyboard(post: Post): InlineKeyboardAttachmentRequest;
 export declare const postStore: PostStore;

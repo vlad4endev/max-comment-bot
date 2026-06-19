@@ -68,6 +68,7 @@
       'post not found': 'Пост не найден или удалён.',
       post_not_found: 'Пост не найден или удалён.',
       'comment not found': 'Комментарий не найден.',
+      comments_closed: 'Комментарии закрыты. Обсуждение ведётся в Telegram.',
       'Доступ запрещён': 'Недостаточно прав для этого действия.',
       'Только администраторы могут изменять комментарии': 'Изменять комментарии могут только администраторы.',
       'owner cannot be disabled': 'Владельца канала нельзя отключить.',
@@ -2523,6 +2524,7 @@
       var feedEl = document.getElementById('feed');
       var errEl = document.getElementById('err');
       var composerWrapEl = document.querySelector('#view-comments .composer-wrap');
+      var commentsClosedBannerEl = document.getElementById('commentsClosedBanner');
       var inputEl = document.getElementById('input');
       var sendBtn = document.getElementById('sendBtn');
       var photoBtnEl = document.getElementById('photoBtn');
@@ -2539,6 +2541,39 @@
       var postRecoveryUiVisible = false;
       var postRecoveryInFlight = false;
       var lastCommentsSnapshot = null;
+      var commentsClosed = false;
+
+      function applyCommentsClosedUi(closed) {
+        commentsClosed = !!closed;
+        if (composerWrapEl) {
+          composerWrapEl.classList.toggle('is-comments-closed', commentsClosed);
+        }
+        if (commentsClosedBannerEl) {
+          if (commentsClosed) {
+            commentsClosedBannerEl.removeAttribute('hidden');
+          } else {
+            commentsClosedBannerEl.setAttribute('hidden', '');
+          }
+        }
+        if (commentsClosed) {
+          hideReplyBanner();
+          clearComposerPhotos();
+          clearComposerInput();
+          if (inputEl) {
+            inputEl.disabled = true;
+            inputEl.placeholder = 'Комментарии закрыты';
+          }
+          if (sendBtn) sendBtn.disabled = true;
+          if (photoBtnEl) photoBtnEl.disabled = true;
+        } else {
+          if (inputEl) {
+            inputEl.disabled = false;
+            inputEl.placeholder = 'Написать комментарий…';
+          }
+          if (photoBtnEl) photoBtnEl.disabled = false;
+          updateSendEnabled();
+        }
+      }
 
       function setPostPreviewLink(url) {
         channelPostUrl = url && String(url).trim() ? String(url).trim() : null;
@@ -2704,7 +2739,7 @@
       function hidePostRecoveryCard() {
         if (!postRecoveryUiVisible) return;
         postRecoveryUiVisible = false;
-        if (composerWrapEl) composerWrapEl.style.display = '';
+        if (composerWrapEl && !commentsClosed) composerWrapEl.style.display = '';
       }
 
       function refreshMissingPost() {
@@ -3860,7 +3895,7 @@
       }
 
       function activateReplyContext(commentId, targetName) {
-        if (!commentId) return;
+        if (!commentId || commentsClosed) return;
         replyContext = {
           comment_id: commentId,
           username: targetName || 'пользователю',
@@ -4129,6 +4164,7 @@
               postCommentCount = p.comment_count;
               updateBadgeFromCount(postCommentCount);
             }
+            applyCommentsClosedUi(!!p.comments_closed);
             setPostPreviewLink(p.channel_post_url || null);
             setPostPreviewReady(true);
             return true;
@@ -4253,6 +4289,10 @@
       }
 
       function submitComment() {
+        if (commentsClosed) {
+          setErr('comments_closed');
+          return;
+        }
         if (!postId) {
           setErr('Не удалось определить пост');
           return;
@@ -4366,7 +4406,10 @@
               .then(function (r) {
                 return parseApiJsonResponse(r).then(function (j) {
                   if (!r.ok) {
-                    throw new Error((j && j.error) || String(r.status));
+                    var err = new Error((j && j.error) || String(r.status));
+                    if (j && j.message) err.message = j.message;
+                    if (j && j.error) err.code = j.error;
+                    throw err;
                   }
                   return j;
                 });

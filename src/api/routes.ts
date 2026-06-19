@@ -52,7 +52,7 @@ import {
 import { telegramChannelRegistry } from '../services/telegramChannelRegistry'
 import { telegramChannelNotifyLinkStore } from '../services/telegramChannelNotifyLinkStore'
 import type { Post } from '../services/postStore'
-import { postStore, resolveChannelPostUrl } from '../services/postStore'
+import { isPostCommentsClosedInMax, postStore, resolveChannelPostUrl } from '../services/postStore'
 import { rememberPostIdAlias } from '../services/postIdAliasStore'
 import { resolveMiniappPostOpen } from '../services/miniappPostRecovery'
 import { parseStartappPayload } from '../utils/startappPayload'
@@ -1819,6 +1819,8 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
       chat_id: post.chat_id,
       message_mid: post.message_mid,
       comment_count: post.comment_count,
+      comments_booked_by: post.comments_booked_by ?? null,
+      comments_closed: isPostCommentsClosedInMax(post),
       channel_title: channelBranding.title,
       channel_avatar_url: channelBranding.avatar_url,
     })
@@ -1964,6 +1966,13 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
       res.status(403).json({ error: 'Доступ запрещён' })
       return
     }
+    if (isPostCommentsClosedInMax(post)) {
+      res.status(403).json({
+        error: 'comments_closed',
+        message: 'Комментарии закрыты. Обсуждение ведётся в Telegram.',
+      })
+      return
+    }
 
     const postAsChannel = await isUserChannelAdmin(deps.bot, chatId, userId)
     let saveUsername = username
@@ -2087,6 +2096,13 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
     const post = postStore.getPost(postId)
     if (!post || post.chat_id !== chatId) {
       res.status(404).json({ error: 'post not found' })
+      return
+    }
+    if (isPostCommentsClosedInMax(post)) {
+      res.status(403).json({
+        error: 'comments_closed',
+        message: 'Комментарии закрыты. Обсуждение ведётся в Telegram.',
+      })
       return
     }
     const channelReplyName = (await resolveChannelBranding(deps.bot, chatId)).title

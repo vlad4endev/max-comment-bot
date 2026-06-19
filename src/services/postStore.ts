@@ -841,6 +841,11 @@ export function buildMiniAppUrl(
   return buttonUrl
 }
 
+/** Новые комментарии в MAX miniapp закрыты — обсуждение в Telegram. */
+export function isPostCommentsClosedInMax(post: Post): boolean {
+  return post.comments_booked_by === 'telegram'
+}
+
 /** Inline-клавиатура под постом: комментарии или «Забронировано в ТГ» с той же ссылкой в miniapp. */
 export function buildPostCommentKeyboard(post: Post): InlineKeyboardAttachmentRequest {
   const url = buildCommentMiniAppUrl(post.post_id, post.chat_id, post.message_mid)

@@ -9,6 +9,7 @@ exports.resolveChannelPostUrl = resolveChannelPostUrl;
 exports.buildCommentMiniAppUrl = buildCommentMiniAppUrl;
 exports.commentButtonStartappHasMid = commentButtonStartappHasMid;
 exports.buildMiniAppUrl = buildMiniAppUrl;
+exports.isPostCommentsClosedInMax = isPostCommentsClosedInMax;
 exports.buildPostCommentKeyboard = buildPostCommentKeyboard;
 const max_bot_api_1 = require("@maxhub/max-bot-api");
 const config_1 = require("../config");
@@ -677,6 +678,10 @@ function buildMiniAppUrl(postId, chatId, extra, messageMid) {
         buttonUrl = u.toString();
     }
     return buttonUrl;
+}
+/** Новые комментарии в MAX miniapp закрыты — обсуждение в Telegram. */
+function isPostCommentsClosedInMax(post) {
+    return post.comments_booked_by === 'telegram';
 }
 /** Inline-клавиатура под постом: комментарии или «Забронировано в ТГ» с той же ссылкой в miniapp. */
 function buildPostCommentKeyboard(post) {

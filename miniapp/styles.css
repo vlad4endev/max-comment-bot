@@ -2065,6 +2065,31 @@
       padding: 8px 12px;
       padding-bottom: calc(8px + var(--composer-safe-bottom, env(safe-area-inset-bottom)));
     }
+    #view-comments .comments-closed-banner {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      padding: 12px 14px;
+      border-radius: 12px;
+      background: var(--comments-input-bg);
+      color: var(--text-secondary);
+      font-size: 13px;
+      line-height: 1.35;
+      text-align: center;
+    }
+    #view-comments .comments-closed-banner[hidden] {
+      display: none !important;
+    }
+    #view-comments .comments-closed-icon {
+      flex-shrink: 0;
+      font-size: 16px;
+    }
+    #view-comments .composer-wrap.is-comments-closed .composer,
+    #view-comments .composer-wrap.is-comments-closed .composer-attachments,
+    #view-comments .composer-wrap.is-comments-closed .reply-banner {
+      display: none !important;
+    }
     #view-comments .composer {
       display: flex;
       flex-direction: row;
