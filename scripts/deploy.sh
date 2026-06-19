@@ -59,6 +59,22 @@ echo "==> последние логи:"
 docker compose logs --tail=40 bot
 
 echo ""
+echo "==> проверка admin autoposts (патч модалки):"
+AUTOPOST_JS="$(curl -sS --max-time 8 "http://127.0.0.1:${HOST_PORT}/admin/assets/autoposts.js" 2>/dev/null || true)"
+if [[ -n "$AUTOPOST_JS" ]] && echo "$AUTOPOST_JS" | grep -q 'updateModalPreview'; then
+  echo "  /admin/assets/autoposts.js -> OK (updateModalPreview найден)"
+else
+  echo "  /admin/assets/autoposts.js -> СТАРАЯ ВЕРСИЯ или недоступен" >&2
+  echo "  Пересоберите образ: docker compose build --no-cache bot && docker compose up -d --force-recreate" >&2
+fi
+ADMIN_HTML="$(curl -sS --max-time 8 "http://127.0.0.1:${HOST_PORT}/admin/login" 2>/dev/null || true)"
+if [[ -n "$ADMIN_HTML" ]] && echo "$ADMIN_HTML" | grep -q 'autoposts.js'; then
+  echo "  admin HTML -> подключает autoposts.js"
+else
+  echo "  admin HTML -> не найден autoposts.js (проверьте admin-panel/admin.html в образе)" >&2
+fi
+
+echo ""
 echo "==> проверка miniapp (все 3 файла обязательны):"
 for path in /miniapp /miniapp/app.js /miniapp/styles.css; do
   code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 5 "http://127.0.0.1:${HOST_PORT}${path}" 2>/dev/null || echo 000)"

@@ -5,6 +5,7 @@
 (function () {
   'use strict';
 
+  var AP_UI_BUILD = '20260619-modal-preview-v2';
   var API_BASE = '/api/admin';
   var CHANNEL_COLORS = ['#534AB7', '#1D9E75', '#BA7517', '#7F77DD', '#3B82F6', '#EC4899'];
   var WEEKDAY_LABELS = ['Вс', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб'];
@@ -217,6 +218,7 @@
       });
     }
     html += '<button type="button" class="ap-channel-add" data-ap-goto-integrations>+ Добавить канал</button>';
+    html += '<div class="ap-ui-build" title="Версия UI автопостинга">' + esc(AP_UI_BUILD) + '</div>';
     return html;
   }
 

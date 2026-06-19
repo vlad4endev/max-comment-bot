@@ -78,7 +78,7 @@ export function createHttpApp(options: HttpAppOptions): express.Express {
   })
 
   app.get('/admin/login', (_req, res) => {
-    res.setHeader('Cache-Control', 'no-cache, must-revalidate')
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate')
     res.sendFile(join(adminPanelRoot, 'login.html'), (err) => {
       if (err) {
         logger.error('/admin/login: sendFile failed', err)
@@ -96,14 +96,14 @@ export function createHttpApp(options: HttpAppOptions): express.Express {
       lastModified: true,
       setHeaders(res, filePath) {
         if (filePath.endsWith('.js') || filePath.endsWith('.css')) {
-          res.setHeader('Cache-Control', 'no-cache, must-revalidate')
+          res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate')
         }
       },
     }),
   )
 
   app.get('/admin', (req, res) => {
-    res.setHeader('Cache-Control', 'no-cache, must-revalidate')
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate')
     if (!isAdminPanelSessionValid(req)) {
       res.redirect(302, '/admin/login')
       return

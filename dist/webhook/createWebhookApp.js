@@ -51,7 +51,7 @@ function createHttpApp(options) {
         res.redirect(302, '/admin/assets/favicon.svg');
     });
     app.get('/admin/login', (_req, res) => {
-        res.setHeader('Cache-Control', 'no-cache, must-revalidate');
+        res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
         res.sendFile((0, node_path_1.join)(adminPanelRoot, 'login.html'), (err) => {
             if (err) {
                 logger_1.logger.error('/admin/login: sendFile failed', err);
@@ -66,12 +66,12 @@ function createHttpApp(options) {
         lastModified: true,
         setHeaders(res, filePath) {
             if (filePath.endsWith('.js') || filePath.endsWith('.css')) {
-                res.setHeader('Cache-Control', 'no-cache, must-revalidate');
+                res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
             }
         },
     }));
     app.get('/admin', (req, res) => {
-        res.setHeader('Cache-Control', 'no-cache, must-revalidate');
+        res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
         if (!(0, adminAuth_1.isAdminPanelSessionValid)(req)) {
             res.redirect(302, '/admin/login');
             return;

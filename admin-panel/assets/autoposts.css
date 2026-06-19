@@ -141,6 +141,16 @@
   background: rgba(127, 119, 221, 0.1);
 }
 
+.ap-ui-build {
+  margin-top: auto;
+  padding: 0.75rem 0.55rem 0.25rem;
+  font-size: 0.62rem;
+  font-family: var(--font-mono);
+  color: var(--text-muted);
+  opacity: 0.55;
+  user-select: all;
+}
+
 .ap-main {
   flex: 1;
   min-width: 0;
