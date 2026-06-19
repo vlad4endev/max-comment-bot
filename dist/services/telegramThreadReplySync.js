@@ -310,12 +310,14 @@ async function markTelegramCommentAnsweredInMax(token, chatId, tgCommentId, comm
 async function syncMaxCommentToTelegramThread(_bot, comment, post) {
     const freshPost = postStore_1.postStore.getPost(post.post_id) ?? post;
     if (freshPost.comments_booked_by === 'telegram') {
+        (0, commentSyncGuard_1.markCommentSynced)(`max-comment-tg-blocked:${comment.comment_id}`);
         logger_1.logger.debug('[telegramThreadReplySync] skip MAX→TG: post booked by Telegram', {
             commentId: comment.comment_id,
             postId: freshPost.post_id,
         });
         return;
     }
+    await (0, telegramDiscussionThreadResolver_1.ensurePostThreadMapping)(post.message_mid);
     const freshComment = commentStore_1.commentStore.getComment(comment.comment_id) ?? comment;
     if (freshComment.source === 'telegram' || freshComment.tg_comment_id) {
         return;

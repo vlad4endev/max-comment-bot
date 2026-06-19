@@ -250,7 +250,14 @@ async function handleTgComment(message, chain, bot, discussionChatId) {
             text,
         }, tgCommentId);
         (0, commentSyncGuard_1.markCommentSynced)(`max:${saved.comment_id}`);
-        postStore_1.postStore.tryClaimCommentsBooking(post.post_id, 'telegram');
+        const claimed = postStore_1.postStore.tryClaimCommentsBooking(post.post_id, 'telegram');
+        if (claimed) {
+            logger_1.logger.info('[tgCommentSync] post booked by Telegram', {
+                chainId: chain.id,
+                postId: post.post_id,
+                tgCommentId,
+            });
+        }
         const newCount = postStore_1.postStore.incrementCommentCount(post.post_id);
         if (newCount !== null) {
             const updatedPost = postStore_1.postStore.getPost(post.post_id);

@@ -342,7 +342,14 @@ export async function handleTgComment(
 
     markCommentSynced(`max:${saved.comment_id}`)
 
-    postStore.tryClaimCommentsBooking(post.post_id, 'telegram')
+    const claimed = postStore.tryClaimCommentsBooking(post.post_id, 'telegram')
+    if (claimed) {
+      logger.info('[tgCommentSync] post booked by Telegram', {
+        chainId: chain.id,
+        postId: post.post_id,
+        tgCommentId,
+      })
+    }
 
     const newCount = postStore.incrementCommentCount(post.post_id)
     if (newCount !== null) {

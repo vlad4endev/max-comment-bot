@@ -73,6 +73,8 @@ export declare class PostStore {
      * Updates the channel message inline keyboard to show the current comment count.
      */
     updateButtonCaption(bot: Bot, post: Post): Promise<boolean>;
+    /** Сохраняет поля брони при частичных обновлениях поста. */
+    private mergeWithExistingPost;
     private parsePost;
     private getStatements;
 }
@@ -107,5 +109,5 @@ export declare function buildCommentMiniAppUrl(postId: string, chatId: number, m
 export declare function commentButtonStartappHasMid(postId: string, chatId: number, messageMid: string): boolean;
 export declare function buildMiniAppUrl(postId: string, chatId: number, extra?: Record<string, string>, messageMid?: string): string;
 /** Inline-клавиатура под постом: обычная ссылка или неактивная «Забронировано в ТГ». */
-export declare function buildPostCommentKeyboard(post: Post): InlineKeyboardAttachmentRequest;
+export declare function buildPostCommentKeyboard(post: Post, bookedFallbackUrl?: string | null): InlineKeyboardAttachmentRequest;
 export declare const postStore: PostStore;

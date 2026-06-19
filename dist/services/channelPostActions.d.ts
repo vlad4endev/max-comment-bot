@@ -25,7 +25,7 @@ export type AttachChannelCommentsResult = {
     ok: false;
     reason: 'no_chat_id' | 'no_mid' | 'skip_bot' | 'no_miniapp' | 'not_admin' | 'already_exists' | 'attach_failed' | 'chain_comments_disabled';
 };
-export type CommentButtonAttachSource = 'webhook' | 'poller' | 'refresh' | 'manual' | 'ensure' | 'tg_chain';
+export type CommentButtonAttachSource = 'webhook' | 'poller' | 'refresh' | 'manual' | 'ensure' | 'tg_chain' | 'caption_update';
 export declare function buildPostFromChannelMessage(message: Message, chatId: number, postId: string, user?: User): Post;
 /**
  * Creates a {@link Post}, saves it, and attaches the Mini App inline button (edit or reply fallback).

@@ -8,7 +8,6 @@ exports.buildPostFromChannelMessage = buildPostFromChannelMessage;
 exports.tryAttachCommentsToChannelPost = tryAttachCommentsToChannelPost;
 exports.loadChannelPostMessage = loadChannelPostMessage;
 exports.ensurePostFromChannelMessage = ensurePostFromChannelMessage;
-const max_bot_api_1 = require("@maxhub/max-bot-api");
 const logger_1 = require("../utils/logger");
 const commentButtonRetryQueue_1 = require("./commentButtonRetryQueue");
 const adminActivityStore_1 = require("./adminActivityStore");
@@ -234,8 +233,25 @@ async function tryAttachCommentsToChannelPost(bot, message, options = {}) {
     });
     const existingPost = postStore_1.postStore.findPostByChannelMessage(chatId, mid);
     if (existingPost) {
+        const freshPost = postStore_1.postStore.getPost(existingPost.post_id) ?? existingPost;
+        /** Пост забронирован TG — не перепривязываем ссылку «Комментарии», только обновляем подпись. */
+        if (freshPost.comments_booked_by === 'telegram') {
+            const captionOk = await postStore_1.postStore.updateButtonCaption(bot, freshPost);
+            logCommentButton(captionOk ? 'info' : 'warn', captionOk
+                ? 'commentButton: пост забронирован в TG — обновлена кнопка'
+                : 'commentButton: пост забронирован в TG — не удалось обновить кнопку', {
+                source: source ?? 'unknown',
+                chatId,
+                messageMid: mid,
+                postId: freshPost.post_id,
+            });
+            if (captionOk) {
+                clearButtonAttachPending(freshPost);
+            }
+            return captionOk ? { ok: true } : { ok: false, reason: 'attach_failed' };
+        }
         /** Периодический поллер не трогает MAX API для постов с кнопкой — иначе очередь каналов растягивается на минуты. */
-        if (source === 'poller' && existingPost.button_attach_pending !== true) {
+        if (source === 'poller' && freshPost.button_attach_pending !== true) {
             const result = { ok: false, reason: 'already_exists' };
             logCommentButtonSkip(source, result.reason, {
                 chatId,
@@ -249,22 +265,22 @@ async function tryAttachCommentsToChannelPost(bot, message, options = {}) {
         const forceReattach = source === 'refresh' || source === 'tg_chain';
         if (!forceReattach) {
             const captionStartedAt = performance.now();
-            const captionOk = await postStore_1.postStore.updateButtonCaption(bot, existingPost);
+            const captionOk = await postStore_1.postStore.updateButtonCaption(bot, freshPost);
             const captionTiming = durationFields(captionStartedAt);
             if (captionOk) {
-                clearButtonAttachPending(existingPost);
+                clearButtonAttachPending(freshPost);
                 logCommentButton('info', `commentButton: пост уже с кнопкой — обновлена подпись (${captionTiming.duration})`, {
                     source: source ?? 'unknown',
                     chatId,
                     messageMid: mid,
-                    postId: existingPost.post_id,
+                    postId: freshPost.post_id,
                     captionUpdateMs: captionTiming.durationMs,
                 });
                 const result = { ok: false, reason: 'already_exists' };
                 logCommentButtonSkip(source, result.reason, {
                     chatId,
                     messageMid: mid,
-                    postId: existingPost.post_id,
+                    postId: freshPost.post_id,
                     captionRefreshed: true,
                     captionUpdateMs: captionTiming.durationMs,
                 }, attachStartedAt);
@@ -277,57 +293,58 @@ async function tryAttachCommentsToChannelPost(bot, message, options = {}) {
             source: source ?? 'unknown',
             chatId,
             messageMid: mid,
-            postId: existingPost.post_id,
+            postId: freshPost.post_id,
             forceReattach,
-            hasCommentsUi: Boolean(existingPost.comments_ui_message_mid),
+            hasCommentsUi: Boolean(freshPost.comments_ui_message_mid),
         });
-        if (!(0, postStore_1.commentButtonStartappHasMid)(existingPost.post_id, chatId, mid)) {
+        if (!(0, postStore_1.commentButtonStartappHasMid)(freshPost.post_id, chatId, mid)) {
             const result = { ok: false, reason: 'attach_failed' };
             logCommentButtonSkip(source, result.reason, { chatId, messageMid: mid, invalidStartapp: true }, attachStartedAt);
             return result;
         }
-        const openUrl = (0, postStore_1.buildCommentMiniAppUrl)(existingPost.post_id, chatId, mid);
-        const reattachStartParam = (() => {
-            try {
-                return new URL(openUrl).searchParams.get('startapp');
-            }
-            catch {
-                return null;
-            }
-        })();
-        logger_1.logger.info('commentButton: creating button', {
-            postId: existingPost.post_id,
-            chatId,
-            messageMid: mid,
-            buttonUrl: openUrl,
-        });
-        logger_1.logger.info('commentButton: button payload', {
-            buttonUrl: openUrl,
-            startParam: reattachStartParam,
-            postId: existingPost.post_id,
-            chatId,
-            messageMid: mid,
-        });
-        const kb = max_bot_api_1.Keyboard.inlineKeyboard([
-            [max_bot_api_1.Keyboard.button.link(`💬 Комментарии (${existingPost.comment_count})`, openUrl)],
-        ]);
-        const editText = existingPost.text.trim() === '' ? '\u00a0' : existingPost.text;
-        const reattached = await (0, postStore_1.attachCommentButtonToChannelPost)(bot, existingPost, editText, kb, {
+        const postForKb = postStore_1.postStore.getPost(freshPost.post_id) ?? freshPost;
+        if (!postForKb.comments_booked_by) {
+            const openUrl = (0, postStore_1.buildCommentMiniAppUrl)(postForKb.post_id, chatId, mid);
+            const reattachStartParam = (() => {
+                try {
+                    return new URL(openUrl).searchParams.get('startapp');
+                }
+                catch {
+                    return null;
+                }
+            })();
+            logger_1.logger.info('commentButton: creating button', {
+                postId: postForKb.post_id,
+                chatId,
+                messageMid: mid,
+                buttonUrl: openUrl,
+            });
+            logger_1.logger.info('commentButton: button payload', {
+                buttonUrl: openUrl,
+                startParam: reattachStartParam,
+                postId: postForKb.post_id,
+                chatId,
+                messageMid: mid,
+            });
+        }
+        const kb = (0, postStore_1.buildPostCommentKeyboard)(postForKb);
+        const editText = postForKb.text.trim() === '' ? '\u00a0' : postForKb.text;
+        const reattached = await (0, postStore_1.attachCommentButtonToChannelPost)(bot, postForKb, editText, kb, {
             source: source ?? 'unknown',
             phase: 'reattach',
             inlineOnly: options.inlineOnly,
         });
         if (reattached) {
-            clearButtonAttachPending(existingPost);
+            clearButtonAttachPending(postForKb);
             logCommentButtonOk(source, {
                 chatId,
                 messageMid: mid,
-                postId: existingPost.post_id,
+                postId: postForKb.post_id,
                 reattached: true,
             }, attachStartedAt);
             return { ok: true };
         }
-        markButtonAttachPending(existingPost);
+        markButtonAttachPending(postForKb);
         (0, commentButtonRetryQueue_1.scheduleCommentButtonRetry)(chatId, mid);
         const fail = { ok: false, reason: 'attach_failed' };
         logCommentButtonSkip(source, fail.reason, {
@@ -403,7 +420,7 @@ async function tryAttachCommentsToChannelPost(bot, message, options = {}) {
         chatId,
         messageMid: mid,
     });
-    const kb = max_bot_api_1.Keyboard.inlineKeyboard([[max_bot_api_1.Keyboard.button.link('💬 Комментарии (0)', openUrl)]]);
+    const kb = (0, postStore_1.buildPostCommentKeyboard)(post);
     const editText = post.text === '' ? '\u00a0' : post.text;
     const attached = await (0, postStore_1.attachCommentButtonToChannelPost)(bot, post, editText, kb, {
         source: source ?? 'unknown',

@@ -81,25 +81,27 @@ export class PostStore {
   savePost(post: Post): void {
     try {
       this.ensureChannelRow(post.chat_id)
+      const merged = this.mergeWithExistingPost(post)
       const result = this.getStatements().upsert.run(
-        post.post_id,
-        post.chat_id,
-        post.message_mid,
-        post.comments_ui_message_mid ?? null,
-        post.sender_name ?? null,
-        post.text,
-        post.photo_url ?? null,
-        post.media_attachments ? JSON.stringify(post.media_attachments) : null,
-        post.comment_count,
-        post.timestamp,
-        JSON.stringify(post),
+        merged.post_id,
+        merged.chat_id,
+        merged.message_mid,
+        merged.comments_ui_message_mid ?? null,
+        merged.sender_name ?? null,
+        merged.text,
+        merged.photo_url ?? null,
+        merged.media_attachments ? JSON.stringify(merged.media_attachments) : null,
+        merged.comment_count,
+        merged.timestamp,
+        JSON.stringify(merged),
       )
       const isNew = result.changes > 0 && result.lastInsertRowid !== undefined
       logger.info(isNew ? 'db: пост сохранён' : 'db: пост обновлён', {
-        postId: post.post_id,
-        chatId: post.chat_id,
-        messageMid: post.message_mid,
-        pending: post.button_attach_pending ?? false,
+        postId: merged.post_id,
+        chatId: merged.chat_id,
+        messageMid: merged.message_mid,
+        pending: merged.button_attach_pending ?? false,
+        bookedBy: merged.comments_booked_by ?? null,
       })
     } catch (err: unknown) {
       logger.error('db: ошибка сохранения поста', {
@@ -333,13 +335,14 @@ export class PostStore {
    * Updates the channel message inline keyboard to show the current comment count.
    */
   async updateButtonCaption(bot: Bot, post: Post): Promise<boolean> {
-    const bookedByTelegram = post.comments_booked_by === 'telegram'
+    const fresh = this.getPost(post.post_id) ?? post
+    const bookedByTelegram = fresh.comments_booked_by === 'telegram'
     if (!bookedByTelegram && !isMiniAppOpenUrlConfigured()) {
       logger.warn('postStore.updateButtonCaption: BOT_NICKNAME / MINI_APP_URL not usable for links')
       return false
     }
     if (!bookedByTelegram) {
-      const url = buildCommentMiniAppUrl(post.post_id, post.chat_id, post.message_mid)
+      const url = buildCommentMiniAppUrl(fresh.post_id, fresh.chat_id, fresh.message_mid)
       const startParam = (() => {
         try {
           return new URL(url).searchParams.get('startapp')
@@ -348,66 +351,97 @@ export class PostStore {
         }
       })()
       logger.info('commentButton: creating button', {
-        postId: post.post_id,
-        chatId: post.chat_id,
-        messageMid: post.message_mid,
+        postId: fresh.post_id,
+        chatId: fresh.chat_id,
+        messageMid: fresh.message_mid,
         buttonUrl: url,
       })
       logger.info('commentButton: button payload', {
         buttonUrl: url,
         startParam,
-        postId: post.post_id,
-        chatId: post.chat_id,
-        messageMid: post.message_mid,
+        postId: fresh.post_id,
+        chatId: fresh.chat_id,
+        messageMid: fresh.message_mid,
       })
     } else {
       logger.info('commentButton: booked-by-TG button', {
-        postId: post.post_id,
-        chatId: post.chat_id,
-        commentCount: post.comment_count,
+        postId: fresh.post_id,
+        chatId: fresh.chat_id,
+        commentCount: fresh.comment_count,
       })
     }
-    const kb = buildPostCommentKeyboard(post)
-    const targetMid = post.comments_ui_message_mid ?? post.message_mid
-    const text =
-      post.comments_ui_message_mid !== undefined
+    const kb = buildPostCommentKeyboard(fresh)
+    const editText =
+      fresh.comments_ui_message_mid !== undefined
         ? '\u00a0'
-        : post.text.trim() === ''
+        : fresh.text.trim() === ''
           ? '\u00a0'
-          : post.text
-    const usesReplyUi = post.comments_ui_message_mid !== undefined
+          : fresh.text
+    const targetMid = fresh.comments_ui_message_mid ?? fresh.message_mid
+    const usesReplyUi = fresh.comments_ui_message_mid !== undefined
     const { media, warnMissingSnapshot } = usesReplyUi
       ? { media: [] as AttachmentRequest[], warnMissingSnapshot: false }
-      : await resolveChannelPostMediaForEdit(bot, post)
-    if (!usesReplyUi && warnMissingSnapshot) {
-      logger.warn('postStore.updateButtonCaption: нет снимка медиа — пропускаем inline edit', {
-        postId: post.post_id,
-        targetMid,
+      : await resolveChannelPostMediaForEdit(bot, fresh)
+
+    const tryAttachFallback = async (reason: string, keyboard = kb): Promise<boolean> => {
+      logger.info('postStore.updateButtonCaption: fallback attach', {
+        postId: fresh.post_id,
+        reason,
       })
-      return false
+      return attachCommentButtonToChannelPost(bot, fresh, editText, keyboard, {
+        source: 'caption_update',
+        inlineOnly: false,
+      })
+    }
+
+    const tryBookedLinkFallback = async (reason: string): Promise<boolean> => {
+      if (!bookedByTelegram) {
+        return tryAttachFallback(reason)
+      }
+      const channelUrl = await resolveChannelPostUrl(bot, fresh)
+      if (!channelUrl) {
+        return tryAttachFallback(reason)
+      }
+      const linkKb = buildPostCommentKeyboard(fresh, channelUrl)
+      return tryAttachFallback(`${reason}_booked_link`, linkKb)
+    }
+
+    if (!usesReplyUi && warnMissingSnapshot) {
+      return tryBookedLinkFallback('no_media_snapshot')
     }
     if (!usesReplyUi && media.length > 0 && !canMergeKeyboardWithMedia(media.length)) {
-      logger.info('postStore.updateButtonCaption: много медиа — пропускаем inline edit', {
-        postId: post.post_id,
-        targetMid,
-        mediaCount: media.length,
-      })
-      return false
+      return tryBookedLinkFallback('too_many_media')
     }
     const attachments: AttachmentRequest[] =
       usesReplyUi || media.length === 0 ? [kb] : [...media, kb]
     try {
       await apiCallWithRetry(() =>
-        bot.api.editMessage(targetMid, { text, attachments }),
+        bot.api.editMessage(targetMid, { text: editText, attachments }),
       )
       return true
     } catch (err: unknown) {
       logger.warn('postStore.updateButtonCaption: editMessage failed', {
-        postId: post.post_id,
+        postId: fresh.post_id,
         targetMid,
         err,
       })
-      return false
+      return tryBookedLinkFallback('edit_failed')
+    }
+  }
+
+  /** Сохраняет поля брони при частичных обновлениях поста. */
+  private mergeWithExistingPost(post: Post): Post {
+    const byId = this.getPost(post.post_id)
+    const byMid = this.findPostByChannelMessage(post.chat_id, post.message_mid)
+    const existing = byId ?? (byMid && byMid.post_id === post.post_id ? byMid : null)
+    if (!existing) {
+      return post
+    }
+    return {
+      ...existing,
+      ...post,
+      comments_booked_by: post.comments_booked_by ?? existing.comments_booked_by,
+      tg_booked_marker_msg_id: post.tg_booked_marker_msg_id ?? existing.tg_booked_marker_msg_id,
     }
   }
 
@@ -817,15 +851,18 @@ export function buildMiniAppUrl(
 }
 
 /** Inline-клавиатура под постом: обычная ссылка или неактивная «Забронировано в ТГ». */
-export function buildPostCommentKeyboard(post: Post): InlineKeyboardAttachmentRequest {
+export function buildPostCommentKeyboard(
+  post: Post,
+  bookedFallbackUrl?: string | null,
+): InlineKeyboardAttachmentRequest {
   if (post.comments_booked_by === 'telegram') {
+    const label = formatMaxBookedInTgButtonLabel(post.comment_count)
+    const fallbackUrl = bookedFallbackUrl?.trim()
+    if (fallbackUrl) {
+      return Keyboard.inlineKeyboard([[Keyboard.button.link(label, fallbackUrl)]])
+    }
     return Keyboard.inlineKeyboard([
-      [
-        Keyboard.button.callback(
-          formatMaxBookedInTgButtonLabel(post.comment_count),
-          MAX_BOOKED_IN_TG_CALLBACK,
-        ),
-      ],
+      [Keyboard.button.callback(label, MAX_BOOKED_IN_TG_CALLBACK)],
     ])
   }
   const url = buildCommentMiniAppUrl(post.post_id, post.chat_id, post.message_mid)

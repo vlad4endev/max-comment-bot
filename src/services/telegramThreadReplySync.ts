@@ -453,12 +453,15 @@ export async function syncMaxCommentToTelegramThread(
 ): Promise<void> {
   const freshPost = postStore.getPost(post.post_id) ?? post
   if (freshPost.comments_booked_by === 'telegram') {
+    markCommentSynced(`max-comment-tg-blocked:${comment.comment_id}`)
     logger.debug('[telegramThreadReplySync] skip MAX→TG: post booked by Telegram', {
       commentId: comment.comment_id,
       postId: freshPost.post_id,
     })
     return
   }
+
+  await ensurePostThreadMapping(post.message_mid)
 
   const freshComment = commentStore.getComment(comment.comment_id) ?? comment
   if (freshComment.source === 'telegram' || freshComment.tg_comment_id) {
