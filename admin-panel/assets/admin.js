@@ -114,7 +114,7 @@
     integrations: {
       title: 'Интеграции',
       group: 'Telegram → MAX',
-      desc: 'Подключения Telegram, VK и MAX, потоки данных и аналитика.',
+      desc: 'Токены платформ, списки каналов и простые потоки пересылки.',
     },
     antispam: {
       title: 'Антиспам',
@@ -1078,17 +1078,24 @@
     if (tg && tg.linkedChatsUpdatedAt) {
       updatedAt = 'Обновлено: ' + fmtRelativeTime(tg.linkedChatsUpdatedAt);
     }
+    var adminCount = list.filter(function (c) {
+      return c.botIsAdmin === true;
+    }).length;
     panel.innerHTML =
       '<div class="tg-chats-panel-head flex-between">' +
-      '<div><div class="tg-chats-title">Привязанные каналы и чаты</div>' +
-      '<div class="muted text-sm">Используются в потоках, TG-цепочках и автопостинге</div></div>' +
-      '<div class="tg-chats-actions"><button type="button" class="btn btn-primary btn-sm" data-refresh-tg-chats="' +
-      esc(integrationId) +
-      '"><i data-lucide="download"></i> Загрузить</button>' +
+      '<div class="tg-chats-panel-summary">' +
+      '<span class="int-channel-stat"><strong>' +
+      esc(String(list.length)) +
+      '</strong> чатов</span>' +
+      '<span class="int-channel-stat is-ok"><strong>' +
+      esc(String(adminCount)) +
+      '</strong> с правами админа</span>' +
+      (updatedAt ? '<span class="muted text-sm">' + esc(updatedAt) + '</span>' : '') +
+      '</div>' +
       '<button type="button" class="btn btn-ghost btn-sm" data-refresh-tg-chats="' +
       esc(integrationId) +
-      '"><i data-lucide="refresh-cw"></i> Обновить</button></div></div>' +
-      (updatedAt ? '<div class="muted text-sm mb-sm">' + esc(updatedAt) + '</div>' : '') +
+      '"><i data-lucide="refresh-cw"></i> Обновить</button></div>' +
+      '<p class="int-channels-hint muted text-sm">Каналы, где бот — администратор, доступны в цепочках, потоках и автопостинге.</p>' +
       renderTelegramChatsListHtml(list);
   }
 
@@ -1194,13 +1201,22 @@
     var updatedAt = maxChannelsRefreshedAt
       ? 'Обновлено: ' + fmtRelativeTime(maxChannelsRefreshedAt)
       : '';
+    var adminCount = list.filter(function (c) {
+      return c.botIsAdmin === true;
+    }).length;
     panel.innerHTML =
       '<div class="tg-chats-panel-head flex-between">' +
-      '<div><div class="tg-chats-title">Привязанные MAX-каналы</div>' +
-      '<div class="muted text-sm">Каналы из реестра бота (потоки, комментарии, автопостинг)</div></div>' +
-      '<div class="tg-chats-actions"><button type="button" class="btn btn-primary btn-sm" data-refresh-max-chats="1"><i data-lucide="download"></i> Загрузить</button>' +
-      '<button type="button" class="btn btn-ghost btn-sm" data-refresh-max-chats="1"><i data-lucide="refresh-cw"></i> Обновить</button></div></div>' +
-      (updatedAt ? '<div class="muted text-sm mb-sm">' + esc(updatedAt) + '</div>' : '') +
+      '<div class="tg-chats-panel-summary">' +
+      '<span class="int-channel-stat"><strong>' +
+      esc(String(list.length)) +
+      '</strong> каналов</span>' +
+      '<span class="int-channel-stat is-ok"><strong>' +
+      esc(String(adminCount)) +
+      '</strong> с правами админа</span>' +
+      (updatedAt ? '<span class="muted text-sm">' + esc(updatedAt) + '</span>' : '') +
+      '</div>' +
+      '<button type="button" class="btn btn-ghost btn-sm" data-refresh-max-chats="1"><i data-lucide="refresh-cw"></i> Обновить</button></div>' +
+      '<p class="int-channels-hint muted text-sm">Добавьте бота администратором в MAX-канал, затем обновите список.</p>' +
       renderMaxChatsListHtml(list);
   }
 
@@ -1237,15 +1253,13 @@
             showToast(msg, n ? 'success' : 'info');
             var metaEl = qs('[data-max-channels-meta]');
             if (metaEl) {
-              metaEl.innerHTML =
-                '<span>Каналов: <strong>' +
-                esc(String(n)) +
-                '</strong> (админ: <strong>' +
-                esc(String(admins)) +
-                '</strong>)</span><span>Bot Token: <code>••••••••' +
-                esc((intMaxMeta && intMaxMeta.tokenPreview) || '') +
-                '</code></span>';
+              var admins = data.adminCount != null ? data.adminCount : 0;
+              var vals = metaEl.querySelectorAll('.int-stat-val');
+              if (vals[0]) vals[0].textContent = String(n);
+              if (vals[1]) vals[1].textContent = String(admins);
             }
+            var badge = qs('.int-card--max .int-details-badge', panel.closest('.integration-card') || document);
+            if (badge) badge.textContent = String(n);
           })
           .catch(function (e) {
             showToast(e.message || 'Ошибка', 'error');
@@ -1265,16 +1279,35 @@
       return c.botIsAdmin === true;
     }).length;
     var tokenPreview = (meta && meta.tokenPreview) || '';
+    var channelsOpen = channels.length ? '' : ' open';
     return (
-      '<div class="integration-card connected"><div class="int-card-header"><div class="int-logo max">М</div><div class="int-info"><div class="int-name">MAX</div><div class="int-desc">Основная платформа — подключён</div></div><span class="int-status connected"><i data-lucide="circle-check"></i> Подключён</span></div>' +
-      '<div class="int-meta" data-max-channels-meta><span>Каналов: <strong>' +
+      '<article class="integration-card connected int-card--max">' +
+      '<div class="int-card-header">' +
+      '<div class="int-logo max">М</div>' +
+      '<div class="int-info">' +
+      '<div class="int-name">MAX</div>' +
+      '<div class="int-desc">Целевая платформа — бот подключён через MAX_TOKEN</div>' +
+      '</div>' +
+      '<span class="int-status connected"><i data-lucide="circle-check"></i> Подключён</span>' +
+      '</div>' +
+      '<div class="int-quick-stats" data-max-channels-meta>' +
+      '<div class="int-stat"><span class="int-stat-val">' +
       esc(String(channels.length)) +
-      '</strong>' +
-      (channels.length ? ' (админ: <strong>' + esc(String(adminCount)) + '</strong>)' : '') +
-      '</span><span>Bot Token: <code>••••••••' +
+      '</span><span class="int-stat-label">каналов</span></div>' +
+      '<div class="int-stat"><span class="int-stat-val">' +
+      esc(String(adminCount)) +
+      '</span><span class="int-stat-label">админ</span></div>' +
+      '<div class="int-stat"><span class="int-stat-val mono">••••' +
       esc(tokenPreview) +
-      '</code></span></div>' +
-      '<div class="tg-chats-panel-wrap" data-max-chats-panel="1"></div></div>'
+      '</span><span class="int-stat-label">токен</span></div>' +
+      '</div>' +
+      '<details class="int-details"' +
+      channelsOpen +
+      '><summary><i data-lucide="radio"></i> Каналы MAX <span class="int-details-badge">' +
+      esc(String(channels.length)) +
+      '</span></summary>' +
+      '<div class="int-details-body tg-chats-panel-wrap" data-max-chats-panel="1"></div></details>' +
+      '</article>'
     );
   }
 
@@ -3329,6 +3362,134 @@
       });
   }
 
+  /** Превью одного выбранного сообщества VK (после резолвинга или выбора из списка). */
+  function renderVkGroupPreview(g, compact) {
+    var url = g.url || ('https://vk.com/' + (g.screenName || ('club' + g.id)));
+    var html = '<div class="vk-group-preview' + (compact ? ' vk-group-preview--compact' : '') + '">';
+    if (g.photo) html += '<img src="' + esc(g.photo) + '" class="vk-group-avatar" alt=""/>';
+    html += '<div class="vk-group-preview__info">';
+    html += '<span class="vk-group-preview__name">' + esc(g.name || g.id) + '</span>';
+    html += '<a href="' + esc(url) + '" target="_blank" class="vk-group-preview__url">' + esc(url.replace('https://', '')) + '</a>';
+    html += '</div>';
+    html += '<i data-lucide="check-circle" class="vk-group-preview__check"></i>';
+    html += '</div>';
+    return html;
+  }
+
+  /** Один элемент в списке сообществ для выбора. */
+  function renderVkGroupPickerItem(g) {
+    var url = g.url || ('https://vk.com/' + (g.screenName || ('club' + g.id)));
+    return (
+      '<button type="button" class="vk-group-item" data-pick-vk-group="' +
+      esc(g.id) +
+      '" data-vk-name="' + esc(g.name || '') + '" data-vk-screen="' + esc(g.screenName || '') +
+      '" data-vk-url="' + esc(url) + '" data-vk-photo="' + esc(g.photo || '') + '">' +
+      (g.photo ? '<img src="' + esc(g.photo) + '" class="vk-group-avatar" alt=""/>' : '<span class="vk-group-avatar vk-group-avatar--empty">VK</span>') +
+      '<span class="vk-group-item__info">' +
+      '<span class="vk-group-item__name">' + esc(g.name || g.id) + '</span>' +
+      '<span class="vk-group-item__url">' + esc(url.replace('https://', '')) + '</span>' +
+      '</span>' +
+      '<i data-lucide="check" class="vk-group-item__check"></i>' +
+      '</button>'
+    );
+  }
+
+  function getVkTokenFromForm(root, vkInt) {
+    var tokenEl = qs('#vc_token', root);
+    var token = tokenEl ? String(tokenEl.value || '').trim() : '';
+    if (!token && vkInt && vkInt.token) token = String(vkInt.token).trim();
+    return token || null;
+  }
+
+  /** Привязывает логику пикера сообществ VK к форме. */
+  function bindVkCommunityPicker(root, vkInt) {
+    var resolveBtn = qs('#vc_resolve_btn', root);
+    var loadGroupsBtn = qs('#vc_load_groups_btn', root);
+    var communityInput = qs('#vc_community_input', root);
+    var resultEl = qs('#vc_community_result', root);
+    var listEl = qs('#vc_groups_list', root);
+    var groupIdHidden = qs('#vc_group_id', root);
+
+    function selectGroup(g) {
+      if (groupIdHidden) groupIdHidden.value = String(g.id || '');
+      if (resultEl) {
+        resultEl.innerHTML = renderVkGroupPreview(g, true);
+        refreshIcons();
+      }
+      if (listEl) {
+        qsa('[data-pick-vk-group]', listEl).forEach(function (item) {
+          item.classList.toggle('is-selected', item.getAttribute('data-pick-vk-group') === String(g.id));
+        });
+      }
+    }
+
+    if (resolveBtn) {
+      resolveBtn.addEventListener('click', function () {
+        var val = communityInput ? String(communityInput.value || '').trim() : '';
+        if (!val) { showToast('Введите ссылку, username или ID', 'error'); return; }
+        var token = getVkTokenFromForm(root, vkInt);
+        if (!token) { showToast('Сначала укажите токен VK или подключите VK в «Интеграциях»', 'error'); return; }
+        resolveBtn.disabled = true;
+        resolveBtn.textContent = '…';
+        postJson('/vk-resolve-group', { input: val, vk_token: token })
+          .then(function (res) {
+            if (listEl) listEl.innerHTML = '';
+            selectGroup(res.group);
+          })
+          .catch(function (e) { showToast(e.message || 'Сообщество не найдено', 'error'); })
+          .finally(function () { resolveBtn.disabled = false; resolveBtn.textContent = 'Найти'; });
+      });
+      if (communityInput) {
+        communityInput.addEventListener('keydown', function (e) {
+          if (e.key === 'Enter') { e.preventDefault(); resolveBtn.click(); }
+        });
+      }
+    }
+
+    if (loadGroupsBtn) {
+      loadGroupsBtn.addEventListener('click', function () {
+        var token = getVkTokenFromForm(root, vkInt);
+        if (!token) { showToast('Сначала укажите токен VK или подключите VK в «Интеграциях»', 'error'); return; }
+        loadGroupsBtn.disabled = true;
+        loadGroupsBtn.innerHTML = '<i data-lucide="loader"></i> Загрузка…';
+        getJson('/vk-groups?token=' + encodeURIComponent(token))
+          .then(function (res) {
+            var groups = res.groups || [];
+            if (resultEl) resultEl.innerHTML = '';
+            if (groupIdHidden) groupIdHidden.value = '';
+            if (!groups.length) {
+              if (listEl) listEl.innerHTML = '<p class="muted" style="padding:8px 0">Сообществ не найдено. Убедитесь, что токен имеет права администратора.</p>';
+              return;
+            }
+            var html = '<div class="vk-groups-picker">';
+            groups.forEach(function (g) { html += renderVkGroupPickerItem(g); });
+            html += '</div>';
+            if (listEl) listEl.innerHTML = html;
+            qsa('[data-pick-vk-group]', root).forEach(function (item) {
+              item.addEventListener('click', function () {
+                var id = item.getAttribute('data-pick-vk-group');
+                var url = item.getAttribute('data-vk-url') || ('https://vk.com/club' + id);
+                selectGroup({
+                  id: id,
+                  name: item.getAttribute('data-vk-name') || id,
+                  screenName: item.getAttribute('data-vk-screen') || '',
+                  url: url,
+                  photo: item.getAttribute('data-vk-photo') || '',
+                });
+              });
+            });
+            refreshIcons();
+          })
+          .catch(function (e) { showToast(e.message || 'Ошибка загрузки', 'error'); })
+          .finally(function () {
+            loadGroupsBtn.disabled = false;
+            loadGroupsBtn.innerHTML = '<i data-lucide="list"></i> Мои сообщества';
+            refreshIcons();
+          });
+      });
+    }
+  }
+
   function renderVkConnectBanner() {
     var vkInt = integrationsCache.find(function (i) {
       return i.platform === 'vk' && i.status === 'connected';
@@ -3371,9 +3532,10 @@
     html += '<div class="chain-card__node chain-card__node--vk">';
     html += '<span class="chain-card__platform-icon">VK</span>';
     html += '<div class="chain-card__node-info">';
-    html +=
-      '<span class="chain-card__node-name">Сообщество ' + esc(c.vk_group_id || '—') + '</span>';
-    html += '<span class="chain-card__node-id">vk.com/club' + esc(c.vk_group_id || '') + '</span>';
+    var vkDisplayName = c.vk_name || ('Сообщество ' + esc(c.vk_group_id || '—'));
+    var vkUrl = c.vk_screen_name ? 'vk.com/' + c.vk_screen_name : ('vk.com/club' + (c.vk_group_id || ''));
+    html += '<span class="chain-card__node-name">' + esc(vkDisplayName) + '</span>';
+    html += '<a href="https://' + esc(vkUrl) + '" target="_blank" class="chain-card__node-id chain-card__node-link">' + esc(vkUrl) + '</a>';
     html += '</div></div></div>';
     html += '<div class="chain-card__stats">';
     html +=
@@ -3534,17 +3696,32 @@
           '<select class="select" id="vc_max">' +
           buildMaxChannelSelectOptions(maxChannels, { adminOnly: true }) +
           '</select></div>';
-        html +=
-          '<div class="form-group"><label>ID сообщества VK</label><input class="input mono" id="vc_group" placeholder="12345678" value="' +
-          esc(vkInt && vkInt.groupId ? String(vkInt.groupId).replace(/^-/, '') : '') +
-          '"/></div>';
+        // ── Токен (если VK не подключён глобально) ──
         if (!vkInt) {
           html +=
-            '<div class="form-group"><label>Токен сообщества VK</label><input class="input mono" id="vc_token" type="password" placeholder="access_token с правами wall, comments"/></div>';
+            '<div class="form-group">' +
+            '<label>Токен сообщества VK <span class="label-hint">— права: wall, comments</span></label>' +
+            '<input class="input mono" id="vc_token" type="password" placeholder="vk1.a.xxxxxxxx"/>' +
+            '</div>';
         } else {
-          html +=
-            '<div class="form-group"><label>Токен (необязательно)</label><input class="input mono" id="vc_token" type="password" placeholder="Оставьте пустым — возьмём из интеграции"/></div>';
+          html += '<input type="hidden" id="vc_token" value=""/>';
         }
+
+        // ── Выбор сообщества ──
+        html += '<div class="form-group">';
+        html += '<div class="flex-between" style="align-items:center;gap:8px;margin-bottom:6px">';
+        html += '<label style="margin:0">Сообщество ВКонтакте</label>';
+        html += '<button type="button" class="btn btn-ghost btn-sm" id="vc_load_groups_btn"><i data-lucide="list"></i> Мои сообщества</button>';
+        html += '</div>';
+        html += '<div style="display:flex;gap:8px">';
+        html += '<input class="input" id="vc_community_input" placeholder="vk.com/ostrovskidok  или  12345678" style="flex:1"/>';
+        html += '<button type="button" class="btn btn-secondary btn-sm" id="vc_resolve_btn" style="white-space:nowrap">Найти</button>';
+        html += '</div>';
+        html += '<p class="form-hint">Введите ссылку, username или числовой ID сообщества и нажмите «Найти».</p>';
+        html += '<div id="vc_community_result" style="margin-top:8px"></div>';
+        html += '<div id="vc_groups_list" style="margin-top:8px"></div>';
+        html += '<input type="hidden" id="vc_group_id"/>';
+        html += '</div>';
         html += '<div id="vcToggles">';
         html += toggleRow('forward_posts', 'Публиковать посты в VK', '', true);
         html += toggleRow('sync_comments', 'Синхронизировать комментарии', 'VK ↔ MAX miniapp', false);
@@ -3588,6 +3765,7 @@
               });
           });
         }
+        bindVkCommunityPicker(main, vkInt || null);
         var submit = qs('#vc_submit', main);
         if (submit) submit.addEventListener('click', function () { submitVkChainFromForm(main); });
         bindToggleRows(main, null);
@@ -4310,6 +4488,97 @@
     });
   }
 
+  function integrationPlatformConnected(record) {
+    return !!(record && record.status === 'connected' && integrationHasToken(record));
+  }
+
+  function renderIntegrationsPageHead(tg, vk, maxMeta, flows, analytics) {
+    var tgOk = integrationPlatformConnected(tg);
+    var vkOk = integrationPlatformConnected(vk);
+    var maxChannels = (maxMeta && maxMeta.channelCount) || (maxMeta && maxMeta.channels && maxMeta.channels.length) || 0;
+    var activeFlows = (flows || []).filter(function (f) {
+      return f.enabled;
+    }).length;
+    var forwarded = (analytics && analytics.telegram && analytics.telegram.forwarded) || 0;
+    var html = '<header class="int-page-head">';
+    html += '<div class="int-page-head-text">';
+    html += '<h2>Подключение платформ</h2>';
+    html +=
+      '<p>Здесь задаются API-токены и загружаются каналы. Чтобы связать каналы для пересылки — откройте раздел «Цепочки».</p>';
+    html += '</div>';
+    html += '<div class="int-status-pills">';
+    html +=
+      '<span class="int-status-pill' +
+      (tgOk ? ' is-ok' : '') +
+      '"><span class="int-pill-dot telegram"></span> Telegram · ' +
+      (tgOk ? 'подключён' : 'не настроен') +
+      '</span>';
+    html +=
+      '<span class="int-status-pill is-ok"><span class="int-pill-dot max"></span> MAX · ' +
+      esc(String(maxChannels)) +
+      ' кан.</span>';
+    html +=
+      '<span class="int-status-pill' +
+      (vkOk ? ' is-ok' : '') +
+      '"><span class="int-pill-dot vk"></span> VK · ' +
+      (vkOk ? 'подключён' : 'не настроен') +
+      '</span>';
+    if (activeFlows > 0) {
+      html +=
+        '<span class="int-status-pill is-muted"><i data-lucide="git-branch"></i> Потоков: <strong>' +
+        esc(String(activeFlows)) +
+        '</strong></span>';
+    }
+    if (forwarded > 0) {
+      html +=
+        '<span class="int-status-pill is-muted"><i data-lucide="arrow-right-left"></i> Переслано: <strong>' +
+        esc(String(forwarded)) +
+        '</strong></span>';
+    }
+    html += '</div></header>';
+    return html;
+  }
+
+  function renderIntegrationsGuide() {
+    return (
+      '<div class="int-guide">' +
+      '<div class="int-guide-item"><div class="int-guide-icon telegram">1</div><div><strong>Платформы</strong><p>Токены Telegram и VK, списки каналов с правами бота.</p></div></div>' +
+      '<div class="int-guide-arrow"><i data-lucide="arrow-right"></i></div>' +
+      '<div class="int-guide-item"><div class="int-guide-icon max">2</div><div><strong>Цепочки</strong><p>Пары каналов TG→MAX с комментариями и опциями.</p><button type="button" class="btn btn-ghost btn-sm" data-route-jump="tgchains">Открыть цепочки</button></div></div>' +
+      '<div class="int-guide-arrow"><i data-lucide="arrow-right"></i></div>' +
+      '<div class="int-guide-item"><div class="int-guide-icon vk">3</div><div><strong>Потоки</strong><p>Простые правила «источник → MAX» с фильтрами по словам.</p></div></div>' +
+      '</div>'
+    );
+  }
+
+  function renderIntegrationsTabBar(flowsCount, logCount) {
+    var tabs = [
+      { id: 'connections', label: 'Платформы', icon: 'plug' },
+      { id: 'flows', label: 'Потоки', icon: 'git-branch', badge: flowsCount || null },
+      { id: 'analytics', label: 'Журнал', icon: 'bar-chart-2', badge: logCount || null },
+    ];
+    var html = '<div class="int-tabs" role="tablist">';
+    tabs.forEach(function (tab) {
+      html +=
+        '<button type="button" role="tab" class="int-tab' +
+        (integrationsTab === tab.id ? ' active' : '') +
+        '" data-int-tab="' +
+        tab.id +
+        '" aria-selected="' +
+        (integrationsTab === tab.id ? 'true' : 'false') +
+        '"><i data-lucide="' +
+        tab.icon +
+        '"></i> ' +
+        esc(tab.label);
+      if (tab.badge) {
+        html += ' <span class="int-tab-badge">' + esc(String(tab.badge)) + '</span>';
+      }
+      html += '</button>';
+    });
+    html += '</div>';
+    return html;
+  }
+
   function renderIntegrations() {
     var main = qs('#mainContent');
     if (!main) return;
@@ -4333,54 +4602,95 @@
         var tg = integrationsCache.find(function (i) { return i.platform === 'telegram'; });
         var vk = integrationsCache.find(function (i) { return i.platform === 'vk'; });
 
-        var html = '<div class="int-page"><div class="int-tabs">';
-        ['connections', 'flows', 'analytics'].forEach(function (tab) {
-          var labels = { connections: 'Подключения', flows: 'Потоки данных', analytics: 'Аналитика' };
-          html +=
-            '<button type="button" class="int-tab' +
-            (integrationsTab === tab ? ' active' : '') +
-            '" data-int-tab="' +
-            tab +
-            '">' +
-            esc(labels[tab]) +
-            '</button>';
-        });
-        html += '</div>';
+        var html = '<div class="int-page">';
+        html += renderIntegrationsPageHead(tg, vk, intMaxMeta, flowsCache, analytics);
+        html += renderIntegrationsGuide();
+        html += renderIntegrationsTabBar(flowsCache.length, logItems.length);
 
         if (integrationsTab === 'connections') {
-          html += '<div class="integrations-grid">';
-          html += integrationCardHtml('telegram', 'Telegram Bot', 'Получение постов из каналов, отправка в MAX', tg, 'tg');
-          html += integrationCardHtml('vk', 'ВКонтакте', 'Сообщества: посты, комментарии, аналитика', vk, 'vk');
+          html += '<section class="int-section-block">';
+          html += sectionHead(
+            'Платформы',
+            'MAX уже подключён через переменные окружения. Добавьте Telegram-бота и при необходимости VK.',
+          );
+          html += '<div class="integrations-stack">';
           maxLinkedChatsCache =
             intMaxMeta && intMaxMeta.channels && intMaxMeta.channels.length
               ? intMaxMeta.channels
               : maxLinkedChatsCache;
           html += maxIntegrationCardHtml(intMaxMeta);
-          html += '</div>';
+          html += integrationCardHtml(
+            'telegram',
+            'Telegram Bot',
+            'Источник постов и комментариев — токен от @BotFather',
+            tg,
+            'tg',
+          );
+          html += integrationCardHtml(
+            'vk',
+            'ВКонтакте',
+            'Публикация MAX → VK и работа с сообществами',
+            vk,
+            'vk',
+          );
+          html += '</div></section>';
         } else if (integrationsTab === 'flows') {
+          html +=
+            '<div class="int-info-callout"><i data-lucide="info"></i><div><strong>Потоки</strong> — упрощённые правила пересылки с фильтрами. Для полноценной связки TG→MAX с комментариями используйте <button type="button" class="btn btn-ghost btn-sm" data-route-jump="tgchains">Цепочки</button>.</div></div>';
+          html += sectionHead('Активные потоки', 'Источник → MAX. Можно включать, тестировать и удалять.');
           html += '<div class="flows-list">';
-          flowsCache.forEach(function (f) { html += flowCardHtml(f); });
-          if (!flowsCache.length) html += '<p class="muted">Потоков пока нет.</p>';
-          html += '</div><button type="button" class="btn btn-primary mt-md" id="btnOpenFlowBuilder"><i data-lucide="plus"></i> Новый поток</button>';
+          if (flowsCache.length) {
+            flowsCache.forEach(function (f) {
+              html += flowCardHtml(f);
+            });
+          } else {
+            html += emptyState(
+              'git-branch',
+              'Потоков пока нет',
+              'Создайте правило пересылки из Telegram или VK в MAX-канал.',
+              '<button type="button" class="btn btn-primary" id="btnOpenFlowBuilder"><i data-lucide="plus"></i> Создать поток</button>',
+            );
+          }
+          html += '</div>';
+          if (flowsCache.length) {
+            html +=
+              '<div class="int-flows-toolbar"><button type="button" class="btn btn-primary" id="btnOpenFlowBuilder"><i data-lucide="plus"></i> Новый поток</button></div>';
+          }
           html += '<div class="flow-builder hidden" id="flow-builder"></div>';
         } else {
+          html += sectionHead('Статистика платформ', 'Сводка по подключённым источникам.');
           html += '<div class="analytics-grid">';
           html += analyticsCardHtml('telegram', analytics.telegram);
           html += analyticsCardHtml('vk', analytics.vk);
-          html += '</div><div class="card-like mt-md"><div class="card-header flex-between"><span>Последние переданные посты</span>';
+          html += '</div>';
+          html +=
+            '<div class="card-like mt-md int-log-card"><div class="card-header flex-between"><div><strong>Журнал пересылок</strong><p class="muted text-sm" style="margin:4px 0 0">Последние посты, прошедшие через потоки</p></div>';
           html += '<select class="select" id="flow-filter-select"><option value="">Все потоки</option>';
-          flowsCache.forEach(function (f) { html += '<option value="' + esc(f.id) + '">' + esc(f.name) + '</option>'; });
+          flowsCache.forEach(function (f) {
+            html += '<option value="' + esc(f.id) + '">' + esc(f.name || f.id) + '</option>';
+          });
           html += '</select></div>';
           html += '<div class="forwarded-list">';
-          logItems.forEach(function (item) { html += forwardedItemHtml(item); });
-          if (!logItems.length) html += '<p class="muted" style="padding:12px">Пока нет пересланных постов</p>';
+          logItems.forEach(function (item) {
+            html += forwardedItemHtml(item);
+          });
+          if (!logItems.length) {
+            html += emptyState(
+              'inbox',
+              'Пока пусто',
+              'Когда потоки начнут пересылать посты, записи появятся здесь.',
+            );
+          }
           html += '</div></div>';
         }
         html += '</div>';
         main.innerHTML = html;
         bindIntTabs(main);
         bindIntegrationsPage(main);
-        var tgRec = integrationsCache.find(function (i) { return i.platform === 'telegram' && i.status === 'connected'; });
+        bindRouteJumpButtons(main);
+        var tgRec = integrationsCache.find(function (i) {
+          return i.platform === 'telegram' && i.status === 'connected';
+        });
         if (tgRec) {
           tgLinkedChatsCache = tgRec.linkedChats || tgLinkedChatsCache;
           var panel = qs('[data-tg-chats-panel="' + tgRec.id + '"]', main);
@@ -4391,6 +4701,8 @@
               .then(function (data) {
                 mountTelegramChatsPanel(panel, tgRec.id, data.channels || []);
                 bindTelegramChatsPanel(panel);
+                var badge = qs('[data-int-tg-channels-badge="' + tgRec.id + '"]', main);
+                if (badge) badge.textContent = String((data.channels || []).length);
                 refreshIcons();
               })
               .catch(function () {});
@@ -4407,15 +4719,12 @@
               var metaEl = qs('[data-max-channels-meta]', main);
               if (metaEl && data.channels) {
                 var admins = data.adminCount != null ? data.adminCount : 0;
-                metaEl.innerHTML =
-                  '<span>Каналов: <strong>' +
-                  esc(String(data.channels.length)) +
-                  '</strong> (админ: <strong>' +
-                  esc(String(admins)) +
-                  '</strong>)</span><span>Bot Token: <code>••••••••' +
-                  esc((intMaxMeta && intMaxMeta.tokenPreview) || '') +
-                  '</code></span>';
+                var vals = metaEl.querySelectorAll('.int-stat-val');
+                if (vals[0]) vals[0].textContent = String(data.channels.length);
+                if (vals[1]) vals[1].textContent = String(admins);
               }
+              var badge = qs('.int-card--max .int-details-badge', main);
+              if (badge) badge.textContent = String((data.channels || []).length);
               refreshIcons();
             })
             .catch(function () {});
@@ -4465,12 +4774,24 @@
 
   function integrationCardHtml(platform, title, desc, record, prefix) {
     var connected = record && record.status === 'connected';
-    var savedToken = record && record.token ? String(record.token) : '';
     var hasToken = integrationHasToken(record);
+    var savedToken = record && record.token ? String(record.token) : '';
     var logo = platform === 'vk' ? 'VK' : 'TG';
+    var linkedCount = (record && record.linkedChats && record.linkedChats.length) || 0;
+    var adminCount =
+      record && record.linkedChats
+        ? record.linkedChats.filter(function (c) {
+            return c.botIsAdmin === true;
+          }).length
+        : 0;
+    var settingsOpen = !connected || !hasToken ? ' open' : '';
+    var channelsOpen = platform === 'telegram' && connected && linkedCount === 0 ? ' open' : '';
+
     var html =
-      '<div class="integration-card' +
-      (connected ? ' connected' : '') +
+      '<article class="integration-card' +
+      (connected && hasToken ? ' connected' : '') +
+      ' int-card--' +
+      platform +
       '"><div class="int-card-header"><div class="int-logo ' +
       platform +
       '">' +
@@ -4480,76 +4801,115 @@
       '</div><div class="int-desc">' +
       esc(desc) +
       '</div></div><span class="int-status ' +
-      (connected ? 'connected' : 'disconnected') +
+      (connected && hasToken ? 'connected' : 'disconnected') +
       '">' +
-      (connected ? '<i data-lucide="circle-check"></i> Подключён' : 'Не подключён') +
+      (connected && hasToken
+        ? '<i data-lucide="circle-check"></i> Подключён'
+        : connected
+          ? '<i data-lucide="alert-circle"></i> Нужен токен'
+          : 'Не подключён') +
       '</span></div>';
-    if (connected && record && !integrationHasToken(record)) {
+
+    if (connected && record && !hasToken) {
       html +=
-        '<div class="int-token-warning muted text-sm">Токен не задан — откройте «Настроить» и вставьте токен от @BotFather</div>';
+        '<div class="int-alert"><i data-lucide="alert-triangle"></i> Токен не задан — откройте «Настройки» и вставьте токен от ' +
+        (platform === 'vk' ? 'VK' : '@BotFather') +
+        '</div>';
     }
+
+    if (connected && record) {
+      html += '<div class="int-quick-stats">';
+      if (platform === 'telegram') {
+        html +=
+          '<div class="int-stat"><span class="int-stat-val">' +
+          esc(String(linkedCount)) +
+          '</span><span class="int-stat-label">чатов</span></div>';
+        html +=
+          '<div class="int-stat"><span class="int-stat-val">' +
+          esc(String(adminCount)) +
+          '</span><span class="int-stat-label">админ</span></div>';
+      }
+      if (record.name) {
+        html +=
+          '<div class="int-stat"><span class="int-stat-val">' +
+          esc(record.name) +
+          '</span><span class="int-stat-label">бот</span></div>';
+      }
+      if (platform === 'vk' && record.groupId) {
+        html +=
+          '<div class="int-stat"><span class="int-stat-val">' +
+          esc(String(record.groupId)) +
+          '</span><span class="int-stat-label">сообщество</span></div>';
+      }
+      html += '</div>';
+    }
+
+    html +=
+      '<details class="int-details int-details--settings"' +
+      settingsOpen +
+      '><summary><i data-lucide="settings"></i> Настройки подключения</summary><div class="int-details-body int-body" id="' +
+      prefix +
+      '-form">';
     if (connected && record) {
       html += savedTokenBlockHtml(prefix, record);
     }
-    if (platform === 'telegram' && connected && record) {
-      var adminCount = (record.linkedChats || []).filter(function (c) {
-        return c.botIsAdmin === true;
-      }).length;
-      html +=
-        '<div class="int-meta"><span>Бот: <strong>' +
-        esc(record.name || 'Telegram') +
-        '</strong></span>' +
-        (record.linkedChats && record.linkedChats.length
-          ? '<span> · чатов: <strong>' +
-            esc(String(record.linkedChats.length)) +
-            '</strong> (админ: <strong>' +
-            esc(String(adminCount)) +
-            '</strong>)</span>'
-          : '') +
-        '</div>';
-      html +=
-        '<div class="tg-chats-panel-wrap" data-tg-chats-panel="' +
-        esc(record.id) +
-        '"></div>';
-    }
     html +=
-      '<div class="int-body hidden" id="' +
-      prefix +
-      '-form"><div class="form-group"><label>' +
-      (platform === 'vk' ? 'Access Token' : 'Bot Token') +
+      '<div class="form-group"><label>' +
+      (platform === 'vk' ? 'Access Token сообщества' : 'Bot Token') +
       '</label><input class="input mono" type="password" id="' +
       prefix +
       '-token" value="' +
       esc(savedToken) +
       '" placeholder="' +
-      (hasToken ? 'Пусто = не менять токен · ' : '') +
-      'Токен от @BotFather" autocomplete="off"/></div>';
+      (hasToken ? 'Оставьте пустым, чтобы не менять · ' : '') +
+      (platform === 'vk' ? 'Токен VK API' : 'Токен от @BotFather') +
+      '" autocomplete="off"/><p class="muted text-sm form-hint">' +
+      (platform === 'vk'
+        ? 'Права: wall, photos, docs. ID сообщества — число без минуса.'
+        : 'Создайте бота через @BotFather. Без webhook — иначе перехват постов не работает.') +
+      '</p></div>';
 
     if (platform === 'vk') {
       html +=
-        '<div class="form-group"><label>ID сообщества</label><input class="input" id="vk-group" value="' +
+        '<div class="form-group"><label>ID сообщества VK</label><input class="input" id="vk-group" value="' +
         esc((record && record.groupId) || '') +
-        '"/></div>';
+        '" placeholder="123456789"/></div>';
     } else {
       html +=
-        '<div class="form-group"><label>Имя бота</label><input class="input" id="tg-name" value="' +
+        '<div class="form-group"><label>Имя бота (необязательно)</label><input class="input" id="tg-name" value="' +
         esc((record && record.name) || '') +
-        '"/></div>';
+        '" placeholder="@my_bot"/></div>';
     }
+
+    html += '<div class="int-actions">';
     html +=
-      '<div class="int-actions"><button type="button" class="btn btn-primary" data-connect="' +
+      '<button type="button" class="btn btn-primary" data-connect="' +
       platform +
-      '"><i data-lucide="plug"></i> Подключить</button>';
-    if (record) {
+      '"><i data-lucide="plug"></i> ' +
+      (connected ? 'Сохранить' : 'Подключить') +
+      '</button>';
+    if (record && connected) {
       html +=
         '<button type="button" class="btn btn-ghost" data-test-int="' +
         esc(record.id) +
-        '"><i data-lucide="activity"></i> Проверить</button>';
+        '"><i data-lucide="activity"></i> Проверить связь</button>';
     }
-    html +=
-      '</div></div><button type="button" class="int-expand-btn" data-expand="' +
-      prefix +
-      '-form">Настроить <i data-lucide="chevron-down"></i></button></div>';
+    html += '</div></div></details>';
+
+    if (platform === 'telegram' && connected && record) {
+      html +=
+        '<details class="int-details"' +
+        channelsOpen +
+        '><summary><i data-lucide="radio"></i> Каналы Telegram <span class="int-details-badge" data-int-tg-channels-badge="' +
+        esc(record.id) +
+        '">' +
+        esc(String(linkedCount)) +
+        '</span></summary><div class="int-details-body tg-chats-panel-wrap" data-tg-chats-panel="' +
+        esc(record.id) +
+        '"></div></details>';
+    }
+
+    html += '</article>';
     return html;
   }
 
@@ -4593,25 +4953,48 @@
       (f.filters.excludeKeywords && f.filters.excludeKeywords.length ? 1 : 0) +
       (f.filters.mediaOnly ? 1 : 0) +
       (f.filters.delaySeconds > 0 ? 1 : 0);
-    var html = '<div class="flow-card" data-flow-id="' + esc(f.id) + '"><div class="flow-pipeline">';
-    html += flowNodeHtml(f.source.platform, srcName);
-    html += '<div class="flow-arrow"><i data-lucide="arrow-right"></i>';
-    if (filterCount) html += '<span class="flow-filter-badge"><i data-lucide="filter"></i> ' + filterCount + '</span>';
-    html += '</div>' + flowNodeHtml(f.destination.platform, destName);
+    var flowTitle = f.name || srcName + ' → ' + destName;
+    var html =
+      '<article class="flow-card' +
+      (f.enabled ? ' is-active' : ' is-paused') +
+      '" data-flow-id="' +
+      esc(f.id) +
+      '">';
+    html += '<div class="flow-card-head flex-between">';
     html +=
-      '</div><div class="flow-meta"><span class="flow-stat">Переслано: <strong>' +
-      esc(String(f.stats.totalForwarded || 0)) +
-      '</strong></span><span class="flow-stat">Последний: <strong>' +
-      esc(fmtRelativeTime(f.stats.lastForwardedAt)) +
-      '</strong></span></div><div class="flow-actions"><span class="switch' +
+      '<div><div class="flow-card-title">' +
+      esc(flowTitle) +
+      '</div><div class="flow-card-sub muted text-sm">' +
+      (f.enabled ? 'Активен' : 'На паузе') +
+      (filterCount ? ' · ' + filterCount + ' фильтр(ов)' : '') +
+      '</div></div>';
+    html +=
+      '<span class="switch' +
       (f.enabled ? ' on' : '') +
       '" data-flow-toggle="' +
       esc(f.id) +
-      '" role="switch" tabindex="0"></span><button type="button" class="btn btn-ghost btn-sm" data-test-flow="' +
+      '" role="switch" tabindex="0" aria-label="Включить поток"></span>';
+    html += '</div>';
+    html += '<div class="flow-pipeline">';
+    html += flowNodeHtml(f.source.platform, srcName);
+    html += '<div class="flow-arrow"><i data-lucide="arrow-right"></i>';
+    if (filterCount) {
+      html += '<span class="flow-filter-badge"><i data-lucide="filter"></i> ' + filterCount + '</span>';
+    }
+    html += '</div>' + flowNodeHtml(f.destination.platform, destName);
+    html += '</div>';
+    html +=
+      '<div class="flow-meta"><span class="flow-stat"><i data-lucide="send"></i> Переслано: <strong>' +
+      esc(String(f.stats.totalForwarded || 0)) +
+      '</strong></span><span class="flow-stat"><i data-lucide="clock"></i> Последний: <strong>' +
+      esc(fmtRelativeTime(f.stats.lastForwardedAt)) +
+      '</strong></span></div>';
+    html +=
+      '<div class="flow-actions"><button type="button" class="btn btn-ghost btn-sm" data-test-flow="' +
       esc(f.id) +
-      '"><i data-lucide="activity"></i> Проверить</button><button type="button" class="btn btn-ghost btn-sm" data-del-flow="' +
+      '"><i data-lucide="activity"></i> Тест</button><button type="button" class="btn btn-ghost btn-sm" data-del-flow="' +
       esc(f.id) +
-      '"><i data-lucide="trash-2"></i></button></div></div>';
+      '"><i data-lucide="trash-2"></i> Удалить</button></div></article>';
     return html;
   }
 
@@ -4692,12 +5075,6 @@
   }
 
   function bindIntegrationsPage(main) {
-    qsa('[data-expand]', main).forEach(function (btn) {
-      btn.addEventListener('click', function () {
-        var body = qs('#' + btn.getAttribute('data-expand'), main);
-        if (body) body.classList.toggle('hidden');
-      });
-    });
     qsa('[data-toggle-token]', main).forEach(function (btn) {
       btn.addEventListener('click', function () {
         var id = btn.getAttribute('data-toggle-token');
@@ -4807,20 +5184,42 @@
     var host = qs('#flow-builder', main);
     if (!host) return;
     host.classList.remove('hidden');
+    host.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     var tgBots = integrationsCache.filter(function (i) { return i.platform === 'telegram' && i.status === 'connected'; });
     var vkGroups = integrationsCache.filter(function (i) { return i.platform === 'vk' && i.status === 'connected'; });
     var maxChannels = (intMaxMeta && intMaxMeta.channels) || [];
     host.innerHTML =
-      '<h3>Создать поток</h3><div class="form-group"><label>Платформа</label><select class="select" id="fb_src_platform"><option value="telegram">Telegram</option><option value="vk">VK</option></select></div>' +
+      '<div class="flow-builder-head flex-between"><h3>Новый поток</h3><button type="button" class="btn btn-ghost btn-sm" id="fb_cancel"><i data-lucide="x"></i></button></div>' +
+      '<div class="flow-builder-steps"><span class="flow-builder-step">① Источник</span><span class="flow-builder-step">② Фильтры</span><span class="flow-builder-step">③ MAX</span></div>' +
+      '<div class="builder-grid">' +
+      '<div class="builder-step"><div class="step-label"><span class="step-num">1</span> Источник</div>' +
+      '<div class="form-group"><label>Платформа</label><select class="select" id="fb_src_platform"><option value="telegram">Telegram</option><option value="vk">VK</option></select></div>' +
       '<div class="form-group"><label>Интеграция</label><select class="select" id="fb_src_int">' +
       tgBots.map(function (b) { return '<option value="' + esc(b.id) + '">' + esc(b.name) + '</option>'; }).join('') +
-      '</select></div><div id="fb_src_channel_wrap"><div class="form-group"><label>Канал</label><input class="input" id="fb_src_channel" placeholder="@channel"/></div></div>' +
-      '<div class="form-group"><label>Слова</label><input class="input" id="fb_kw"/></div><div class="form-group"><label>Исключить</label><input class="input" id="fb_ex"/></div>' +
-      '<label class="checkbox-label"><input type="checkbox" id="fb_media"/> Только медиа</label>' +
+      '</select></div><div id="fb_src_channel_wrap"></div></div>' +
+      '<div class="builder-step"><div class="step-label"><span class="step-num">2</span> Фильтры <span class="step-optional">необязательно</span></div>' +
+      '<div class="form-group"><label>Слова (через запятую)</label><input class="input" id="fb_kw" placeholder="новость, анонс"/></div>' +
+      '<div class="form-group"><label>Исключить</label><input class="input" id="fb_ex" placeholder="реклама"/></div>' +
+      '<label class="checkbox-label"><input type="checkbox" id="fb_media"/> Только посты с медиа</label></div>' +
+      '<div class="builder-step"><div class="step-label"><span class="step-num">3</span> Куда в MAX</div>' +
       '<div class="form-group"><label>MAX-канал</label><select class="select" id="fb_dest_channel">' +
-      maxChannels.map(function (c) { return '<option value="' + esc(c.id) + '">' + esc(c.title) + '</option>'; }).join('') +
-      '</select></div><div class="form-group"><label>Подпись</label><input class="input" id="fb_signature"/></div>' +
-      '<div class="builder-actions"><button type="button" class="btn btn-primary" id="fb_save">Создать</button><button type="button" class="btn btn-ghost" id="fb_cancel">Отмена</button></div>';
+      (maxChannels.length
+        ? maxChannels.map(function (c) { return '<option value="' + esc(c.id) + '">' + esc(c.title) + '</option>'; }).join('')
+        : '<option value="">— сначала загрузите каналы MAX —</option>') +
+      '</select></div>' +
+      '<div class="form-group"><label>Подпись к посту</label><input class="input" id="fb_signature" placeholder="— TG"/></div></div></div>' +
+      '<div class="builder-actions"><button type="button" class="btn btn-primary" id="fb_save"><i data-lucide="check"></i> Создать поток</button><button type="button" class="btn btn-ghost" id="fb_cancel2">Отмена</button></div>';
+    if (!tgBots.length && !vkGroups.length) {
+      host.innerHTML =
+        '<div class="int-info-callout"><i data-lucide="alert-circle"></i><div>Сначала подключите Telegram или VK на вкладке «Платформы», затем создайте поток.</div></div>' +
+        '<div class="builder-actions"><button type="button" class="btn btn-ghost" id="fb_cancel">Закрыть</button></div>';
+      qs('#fb_cancel', host).addEventListener('click', function () {
+        host.classList.add('hidden');
+        host.innerHTML = '';
+      });
+      refreshIcons();
+      return;
+    }
     function applyFbSourceChannelUi() {
       var wrap = qs('#fb_src_channel_wrap', host);
       if (!wrap || !srcPlatform) return;
@@ -4847,7 +5246,13 @@
         applyFbSourceChannelUi();
       });
     }
-    qs('#fb_cancel', host).addEventListener('click', function () { host.classList.add('hidden'); host.innerHTML = ''; });
+    function closeFlowBuilder() {
+      host.classList.add('hidden');
+      host.innerHTML = '';
+    }
+    qs('#fb_cancel', host).addEventListener('click', closeFlowBuilder);
+    var cancel2 = qs('#fb_cancel2', host);
+    if (cancel2) cancel2.addEventListener('click', closeFlowBuilder);
     qs('#fb_save', host).addEventListener('click', function () {
       var platform = srcPlatform.value;
       var integrationId = srcInt.value;
@@ -4874,7 +5279,7 @@
         },
       }).then(function () {
         showToast('Поток создан', 'success');
-        host.classList.add('hidden');
+        closeFlowBuilder();
         integrationsTab = 'flows';
         renderIntegrations();
       }).catch(function (e) { showToast(e.message || 'Ошибка', 'error'); });
