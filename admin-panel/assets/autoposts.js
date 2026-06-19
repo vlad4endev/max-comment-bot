@@ -5,7 +5,7 @@
 (function () {
   'use strict';
 
-  var AP_UI_BUILD = '20260619-modal-preview-v2';
+  var AP_UI_BUILD = '20260619-single-form-v3';
   var API_BASE = '/api/admin';
   var CHANNEL_COLORS = ['#534AB7', '#1D9E75', '#BA7517', '#7F77DD', '#3B82F6', '#EC4899'];
   var WEEKDAY_LABELS = ['Вс', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб'];
@@ -22,7 +22,6 @@
     postsPage: 1,
     postsPerPage: 15,
     editingId: null,
-    modalTab: 'basic',
     modalOpen: false,
   };
 
@@ -76,6 +75,15 @@
     if (window.AdminShell && window.AdminShell.showToast) {
       window.AdminShell.showToast(msg, type);
     }
+    var root = qs('#toastRoot');
+    if (!root) return;
+    var el = document.createElement('div');
+    el.className = 'toast ' + (type || 'info');
+    el.textContent = msg;
+    root.appendChild(el);
+    setTimeout(function () {
+      if (el.parentNode) el.parentNode.removeChild(el);
+    }, 4500);
   }
   function confirmDlg(title, body, onOk) {
     if (window.AdminShell && window.AdminShell.showConfirm) {
@@ -546,7 +554,6 @@
     if (!host) return;
     host.innerHTML = '';
     state.editingId = editPost && editPost.id ? editPost.id : null;
-    state.modalTab = 'basic';
     state.modalOpen = true;
     document.body.classList.add('ap-modal-open');
     var p = editPost || {};
@@ -577,22 +584,19 @@
     modal.innerHTML =
       '<div class="ap-modal-header"><h2>' + (editPost && editPost.id ? 'Редактировать пост' : 'Новый пост') + '</h2>' +
       '<button type="button" class="ap-modal-close" data-ap-modal-close><i data-lucide="x"></i></button></div>' +
-      '<div class="ap-modal-tabs">' +
-      ['Основное', 'Расписание', 'Условия', 'Медиа и кнопки'].map(function (lbl, i) {
-        var ids = ['basic', 'schedule', 'conditions', 'media'];
-        return '<button type="button" class="ap-modal-tab' + (i === 0 ? ' active' : '') + '" data-modal-tab="' + ids[i] + '">' + lbl + '</button>';
-      }).join('') +
-      '</div>' +
       '<div class="ap-modal-body" id="apModalBody"></div>' +
       '<div class="ap-modal-preview-wrap">' +
-      '<div class="ap-modal-preview-label">Предпросмотр</div>' +
+      '<div class="ap-modal-preview-label">Как будет выглядеть в Telegram</div>' +
       '<div class="ap-preview-telegram" id="apModalPreview"></div>' +
       '</div>' +
+      '<div id="apModalStatus" class="ap-modal-status hidden" role="alert"></div>' +
       '<div class="ap-modal-footer">' +
+      '<span class="ap-modal-build">' + esc(AP_UI_BUILD) + '</span>' +
+      '<div class="ap-modal-footer-actions">' +
       '<button type="button" class="btn btn-ghost" data-ap-modal-close>Отмена</button>' +
       '<button type="button" class="btn btn-ghost" data-ap-save-draft>Сохранить как черновик</button>' +
       '<button type="button" class="ap-topbar-btn" data-ap-submit-post>Запланировать ▶</button>' +
-      '</div>';
+      '</div></div>';
 
     backdrop.appendChild(modal);
     host.appendChild(backdrop);
@@ -614,45 +618,61 @@
       onFailure: 'skip',
     };
 
+    function showModalStatus(msg, type) {
+      var el = qs('#apModalStatus', modal);
+      if (!el) {
+        toast(msg, type || 'error');
+        return;
+      }
+      el.textContent = msg;
+      el.className = 'ap-modal-status ' + (type || 'error');
+      el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    }
+
+    function hideModalStatus() {
+      var el = qs('#apModalStatus', modal);
+      if (el) el.className = 'ap-modal-status hidden';
+    }
+
     function snapshotFromDom() {
       var body = qs('#apModalBody', modal);
       if (!body) return;
-      var tab = state.modalTab;
-      if (tab === 'basic') {
-        var ta = qs('#apModalText', body);
-        if (ta) modalState.text = ta.value;
-      } else if (tab === 'schedule') {
-        var st = modalState.scheduleType;
-        if (st === 'once') {
-          var dateEl = qs('#apModalDate', body);
-          var timeEl = qs('#apModalTime', body);
-          if (dateEl) modalState.onceDate = dateEl.value;
-          if (timeEl) modalState.onceTime = timeEl.value;
-        } else if (st === 'daily') {
-          var startEl = qs('#apModalStart', body);
-          var endEl = qs('#apModalEnd', body);
-          if (startEl) modalState.startDate = startEl.value;
-          if (endEl) modalState.endDate = endEl.value;
-        } else if (st === 'weekly') {
-          var weeklyTime = qs('#apModalWeeklyTime', body);
-          if (weeklyTime) modalState.dailyTimes[0] = weeklyTime.value;
-          var wStart = qs('#apModalWStart', body);
-          var wEnd = qs('#apModalWEnd', body);
-          if (wStart) modalState.startDate = wStart.value;
-          if (wEnd) modalState.endDate = wEnd.value;
-          var picked = [];
-          qsa('.apmodal_wd:checked', body).forEach(function (cb) { picked.push(Number(cb.value)); });
-          modalState.weekdays = picked;
-        }
-      } else if (tab === 'media') {
-        var btnTextEl = qs('#apBtnText', body);
-        var btnUrlEl = qs('#apBtnUrl', body);
-        if (btnTextEl) modalState.btnText = btnTextEl.value;
-        if (btnUrlEl) modalState.btnUrl = btnUrlEl.value;
-      } else if (tab === 'conditions') {
-        var onFail = qs('#apOnFailure', body);
-        if (onFail) modalState.onFailure = onFail.value;
+      var ta = qs('#apModalText', body);
+      if (ta) modalState.text = ta.value;
+      var st = modalState.scheduleType;
+      if (st === 'once') {
+        var dateEl = qs('#apModalDate', body);
+        var timeEl = qs('#apModalTime', body);
+        if (dateEl) modalState.onceDate = dateEl.value;
+        if (timeEl) modalState.onceTime = timeEl.value;
+      } else if (st === 'daily') {
+        var startEl = qs('#apModalStart', body);
+        var endEl = qs('#apModalEnd', body);
+        if (startEl) modalState.startDate = startEl.value;
+        if (endEl) modalState.endDate = endEl.value;
+      } else if (st === 'weekly') {
+        var weeklyTime = qs('#apModalWeeklyTime', body);
+        if (weeklyTime) modalState.dailyTimes[0] = weeklyTime.value;
+        var wStart = qs('#apModalWStart', body);
+        var wEnd = qs('#apModalWEnd', body);
+        if (wStart) modalState.startDate = wStart.value;
+        if (wEnd) modalState.endDate = wEnd.value;
+        var picked = [];
+        qsa('.apmodal_wd:checked', body).forEach(function (cb) { picked.push(Number(cb.value)); });
+        modalState.weekdays = picked;
       }
+      var btnTextEl = qs('#apBtnText', body);
+      var btnUrlEl = qs('#apBtnUrl', body);
+      if (btnTextEl) modalState.btnText = btnTextEl.value;
+      if (btnUrlEl) modalState.btnUrl = btnUrlEl.value;
+      var onFail = qs('#apOnFailure', body);
+      if (onFail) modalState.onFailure = onFail.value;
+    }
+
+    function syncWeekdaysFromDom(body) {
+      var picked = [];
+      qsa('.apmodal_wd:checked', body).forEach(function (cb) { picked.push(Number(cb.value)); });
+      modalState.weekdays = picked;
     }
 
     function updateModalPreview() {
@@ -702,226 +722,205 @@
       wrap.innerHTML = html;
     }
 
-    function renderModalTab() {
+    function renderModalForm() {
       var body = qs('#apModalBody', modal);
       if (!body) return;
-      var tab = state.modalTab;
-      if (tab === 'basic') {
-        var chips = modalState.channels.map(function (cid) {
-          var c = state.channels.find(function (ch) { return String(ch.id) === cid; });
-          var ci = state.channels.findIndex(function (ch) { return String(ch.id) === cid; });
-          return '<span class="ap-channel-chip"><span class="ap-channel-dot" style="background:' + channelColor(cid, ci) + '"></span>' +
-            esc(c ? channelLabel(c) : cid) +
-            '<button type="button" data-rm-ch="' + esc(cid) + '">✕</button></span>';
-        }).join('');
-        var addOpts = state.channels.filter(function (c) {
-          return modalState.channels.indexOf(String(c.id)) < 0;
-        }).map(function (c) {
-          return '<option value="' + esc(String(c.id)) + '">' + esc(channelLabel(c)) + '</option>';
-        }).join('');
-        body.innerHTML =
-          '<div class="form-group"><label>Каналы</label><div class="ap-channel-chips" id="apModalChips">' + (chips || '<span class="muted text-sm">Выберите канал</span>') + '</div>' +
-          (addOpts ? '<select class="select" id="apAddChannel"><option value="">+ Добавить канал</option>' + addOpts + '</select>' : '') + '</div>' +
-          '<div class="form-group"><label>Текст поста</label><textarea class="textarea" id="apModalText" rows="5" placeholder="Введите текст публикации…">' + esc(modalState.text) + '</textarea>' +
-          '<div class="ap-char-count"><span id="apCharCount">0</span> символов</div></div>';
-        var ta = qs('#apModalText', body);
-        var previewTimer = null;
-        function updateTextField() {
-          var v = ta ? ta.value : '';
-          modalState.text = v;
-          var cnt = qs('#apCharCount', body);
-          if (cnt) cnt.textContent = String(v.length);
-          updateModalPreview();
-        }
-        if (ta) {
-          ta.addEventListener('input', function () {
-            if (previewTimer) clearTimeout(previewTimer);
-            previewTimer = setTimeout(updateTextField, 200);
-          });
-          updateTextField();
-        }
-        var addSel = qs('#apAddChannel', body);
-        if (addSel) {
-          addSel.addEventListener('change', function () {
-            var v = addSel.value;
-            if (v && modalState.channels.indexOf(v) < 0) {
-              modalState.channels.push(v);
-              renderModalTab();
-            }
-            addSel.value = '';
-          });
-        }
-        qsa('[data-rm-ch]', body).forEach(function (btn) {
-          btn.addEventListener('click', function () {
-            var id = btn.getAttribute('data-rm-ch');
-            modalState.channels = modalState.channels.filter(function (c) { return c !== id; });
-            renderModalTab();
-          });
+      var st = modalState.scheduleType;
+      var chips = modalState.channels.map(function (cid) {
+        var c = state.channels.find(function (ch) { return String(ch.id) === cid; });
+        var ci = state.channels.findIndex(function (ch) { return String(ch.id) === cid; });
+        return '<span class="ap-channel-chip"><span class="ap-channel-dot" style="background:' + channelColor(cid, ci) + '"></span>' +
+          esc(c ? channelLabel(c) : cid) +
+          '<button type="button" data-rm-ch="' + esc(cid) + '">✕</button></span>';
+      }).join('');
+      var addOpts = state.channels.filter(function (c) {
+        return modalState.channels.indexOf(String(c.id)) < 0;
+      }).map(function (c) {
+        return '<option value="' + esc(String(c.id)) + '">' + esc(channelLabel(c)) + '</option>';
+      }).join('');
+
+      body.innerHTML =
+        '<section class="ap-form-section" id="apSecChannels"><h3>Каналы</h3>' +
+        '<div class="ap-channel-chips" id="apModalChips">' + (chips || '<span class="muted text-sm">Выберите канал</span>') + '</div>' +
+        (addOpts ? '<select class="select" id="apAddChannel"><option value="">+ Добавить канал</option>' + addOpts + '</select>' : '') +
+        '</section>' +
+        '<section class="ap-form-section" id="apSecText"><h3>Текст</h3>' +
+        '<textarea class="textarea" id="apModalText" rows="4" placeholder="Введите текст публикации…">' + esc(modalState.text) + '</textarea>' +
+        '<div class="ap-char-count"><span id="apCharCount">0</span> символов</div></section>' +
+        '<section class="ap-form-section" id="apSecSchedule"><h3>Расписание</h3>' +
+        '<div class="ap-schedule-types" id="apModalSchedTypes">' +
+        '<button type="button" class="ap-schedule-type' + (st === 'once' ? ' active' : '') + '" data-mst="once">📅 Разово</button>' +
+        '<button type="button" class="ap-schedule-type' + (st === 'daily' ? ' active' : '') + '" data-mst="daily">🔄 Ежедневно</button>' +
+        '<button type="button" class="ap-schedule-type' + (st === 'weekly' ? ' active' : '') + '" data-mst="weekly">🗓 По дням</button>' +
+        '</div>' +
+        '<div id="apModalOnce" class="ap-schedule-panel' + (st !== 'once' ? ' hidden' : '') + '">' +
+        '<div class="form-row"><div class="form-group"><label>Дата</label><input type="date" class="input" id="apModalDate" value="' + esc(modalState.onceDate) + '"/></div>' +
+        '<div class="form-group"><label>Время</label><input type="time" class="input" id="apModalTime" value="' + esc(modalState.onceTime) + '"/></div></div></div>' +
+        '<div id="apModalDaily" class="ap-schedule-panel' + (st !== 'daily' ? ' hidden' : '') + '">' +
+        '<label>Время публикации</label><div class="ap-time-chips" id="apDailyChips"></div>' +
+        '<button type="button" class="btn btn-ghost btn-sm" id="apAddDailyTime">+ Ещё время</button>' +
+        '<div class="form-row"><div class="form-group"><label>Дата начала</label><input type="date" class="input" id="apModalStart" value="' + esc(modalState.startDate) + '"/></div>' +
+        '<div class="form-group"><label>Дата окончания</label><input type="date" class="input" id="apModalEnd" value="' + esc(modalState.endDate) + '"/></div></div></div>' +
+        '<div id="apModalWeekly" class="ap-schedule-panel' + (st !== 'weekly' ? ' hidden' : '') + '">' +
+        '<label>Дни недели</label><div class="ap-weekdays" id="apModalWd">' + buildWeekdayHtml('apmodal', modalState.weekdays) + '</div>' +
+        '<div class="form-group"><label>Время</label><input type="time" class="input" id="apModalWeeklyTime" value="' + esc(modalState.dailyTimes[0] || '09:00') + '"/></div>' +
+        '<div class="form-row"><div class="form-group"><label>Дата начала</label><input type="date" class="input" id="apModalWStart" value="' + esc(modalState.startDate) + '"/></div>' +
+        '<div class="form-group"><label>Дата окончания</label><input type="date" class="input" id="apModalWEnd" value="' + esc(modalState.endDate) + '"/></div></div></div>' +
+        '</section>' +
+        '<section class="ap-form-section" id="apSecMedia"><h3>Медиа и кнопка</h3>' +
+        '<div class="ap-dropzone" id="apDropzone">Нажмите или перетащите фото/видео<br><span class="text-sm muted">До 10 файлов</span></div>' +
+        '<input type="file" id="apModalMedia" multiple accept="image/*,video/*" class="hidden"/>' +
+        '<div class="ap-media-grid" id="apMediaGrid"></div>' +
+        '<div class="form-row" style="margin-top:0.75rem">' +
+        '<div class="form-group"><label>Текст кнопки</label><input class="input" id="apBtnText" placeholder="Открыть сайт" value="' + esc(modalState.btnText) + '"/></div>' +
+        '<div class="form-group"><label>URL кнопки</label><input class="input" id="apBtnUrl" placeholder="https://…" value="' + esc(modalState.btnUrl) + '"/></div></div>' +
+        '</section>';
+
+      var ta = qs('#apModalText', body);
+      var previewTimer = null;
+      function updateTextField() {
+        modalState.text = ta ? ta.value : '';
+        var cnt = qs('#apCharCount', body);
+        if (cnt) cnt.textContent = String(modalState.text.length);
+        updateModalPreview();
+      }
+      if (ta) {
+        ta.addEventListener('input', function () {
+          if (previewTimer) clearTimeout(previewTimer);
+          previewTimer = setTimeout(updateTextField, 150);
         });
-      } else if (tab === 'schedule') {
-        var st = modalState.scheduleType;
-        body.innerHTML =
-          '<div class="ap-schedule-types" id="apModalSchedTypes">' +
-          '<button type="button" class="ap-schedule-type' + (st === 'once' ? ' active' : '') + '" data-mst="once">📅 Разово</button>' +
-          '<button type="button" class="ap-schedule-type' + (st === 'daily' ? ' active' : '') + '" data-mst="daily">🔄 Ежедневно</button>' +
-          '<button type="button" class="ap-schedule-type' + (st === 'weekly' ? ' active' : '') + '" data-mst="weekly">🗓 По дням</button>' +
-          '</div>' +
-          '<div id="apModalOnce" class="ap-schedule-panel' + (st !== 'once' ? ' hidden' : '') + '">' +
-          '<div class="form-row"><div class="form-group"><label>Дата</label><input type="date" class="input" id="apModalDate" value="' + esc(modalState.onceDate) + '"/></div>' +
-          '<div class="form-group"><label>Время</label><input type="time" class="input" id="apModalTime" value="' + esc(modalState.onceTime) + '"/></div></div></div>' +
-          '<div id="apModalDaily" class="ap-schedule-panel' + (st !== 'daily' ? ' hidden' : '') + '">' +
-          '<label>Время публикации</label><div class="ap-time-chips" id="apDailyChips"></div>' +
-          '<button type="button" class="btn btn-ghost btn-sm" id="apAddDailyTime">+ Ещё время</button>' +
-          '<div class="form-row"><div class="form-group"><label>Дата начала</label><input type="date" class="input" id="apModalStart" value="' + esc(modalState.startDate) + '"/></div>' +
-          '<div class="form-group"><label>Дата окончания</label><input type="date" class="input" id="apModalEnd" value="' + esc(modalState.endDate) + '"/></div></div></div>' +
-          '<div id="apModalWeekly" class="ap-schedule-panel' + (st !== 'weekly' ? ' hidden' : '') + '">' +
-          '<label>Дни недели</label><div class="ap-weekdays" id="apModalWd">' + buildWeekdayHtml('apmodal', modalState.weekdays) + '</div>' +
-          '<div class="form-group"><label>Время</label><input type="time" class="input" id="apModalWeeklyTime" value="' + esc(modalState.dailyTimes[0] || '09:00') + '"/></div>' +
-          '<div class="form-row"><div class="form-group"><label>Дата начала</label><input type="date" class="input" id="apModalWStart" value="' + esc(modalState.startDate) + '"/></div>' +
-          '<div class="form-group"><label>Дата окончания</label><input type="date" class="input" id="apModalWEnd" value="' + esc(modalState.endDate) + '"/></div></div></div>';
-        qsa('[data-mst]', body).forEach(function (btn) {
-          btn.addEventListener('click', function () {
-            snapshotFromDom();
-            modalState.scheduleType = btn.getAttribute('data-mst');
-            renderModalTab();
-          });
-        });
-        function renderDailyChips() {
-          var wrap = qs('#apDailyChips', body);
-          if (!wrap) return;
-          wrap.innerHTML = modalState.dailyTimes.map(function (t, i) {
-            return '<span class="ap-time-chip">⏰ ' + esc(t) + '<button type="button" data-rm-time="' + i + '">✕</button></span>';
-          }).join('');
-          qsa('[data-rm-time]', wrap).forEach(function (b) {
-            b.addEventListener('click', function () {
-              var idx = Number(b.getAttribute('data-rm-time'));
-              modalState.dailyTimes.splice(idx, 1);
-              if (!modalState.dailyTimes.length) modalState.dailyTimes.push('09:00');
-              renderDailyChips();
-            });
-          });
-        }
-        renderDailyChips();
-        var addTime = qs('#apAddDailyTime', body);
-        if (addTime) {
-          addTime.addEventListener('click', function () {
-            var t = prompt('Время (ЧЧ:ММ)', '14:00');
-            if (t && /^\d{1,2}:\d{2}$/.test(t)) {
-              modalState.dailyTimes.push(t);
-              renderDailyChips();
-            }
-          });
-        }
-        qsa('.apmodal_wd', body).forEach(function (cb) {
-          cb.addEventListener('change', function () {
-            var lbl = cb.closest('.ap-weekday');
-            if (lbl) lbl.classList.toggle('checked', cb.checked);
-            var picked = [];
-            qsa('.apmodal_wd:checked', body).forEach(function (c) { picked.push(Number(c.value)); });
-            modalState.weekdays = picked;
-          });
-        });
-        qsa('#apModalDate, #apModalTime, #apModalStart, #apModalEnd, #apModalWeeklyTime, #apModalWStart, #apModalWEnd', body).forEach(function (el) {
-          el.addEventListener('change', snapshotFromDom);
-        });
-      } else if (tab === 'conditions') {
-        body.innerHTML =
-          '<p class="text-sm muted">Условия проверяются перед каждой публикацией (логируются в журнале бота).</p>' +
-          '<div id="apConditionsList"></div>' +
-          '<button type="button" class="btn btn-ghost btn-sm" id="apAddCondition">+ Добавить условие</button>' +
-          '<div class="form-group" style="margin-top:1rem"><label>Действие при сбое</label>' +
-          '<select class="select" id="apOnFailure">' +
-          '<option value="skip"' + (modalState.onFailure === 'skip' ? ' selected' : '') + '>Пропустить и продолжить</option>' +
-          '<option value="retry_15m"' + (modalState.onFailure === 'retry_15m' ? ' selected' : '') + '>Повторить через 15 мин</option>' +
-          '<option value="stop_series"' + (modalState.onFailure === 'stop_series' ? ' selected' : '') + '>Остановить серию</option>' +
-          '<option value="notify"' + (modalState.onFailure === 'notify' ? ' selected' : '') + '>Уведомить меня</option></select></div>';
-        qs('#apAddCondition', body).addEventListener('click', function () {
-          modalState.conditions.push({ type: 'min_subscribers', operator: '>=', value: '100' });
-          renderConditionsList();
-        });
-        function renderConditionsList() {
-          var list = qs('#apConditionsList', body);
-          if (!list) return;
-          if (!modalState.conditions.length) {
-            list.innerHTML = '<p class="muted text-sm">Нет условий</p>';
-            return;
+        updateTextField();
+      }
+
+      var addSel = qs('#apAddChannel', body);
+      if (addSel) {
+        addSel.addEventListener('change', function () {
+          var v = addSel.value;
+          if (v && modalState.channels.indexOf(v) < 0) {
+            modalState.channels.push(v);
+            renderModalForm();
           }
-          list.innerHTML = modalState.conditions.map(function (c, i) {
-            return '<div class="ap-condition-row">' +
-              '<select class="select ap-cond-type" data-idx="' + i + '">' +
-              '<option value="min_subscribers">Минимум подписчиков</option>' +
-              '<option value="max_posts_per_day">Макс. постов в день</option>' +
-              '<option value="min_interval_hours">Интервал после поста (ч)</option>' +
-              '<option value="hours_range">Только в часы</option>' +
-              '<option value="weekdays_only">День недели</option></select>' +
-              '<select class="select ap-cond-op" data-idx="' + i + '"><option value=">=">>=</option><option value="<="><=</option><option value="=">=</option></select>' +
-              '<input class="input ap-cond-val" data-idx="' + i + '" value="' + esc(String(c.value)) + '"/>' +
-              '<button type="button" class="btn btn-ghost btn-sm" data-rm-cond="' + i + '">✕</button></div>';
-          }).join('');
-          qsa('[data-rm-cond]', list).forEach(function (b) {
-            b.addEventListener('click', function () {
-              modalState.conditions.splice(Number(b.getAttribute('data-rm-cond')), 1);
-              renderConditionsList();
-            });
+        });
+      }
+      qsa('[data-rm-ch]', body).forEach(function (btn) {
+        btn.addEventListener('click', function () {
+          modalState.channels = modalState.channels.filter(function (c) { return c !== btn.getAttribute('data-rm-ch'); });
+          renderModalForm();
+        });
+      });
+
+      qsa('[data-mst]', body).forEach(function (btn) {
+        btn.addEventListener('click', function () {
+          snapshotFromDom();
+          modalState.scheduleType = btn.getAttribute('data-mst');
+          qsa('[data-mst]', body).forEach(function (b) {
+            b.classList.toggle('active', b === btn);
           });
-        }
-        renderConditionsList();
-      } else if (tab === 'media') {
-        body.innerHTML =
-          '<div class="ap-dropzone" id="apDropzone">Перетащите файлы или нажмите для выбора<br><span class="text-sm muted">До 10 файлов (фото/видео)</span></div>' +
-          '<input type="file" id="apModalMedia" multiple accept="image/*,video/*" class="hidden"/>' +
-          '<div class="ap-media-grid" id="apMediaGrid"></div>' +
-          '<div class="form-row" style="margin-top:1rem">' +
-          '<div class="form-group"><label>Текст кнопки</label><input class="input" id="apBtnText" placeholder="Открыть сайт" value="' + esc(modalState.btnText) + '"/></div>' +
-          '<div class="form-group"><label>URL</label><input class="input" id="apBtnUrl" placeholder="https://…" value="' + esc(modalState.btnUrl) + '"/></div></div>';
-        var dz = qs('#apDropzone', body);
-        var fileInput = qs('#apModalMedia', body);
-        function renderMediaGrid() {
-          var grid = qs('#apMediaGrid', body);
-          if (!grid) return;
-          grid.innerHTML = modalState.mediaFiles.map(function (f, i) {
-            var url = f.preview || '';
-            return '<div class="ap-media-thumb">' + (url ? '<img src="' + url + '" alt=""/>' : '📎') +
-              '<button type="button" style="position:absolute;top:2px;right:2px" data-rm-media="' + i + '">✕</button></div>';
-          }).join('');
-          qsa('[data-rm-media]', grid).forEach(function (b) {
-            b.addEventListener('click', function () {
-              modalState.mediaFiles.splice(Number(b.getAttribute('data-rm-media')), 1);
-              renderMediaGrid();
-              updateModalPreview();
-            });
+          qsa('.ap-schedule-panel', body).forEach(function (p) { p.classList.add('hidden'); });
+          var panelId = { once: 'apModalOnce', daily: 'apModalDaily', weekly: 'apModalWeekly' }[modalState.scheduleType];
+          var panel = panelId ? qs('#' + panelId, body) : null;
+          if (panel) panel.classList.remove('hidden');
+        });
+      });
+
+      function renderDailyChips() {
+        var wrap = qs('#apDailyChips', body);
+        if (!wrap) return;
+        wrap.innerHTML = modalState.dailyTimes.map(function (t, i) {
+          return '<span class="ap-time-chip">⏰ ' + esc(t) + '<button type="button" data-rm-time="' + i + '">✕</button></span>';
+        }).join('');
+        qsa('[data-rm-time]', wrap).forEach(function (b) {
+          b.addEventListener('click', function () {
+            modalState.dailyTimes.splice(Number(b.getAttribute('data-rm-time')), 1);
+            if (!modalState.dailyTimes.length) modalState.dailyTimes.push('09:00');
+            renderDailyChips();
           });
-        }
-        function addFiles(files) {
-          for (var i = 0; i < files.length && modalState.mediaFiles.length < 10; i++) {
-            var f = files[i];
-            var item = { file: f, preview: f.type.startsWith('image/') ? URL.createObjectURL(f) : null };
-            modalState.mediaFiles.push(item);
+        });
+      }
+      renderDailyChips();
+      var addTime = qs('#apAddDailyTime', body);
+      if (addTime) {
+        addTime.addEventListener('click', function () {
+          var t = prompt('Время (ЧЧ:ММ)', '14:00');
+          if (t && /^\d{1,2}:\d{2}$/.test(t)) {
+            modalState.dailyTimes.push(t);
+            renderDailyChips();
           }
-          renderMediaGrid();
-          updateModalPreview();
-        }
-        if (dz && fileInput) {
-          dz.addEventListener('click', function () { fileInput.click(); });
-          dz.addEventListener('dragover', function (e) { e.preventDefault(); dz.classList.add('dragover'); });
-          dz.addEventListener('dragleave', function () { dz.classList.remove('dragover'); });
-          dz.addEventListener('drop', function (e) {
-            e.preventDefault();
-            dz.classList.remove('dragover');
-            if (e.dataTransfer && e.dataTransfer.files) addFiles(e.dataTransfer.files);
-          });
-          fileInput.addEventListener('change', function () {
-            if (fileInput.files) addFiles(fileInput.files);
-          });
-        }
-        qsa('#apBtnText, #apBtnUrl', body).forEach(function (el) {
-          el.addEventListener('input', function () {
-            snapshotFromDom();
+        });
+      }
+
+      qsa('.apmodal_wd', body).forEach(function (cb) {
+        cb.addEventListener('change', function () {
+          var lbl = cb.closest('.ap-weekday');
+          if (lbl) lbl.classList.toggle('checked', cb.checked);
+          syncWeekdaysFromDom(body);
+        });
+      });
+      qsa('.ap-weekday', body).forEach(function (lbl) {
+        lbl.addEventListener('click', function () {
+          setTimeout(function () {
+            var cb = lbl.querySelector('.apmodal_wd');
+            if (cb) lbl.classList.toggle('checked', cb.checked);
+            syncWeekdaysFromDom(body);
+          }, 0);
+        });
+      });
+
+      qsa('#apModalDate, #apModalTime, #apModalStart, #apModalEnd, #apModalWeeklyTime, #apModalWStart, #apModalWEnd', body).forEach(function (el) {
+        el.addEventListener('change', snapshotFromDom);
+      });
+
+      var dz = qs('#apDropzone', body);
+      var fileInput = qs('#apModalMedia', body);
+      function renderMediaGrid() {
+        var grid = qs('#apMediaGrid', body);
+        if (!grid) return;
+        grid.innerHTML = modalState.mediaFiles.map(function (f, i) {
+          var url = f.preview || '';
+          return '<div class="ap-media-thumb">' + (url ? '<img src="' + url + '" alt=""/>' : '📎') +
+            '<button type="button" data-rm-media="' + i + '">✕</button></div>';
+        }).join('');
+        qsa('[data-rm-media]', grid).forEach(function (b) {
+          b.addEventListener('click', function () {
+            modalState.mediaFiles.splice(Number(b.getAttribute('data-rm-media')), 1);
+            renderMediaGrid();
             updateModalPreview();
           });
         });
-        renderMediaGrid();
       }
+      function addFiles(files) {
+        for (var i = 0; i < files.length && modalState.mediaFiles.length < 10; i++) {
+          var f = files[i];
+          modalState.mediaFiles.push({
+            file: f,
+            preview: f.type.startsWith('image/') ? URL.createObjectURL(f) : null,
+          });
+        }
+        renderMediaGrid();
+        updateModalPreview();
+      }
+      if (dz && fileInput) {
+        dz.addEventListener('click', function () { fileInput.click(); });
+        dz.addEventListener('dragover', function (e) { e.preventDefault(); dz.classList.add('dragover'); });
+        dz.addEventListener('dragleave', function () { dz.classList.remove('dragover'); });
+        dz.addEventListener('drop', function (e) {
+          e.preventDefault();
+          dz.classList.remove('dragover');
+          if (e.dataTransfer && e.dataTransfer.files) addFiles(e.dataTransfer.files);
+        });
+        fileInput.addEventListener('change', function () {
+          if (fileInput.files) addFiles(fileInput.files);
+        });
+      }
+      renderMediaGrid();
+
+      qsa('#apBtnText, #apBtnUrl', body).forEach(function (el) {
+        el.addEventListener('input', function () {
+          snapshotFromDom();
+          updateModalPreview();
+        });
+      });
+
       refreshIcons(body);
       updateModalPreview();
     }
@@ -936,53 +935,46 @@
 
     function submitPost(asDraft) {
       snapshotFromDom();
+      hideModalStatus();
       var text = (modalState.text || '').trim();
+      var submitBtn = qs('[data-ap-submit-post]', modal);
+      var draftBtn = qs('[data-ap-save-draft]', modal);
       if (!modalState.channels.length) {
-        toast('Выберите хотя бы один канал', 'error');
-        state.modalTab = 'basic';
-        qsa('.ap-modal-tab', modal).forEach(function (t) {
-          t.classList.toggle('active', t.getAttribute('data-modal-tab') === 'basic');
-        });
-        renderModalTab();
+        showModalStatus('Выберите хотя бы один канал', 'error');
+        var sec = qs('#apSecChannels', modal);
+        if (sec) sec.scrollIntoView({ behavior: 'smooth', block: 'start' });
         return;
       }
       var btnText = (modalState.btnText || '').trim();
       var btnUrl = (modalState.btnUrl || '').trim();
       var mediaCount = modalState.mediaFiles.length;
       if (!text && !mediaCount) {
-        toast('Укажите текст или медиа на вкладке «Основное»', 'error');
-        state.modalTab = 'basic';
-        qsa('.ap-modal-tab', modal).forEach(function (t) {
-          t.classList.toggle('active', t.getAttribute('data-modal-tab') === 'basic');
-        });
-        renderModalTab();
+        showModalStatus('Введите текст или добавьте фото/видео', 'error');
+        var secText = qs('#apSecText', modal);
+        if (secText) secText.scrollIntoView({ behavior: 'smooth', block: 'start' });
         return;
       }
       if (mediaCount > 1 && btnText && btnUrl) {
-        toast('Инлайн-кнопка недоступна для альбома', 'error');
+        showModalStatus('Инлайн-кнопка недоступна для альбома из нескольких файлов', 'error');
         return;
       }
 
       var st = modalState.scheduleType;
       if (st === 'once' && !modalState.onceDate) {
-        toast('Укажите дату на вкладке «Расписание»', 'error');
-        state.modalTab = 'schedule';
-        qsa('.ap-modal-tab', modal).forEach(function (t) {
-          t.classList.toggle('active', t.getAttribute('data-modal-tab') === 'schedule');
-        });
-        renderModalTab();
+        showModalStatus('Укажите дату публикации', 'error');
+        var secSched = qs('#apSecSchedule', modal);
+        if (secSched) secSched.scrollIntoView({ behavior: 'smooth', block: 'start' });
         return;
       }
       if (st === 'weekly' && !modalState.weekdays.length) {
-        toast('Выберите хотя бы один день недели', 'error');
-        state.modalTab = 'schedule';
-        qsa('.ap-modal-tab', modal).forEach(function (t) {
-          t.classList.toggle('active', t.getAttribute('data-modal-tab') === 'schedule');
-        });
-        renderModalTab();
+        showModalStatus('Выберите хотя бы один день недели', 'error');
+        var secSched2 = qs('#apSecSchedule', modal);
+        if (secSched2) secSched2.scrollIntoView({ behavior: 'smooth', block: 'start' });
         return;
       }
 
+      if (submitBtn) { submitBtn.disabled = true; submitBtn.textContent = 'Сохранение…'; }
+      if (draftBtn) draftBtn.disabled = true;
       var promises = modalState.channels.map(function (channelId) {
         var fd = new FormData();
         fd.append('target_channel_id', channelId);
@@ -1034,20 +1026,15 @@
           loadAndRender();
         })
         .catch(function (e) {
+          showModalStatus(e.message || 'Ошибка сохранения', 'error');
           toast(e.message || 'Ошибка сохранения', 'error');
+        })
+        .finally(function () {
+          if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = 'Запланировать ▶'; }
+          if (draftBtn) draftBtn.disabled = false;
         });
     }
 
-    qsa('[data-modal-tab]', modal).forEach(function (btn) {
-      btn.addEventListener('click', function () {
-        snapshotFromDom();
-        state.modalTab = btn.getAttribute('data-modal-tab');
-        qsa('.ap-modal-tab', modal).forEach(function (t) {
-          t.classList.toggle('active', t.getAttribute('data-modal-tab') === state.modalTab);
-        });
-        renderModalTab();
-      });
-    });
     qsa('[data-ap-modal-close]', modal).forEach(function (btn) {
       btn.addEventListener('click', closeModal);
     });
@@ -1066,7 +1053,7 @@
     qs('[data-ap-submit-post]', modal).addEventListener('click', function () { submitPost(false); });
     qs('[data-ap-save-draft]', modal).addEventListener('click', function () { submitPost(true); });
 
-    renderModalTab();
+    renderModalForm();
     refreshIcons(modal);
   }
 

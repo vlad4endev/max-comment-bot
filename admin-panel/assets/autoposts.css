@@ -610,7 +610,7 @@ body.ap-modal-open .sidebar {
 
 .ap-modal {
   width: 100%;
-  max-width: 560px;
+  max-width: 680px;
   max-height: 90vh;
   overflow: hidden;
   display: flex;
@@ -699,21 +699,72 @@ body.ap-modal-open .sidebar {
   display: none !important;
 }
 
+.ap-form-section {
+  margin-bottom: 1.25rem;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid var(--ap-border);
+}
+
+.ap-form-section:last-child {
+  border-bottom: none;
+  margin-bottom: 0;
+  padding-bottom: 0;
+}
+
+.ap-form-section h3 {
+  margin: 0 0 0.65rem;
+  font-size: 0.78rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+}
+
+.ap-modal-status {
+  margin: 0 1.15rem;
+  padding: 0.55rem 0.75rem;
+  border-radius: 6px;
+  font-size: 0.82rem;
+}
+
+.ap-modal-status.error {
+  background: rgba(239, 68, 68, 0.12);
+  border: 1px solid rgba(239, 68, 68, 0.35);
+  color: #fca5a5;
+}
+
 .ap-modal-footer {
   display: flex;
-  justify-content: flex-end;
-  gap: 0.5rem;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
   padding: 0.85rem 1.15rem;
   border-top: 1px solid var(--ap-border);
   flex-shrink: 0;
 }
 
+.ap-modal-footer-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
+
+.ap-modal-build {
+  font-size: 0.62rem;
+  font-family: var(--font-mono);
+  color: var(--text-muted);
+  opacity: 0.55;
+  user-select: all;
+  flex-shrink: 0;
+}
+
 .ap-modal-preview-wrap {
   border-top: 1px solid var(--ap-border);
-  padding: 0.75rem 1.15rem;
-  background: rgba(0, 0, 0, 0.2);
+  padding: 0.85rem 1.15rem 1rem;
+  background: rgba(0, 0, 0, 0.28);
   flex-shrink: 0;
-  max-height: 240px;
+  max-height: 280px;
   overflow-y: auto;
 }
 

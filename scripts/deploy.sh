@@ -64,8 +64,11 @@ docker compose logs --tail=40 bot
 echo ""
 echo "==> проверка admin autoposts (патч модалки):"
 AUTOPOST_JS="$(curl -sS --max-time 8 "http://127.0.0.1:${HOST_PORT}/admin/assets/autoposts.js" 2>/dev/null || true)"
-if [[ -n "$AUTOPOST_JS" ]] && echo "$AUTOPOST_JS" | grep -q 'updateModalPreview'; then
-  echo "  /admin/assets/autoposts.js -> OK (updateModalPreview найден)"
+if [[ -n "$AUTOPOST_JS" ]] && echo "$AUTOPOST_JS" | grep -q 'single-form-v3'; then
+  echo "  /admin/assets/autoposts.js -> OK (single-form-v3)"
+elif [[ -n "$AUTOPOST_JS" ]] && echo "$AUTOPOST_JS" | grep -q 'updateModalPreview'; then
+  echo "  /admin/assets/autoposts.js -> частично (старая сборка, нужен single-form-v3)" >&2
+  exit 1
 else
   echo "  /admin/assets/autoposts.js -> СТАРАЯ ВЕРСИЯ или недоступен" >&2
   echo "  Пересоберите образ: GIT_COMMIT=\$(git rev-parse HEAD) docker compose build --no-cache bot && docker compose up -d --force-recreate" >&2
