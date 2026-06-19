@@ -4319,6 +4319,106 @@ tbody tr:hover td {
   margin-top: 0.5rem;
 }
 
+.as-words-toolbar {
+  margin-bottom: 1rem;
+  gap: 0.5rem;
+}
+
+.as-words-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.as-words-tier {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-2);
+  overflow: hidden;
+}
+
+.as-words-tier-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem 0.75rem;
+  padding: 0.65rem 0.85rem;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+
+.as-words-tier-head::-webkit-details-marker {
+  display: none;
+}
+
+.as-tier-badge {
+  display: inline-flex;
+  min-width: 2.25rem;
+  justify-content: center;
+  padding: 0.15rem 0.45rem;
+  border-radius: var(--radius-sm);
+  font-size: 0.75rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.as-words-tier.tier-critical .as-tier-badge {
+  background: rgba(239, 68, 68, 0.2);
+  color: #fca5a5;
+}
+
+.as-words-tier.tier-high .as-tier-badge {
+  background: rgba(249, 115, 22, 0.2);
+  color: #fdba74;
+}
+
+.as-words-tier.tier-medium .as-tier-badge {
+  background: rgba(234, 179, 8, 0.15);
+  color: #fde047;
+}
+
+.as-words-tier.tier-low .as-tier-badge {
+  background: rgba(99, 102, 241, 0.15);
+  color: #a5b4fc;
+}
+
+.as-words-tier.tier-safe .as-tier-badge {
+  background: rgba(34, 197, 94, 0.15);
+  color: #86efac;
+}
+
+.as-words-tier.tier-muted .as-tier-badge {
+  background: var(--surface-3);
+  color: var(--text-muted);
+}
+
+.as-tier-title {
+  font-weight: 600;
+  font-size: 0.88rem;
+}
+
+.as-tier-count {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  margin-left: auto;
+}
+
+.as-tier-hint {
+  flex-basis: 100%;
+  font-size: 0.75rem;
+  padding-left: 2.75rem;
+}
+
+.as-words-tier-body {
+  padding: 0 0.85rem 0.85rem;
+  border-top: 1px solid var(--border);
+}
+
+.as-words-tags {
+  margin-top: 0.65rem;
+}
+
 @media (max-width: 640px) {
   .as-scoring-item {
     flex-direction: column;

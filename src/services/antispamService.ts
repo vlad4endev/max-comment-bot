@@ -3,11 +3,13 @@ import {
   type AntispamDetectAction,
   type AntispamDetectConfig,
 } from '../antispam/detectSpam'
+import type { ScoredWordsByScore } from '../db/seedAntispamScoredWords'
 import {
   getAntispamEngineSync,
   getAntispamRulesSync,
   getChannelExtrasSync,
   getGlobalStopwordsSync,
+  getScoredWordsSync,
   isAntispamRestrictedUserSync,
   pushAntispamLog,
   restrictAntispamUser,
@@ -85,6 +87,7 @@ function buildDetectConfig(channelChatId: number): AntispamDetectConfig {
     emojiSpam: rules.emoji_spam,
     extraStopWordWeight: 90,
     extraStopWords,
+    scoredWordsByScore: getScoredWordsSync(),
   }
 }
 

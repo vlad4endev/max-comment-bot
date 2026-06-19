@@ -46,6 +46,7 @@ function buildDetectConfig(channelChatId) {
         emojiSpam: rules.emoji_spam,
         extraStopWordWeight: 90,
         extraStopWords,
+        scoredWordsByScore: (0, adminPanelState_1.getScoredWordsSync)(),
     };
 }
 function mapActionToOutcome(action, softMode) {

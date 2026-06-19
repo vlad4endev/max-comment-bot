@@ -56,6 +56,7 @@ import {
   listVkChains,
   saveAntispamWords,
   saveAntispamEngine,
+  saveScoredWords,
   saveChannelExtras,
   updateTgChain,
   updateVkChain,
@@ -69,6 +70,11 @@ import { isMtprotoSessionReady, resolveMtprotoCredentials } from '../services/mt
 import { findActiveTgChainForPair } from '../utils/tgChainPair'
 import { getAdminLogTail, logger } from '../utils/logger'
 import { extractMemberAvatarUrl } from '../utils/memberAvatar'
+import {
+  ANTISPAM_SCORE_TIERS,
+  resetScoredWordsToDefault,
+} from '../db/seedAntispamScoredWords'
+import type { ScoredWordsByScore } from '../db/seedAntispamScoredWords'
 
 const RUNTIME_LOG_PATH = join(process.cwd(), 'data', 'runtime.log')
 
@@ -1063,6 +1069,9 @@ export function createAdminRouter(deps: AdminRouterDeps): express.Router {
       rules: data.rules,
       engine: data.engine,
       restricted_users: data.restricted_users,
+      scored_words: data.scored_words,
+      scored_words_total: data.scored_words_total,
+      score_tiers: [...ANTISPAM_SCORE_TIERS],
       blocked_today: countAntispamBlocksToday(log),
     })
   })
@@ -1121,6 +1130,39 @@ export function createAdminRouter(deps: AdminRouterDeps): express.Router {
       }
     }
     res.json({ ok: true })
+  })
+
+  secured.post('/antispam/scored-words', async (req, res) => {
+    if (!isRecord(req.body) || !isRecord(req.body.scored_words)) {
+      res.status(400).json({ error: 'invalid scored_words' })
+      return
+    }
+    const raw = req.body.scored_words as Record<string, unknown>
+    const dict: ScoredWordsByScore = {}
+    for (const tier of ANTISPAM_SCORE_TIERS) {
+      const arr = raw[String(tier)]
+      dict[tier] = Array.isArray(arr)
+        ? [
+            ...new Set(
+              arr
+                .filter((w): w is string => typeof w === 'string')
+                .map((w) => w.trim().toLowerCase())
+                .filter(Boolean),
+            ),
+          ]
+        : []
+    }
+    const saved = await saveScoredWords(dict)
+    res.json({ ok: true, scored_words: saved, scored_words_total: Object.values(saved).flat().length })
+  })
+
+  secured.post('/antispam/scored-words/reset', async (_req, res) => {
+    const saved = resetScoredWordsToDefault()
+    res.json({
+      ok: true,
+      scored_words: saved,
+      scored_words_total: Object.values(saved).flat().length,
+    })
   })
 
   secured.post('/antispam/test', async (req, res) => {

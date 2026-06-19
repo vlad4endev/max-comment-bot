@@ -72,6 +72,7 @@ const mtprotoConfigStore_1 = require("../services/mtprotoConfigStore");
 const tgChainPair_1 = require("../utils/tgChainPair");
 const logger_1 = require("../utils/logger");
 const memberAvatar_1 = require("../utils/memberAvatar");
+const seedAntispamScoredWords_1 = require("../db/seedAntispamScoredWords");
 const RUNTIME_LOG_PATH = (0, node_path_1.join)(process.cwd(), 'data', 'runtime.log');
 function isRecord(value) {
     return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -964,6 +965,9 @@ function createAdminRouter(deps) {
             rules: data.rules,
             engine: data.engine,
             restricted_users: data.restricted_users,
+            scored_words: data.scored_words,
+            scored_words_total: data.scored_words_total,
+            score_tiers: [...seedAntispamScoredWords_1.ANTISPAM_SCORE_TIERS],
             blocked_today: (0, adminPanelState_1.countAntispamBlocksToday)(log),
         });
     });
@@ -1023,6 +1027,35 @@ function createAdminRouter(deps) {
             }
         }
         res.json({ ok: true });
+    });
+    secured.post('/antispam/scored-words', async (req, res) => {
+        if (!isRecord(req.body) || !isRecord(req.body.scored_words)) {
+            res.status(400).json({ error: 'invalid scored_words' });
+            return;
+        }
+        const raw = req.body.scored_words;
+        const dict = {};
+        for (const tier of seedAntispamScoredWords_1.ANTISPAM_SCORE_TIERS) {
+            const arr = raw[String(tier)];
+            dict[tier] = Array.isArray(arr)
+                ? [
+                    ...new Set(arr
+                        .filter((w) => typeof w === 'string')
+                        .map((w) => w.trim().toLowerCase())
+                        .filter(Boolean)),
+                ]
+                : [];
+        }
+        const saved = await (0, adminPanelState_1.saveScoredWords)(dict);
+        res.json({ ok: true, scored_words: saved, scored_words_total: Object.values(saved).flat().length });
+    });
+    secured.post('/antispam/scored-words/reset', async (_req, res) => {
+        const saved = (0, seedAntispamScoredWords_1.resetScoredWordsToDefault)();
+        res.json({
+            ok: true,
+            scored_words: saved,
+            scored_words_total: Object.values(saved).flat().length,
+        });
     });
     secured.post('/antispam/test', async (req, res) => {
         if (!isRecord(req.body)) {

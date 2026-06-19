@@ -5,6 +5,9 @@ exports.reloadAntispamStore = reloadAntispamStore;
 exports.getAntispamEngineSync = getAntispamEngineSync;
 exports.getAntispamRulesSync = getAntispamRulesSync;
 exports.getGlobalStopwordsSync = getGlobalStopwordsSync;
+exports.getScoredWordsSync = getScoredWordsSync;
+exports.countScoredWordsSync = countScoredWordsSync;
+exports.saveScoredWordsToStore = saveScoredWordsToStore;
 exports.getChannelAntispamSettingsSync = getChannelAntispamSettingsSync;
 exports.isAntispamRestrictedUserSync = isAntispamRestrictedUserSync;
 exports.getAntispamWordsSnapshot = getAntispamWordsSnapshot;
@@ -18,6 +21,7 @@ exports.purgeAntispamChannelData = purgeAntispamChannelData;
 exports.countAntispamBlocksTodayFromStore = countAntispamBlocksTodayFromStore;
 const node_crypto_1 = require("node:crypto");
 const antispamDatabase_1 = require("../db/antispamDatabase");
+const seedAntispamScoredWords_1 = require("../db/seedAntispamScoredWords");
 const DEFAULT_ENGINE = {
     soft_mode: false,
     enabled: true,
@@ -106,6 +110,7 @@ function loadCacheFromDb() {
         engine: loadEngineFromDb(),
         rules: loadRulesFromDb(),
         globalStopwords: globalRows.map((r) => r.word),
+        scoredWordsByScore: (0, seedAntispamScoredWords_1.loadScoredWordsFromDb)(),
         channelStopwords,
         channelSettings,
         restrictedUsers: new Set(restrictedRows.map((r) => r.user_id)),
@@ -132,6 +137,29 @@ function getAntispamRulesSync() {
 function getGlobalStopwordsSync() {
     ensureAntispamStoreLoaded();
     return [...cache.globalStopwords];
+}
+function getScoredWordsSync() {
+    ensureAntispamStoreLoaded();
+    const src = cache.scoredWordsByScore;
+    const out = {};
+    for (const [score, words] of Object.entries(src)) {
+        out[Number(score)] = [...words];
+    }
+    return out;
+}
+function countScoredWordsSync() {
+    ensureAntispamStoreLoaded();
+    let n = 0;
+    for (const words of Object.values(cache.scoredWordsByScore)) {
+        n += words.length;
+    }
+    return n;
+}
+function saveScoredWordsToStore(dict) {
+    ensureAntispamStoreLoaded();
+    (0, seedAntispamScoredWords_1.persistScoredWords)(dict);
+    cache.scoredWordsByScore = (0, seedAntispamScoredWords_1.loadScoredWordsFromDb)();
+    return getScoredWordsSync();
 }
 function getChannelAntispamSettingsSync(chatId) {
     ensureAntispamStoreLoaded();
@@ -161,6 +189,8 @@ function getAntispamWordsSnapshot() {
         rules: { ...cache.rules },
         engine: { ...cache.engine },
         restricted_users: [...cache.restrictedUsers],
+        scored_words: getScoredWordsSync(),
+        scored_words_total: countScoredWordsSync(),
     };
 }
 function saveAntispamEngineToStore(patch) {

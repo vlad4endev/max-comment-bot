@@ -1,3 +1,4 @@
+import type { ScoredWordsByScore } from '../db/seedAntispamScoredWords';
 import type { AntispamEngineConfig, AntispamLogEntry, AntispamRules } from '../api/adminPanelState';
 export interface ChannelAntispamSettings {
     stopwords: string[];
@@ -10,6 +11,9 @@ export declare function reloadAntispamStore(): void;
 export declare function getAntispamEngineSync(): AntispamEngineConfig;
 export declare function getAntispamRulesSync(): AntispamRules;
 export declare function getGlobalStopwordsSync(): string[];
+export declare function getScoredWordsSync(): ScoredWordsByScore;
+export declare function countScoredWordsSync(): number;
+export declare function saveScoredWordsToStore(dict: ScoredWordsByScore): ScoredWordsByScore;
 export declare function getChannelAntispamSettingsSync(chatId: number): ChannelAntispamSettings;
 export declare function isAntispamRestrictedUserSync(userId: number): boolean;
 export declare function getAntispamWordsSnapshot(): {
@@ -18,6 +22,8 @@ export declare function getAntispamWordsSnapshot(): {
     rules: AntispamRules;
     engine: AntispamEngineConfig;
     restricted_users: number[];
+    scored_words: ScoredWordsByScore;
+    scored_words_total: number;
 };
 export declare function saveAntispamEngineToStore(patch: Partial<AntispamEngineConfig>): AntispamEngineConfig;
 export declare function saveAntispamWordsToStore(input: {

@@ -463,10 +463,13 @@ function checkStopWords(tokens, index) {
 }
 const SAFE_PHRASE_REDUCTION = 15;
 /** Снижение score за безопасные фразы (уровень 0). */
-function checkSafePhraseReduction(tokens) {
+function checkSafePhraseReduction(tokens, safePhrases) {
+    if (!safePhrases.length) {
+        return 0;
+    }
     let count = 0;
     const found = new Set();
-    const exact = new Set(exports.SAFE_PHRASES.map((w) => w.toLowerCase().trim()).filter((w) => !w.includes(' ')));
+    const exact = new Set(safePhrases.map((w) => w.toLowerCase().trim()).filter((w) => w && !w.includes(' ')));
     for (const t of tokens) {
         if (exact.has(t) && !found.has(t)) {
             found.add(t);
@@ -475,7 +478,7 @@ function checkSafePhraseReduction(tokens) {
     }
     for (let i = 0; i < tokens.length - 1; i++) {
         const bg = `${tokens[i]} ${tokens[i + 1]}`;
-        for (const sw of exports.SAFE_PHRASES) {
+        for (const sw of safePhrases) {
             const phrase = sw.toLowerCase().trim();
             if (phrase.includes(' ') && bg.includes(phrase) && !found.has(phrase)) {
                 found.add(phrase);

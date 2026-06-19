@@ -3,6 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.DEFAULT_ANTISPAM_DETECT_CONFIG = void 0;
 exports.detectSpam = detectSpam;
 const normalize_1 = require("./normalize");
+const seedAntispamScoredWords_1 = require("../db/seedAntispamScoredWords");
 const stopWords_1 = require("./stopWords");
 exports.DEFAULT_ANTISPAM_DETECT_CONFIG = {
     softMode: false,
@@ -17,6 +18,7 @@ exports.DEFAULT_ANTISPAM_DETECT_CONFIG = {
     emojiSpam: true,
     extraStopWordWeight: 90,
     extraStopWords: [],
+    scoredWordsByScore: {},
 };
 const phonePattern = /\b\d{10,12}\b/;
 const linkPattern = /(?:https?:\/\/|t\.me\/\+?|www\.)/i;
@@ -31,21 +33,21 @@ function isPureEmoji(text, maxTextLength) {
     const withoutEmoji = String(text).replace(emojiPattern, '').replace(/\s/g, '');
     return withoutEmoji.length <= maxTextLength && n >= 1;
 }
-let baseStopIndex = null;
-function getBaseStopIndex() {
-    if (!baseStopIndex) {
-        baseStopIndex = (0, stopWords_1.buildStopWordIndexes)(stopWords_1.SPAM_WORDS_BY_SCORE);
+function spamTiersFromConfig(scoredWordsByScore) {
+    const out = {};
+    for (const tier of seedAntispamScoredWords_1.ANTISPAM_SCORE_TIERS) {
+        if (tier === 0) {
+            continue;
+        }
+        out[tier] = [...(scoredWordsByScore[tier] ?? [])];
     }
-    return baseStopIndex;
+    return out;
 }
-function buildRuntimeStopIndex(extraStopWords, extraWeight) {
+function buildRuntimeStopIndex(scoredWordsByScore, extraStopWords, extraWeight) {
     const extraExact = new Map();
     for (const raw of extraStopWords) {
         const w = raw.trim().toLowerCase();
-        if (!w) {
-            continue;
-        }
-        if (w.includes(' ')) {
+        if (!w || w.includes(' ')) {
             continue;
         }
         extraExact.set(w, extraWeight);
@@ -57,7 +59,7 @@ function buildRuntimeStopIndex(extraStopWords, extraWeight) {
             partial.push([w, extraWeight]);
         }
     }
-    const base = getBaseStopIndex();
+    const base = (0, stopWords_1.buildStopWordIndexes)(spamTiersFromConfig(scoredWordsByScore));
     const exact = new Map(base.exact);
     for (const [k, v] of extraExact) {
         exact.set(k, Math.max(exact.get(k) ?? 0, v));
@@ -92,7 +94,7 @@ function detectSpam(text, config) {
         spamScore += 60;
         categories.add('link');
     }
-    const stopIndex = buildRuntimeStopIndex(config.extraStopWords, config.extraStopWordWeight);
+    const stopIndex = buildRuntimeStopIndex(config.scoredWordsByScore, config.extraStopWords, config.extraStopWordWeight);
     const swScore = (0, stopWords_1.checkStopWords)(tokens, stopIndex);
     if (swScore > 0) {
         spamScore += swScore;
@@ -113,13 +115,13 @@ function detectSpam(text, config) {
             categories.add('emoji');
         }
     }
-    // Украинские маркеры в обфусцированном тексте
     const norm = (0, normalize_1.normalizeObfuscation)(original.toLowerCase());
     if (/\b(мені|допоможу|гривн|₴|виграй|заробляй)\b/u.test(norm)) {
         spamScore += 45;
         categories.add('uk');
     }
-    const safeReduction = (0, stopWords_1.checkSafePhraseReduction)(tokens);
+    const safePhrases = config.scoredWordsByScore[0] ?? [];
+    const safeReduction = (0, stopWords_1.checkSafePhraseReduction)(tokens, safePhrases);
     if (safeReduction > 0) {
         spamScore = Math.max(0, spamScore - safeReduction);
         categories.add('safe');

@@ -21,4 +21,4 @@ export interface StopWordIndex {
 export declare function buildStopWordIndexes(dict: Record<number, string[]>, extraExact?: Map<string, number>): StopWordIndex;
 export declare function checkStopWords(tokens: string[], index: StopWordIndex): number;
 /** Снижение score за безопасные фразы (уровень 0). */
-export declare function checkSafePhraseReduction(tokens: string[]): number;
+export declare function checkSafePhraseReduction(tokens: string[], safePhrases: string[]): number;

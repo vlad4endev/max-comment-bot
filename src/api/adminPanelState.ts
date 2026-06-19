@@ -8,6 +8,8 @@ import {
   getAntispamEngineSync as getEngineFromStore,
   getAntispamRulesSync as getRulesFromStore,
   getGlobalStopwordsSync as getGlobalWordsFromStore,
+  getScoredWordsSync as getScoredWordsFromStore,
+  saveScoredWordsToStore,
   getChannelAntispamSettingsSync,
   isAntispamRestrictedUserSync as isRestrictedFromStore,
   getAntispamWordsSnapshot,
@@ -286,6 +288,8 @@ export async function getAntispamWords(): Promise<{
   rules: AntispamRules
   engine: AntispamEngineConfig
   restricted_users: number[]
+  scored_words: import('../db/seedAntispamScoredWords').ScoredWordsByScore
+  scored_words_total: number
 }> {
   await loadState()
   return getAntispamWordsSnapshot()
@@ -304,6 +308,18 @@ export function getAntispamRulesSync(): AntispamRules {
 export function getGlobalStopwordsSync(): string[] {
   ensureAntispamStoreLoaded()
   return getGlobalWordsFromStore()
+}
+
+export function getScoredWordsSync(): import('../db/seedAntispamScoredWords').ScoredWordsByScore {
+  ensureAntispamStoreLoaded()
+  return getScoredWordsFromStore()
+}
+
+export async function saveScoredWords(
+  dict: import('../db/seedAntispamScoredWords').ScoredWordsByScore,
+): Promise<import('../db/seedAntispamScoredWords').ScoredWordsByScore> {
+  await loadState()
+  return saveScoredWordsToStore(dict)
 }
 
 export function getChannelExtrasSync(chatId: number): ChannelAdminExtras {

@@ -1,3 +1,4 @@
+import type { ScoredWordsByScore } from '../db/seedAntispamScoredWords';
 export interface AntispamDetectConfig {
     softMode: boolean;
     enabled: boolean;
@@ -12,6 +13,8 @@ export interface AntispamDetectConfig {
     /** Доп. стоп-слова из админки (глобальные + канала) с весом. */
     extraStopWordWeight: number;
     extraStopWords: string[];
+    /** База слов с баллами из antispam.db. */
+    scoredWordsByScore: ScoredWordsByScore;
 }
 export declare const DEFAULT_ANTISPAM_DETECT_CONFIG: AntispamDetectConfig;
 export type AntispamDetectAction = 'leave' | 'delete' | 'delete_and_ban' | 'captcha';

@@ -40,6 +40,7 @@ const migrate_1 = require("./db/migrate");
 const migrateAutopostsFromJson_1 = require("./db/migrateAutopostsFromJson");
 const migratePostsDb_1 = require("./db/migratePostsDb");
 const migrateAntispamDb_1 = require("./db/migrateAntispamDb");
+const seedAntispamScoredWords_1 = require("./db/seedAntispamScoredWords");
 const subscriptions_1 = require("./maxPlatform/subscriptions");
 const channelNotifyLinkStore_1 = require("./services/channelNotifyLinkStore");
 const channelRegistry_1 = require("./services/channelRegistry");
@@ -75,6 +76,7 @@ async function main() {
     (0, migratePostsDb_1.migrateAutopostsFromBotDb)();
     (0, migrateAutopostsFromJson_1.migrateAutopostsFromJson)();
     await (0, migrateAntispamDb_1.migrateAntispamFromJson)();
+    (0, seedAntispamScoredWords_1.seedAntispamScoredWordsIfEmpty)();
     const redisStatus = await (0, redisClient_1.initRedis)();
     const bot = (0, bot_1.initializeBot)();
     await channelRegistry_1.channelRegistry.loadFromDisk();

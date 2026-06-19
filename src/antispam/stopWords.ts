@@ -473,10 +473,15 @@ export function checkStopWords(tokens: string[], index: StopWordIndex): number {
 const SAFE_PHRASE_REDUCTION = 15
 
 /** Снижение score за безопасные фразы (уровень 0). */
-export function checkSafePhraseReduction(tokens: string[]): number {
+export function checkSafePhraseReduction(tokens: string[], safePhrases: string[]): number {
+  if (!safePhrases.length) {
+    return 0
+  }
   let count = 0
   const found = new Set<string>()
-  const exact = new Set(SAFE_PHRASES.map((w) => w.toLowerCase().trim()).filter((w) => !w.includes(' ')))
+  const exact = new Set(
+    safePhrases.map((w) => w.toLowerCase().trim()).filter((w) => w && !w.includes(' ')),
+  )
   for (const t of tokens) {
     if (exact.has(t) && !found.has(t)) {
       found.add(t)
@@ -485,7 +490,7 @@ export function checkSafePhraseReduction(tokens: string[]): number {
   }
   for (let i = 0; i < tokens.length - 1; i++) {
     const bg = `${tokens[i]} ${tokens[i + 1]}`
-    for (const sw of SAFE_PHRASES) {
+    for (const sw of safePhrases) {
       const phrase = sw.toLowerCase().trim()
       if (phrase.includes(' ') && bg.includes(phrase) && !found.has(phrase)) {
         found.add(phrase)

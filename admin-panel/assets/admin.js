@@ -4987,6 +4987,76 @@
       });
   }
 
+  var ANTISPAM_SCORE_META = {
+    100: { label: 'Критичные', hint: 'Мгновенный бан при сумме ≥ порога бана' },
+    80: { label: 'Сильные', hint: 'Явный спам-сигнал' },
+    10: { label: 'Финансы', hint: 'Заработок, казино, инвестиции' },
+    9: { label: 'Доход', hint: 'Подработка, удалёнка' },
+    8: { label: 'Вакансии и ссылки', hint: 't.me, вакансии, шабашки' },
+    7: { label: 'ЛС и работа', hint: '«пиши в лс», разгрузка' },
+    6: { label: 'Средние', hint: 'Общие маркеры' },
+    5: { label: 'Широкие', hint: 'Темки, валюта, заработок' },
+    4: { label: 'Слабые', hint: 'работа, ищу, деньги' },
+    3: { label: 'Очень слабые', hint: 'кредит, крипта' },
+    0: { label: 'Безопасные', hint: 'Снижают score (−15 за совпадение)' },
+  };
+
+  function antispamScoreTierClass(score) {
+    if (score >= 100) return 'tier-critical';
+    if (score >= 80) return 'tier-high';
+    if (score >= 10) return 'tier-medium';
+    if (score >= 5) return 'tier-low';
+    if (score === 0) return 'tier-safe';
+    return 'tier-muted';
+  }
+
+  function collectScoredWordsFromEditor(main, tiers) {
+    var out = {};
+    (tiers || []).forEach(function (tier) {
+      var wrap = qs('#as_words_tier_' + tier, main);
+      out[String(tier)] = collectTagsFromWrap(wrap);
+    });
+    return out;
+  }
+
+  function saveScoredWordsBase(main, tiers) {
+    var btn = qs('#btnSaveScoredWords', main);
+    if (btn) btn.disabled = true;
+    return postJson('/antispam/scored-words', {
+      scored_words: collectScoredWordsFromEditor(main, tiers),
+    })
+      .then(function () {
+        showToast('База стоп-слов сохранена', 'success');
+        renderAntispam();
+      })
+      .catch(function (e) {
+        showToast(e.message || 'Ошибка сохранения', 'error');
+      })
+      .finally(function () {
+        if (btn) btn.disabled = false;
+      });
+  }
+
+  function bindAntispamWordsSearch(main) {
+    var input = qs('#as_words_search', main);
+    if (!input) return;
+    input.addEventListener('input', function () {
+      var q = String(input.value || '')
+        .trim()
+        .toLowerCase();
+      qsa('.as-words-tier', main).forEach(function (tierEl) {
+        var visible = 0;
+        qsa('.tag', tierEl).forEach(function (tag) {
+          var text = String(tag.textContent || '').toLowerCase();
+          var show = !q || text.indexOf(q) !== -1;
+          tag.style.display = show ? '' : 'none';
+          if (show) visible += 1;
+        });
+        tierEl.style.display = !q || visible > 0 ? '' : 'none';
+      });
+    });
+  }
+
   function collectAntispamPayload(main) {
     var gStop = qs('#g_stop', main);
     var wlWrap = qs('#as_whitelist_wrap', main);
@@ -5118,8 +5188,12 @@
         var rules = w.rules || {};
         var engine = w.engine || {};
         var globalWords = w.global || [];
+        var scoredWords = w.scored_words || {};
+        var scoreTiers = w.score_tiers || [100, 80, 10, 9, 8, 7, 6, 5, 4, 3, 0];
+        var scoredTotal = w.scored_words_total != null ? w.scored_words_total : 0;
         var tabLabels = {
           overview: 'Обзор',
+          words: 'База слов',
           settings: 'Настройки',
           test: 'Проверка',
           log: 'Журнал',
@@ -5159,7 +5233,11 @@
             esc(String(w.blocked_today || 0)) +
             '</div></div>';
           html +=
-            '<div class="metric-card"><div class="label">Глобальных стоп-слов</div><div class="value">' +
+            '<div class="metric-card"><div class="label">База стоп-слов</div><div class="value">' +
+            esc(String(scoredTotal)) +
+            '</div></div>';
+          html +=
+            '<div class="metric-card"><div class="label">Доп. стоп-слов</div><div class="value">' +
             esc(String(globalWords.length)) +
             '</div></div>';
           html +=
@@ -5191,8 +5269,44 @@
           html += '<div class="as-rule-pill' + (rules.emoji_spam ? ' on' : '') + '"><i data-lucide="smile"></i> Эмодзи</div>';
           html += '</div>';
           html +=
-            '<p class="muted text-sm mt-sm" style="margin-bottom:0">Для канала можно задать дополнительные стоп-слова в карточке канала → вкладка «Антиспам».</p>';
+            '<p class="muted text-sm mt-sm" style="margin-bottom:0">Редактируйте базу на вкладке «База слов». Дополнительные слова (+90 баллов) — в «Настройки» или в карточке канала.</p>';
           html += '</div>';
+        } else if (antispamTab === 'words') {
+          html += '<div class="panel">';
+          html += sectionHead(
+            'Стоп-слова по баллам',
+            'Каждое совпадение добавляет баллы к spam score. Enter — добавить, × — удалить.',
+          );
+          html += '<div class="search-bar as-words-toolbar">';
+          html +=
+            '<input class="input" id="as_words_search" placeholder="Поиск по словам и фразам…" style="flex:1;min-width:160px">';
+          html +=
+            '<button type="button" class="btn btn-ghost" id="btnResetScoredWords"><i data-lucide="rotate-ccw"></i> Сбросить базу</button>';
+          html += '</div>';
+          html += '<div class="as-words-list" id="as_words_list">';
+          scoreTiers.forEach(function (tier) {
+            var meta = ANTISPAM_SCORE_META[tier] || { label: 'Уровень ' + tier, hint: '' };
+            var words = scoredWords[tier] || scoredWords[String(tier)] || [];
+            var tierCls = antispamScoreTierClass(tier);
+            html += '<details class="as-words-tier ' + tierCls + '" open>';
+            html += '<summary class="as-words-tier-head">';
+            html += '<span class="as-tier-badge">' + esc(String(tier)) + '</span>';
+            html += '<span class="as-tier-title">' + esc(meta.label) + '</span>';
+            html += '<span class="as-tier-count">' + esc(String(words.length)) + '</span>';
+            if (meta.hint) html += '<span class="as-tier-hint muted">' + esc(meta.hint) + '</span>';
+            html += '</summary>';
+            html += '<div class="as-words-tier-body">';
+            html +=
+              '<div class="tags-input-wrap as-words-tags" id="as_words_tier_' +
+              esc(String(tier)) +
+              '"></div>';
+            html += '</div></details>';
+          });
+          html += '</div>';
+          html += '<div class="as-save-bar mt-md">';
+          html +=
+            '<button type="button" class="btn btn-primary" id="btnSaveScoredWords"><i data-lucide="save"></i> Сохранить базу слов</button>';
+          html += '</div></div>';
         } else if (antispamTab === 'settings') {
           html += '<div class="panel">';
           html += sectionHead('Режим работы', 'Глобальные переключатели движка');
@@ -5210,9 +5324,9 @@
           html += '</div></div>';
 
           html += '<div class="panel mt-md">';
-          html += sectionHead('Стоп-слова', 'Дополнительные слова и фразы поверх встроенной базы');
+          html += sectionHead('Дополнительные стоп-слова', 'Поверх базы: +90 баллов за каждое совпадение');
           html += '<div class="form-group"><div class="tags-input-wrap" id="g_stop"></div>';
-          html += '<p class="field-hint">Одно слово или фраза — Enter. Совпадение добавляет до 90 баллов.</p></div>';
+          html += '<p class="field-hint">Одно слово или фраза — Enter. Не путать с базой на вкладке «База слов».</p></div>';
           html += '</div>';
 
           html += '<div class="panel mt-md">';
@@ -5326,6 +5440,46 @@
 
         html += '</div>';
         main.innerHTML = html;
+
+        if (antispamTab === 'words') {
+          scoreTiers.forEach(function (tier) {
+            var wrap = qs('#as_words_tier_' + tier, main);
+            var words = scoredWords[tier] || scoredWords[String(tier)] || [];
+            if (wrap) bindTagsInput(wrap, words, function () {});
+          });
+          bindAntispamWordsSearch(main);
+          var saveWordsBtn = qs('#btnSaveScoredWords', main);
+          if (saveWordsBtn) {
+            saveWordsBtn.addEventListener('click', function () {
+              saveScoredWordsBase(main, scoreTiers);
+            });
+          }
+          var resetBtn = qs('#btnResetScoredWords', main);
+          if (resetBtn) {
+            resetBtn.addEventListener('click', function () {
+              if (!confirm('Сбросить базу стоп-слов к заводским значениям? Текущие правки будут потеряны.')) {
+                return;
+              }
+              postJson('/antispam/scored-words/reset', {})
+                .then(function () {
+                  showToast('База восстановлена', 'success');
+                  renderAntispam();
+                })
+                .catch(function (e) {
+                  showToast(e.message || 'Ошибка', 'error');
+                });
+            });
+          }
+          setTopbarActions(
+            '<button type="button" class="btn btn-primary btn-sm" id="topbarSaveScoredWords"><i data-lucide="save"></i> Сохранить базу</button>',
+          );
+          var topSaveWords = qs('#topbarSaveScoredWords');
+          if (topSaveWords) {
+            topSaveWords.addEventListener('click', function () {
+              saveScoredWordsBase(main, scoreTiers);
+            });
+          }
+        }
 
         if (antispamTab === 'settings') {
           var gStop = qs('#g_stop', main);

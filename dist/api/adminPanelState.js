@@ -5,6 +5,8 @@ exports.getAntispamWords = getAntispamWords;
 exports.getAntispamEngineSync = getAntispamEngineSync;
 exports.getAntispamRulesSync = getAntispamRulesSync;
 exports.getGlobalStopwordsSync = getGlobalStopwordsSync;
+exports.getScoredWordsSync = getScoredWordsSync;
+exports.saveScoredWords = saveScoredWords;
 exports.getChannelExtrasSync = getChannelExtrasSync;
 exports.isAntispamRestrictedUserSync = isAntispamRestrictedUserSync;
 exports.saveAntispamEngine = saveAntispamEngine;
@@ -169,6 +171,14 @@ function getAntispamRulesSync() {
 function getGlobalStopwordsSync() {
     (0, antispamStore_1.ensureAntispamStoreLoaded)();
     return (0, antispamStore_1.getGlobalStopwordsSync)();
+}
+function getScoredWordsSync() {
+    (0, antispamStore_1.ensureAntispamStoreLoaded)();
+    return (0, antispamStore_1.getScoredWordsSync)();
+}
+async function saveScoredWords(dict) {
+    await loadState();
+    return (0, antispamStore_1.saveScoredWordsToStore)(dict);
 }
 function getChannelExtrasSync(chatId) {
     if (!cache) {

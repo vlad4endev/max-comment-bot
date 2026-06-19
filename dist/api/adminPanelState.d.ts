@@ -121,10 +121,14 @@ export declare function getAntispamWords(): Promise<{
     rules: AntispamRules;
     engine: AntispamEngineConfig;
     restricted_users: number[];
+    scored_words: import('../db/seedAntispamScoredWords').ScoredWordsByScore;
+    scored_words_total: number;
 }>;
 export declare function getAntispamEngineSync(): AntispamEngineConfig;
 export declare function getAntispamRulesSync(): AntispamRules;
 export declare function getGlobalStopwordsSync(): string[];
+export declare function getScoredWordsSync(): import('../db/seedAntispamScoredWords').ScoredWordsByScore;
+export declare function saveScoredWords(dict: import('../db/seedAntispamScoredWords').ScoredWordsByScore): Promise<import('../db/seedAntispamScoredWords').ScoredWordsByScore>;
 export declare function getChannelExtrasSync(chatId: number): ChannelAdminExtras;
 export declare function isAntispamRestrictedUserSync(userId: number): boolean;
 export declare function saveAntispamEngine(patch: Partial<AntispamEngineConfig>): Promise<AntispamEngineConfig>;

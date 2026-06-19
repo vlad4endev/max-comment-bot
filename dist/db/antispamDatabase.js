@@ -106,6 +106,14 @@ function initAntispamSchema(db) {
       ON antispam_log(channel_chat_id);
     CREATE INDEX IF NOT EXISTS idx_antispam_log_user
       ON antispam_log(user_id);
+
+    CREATE TABLE IF NOT EXISTS antispam_scored_words (
+      word   TEXT NOT NULL PRIMARY KEY,
+      score  INTEGER NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_antispam_scored_words_score
+      ON antispam_scored_words(score);
   `);
 }
 function getAntispamDbMeta(key) {

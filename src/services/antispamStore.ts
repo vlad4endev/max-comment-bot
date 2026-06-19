@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto'
 
 import { getAntispamDb } from '../db/antispamDatabase'
+import type { ScoredWordsByScore } from '../db/seedAntispamScoredWords'
+import { loadScoredWordsFromDb, persistScoredWords } from '../db/seedAntispamScoredWords'
 import type {
   AntispamEngineConfig,
   AntispamLogEntry,
@@ -36,6 +38,7 @@ interface AntispamCache {
   engine: AntispamEngineConfig
   rules: AntispamRules
   globalStopwords: string[]
+  scoredWordsByScore: ScoredWordsByScore
   channelStopwords: Map<number, string[]>
   channelSettings: Map<number, Omit<ChannelAntispamSettings, 'stopwords'>>
   restrictedUsers: Set<number>
@@ -142,6 +145,7 @@ function loadCacheFromDb(): AntispamCache {
     engine: loadEngineFromDb(),
     rules: loadRulesFromDb(),
     globalStopwords: globalRows.map((r) => r.word),
+    scoredWordsByScore: loadScoredWordsFromDb(),
     channelStopwords,
     channelSettings,
     restrictedUsers: new Set(restrictedRows.map((r) => r.user_id)),
@@ -175,6 +179,32 @@ export function getGlobalStopwordsSync(): string[] {
   return [...cache!.globalStopwords]
 }
 
+export function getScoredWordsSync(): ScoredWordsByScore {
+  ensureAntispamStoreLoaded()
+  const src = cache!.scoredWordsByScore
+  const out: ScoredWordsByScore = {}
+  for (const [score, words] of Object.entries(src)) {
+    out[Number(score)] = [...words]
+  }
+  return out
+}
+
+export function countScoredWordsSync(): number {
+  ensureAntispamStoreLoaded()
+  let n = 0
+  for (const words of Object.values(cache!.scoredWordsByScore)) {
+    n += words.length
+  }
+  return n
+}
+
+export function saveScoredWordsToStore(dict: ScoredWordsByScore): ScoredWordsByScore {
+  ensureAntispamStoreLoaded()
+  persistScoredWords(dict)
+  cache!.scoredWordsByScore = loadScoredWordsFromDb()
+  return getScoredWordsSync()
+}
+
 export function getChannelAntispamSettingsSync(chatId: number): ChannelAntispamSettings {
   ensureAntispamStoreLoaded()
   const settings = cache!.channelSettings.get(chatId)
@@ -198,6 +228,8 @@ export function getAntispamWordsSnapshot(): {
   rules: AntispamRules
   engine: AntispamEngineConfig
   restricted_users: number[]
+  scored_words: ScoredWordsByScore
+  scored_words_total: number
 } {
   ensureAntispamStoreLoaded()
   const byChannel: Record<string, string[]> = {}
@@ -210,6 +242,8 @@ export function getAntispamWordsSnapshot(): {
     rules: { ...cache!.rules },
     engine: { ...cache!.engine },
     restricted_users: [...cache!.restrictedUsers],
+    scored_words: getScoredWordsSync(),
+    scored_words_total: countScoredWordsSync(),
   }
 }
 

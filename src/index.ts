@@ -11,6 +11,7 @@ import { migrateFromJson } from './db/migrate'
 import { migrateAutopostsFromJson } from './db/migrateAutopostsFromJson'
 import { migrateAutopostsFromBotDb } from './db/migratePostsDb'
 import { migrateAntispamFromJson } from './db/migrateAntispamDb'
+import { seedAntispamScoredWordsIfEmpty } from './db/seedAntispamScoredWords'
 import {
   BOT_WEBHOOK_UPDATE_TYPES,
   setWebhookSubscription,
@@ -54,6 +55,7 @@ async function main(): Promise<void> {
   migrateAutopostsFromBotDb()
   migrateAutopostsFromJson()
   await migrateAntispamFromJson()
+  seedAntispamScoredWordsIfEmpty()
   const redisStatus = await initRedis()
   const bot = initializeBot()
   await channelRegistry.loadFromDisk()

@@ -1,6 +1,7 @@
 import { normalizeAndStemWords, normalizeObfuscation } from './normalize'
+import type { ScoredWordsByScore } from '../db/seedAntispamScoredWords'
+import { ANTISPAM_SCORE_TIERS } from '../db/seedAntispamScoredWords'
 import {
-  SPAM_WORDS_BY_SCORE,
   buildStopWordIndexes,
   checkSafePhraseReduction,
   checkStopWords,
@@ -21,6 +22,8 @@ export interface AntispamDetectConfig {
   /** Доп. стоп-слова из админки (глобальные + канала) с весом. */
   extraStopWordWeight: number
   extraStopWords: string[]
+  /** База слов с баллами из antispam.db. */
+  scoredWordsByScore: ScoredWordsByScore
 }
 
 export const DEFAULT_ANTISPAM_DETECT_CONFIG: AntispamDetectConfig = {
@@ -36,6 +39,7 @@ export const DEFAULT_ANTISPAM_DETECT_CONFIG: AntispamDetectConfig = {
   emojiSpam: true,
   extraStopWordWeight: 90,
   extraStopWords: [],
+  scoredWordsByScore: {},
 }
 
 export type AntispamDetectAction = 'leave' | 'delete' | 'delete_and_ban' | 'captcha'
@@ -63,23 +67,26 @@ function isPureEmoji(text: string, maxTextLength: number): boolean {
   return withoutEmoji.length <= maxTextLength && n >= 1
 }
 
-let baseStopIndex: StopWordIndex | null = null
-
-function getBaseStopIndex(): StopWordIndex {
-  if (!baseStopIndex) {
-    baseStopIndex = buildStopWordIndexes(SPAM_WORDS_BY_SCORE)
+function spamTiersFromConfig(scoredWordsByScore: ScoredWordsByScore): Record<number, string[]> {
+  const out: Record<number, string[]> = {}
+  for (const tier of ANTISPAM_SCORE_TIERS) {
+    if (tier === 0) {
+      continue
+    }
+    out[tier] = [...(scoredWordsByScore[tier] ?? [])]
   }
-  return baseStopIndex
+  return out
 }
 
-function buildRuntimeStopIndex(extraStopWords: string[], extraWeight: number): StopWordIndex {
+function buildRuntimeStopIndex(
+  scoredWordsByScore: ScoredWordsByScore,
+  extraStopWords: string[],
+  extraWeight: number,
+): StopWordIndex {
   const extraExact = new Map<string, number>()
   for (const raw of extraStopWords) {
     const w = raw.trim().toLowerCase()
-    if (!w) {
-      continue
-    }
-    if (w.includes(' ')) {
+    if (!w || w.includes(' ')) {
       continue
     }
     extraExact.set(w, extraWeight)
@@ -91,7 +98,7 @@ function buildRuntimeStopIndex(extraStopWords: string[], extraWeight: number): S
       partial.push([w, extraWeight])
     }
   }
-  const base = getBaseStopIndex()
+  const base = buildStopWordIndexes(spamTiersFromConfig(scoredWordsByScore))
   const exact = new Map<string, number>(base.exact)
   for (const [k, v] of extraExact) {
     exact.set(k, Math.max(exact.get(k) ?? 0, v))
@@ -131,7 +138,11 @@ export function detectSpam(text: string, config: AntispamDetectConfig): Antispam
     categories.add('link')
   }
 
-  const stopIndex = buildRuntimeStopIndex(config.extraStopWords, config.extraStopWordWeight)
+  const stopIndex = buildRuntimeStopIndex(
+    config.scoredWordsByScore,
+    config.extraStopWords,
+    config.extraStopWordWeight,
+  )
   const swScore = checkStopWords(tokens, stopIndex)
   if (swScore > 0) {
     spamScore += swScore
@@ -155,14 +166,14 @@ export function detectSpam(text: string, config: AntispamDetectConfig): Antispam
     }
   }
 
-  // Украинские маркеры в обфусцированном тексте
   const norm = normalizeObfuscation(original.toLowerCase())
   if (/\b(мені|допоможу|гривн|₴|виграй|заробляй)\b/u.test(norm)) {
     spamScore += 45
     categories.add('uk')
   }
 
-  const safeReduction = checkSafePhraseReduction(tokens)
+  const safePhrases = config.scoredWordsByScore[0] ?? []
+  const safeReduction = checkSafePhraseReduction(tokens, safePhrases)
   if (safeReduction > 0) {
     spamScore = Math.max(0, spamScore - safeReduction)
     categories.add('safe')
