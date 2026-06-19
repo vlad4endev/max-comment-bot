@@ -293,6 +293,7 @@ export async function handleTgComment(
       discussionChatId,
       postCommentCount: post.comment_count,
       threadRootMsgId,
+      commentsBookedBy: post.comments_booked_by ?? null,
     })
     if (!shouldSync) {
       logger.debug('[tgCommentSync] skipped by filter', {
@@ -319,6 +320,8 @@ export async function handleTgComment(
     )
 
     markCommentSynced(`max:${saved.comment_id}`)
+
+    postStore.tryClaimCommentsBooking(post.post_id, 'telegram')
 
     const newCount = postStore.incrementCommentCount(post.post_id)
     if (newCount !== null) {

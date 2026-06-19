@@ -213,6 +213,7 @@ async function handleTgComment(message, chain, bot, discussionChatId) {
             discussionChatId,
             postCommentCount: post.comment_count,
             threadRootMsgId,
+            commentsBookedBy: post.comments_booked_by ?? null,
         });
         if (!shouldSync) {
             logger_1.logger.debug('[tgCommentSync] skipped by filter', {
@@ -230,6 +231,7 @@ async function handleTgComment(message, chain, bot, discussionChatId) {
             text,
         }, tgCommentId);
         (0, commentSyncGuard_1.markCommentSynced)(`max:${saved.comment_id}`);
+        postStore_1.postStore.tryClaimCommentsBooking(post.post_id, 'telegram');
         const newCount = postStore_1.postStore.incrementCommentCount(post.post_id);
         if (newCount !== null) {
             const updatedPost = postStore_1.postStore.getPost(post.post_id);

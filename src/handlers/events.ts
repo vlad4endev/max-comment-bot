@@ -4,6 +4,7 @@ import type { Chat, Message, User } from '@maxhub/max-bot-api/types'
 
 import { config } from '../config'
 import { parseConfirmChannelLinkPayload } from '../utils/channelLinkCallback'
+import { MAX_BOOKED_IN_TG_CALLBACK } from '../utils/commentSyncFilter'
 import {
   fetchBotChatMember,
   fetchBotChatMemberWithRetry,
@@ -847,6 +848,10 @@ export function registerEventHandlers(bot: Bot): void {
         await ctx.answerOnCallback({})
       } catch (e: unknown) {
         logger.warn('message_callback: answerOnCallback failed', { userId, e })
+      }
+
+      if (rawPayload === MAX_BOOKED_IN_TG_CALLBACK) {
+        return
       }
 
       const confirmChannelId = parseConfirmChannelPayload(rawPayload)

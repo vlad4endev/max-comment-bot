@@ -13,11 +13,13 @@ import { commentStore } from './commentStore'
 import { findMappingByMaxMid } from './postCommentMappingStore'
 import { ensurePostThreadMapping } from './telegramDiscussionThreadResolver'
 import type { Post } from './postStore'
+import { postStore } from './postStore'
 import { resolveTelegramBotToken } from './resolveTelegramBotToken'
 import { isCommentSynced, markCommentSynced } from '../utils/commentSyncGuard'
 import {
   MAX_ANSWERED_IN_MAX_MARKER,
   MAX_REPLY_TG_PREFIX,
+  TG_BOOKED_IN_MAX_MARKER,
   formatMaxCommentForTelegram,
   isTelegramCommentMarkedAnsweredInMax,
 } from '../utils/commentSyncFilter'
@@ -310,6 +312,34 @@ async function trySendBookedMarkerReply(
   return data.ok === true
 }
 
+async function sendPostBookedInMaxMarker(target: ThreadTarget, post: Post): Promise<void> {
+  if (post.tg_booked_marker_msg_id) {
+    return
+  }
+  try {
+    const tgMsgId = await deliverTelegramThreadMessage(
+      target,
+      TG_BOOKED_IN_MAX_MARKER,
+      target.threadMsgId,
+      false,
+    )
+    if (tgMsgId != null) {
+      postStore.setTgBookedMarkerMsgId(post.post_id, tgMsgId)
+      logger.info('[telegramThreadReplySync] posted TG booked-in-MAX marker', {
+        postId: post.post_id,
+        tgMsgId,
+        threadChatId: target.threadChatId,
+      })
+    }
+  } catch (err: unknown) {
+    logger.warn('[telegramThreadReplySync] failed to post TG booked-in-MAX marker', {
+      postId: post.post_id,
+      threadChatId: target.threadChatId,
+      err,
+    })
+  }
+}
+
 /**
  * Помечает исходный комментарий в TG-треде как отвеченный в MAX.
  * @returns true если сообщение успешно помечено (edit или reaction)
@@ -421,6 +451,15 @@ export async function syncMaxCommentToTelegramThread(
   comment: Comment,
   post: Post,
 ): Promise<void> {
+  const freshPost = postStore.getPost(post.post_id) ?? post
+  if (freshPost.comments_booked_by === 'telegram') {
+    logger.debug('[telegramThreadReplySync] skip MAX→TG: post booked by Telegram', {
+      commentId: comment.comment_id,
+      postId: freshPost.post_id,
+    })
+    return
+  }
+
   const freshComment = commentStore.getComment(comment.comment_id) ?? comment
   if (freshComment.source === 'telegram' || freshComment.tg_comment_id) {
     return
@@ -460,6 +499,12 @@ export async function syncMaxCommentToTelegramThread(
     markCommentSynced(guardKey)
     commentStore.setTgCommentId(freshComment.comment_id, tgMsgId, body)
 
+    const claimed = postStore.tryClaimCommentsBooking(freshPost.post_id, 'max')
+    if (claimed) {
+      const postForMarker = postStore.getPost(freshPost.post_id) ?? freshPost
+      await sendPostBookedInMaxMarker(target, postForMarker)
+    }
+
     logger.info('[telegramThreadReplySync] delivered MAX comment to TG thread', {
       commentId: freshComment.comment_id,
       tgMsgId,
@@ -484,6 +529,15 @@ export async function syncAdminReplyToTelegramThread(
   comment: Comment,
   post: Post,
 ): Promise<void> {
+  const freshPost = postStore.getPost(post.post_id) ?? post
+  if (freshPost.comments_booked_by === 'telegram') {
+    logger.debug('[telegramThreadReplySync] skip admin MAX→TG: post booked by Telegram', {
+      commentId: comment.comment_id,
+      postId: freshPost.post_id,
+    })
+    return
+  }
+
   const freshComment = commentStore.getComment(comment.comment_id) ?? comment
   const maxReply = commentStore.latestMaxAdminReply(freshComment)
   if (!maxReply) {

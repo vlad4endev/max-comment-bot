@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.MAX_COMMENT_TG_PREFIX = exports.MAX_REPLY_TG_PREFIX = exports.MAX_ANSWERED_IN_TELEGRAM_LABEL = exports.LEGACY_ANSWERED_IN_MAX_MARKER = exports.MAX_ANSWERED_IN_MAX_MARKER = void 0;
+exports.MAX_COMMENT_TG_PREFIX = exports.MAX_REPLY_TG_PREFIX = exports.MAX_BOOKED_IN_TG_CALLBACK = exports.TG_BOOKED_IN_MAX_MARKER = exports.MAX_ANSWERED_IN_TELEGRAM_LABEL = exports.LEGACY_ANSWERED_IN_MAX_MARKER = exports.MAX_ANSWERED_IN_MAX_MARKER = void 0;
 exports.normalizeCommentSyncMatchMode = normalizeCommentSyncMatchMode;
 exports.normalizeCommentSyncKeywords = normalizeCommentSyncKeywords;
 exports.parseCommentSyncKeyword = parseCommentSyncKeyword;
@@ -12,6 +12,7 @@ exports.resolveDiscussionThreadRootMsgId = resolveDiscussionThreadRootMsgId;
 exports.resolveChannelMsgIdFromThreadRoot = resolveChannelMsgIdFromThreadRoot;
 exports.resolveTgCommentAuthor = resolveTgCommentAuthor;
 exports.isTelegramOriginComment = isTelegramOriginComment;
+exports.formatMaxBookedInTgButtonLabel = formatMaxBookedInTgButtonLabel;
 exports.isTelegramCommentMarkedAnsweredInMax = isTelegramCommentMarkedAnsweredInMax;
 exports.isMaxAdminReplyInTelegram = isMaxAdminReplyInTelegram;
 exports.isMaxCommentInTelegram = isMaxCommentInTelegram;
@@ -211,6 +212,14 @@ exports.MAX_ANSWERED_IN_MAX_MARKER = '🔒 Забронирован в MAX';
 exports.LEGACY_ANSWERED_IN_MAX_MARKER = '✅ Отвечено в MAX';
 /** Подпись в miniapp: на комментарий ответили в Telegram. */
 exports.MAX_ANSWERED_IN_TELEGRAM_LABEL = '✅ Отвечено в Telegram';
+/** Служебное сообщение в TG-треде: пост забронирован первым комментарием из MAX. */
+exports.TG_BOOKED_IN_MAX_MARKER = '🔒 Забронировано в МАКСе';
+/** MAX inline callback для неактивной кнопки «Забронировано в ТГ». */
+exports.MAX_BOOKED_IN_TG_CALLBACK = 'max:booked_tg';
+function formatMaxBookedInTgButtonLabel(commentCount) {
+    const n = Math.max(0, commentCount);
+    return `🔒 Забронировано в ТГ (${n})`;
+}
 function isTelegramCommentMarkedAnsweredInMax(text) {
     return (text.includes(exports.MAX_ANSWERED_IN_MAX_MARKER) ||
         text.includes(exports.LEGACY_ANSWERED_IN_MAX_MARKER));
@@ -238,11 +247,15 @@ function formatMaxCommentForTelegram(username, text) {
     return `${exports.MAX_COMMENT_TG_PREFIX} ${name}`;
 }
 async function shouldSyncTgCommentToMax(params) {
+    if (params.commentsBookedBy === 'max') {
+        return false;
+    }
     const text = (params.message.text || params.message.caption || '').trim();
     if (!text ||
         isMaxAdminReplyInTelegram(text) ||
         isMaxCommentInTelegram(text) ||
-        isTelegramCommentMarkedAnsweredInMax(text)) {
+        isTelegramCommentMarkedAnsweredInMax(text) ||
+        text.includes(exports.TG_BOOKED_IN_MAX_MARKER)) {
         return false;
     }
     const keywords = normalizeCommentSyncKeywords(params.chain.comment_sync_keywords);

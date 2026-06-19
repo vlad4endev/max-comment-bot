@@ -258,6 +258,17 @@ export const LEGACY_ANSWERED_IN_MAX_MARKER = '✅ Отвечено в MAX'
 /** Подпись в miniapp: на комментарий ответили в Telegram. */
 export const MAX_ANSWERED_IN_TELEGRAM_LABEL = '✅ Отвечено в Telegram'
 
+/** Служебное сообщение в TG-треде: пост забронирован первым комментарием из MAX. */
+export const TG_BOOKED_IN_MAX_MARKER = '🔒 Забронировано в МАКСе'
+
+/** MAX inline callback для неактивной кнопки «Забронировано в ТГ». */
+export const MAX_BOOKED_IN_TG_CALLBACK = 'max:booked_tg'
+
+export function formatMaxBookedInTgButtonLabel(commentCount: number): string {
+  const n = Math.max(0, commentCount)
+  return `🔒 Забронировано в ТГ (${n})`
+}
+
 export function isTelegramCommentMarkedAnsweredInMax(text: string): boolean {
   return (
     text.includes(MAX_ANSWERED_IN_MAX_MARKER) ||
@@ -302,13 +313,19 @@ export async function shouldSyncTgCommentToMax(params: {
   discussionChatId: number
   postCommentCount: number
   threadRootMsgId: number
+  commentsBookedBy?: 'telegram' | 'max' | null
 }): Promise<boolean> {
+  if (params.commentsBookedBy === 'max') {
+    return false
+  }
+
   const text = (params.message.text || params.message.caption || '').trim()
   if (
     !text ||
     isMaxAdminReplyInTelegram(text) ||
     isMaxCommentInTelegram(text) ||
-    isTelegramCommentMarkedAnsweredInMax(text)
+    isTelegramCommentMarkedAnsweredInMax(text) ||
+    text.includes(TG_BOOKED_IN_MAX_MARKER)
   ) {
     return false
   }

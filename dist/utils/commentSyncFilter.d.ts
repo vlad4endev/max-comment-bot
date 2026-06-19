@@ -32,6 +32,11 @@ export declare const MAX_ANSWERED_IN_MAX_MARKER = "\uD83D\uDD12 \u0417\u0430\u04
 export declare const LEGACY_ANSWERED_IN_MAX_MARKER = "\u2705 \u041E\u0442\u0432\u0435\u0447\u0435\u043D\u043E \u0432 MAX";
 /** Подпись в miniapp: на комментарий ответили в Telegram. */
 export declare const MAX_ANSWERED_IN_TELEGRAM_LABEL = "\u2705 \u041E\u0442\u0432\u0435\u0447\u0435\u043D\u043E \u0432 Telegram";
+/** Служебное сообщение в TG-треде: пост забронирован первым комментарием из MAX. */
+export declare const TG_BOOKED_IN_MAX_MARKER = "\uD83D\uDD12 \u0417\u0430\u0431\u0440\u043E\u043D\u0438\u0440\u043E\u0432\u0430\u043D\u043E \u0432 \u041C\u0410\u041A\u0421\u0435";
+/** MAX inline callback для неактивной кнопки «Забронировано в ТГ». */
+export declare const MAX_BOOKED_IN_TG_CALLBACK = "max:booked_tg";
+export declare function formatMaxBookedInTgButtonLabel(commentCount: number): string;
 export declare function isTelegramCommentMarkedAnsweredInMax(text: string): boolean;
 /** Префикс ответа админа из MAX в TG-треде (не синхронизировать обратно в miniapp). */
 export declare const MAX_REPLY_TG_PREFIX = "MAX \u043E\u0442\u0432\u0435\u0442:";
@@ -48,4 +53,5 @@ export declare function shouldSyncTgCommentToMax(params: {
     discussionChatId: number;
     postCommentCount: number;
     threadRootMsgId: number;
+    commentsBookedBy?: 'telegram' | 'max' | null;
 }): Promise<boolean>;

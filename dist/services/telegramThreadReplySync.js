@@ -16,6 +16,7 @@ const adminPanelState_1 = require("../api/adminPanelState");
 const commentStore_1 = require("./commentStore");
 const postCommentMappingStore_1 = require("./postCommentMappingStore");
 const telegramDiscussionThreadResolver_1 = require("./telegramDiscussionThreadResolver");
+const postStore_1 = require("./postStore");
 const resolveTelegramBotToken_1 = require("./resolveTelegramBotToken");
 const commentSyncGuard_1 = require("../utils/commentSyncGuard");
 const commentSyncFilter_1 = require("../utils/commentSyncFilter");
@@ -195,6 +196,29 @@ async function trySendBookedMarkerReply(token, chatId, replyToMessageId, message
     const data = await callTelegramBot(token, 'sendMessage', payload, { chatId, replyToMessageId, messageThreadId });
     return data.ok === true;
 }
+async function sendPostBookedInMaxMarker(target, post) {
+    if (post.tg_booked_marker_msg_id) {
+        return;
+    }
+    try {
+        const tgMsgId = await deliverTelegramThreadMessage(target, commentSyncFilter_1.TG_BOOKED_IN_MAX_MARKER, target.threadMsgId, false);
+        if (tgMsgId != null) {
+            postStore_1.postStore.setTgBookedMarkerMsgId(post.post_id, tgMsgId);
+            logger_1.logger.info('[telegramThreadReplySync] posted TG booked-in-MAX marker', {
+                postId: post.post_id,
+                tgMsgId,
+                threadChatId: target.threadChatId,
+            });
+        }
+    }
+    catch (err) {
+        logger_1.logger.warn('[telegramThreadReplySync] failed to post TG booked-in-MAX marker', {
+            postId: post.post_id,
+            threadChatId: target.threadChatId,
+            err,
+        });
+    }
+}
 /**
  * Помечает исходный комментарий в TG-треде как отвеченный в MAX.
  * @returns true если сообщение успешно помечено (edit или reaction)
@@ -284,6 +308,14 @@ async function markTelegramCommentAnsweredInMax(token, chatId, tgCommentId, comm
  * Отправляет пользовательский комментарий из MAX miniapp в TG-тред.
  */
 async function syncMaxCommentToTelegramThread(_bot, comment, post) {
+    const freshPost = postStore_1.postStore.getPost(post.post_id) ?? post;
+    if (freshPost.comments_booked_by === 'telegram') {
+        logger_1.logger.debug('[telegramThreadReplySync] skip MAX→TG: post booked by Telegram', {
+            commentId: comment.comment_id,
+            postId: freshPost.post_id,
+        });
+        return;
+    }
     const freshComment = commentStore_1.commentStore.getComment(comment.comment_id) ?? comment;
     if (freshComment.source === 'telegram' || freshComment.tg_comment_id) {
         return;
@@ -312,6 +344,11 @@ async function syncMaxCommentToTelegramThread(_bot, comment, post) {
         (0, commentSyncGuard_1.markCommentSynced)(`tg:${tgMsgId}`);
         (0, commentSyncGuard_1.markCommentSynced)(guardKey);
         commentStore_1.commentStore.setTgCommentId(freshComment.comment_id, tgMsgId, body);
+        const claimed = postStore_1.postStore.tryClaimCommentsBooking(freshPost.post_id, 'max');
+        if (claimed) {
+            const postForMarker = postStore_1.postStore.getPost(freshPost.post_id) ?? freshPost;
+            await sendPostBookedInMaxMarker(target, postForMarker);
+        }
         logger_1.logger.info('[telegramThreadReplySync] delivered MAX comment to TG thread', {
             commentId: freshComment.comment_id,
             tgMsgId,
@@ -332,6 +369,14 @@ async function syncMaxCommentToTelegramThread(_bot, comment, post) {
  * не привязан к TG (fallback). Для MAX→TG комментариев — только правка маркера.
  */
 async function syncAdminReplyToTelegramThread(_bot, comment, post) {
+    const freshPost = postStore_1.postStore.getPost(post.post_id) ?? post;
+    if (freshPost.comments_booked_by === 'telegram') {
+        logger_1.logger.debug('[telegramThreadReplySync] skip admin MAX→TG: post booked by Telegram', {
+            commentId: comment.comment_id,
+            postId: freshPost.post_id,
+        });
+        return;
+    }
     const freshComment = commentStore_1.commentStore.getComment(comment.comment_id) ?? comment;
     const maxReply = commentStore_1.commentStore.latestMaxAdminReply(freshComment);
     if (!maxReply) {

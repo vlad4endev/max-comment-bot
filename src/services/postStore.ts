@@ -15,8 +15,14 @@ import {
   compactUuidToStandard,
   encodeMessageMidForStartapp,
 } from '../utils/startappPayload'
+import {
+  MAX_BOOKED_IN_TG_CALLBACK,
+  formatMaxBookedInTgButtonLabel,
+} from '../utils/commentSyncFilter'
 import { logger } from '../utils/logger'
 import { apiCallWithRetry } from '../utils/maxApiRetry'
+
+export type CommentsBookedBy = 'telegram' | 'max'
 
 /**
  * Channel post tracked for Mini App comments (MAX message id is {@link Post.message_mid}).
@@ -45,6 +51,10 @@ export interface Post {
    * (attach failed). Poller and retry queue keep trying until cleared.
    */
   button_attach_pending?: boolean
+  /** Кросс-платформенная бронь поста: кто первым синхронизировал комментарий. */
+  comments_booked_by?: CommentsBookedBy
+  /** ID служебного сообщения «Забронировано в МАКСе» в TG-треде. */
+  tg_booked_marker_msg_id?: number
 }
 
 export class PostStore {
@@ -298,37 +308,66 @@ export class PostStore {
   }
 
   /**
+   * Атомарно (на уровне строки поста) выставляет бронь, если ещё не занята.
+   * @returns true если бронь успешно захвачена
+   */
+  tryClaimCommentsBooking(postId: string, by: CommentsBookedBy): boolean {
+    const post = this.getPost(postId)
+    if (!post || post.comments_booked_by) {
+      return false
+    }
+    this.savePost({ ...post, comments_booked_by: by })
+    logger.info('postStore: comments booking claimed', { postId, bookedBy: by })
+    return true
+  }
+
+  setTgBookedMarkerMsgId(postId: string, msgId: number): void {
+    const post = this.getPost(postId)
+    if (!post) {
+      return
+    }
+    this.savePost({ ...post, tg_booked_marker_msg_id: msgId })
+  }
+
+  /**
    * Updates the channel message inline keyboard to show the current comment count.
    */
   async updateButtonCaption(bot: Bot, post: Post): Promise<boolean> {
-    if (!isMiniAppOpenUrlConfigured()) {
+    const bookedByTelegram = post.comments_booked_by === 'telegram'
+    if (!bookedByTelegram && !isMiniAppOpenUrlConfigured()) {
       logger.warn('postStore.updateButtonCaption: BOT_NICKNAME / MINI_APP_URL not usable for links')
       return false
     }
-    const url = buildCommentMiniAppUrl(post.post_id, post.chat_id, post.message_mid)
-    const startParam = (() => {
-      try {
-        return new URL(url).searchParams.get('startapp')
-      } catch {
-        return null
-      }
-    })()
-    logger.info('commentButton: creating button', {
-      postId: post.post_id,
-      chatId: post.chat_id,
-      messageMid: post.message_mid,
-      buttonUrl: url,
-    })
-    logger.info('commentButton: button payload', {
-      buttonUrl: url,
-      startParam,
-      postId: post.post_id,
-      chatId: post.chat_id,
-      messageMid: post.message_mid,
-    })
-    const kb = Keyboard.inlineKeyboard([
-      [Keyboard.button.link(`💬 Комментарии (${post.comment_count})`, url)],
-    ])
+    if (!bookedByTelegram) {
+      const url = buildCommentMiniAppUrl(post.post_id, post.chat_id, post.message_mid)
+      const startParam = (() => {
+        try {
+          return new URL(url).searchParams.get('startapp')
+        } catch {
+          return null
+        }
+      })()
+      logger.info('commentButton: creating button', {
+        postId: post.post_id,
+        chatId: post.chat_id,
+        messageMid: post.message_mid,
+        buttonUrl: url,
+      })
+      logger.info('commentButton: button payload', {
+        buttonUrl: url,
+        startParam,
+        postId: post.post_id,
+        chatId: post.chat_id,
+        messageMid: post.message_mid,
+      })
+    } else {
+      logger.info('commentButton: booked-by-TG button', {
+        postId: post.post_id,
+        chatId: post.chat_id,
+        commentCount: post.comment_count,
+      })
+    }
+    const kb = buildPostCommentKeyboard(post)
     const targetMid = post.comments_ui_message_mid ?? post.message_mid
     const text =
       post.comments_ui_message_mid !== undefined
@@ -775,6 +814,24 @@ export function buildMiniAppUrl(
     buttonUrl = u.toString()
   }
   return buttonUrl
+}
+
+/** Inline-клавиатура под постом: обычная ссылка или неактивная «Забронировано в ТГ». */
+export function buildPostCommentKeyboard(post: Post): InlineKeyboardAttachmentRequest {
+  if (post.comments_booked_by === 'telegram') {
+    return Keyboard.inlineKeyboard([
+      [
+        Keyboard.button.callback(
+          formatMaxBookedInTgButtonLabel(post.comment_count),
+          MAX_BOOKED_IN_TG_CALLBACK,
+        ),
+      ],
+    ])
+  }
+  const url = buildCommentMiniAppUrl(post.post_id, post.chat_id, post.message_mid)
+  return Keyboard.inlineKeyboard([
+    [Keyboard.button.link(`💬 Комментарии (${post.comment_count})`, url)],
+  ])
 }
 
 export const postStore = new PostStore()

@@ -9,11 +9,13 @@ exports.resolveChannelPostUrl = resolveChannelPostUrl;
 exports.buildCommentMiniAppUrl = buildCommentMiniAppUrl;
 exports.commentButtonStartappHasMid = commentButtonStartappHasMid;
 exports.buildMiniAppUrl = buildMiniAppUrl;
+exports.buildPostCommentKeyboard = buildPostCommentKeyboard;
 const max_bot_api_1 = require("@maxhub/max-bot-api");
 const config_1 = require("../config");
 const database_1 = require("../db/database");
 const resolveChannelChatId_1 = require("./resolveChannelChatId");
 const startappPayload_1 = require("../utils/startappPayload");
+const commentSyncFilter_1 = require("../utils/commentSyncFilter");
 const logger_1 = require("../utils/logger");
 const maxApiRetry_1 = require("../utils/maxApiRetry");
 class PostStore {
@@ -209,38 +211,66 @@ class PostStore {
         return Number(row.n) || 0;
     }
     /**
+     * Атомарно (на уровне строки поста) выставляет бронь, если ещё не занята.
+     * @returns true если бронь успешно захвачена
+     */
+    tryClaimCommentsBooking(postId, by) {
+        const post = this.getPost(postId);
+        if (!post || post.comments_booked_by) {
+            return false;
+        }
+        this.savePost({ ...post, comments_booked_by: by });
+        logger_1.logger.info('postStore: comments booking claimed', { postId, bookedBy: by });
+        return true;
+    }
+    setTgBookedMarkerMsgId(postId, msgId) {
+        const post = this.getPost(postId);
+        if (!post) {
+            return;
+        }
+        this.savePost({ ...post, tg_booked_marker_msg_id: msgId });
+    }
+    /**
      * Updates the channel message inline keyboard to show the current comment count.
      */
     async updateButtonCaption(bot, post) {
-        if (!isMiniAppOpenUrlConfigured()) {
+        const bookedByTelegram = post.comments_booked_by === 'telegram';
+        if (!bookedByTelegram && !isMiniAppOpenUrlConfigured()) {
             logger_1.logger.warn('postStore.updateButtonCaption: BOT_NICKNAME / MINI_APP_URL not usable for links');
             return false;
         }
-        const url = buildCommentMiniAppUrl(post.post_id, post.chat_id, post.message_mid);
-        const startParam = (() => {
-            try {
-                return new URL(url).searchParams.get('startapp');
-            }
-            catch {
-                return null;
-            }
-        })();
-        logger_1.logger.info('commentButton: creating button', {
-            postId: post.post_id,
-            chatId: post.chat_id,
-            messageMid: post.message_mid,
-            buttonUrl: url,
-        });
-        logger_1.logger.info('commentButton: button payload', {
-            buttonUrl: url,
-            startParam,
-            postId: post.post_id,
-            chatId: post.chat_id,
-            messageMid: post.message_mid,
-        });
-        const kb = max_bot_api_1.Keyboard.inlineKeyboard([
-            [max_bot_api_1.Keyboard.button.link(`💬 Комментарии (${post.comment_count})`, url)],
-        ]);
+        if (!bookedByTelegram) {
+            const url = buildCommentMiniAppUrl(post.post_id, post.chat_id, post.message_mid);
+            const startParam = (() => {
+                try {
+                    return new URL(url).searchParams.get('startapp');
+                }
+                catch {
+                    return null;
+                }
+            })();
+            logger_1.logger.info('commentButton: creating button', {
+                postId: post.post_id,
+                chatId: post.chat_id,
+                messageMid: post.message_mid,
+                buttonUrl: url,
+            });
+            logger_1.logger.info('commentButton: button payload', {
+                buttonUrl: url,
+                startParam,
+                postId: post.post_id,
+                chatId: post.chat_id,
+                messageMid: post.message_mid,
+            });
+        }
+        else {
+            logger_1.logger.info('commentButton: booked-by-TG button', {
+                postId: post.post_id,
+                chatId: post.chat_id,
+                commentCount: post.comment_count,
+            });
+        }
+        const kb = buildPostCommentKeyboard(post);
         const targetMid = post.comments_ui_message_mid ?? post.message_mid;
         const text = post.comments_ui_message_mid !== undefined
             ? '\u00a0'
@@ -632,6 +662,20 @@ function buildMiniAppUrl(postId, chatId, extra, messageMid) {
         buttonUrl = u.toString();
     }
     return buttonUrl;
+}
+/** Inline-клавиатура под постом: обычная ссылка или неактивная «Забронировано в ТГ». */
+function buildPostCommentKeyboard(post) {
+    if (post.comments_booked_by === 'telegram') {
+        return max_bot_api_1.Keyboard.inlineKeyboard([
+            [
+                max_bot_api_1.Keyboard.button.callback((0, commentSyncFilter_1.formatMaxBookedInTgButtonLabel)(post.comment_count), commentSyncFilter_1.MAX_BOOKED_IN_TG_CALLBACK),
+            ],
+        ]);
+    }
+    const url = buildCommentMiniAppUrl(post.post_id, post.chat_id, post.message_mid);
+    return max_bot_api_1.Keyboard.inlineKeyboard([
+        [max_bot_api_1.Keyboard.button.link(`💬 Комментарии (${post.comment_count})`, url)],
+    ]);
 }
 exports.postStore = new PostStore();
 //# sourceMappingURL=postStore.js.map

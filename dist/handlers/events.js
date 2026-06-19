@@ -5,6 +5,7 @@ exports.registerEventHandlers = registerEventHandlers;
 const max_bot_api_1 = require("@maxhub/max-bot-api");
 const config_1 = require("../config");
 const channelLinkCallback_1 = require("../utils/channelLinkCallback");
+const commentSyncFilter_1 = require("../utils/commentSyncFilter");
 const botChannelMembership_1 = require("../services/botChannelMembership");
 const channelAdminJoinNotified_1 = require("../services/channelAdminJoinNotified");
 const commentButtonRetryQueue_1 = require("../services/commentButtonRetryQueue");
@@ -700,6 +701,9 @@ function registerEventHandlers(bot) {
             }
             catch (e) {
                 logger_1.logger.warn('message_callback: answerOnCallback failed', { userId, e });
+            }
+            if (rawPayload === commentSyncFilter_1.MAX_BOOKED_IN_TG_CALLBACK) {
+                return;
             }
             const confirmChannelId = parseConfirmChannelPayload(rawPayload);
             if (confirmChannelId !== null) {

@@ -1,5 +1,6 @@
 import type { Bot } from '@maxhub/max-bot-api';
 import type { Attachment, AttachmentRequest, InlineKeyboardAttachmentRequest } from '@maxhub/max-bot-api/types';
+export type CommentsBookedBy = 'telegram' | 'max';
 /**
  * Channel post tracked for Mini App comments (MAX message id is {@link Post.message_mid}).
  */
@@ -27,6 +28,10 @@ export interface Post {
      * (attach failed). Poller and retry queue keep trying until cleared.
      */
     button_attach_pending?: boolean;
+    /** Кросс-платформенная бронь поста: кто первым синхронизировал комментарий. */
+    comments_booked_by?: CommentsBookedBy;
+    /** ID служебного сообщения «Забронировано в МАКСе» в TG-треде. */
+    tg_booked_marker_msg_id?: number;
 }
 export declare class PostStore {
     private statements;
@@ -58,6 +63,12 @@ export declare class PostStore {
     deletePostById(postId: string): void;
     getTotalPostCount(): number;
     countPostsByChatId(chatId: number): number;
+    /**
+     * Атомарно (на уровне строки поста) выставляет бронь, если ещё не занята.
+     * @returns true если бронь успешно захвачена
+     */
+    tryClaimCommentsBooking(postId: string, by: CommentsBookedBy): boolean;
+    setTgBookedMarkerMsgId(postId: string, msgId: number): void;
     /**
      * Updates the channel message inline keyboard to show the current comment count.
      */
@@ -95,4 +106,6 @@ export declare function resolveChannelPostUrl(bot: Bot, post: Post): Promise<str
 export declare function buildCommentMiniAppUrl(postId: string, chatId: number, messageMid: string): string;
 export declare function commentButtonStartappHasMid(postId: string, chatId: number, messageMid: string): boolean;
 export declare function buildMiniAppUrl(postId: string, chatId: number, extra?: Record<string, string>, messageMid?: string): string;
+/** Inline-клавиатура под постом: обычная ссылка или неактивная «Забронировано в ТГ». */
+export declare function buildPostCommentKeyboard(post: Post): InlineKeyboardAttachmentRequest;
 export declare const postStore: PostStore;
