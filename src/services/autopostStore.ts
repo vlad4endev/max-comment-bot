@@ -12,6 +12,23 @@ export interface AutopostMediaItem {
   path: string
 }
 
+/** Палитра цветов для тегов автопостов. */
+export const AUTOPOST_TAG_COLORS = [
+  '#7F77DD',
+  '#1D9E75',
+  '#BA7517',
+  '#3B82F6',
+  '#EC4899',
+  '#EF4444',
+  '#6B7280',
+  '#EAB308',
+] as const
+
+export interface AutopostTag {
+  name: string
+  color: string
+}
+
 export interface AutopostInlineButton {
   text: string
   url: string
@@ -34,6 +51,7 @@ export interface AutopostRecord {
   media: AutopostMediaItem[]
   inline_button: AutopostInlineButton | null
   inline_buttons: AutopostInlineKeyboard | null
+  tags: AutopostTag[]
   target_channel_id: string
   channel_title: string | null
   series_id: string | null
@@ -63,6 +81,7 @@ export interface CreateAutopostInput {
   media?: AutopostMediaItem[]
   inline_button?: AutopostInlineButton | null
   inline_buttons?: AutopostInlineKeyboard | null
+  tags?: AutopostTag[]
   target_channel_id: string
   channel_title?: string | null
   series_id?: string | null
@@ -86,6 +105,7 @@ export interface UpdateAutopostInput {
   media?: AutopostMediaItem[]
   inline_button?: AutopostInlineButton | null
   inline_buttons?: AutopostInlineKeyboard | null
+  tags?: AutopostTag[]
   target_channel_id?: string
   channel_title?: string | null
   series_id?: string | null
@@ -136,6 +156,7 @@ interface AutopostDbRow {
   repeat_limit: number | null
   on_failure: string
   conditions_json: string
+  tags_json: string
   last_sent_at: string | null
   last_error: string | null
   sent_count: number
@@ -236,6 +257,42 @@ export function resolveInlineKeyboard(
   return null
 }
 
+function isAllowedTagColor(color: string): boolean {
+  const normalized = color.trim().toUpperCase()
+  return AUTOPOST_TAG_COLORS.some((c) => c.toUpperCase() === normalized)
+}
+
+export function normalizeAutopostTags(input: unknown): AutopostTag[] {
+  if (!Array.isArray(input)) return []
+  const out: AutopostTag[] = []
+  const seen = new Set<string>()
+  for (const raw of input.slice(0, 10)) {
+    if (typeof raw !== 'object' || raw === null) continue
+    const row = raw as { name?: unknown; color?: unknown }
+    const name =
+      typeof row.name === 'string' ? row.name.trim().replace(/\s+/g, ' ').slice(0, 32) : ''
+    if (!name) continue
+    const key = name.toLowerCase()
+    if (seen.has(key)) continue
+    let color = typeof row.color === 'string' ? row.color.trim() : ''
+    if (!isAllowedTagColor(color)) {
+      color = AUTOPOST_TAG_COLORS[out.length % AUTOPOST_TAG_COLORS.length]
+    }
+    seen.add(key)
+    out.push({ name, color })
+  }
+  return out
+}
+
+function parseTagsJson(raw: string | null | undefined): AutopostTag[] {
+  if (!raw) return []
+  try {
+    return normalizeAutopostTags(JSON.parse(raw))
+  } catch {
+    return []
+  }
+}
+
 function parseWeekdays(raw: string | null): number[] | null {
   if (!raw) return null
   try {
@@ -294,6 +351,7 @@ function rowToRecord(row: AutopostDbRow): AutopostRecord {
     media: parseMediaJson(row.media_json),
     inline_buttons,
     inline_button: primaryInlineButton(inline_buttons),
+    tags: parseTagsJson(row.tags_json),
     target_channel_id: row.target_channel_id,
     channel_title: row.channel_title,
     series_id: row.series_id,
@@ -423,6 +481,7 @@ export interface AutopostListFilters {
   platform?: PostPlatform
   scheduleType?: AutopostScheduleType
   search?: string
+  tag?: string
   from?: string
   to?: string
 }
@@ -441,7 +500,15 @@ export function listAutopostsFiltered(filters: AutopostListFilters = {}): Autopo
   if (filters.scheduleType) posts = posts.filter((p) => p.schedule_type === filters.scheduleType)
   if (filters.search) {
     const q = filters.search.toLowerCase()
-    posts = posts.filter((p) => p.text.toLowerCase().includes(q))
+    posts = posts.filter(
+      (p) =>
+        p.text.toLowerCase().includes(q) ||
+        p.tags.some((t) => t.name.toLowerCase().includes(q)),
+    )
+  }
+  if (filters.tag) {
+    const tagQ = filters.tag.toLowerCase()
+    posts = posts.filter((p) => p.tags.some((t) => t.name.toLowerCase() === tagQ))
   }
   if (filters.from) {
     const fromMs = Date.parse(filters.from)
@@ -552,6 +619,7 @@ export function createAutopost(input: CreateAutopostInput): AutopostRecord {
   const status = input.status ?? 'active'
   const inline_buttons = resolveInlineKeyboard(input.inline_buttons, input.inline_button ?? null)
   const inline_button = primaryInlineButton(inline_buttons)
+  const tags = normalizeAutopostTags(input.tags ?? [])
 
   upsertPostChannel({
     id: input.target_channel_id,
@@ -563,12 +631,12 @@ export function createAutopost(input: CreateAutopostInput): AutopostRecord {
     .prepare(
       `INSERT INTO autoposts (
         id, platform, target_channel_id, channel_title, series_id, text, media_json,
-        inline_button_json, inline_buttons_json, status, schedule_type, scheduled_at, recurring_time,
+        inline_button_json, inline_buttons_json, tags_json, status, schedule_type, scheduled_at, recurring_time,
         weekdays_json, daily_times_json, timezone, start_date, end_date, repeat_limit,
         on_failure, conditions_json, last_sent_at, last_error, sent_count, created_at, updated_at
       ) VALUES (
         ?, ?, ?, ?, ?, ?, ?,
-        ?, ?, ?, ?, ?, ?,
+        ?, ?, ?, ?, ?, ?, ?,
         ?, ?, ?, ?, ?, ?,
         ?, ?, NULL, NULL, 0, ?, ?
       )`,
@@ -583,6 +651,7 @@ export function createAutopost(input: CreateAutopostInput): AutopostRecord {
       JSON.stringify(media),
       inline_button ? JSON.stringify(inline_button) : null,
       inline_buttons ? JSON.stringify(inline_buttons) : null,
+      JSON.stringify(tags),
       status,
       input.schedule_type,
       input.scheduled_at,
@@ -620,6 +689,7 @@ export function updateAutopost(id: string, patch: UpdateAutopostInput): Autopost
     media: patch.media ?? current.media,
     inline_buttons: resolvedKeyboard,
     inline_button: primaryInlineButton(resolvedKeyboard),
+    tags: patch.tags !== undefined ? normalizeAutopostTags(patch.tags) : current.tags,
     target_channel_id: patch.target_channel_id ?? current.target_channel_id,
     channel_title: patch.channel_title !== undefined ? patch.channel_title : current.channel_title,
     series_id: patch.series_id !== undefined ? patch.series_id : current.series_id,
@@ -651,7 +721,7 @@ export function updateAutopost(id: string, patch: UpdateAutopostInput): Autopost
   getPostsDb()
     .prepare(
       `UPDATE autoposts SET
-        platform = ?, text = ?, media_json = ?, inline_button_json = ?, inline_buttons_json = ?,
+        platform = ?, text = ?, media_json = ?, inline_button_json = ?, inline_buttons_json = ?, tags_json = ?,
         target_channel_id = ?, channel_title = ?, series_id = ?,
         status = ?, schedule_type = ?, scheduled_at = ?,
         recurring_time = ?, weekdays_json = ?, daily_times_json = ?, timezone = ?,
@@ -666,6 +736,7 @@ export function updateAutopost(id: string, patch: UpdateAutopostInput): Autopost
       JSON.stringify(next.media),
       next.inline_button ? JSON.stringify(next.inline_button) : null,
       next.inline_buttons ? JSON.stringify(next.inline_buttons) : null,
+      JSON.stringify(next.tags),
       next.target_channel_id,
       next.channel_title,
       next.series_id,

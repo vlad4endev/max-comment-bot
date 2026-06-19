@@ -29,6 +29,8 @@ import {
   type AutopostMediaItem,
   type AutopostScheduleType,
   normalizeInlineKeyboard,
+  normalizeAutopostTags,
+  type AutopostTag,
 } from '../services/autopostStore'
 import { channelRegistry } from '../services/channelRegistry'
 import {
@@ -164,6 +166,25 @@ function resolveAutopostMediaFile(fileId: string): string | null {
     return null
   }
   return resolved
+}
+
+function parseTagsFromBody(body: Record<string, unknown>): AutopostTag[] {
+  const raw = body.tags
+  if (typeof raw === 'string') {
+    const trimmed = raw.trim()
+    if (!trimmed || trimmed === '[]') {
+      return []
+    }
+    try {
+      return normalizeAutopostTags(JSON.parse(trimmed))
+    } catch {
+      throw new Error('tags must be valid JSON')
+    }
+  }
+  if (Array.isArray(raw)) {
+    return normalizeAutopostTags(raw)
+  }
+  return []
 }
 
 function parseInlineButton(body: Record<string, unknown>): AutopostInlineButton | null {
@@ -391,7 +412,8 @@ export function createAutopostRouter(): express.Router {
     const search = parseNonEmptyString(req.query.search) ?? undefined
     const from = parseNonEmptyString(req.query.from) ?? undefined
     const to = parseNonEmptyString(req.query.to) ?? undefined
-    const posts = listAutopostsFiltered({ status, channelId, scheduleType, search, from, to })
+    const tag = parseNonEmptyString(req.query.tag) ?? undefined
+    const posts = listAutopostsFiltered({ status, channelId, scheduleType, search, tag, from, to })
     res.json({ posts })
   })
 
@@ -438,6 +460,7 @@ export function createAutopostRouter(): express.Router {
       }
       const schedule = validateScheduleInput(body)
       const inline_buttons = parseInlineButtonsFromBody(body)
+      const tags = parseTagsFromBody(body)
       const media = mergeAutopostMedia(body, (req.files as Express.Multer.File[]) ?? [])
       const platformRaw = parseNonEmptyString(body.platform)
       const platform = platformRaw === 'max' ? 'max' : 'telegram'
@@ -454,6 +477,7 @@ export function createAutopostRouter(): express.Router {
         text,
         media,
         inline_buttons,
+        tags,
         target_channel_id,
         channel_title: parseNonEmptyString(body.channel_title),
         ...schedule,
@@ -496,6 +520,9 @@ export function createAutopostRouter(): express.Router {
         patch.inline_buttons = parseInlineButtonsFromBody(body)
       } else if (body.inline_button_text !== undefined || body.inline_button_url !== undefined) {
         patch.inline_buttons = parseInlineButtonsFromBody(body)
+      }
+      if (body.tags !== undefined) {
+        patch.tags = parseTagsFromBody(body)
       }
       if (
         body.existing_media !== undefined ||

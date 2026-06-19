@@ -5,7 +5,8 @@
 (function () {
   'use strict';
 
-  var AP_UI_BUILD = '20260619-inline-rows-v8';
+  var AP_UI_BUILD = '20260619-tags-v9';
+  var AP_TAG_COLORS = ['#7F77DD', '#1D9E75', '#BA7517', '#3B82F6', '#EC4899', '#EF4444', '#6B7280', '#EAB308'];
   var API_BASE = '/api/admin';
   var CHANNEL_COLORS = ['#534AB7', '#1D9E75', '#BA7517', '#7F77DD', '#3B82F6', '#EC4899'];
   var WEEKDAY_LABELS = ['Вс', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб'];
@@ -18,7 +19,7 @@
     templates: [],
     channelsHint: null,
     stats: null,
-    filters: { search: '', channelId: '', status: '', scheduleType: '', from: '', to: '' },
+    filters: { search: '', channelId: '', status: '', scheduleType: '', tag: '', from: '', to: '' },
     postsPage: 1,
     postsPerPage: 15,
     editingId: null,
@@ -87,6 +88,77 @@
 
   function hasInlineKeyboard(rows) {
     return !!serializeInlineKeyboard(rows);
+  }
+
+  function hexToRgb(hex) {
+    var h = String(hex || '').replace('#', '');
+    if (h.length === 3) h = h.charAt(0) + h.charAt(0) + h.charAt(1) + h.charAt(1) + h.charAt(2) + h.charAt(2);
+    var n = parseInt(h, 16);
+    if (!Number.isFinite(n)) return { r: 127, g: 119, b: 221 };
+    return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 };
+  }
+
+  function tagInlineStyle(color) {
+    var rgb = hexToRgb(color || AP_TAG_COLORS[0]);
+    var c = color || AP_TAG_COLORS[0];
+    return 'background:rgba(' + rgb.r + ',' + rgb.g + ',' + rgb.b + ',0.18);border:1px solid rgba(' +
+      rgb.r + ',' + rgb.g + ',' + rgb.b + ',0.42);color:' + c;
+  }
+
+  function normalizeTagList(tags) {
+    if (!Array.isArray(tags)) return [];
+    var out = [];
+    var seen = {};
+    tags.forEach(function (t) {
+      if (!t || typeof t.name !== 'string') return;
+      var name = t.name.trim().replace(/\s+/g, ' ').slice(0, 32);
+      if (!name) return;
+      var key = name.toLowerCase();
+      if (seen[key]) return;
+      seen[key] = true;
+      var color = AP_TAG_COLORS.indexOf(t.color) >= 0 ? t.color : AP_TAG_COLORS[out.length % AP_TAG_COLORS.length];
+      out.push({ name: name, color: color });
+    });
+    return out.slice(0, 10);
+  }
+
+  function renderPostTagsHtml(tags, emptyFallback) {
+    var list = normalizeTagList(tags || []);
+    if (!list.length) return emptyFallback ? '<span class="muted text-sm">—</span>' : '';
+    return '<div class="ap-tags">' + list.map(function (t) {
+      return '<span class="ap-tag" style="' + tagInlineStyle(t.color) + '">' + esc(t.name) + '</span>';
+    }).join('') + '</div>';
+  }
+
+  function collectAllTagsFromPosts(posts) {
+    var map = {};
+    (posts || []).forEach(function (p) {
+      normalizeTagList(p.tags).forEach(function (t) {
+        map[t.name.toLowerCase()] = t;
+      });
+    });
+    return Object.keys(map).sort().map(function (k) { return map[k]; });
+  }
+
+  function buildTagColorsHtml(activeColor) {
+    return AP_TAG_COLORS.map(function (c) {
+      return '<button type="button" class="ap-tag-color' + (c === activeColor ? ' active' : '') +
+        '" data-tag-color="' + c + '" style="background:' + c + '" title="Цвет тега"></button>';
+    }).join('');
+  }
+
+  function buildTagEditorHtml(tags, draftColor) {
+    var list = normalizeTagList(tags);
+    var chips = list.map(function (t, i) {
+      return '<span class="ap-tag ap-tag--editable" style="' + tagInlineStyle(t.color) + '">' + esc(t.name) +
+        '<button type="button" data-rm-tag="' + i + '" title="Удалить">✕</button></span>';
+    }).join('');
+    return '<div class="ap-tags ap-tags--editor" id="apTagList">' + (chips || '<span class="text-sm muted">Теги не добавлены</span>') + '</div>' +
+      '<div class="ap-tag-add">' +
+      '<input class="input" id="apTagInput" placeholder="Название тега" maxlength="32"/>' +
+      '<div class="ap-tag-colors" id="apTagColors">' + buildTagColorsHtml(draftColor || AP_TAG_COLORS[0]) + '</div>' +
+      '<button type="button" class="btn btn-ghost btn-sm" id="apTagAdd">Добавить</button>' +
+      '</div>';
   }
 
   function buildInlineRowsEditorHtml(rows) {
@@ -391,6 +463,7 @@
       html += '<span class="ap-upcoming-time">' + esc(fmtTime(p.scheduled_at)) + '</span>';
       html += '<span class="ap-upcoming-stripe" style="background:' + color + '"></span>';
       html += '<span class="ap-upcoming-text" title="' + esc(p.text) + '">' + esc(truncate(p.text || '—', 60)) + '</span>';
+      html += renderPostTagsHtml(p.tags, false);
       html += '<span class="ap-upcoming-channel">' + esc(postChannelName(p)) + '</span>';
       html += '<button type="button" class="ap-menu-btn" data-ap-menu="' + esc(p.id) + '" title="Действия"><i data-lucide="more-vertical"></i></button>';
       html += '</div>';
@@ -474,8 +547,11 @@
     var chOpts = '<option value="">Все каналы</option>' + state.channels.map(function (c) {
       return '<option value="' + esc(String(c.id)) + '"' + (state.filters.channelId === String(c.id) ? ' selected' : '') + '>' + esc(channelLabel(c)) + '</option>';
     }).join('');
+    var tagOpts = collectAllTagsFromPosts(state.posts).map(function (t) {
+      return '<option value="' + esc(t.name) + '"' + (state.filters.tag === t.name ? ' selected' : '') + '>' + esc(t.name) + '</option>';
+    }).join('');
     return '<div class="ap-filters">' +
-      '<input type="search" class="input search" id="apFilterSearch" placeholder="Поиск по тексту…" value="' + esc(state.filters.search) + '"/>' +
+      '<input type="search" class="input search" id="apFilterSearch" placeholder="Поиск по тексту или тегу…" value="' + esc(state.filters.search) + '"/>' +
       '<select class="select" id="apFilterChannel">' + chOpts + '</select>' +
       '<select class="select" id="apFilterStatus">' +
       '<option value="">Все статусы</option>' +
@@ -489,6 +565,7 @@
       '<option value="once"' + (state.filters.scheduleType === 'once' ? ' selected' : '') + '>Разово</option>' +
       '<option value="recurring"' + (state.filters.scheduleType === 'recurring' ? ' selected' : '') + '>Серия</option>' +
       '</select>' +
+      '<select class="select" id="apFilterTag"><option value="">Все теги</option>' + tagOpts + '</select>' +
       '<input type="date" class="input" id="apFilterFrom" value="' + esc(state.filters.from) + '" title="С даты"/>' +
       '<input type="date" class="input" id="apFilterTo" value="' + esc(state.filters.to) + '" title="По дату"/>' +
       '</div>';
@@ -499,7 +576,17 @@
     var f = state.filters;
     if (f.search) {
       var q = f.search.toLowerCase();
-      list = list.filter(function (p) { return (p.text || '').toLowerCase().includes(q); });
+      list = list.filter(function (p) {
+        var inText = (p.text || '').toLowerCase().includes(q);
+        var inTags = normalizeTagList(p.tags).some(function (t) { return t.name.toLowerCase().includes(q); });
+        return inText || inTags;
+      });
+    }
+    if (f.tag) {
+      var tagQ = f.tag.toLowerCase();
+      list = list.filter(function (p) {
+        return normalizeTagList(p.tags).some(function (t) { return t.name.toLowerCase() === tagQ; });
+      });
     }
     if (f.channelId) {
       list = list.filter(function (p) { return String(p.target_channel_id) === f.channelId; });
@@ -532,7 +619,7 @@
       return html;
     }
     html += '<div class="ap-table-wrap"><table class="ap-table"><thead><tr>' +
-      '<th>Платформа</th><th>Текст</th><th>Канал</th><th>Дата и время</th><th>Тип</th><th>Статус</th><th>Действия</th></tr></thead><tbody>';
+      '<th>Платформа</th><th>Текст</th><th>Теги</th><th>Канал</th><th>Дата и время</th><th>Тип</th><th>Статус</th><th>Действия</th></tr></thead><tbody>';
     page.forEach(function (p) {
       var ci = state.channels.findIndex(function (c) { return String(c.id) === String(p.target_channel_id); });
       var color = channelColor(p.target_channel_id, ci);
@@ -541,6 +628,7 @@
       html += '<tr>';
       html += '<td><span class="ap-platform-tag ap-platform-' + esc(p.platform || 'telegram') + '">' + esc(platformLabel(p.platform || 'telegram')) + '</span></td>';
       html += '<td style="max-width:220px" title="' + esc(p.text) + '">' + esc(truncate(p.text || '—', 50)) + '</td>';
+      html += '<td style="min-width:120px">' + renderPostTagsHtml(p.tags, true) + '</td>';
       html += '<td><span class="ap-channel-dot" style="background:' + color + ';display:inline-block;vertical-align:middle"></span> ' + esc(postChannelName(p)) + '</td>';
       html += '<td class="mono text-sm">' + esc(fmtDateTime(p.scheduled_at)) + '</td>';
       html += '<td><span class="ap-badge ' + typeBadge + '">' + typeLabel + '</span></td>';
@@ -770,6 +858,8 @@
       conditions: [],
       mediaFiles: buildMediaFilesFromPost(p),
       inlineRows: inlineRowsFromPost(p),
+      tags: normalizeTagList(p.tags || []),
+      tagDraftColor: AP_TAG_COLORS[0],
       onFailure: 'skip',
     };
 
@@ -890,6 +980,71 @@
       var wrap = qs('#apInlineRows', body);
       if (!wrap) return;
       wrap.innerHTML = buildInlineRowsEditorHtml(modalState.inlineRows);
+    }
+
+    function renderTagEditor(body) {
+      var wrap = qs('#apTagEditor', body);
+      if (!wrap) return;
+      wrap.innerHTML = buildTagEditorHtml(modalState.tags, modalState.tagDraftColor);
+    }
+
+    function addTagFromDraft(body) {
+      var inp = qs('#apTagInput', body);
+      var name = inp ? inp.value.trim().replace(/\s+/g, ' ') : '';
+      if (!name) {
+        showModalStatus('Введите название тега', 'error');
+        return;
+      }
+      if (modalState.tags.length >= 10) {
+        showModalStatus('Не более 10 тегов на пост', 'error');
+        return;
+      }
+      var exists = modalState.tags.some(function (t) { return t.name.toLowerCase() === name.toLowerCase(); });
+      if (exists) {
+        showModalStatus('Такой тег уже добавлен', 'error');
+        return;
+      }
+      modalState.tags = normalizeTagList(modalState.tags.concat([{
+        name: name.slice(0, 32),
+        color: modalState.tagDraftColor || AP_TAG_COLORS[0],
+      }]));
+      if (inp) inp.value = '';
+      hideModalStatus();
+      renderTagEditor(body);
+      wireTagEditor(body);
+    }
+
+    function wireTagEditor(body) {
+      var addBtn = qs('#apTagAdd', body);
+      if (addBtn) {
+        addBtn.addEventListener('click', function () { addTagFromDraft(body); });
+      }
+      var inp = qs('#apTagInput', body);
+      if (inp) {
+        inp.addEventListener('keydown', function (e) {
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            addTagFromDraft(body);
+          }
+        });
+      }
+      qsa('[data-rm-tag]', body).forEach(function (btn) {
+        btn.addEventListener('click', function () {
+          var idx = Number(btn.getAttribute('data-rm-tag'));
+          modalState.tags.splice(idx, 1);
+          modalState.tags = normalizeTagList(modalState.tags);
+          renderTagEditor(body);
+          wireTagEditor(body);
+        });
+      });
+      qsa('[data-tag-color]', body).forEach(function (btn) {
+        btn.addEventListener('click', function () {
+          modalState.tagDraftColor = btn.getAttribute('data-tag-color') || AP_TAG_COLORS[0];
+          qsa('[data-tag-color]', body).forEach(function (b) {
+            b.classList.toggle('active', b === btn);
+          });
+        });
+      });
     }
 
     function wireInlineRowsEditor(body) {
@@ -1052,6 +1207,9 @@
         '<div class="ap-channel-chips" id="apModalChips">' + (chips || '<span class="muted text-sm">Нет каналов ' + esc(platformLabel(modalState.platform)) + '</span>') + '</div>' +
         (addOpts ? '<select class="select" id="apAddChannel"><option value="">+ Добавить канал</option>' + addOpts + '</select>' : '') +
         '</section>' +
+        '<section class="ap-form-section" id="apSecTags"><h3>Теги</h3>' +
+        '<p class="text-sm muted ap-tag-hint">До 10 тегов · для группировки и фильтрации постов</p>' +
+        '<div id="apTagEditor">' + buildTagEditorHtml(modalState.tags, modalState.tagDraftColor) + '</div></section>' +
         '<section class="ap-form-section" id="apSecText"><h3>Текст</h3>' +
         '<div id="apTextEditorMount" class="ap-text-editor-mount"></div>' +
         '<textarea class="textarea hidden" id="apModalText" rows="4">' + esc(modalState.text) + '</textarea>' +
@@ -1264,6 +1422,7 @@
         });
       }
       renderMediaGrid();
+      wireTagEditor(body);
       wireInlineRowsEditor(body);
 
       refreshIcons(body);
@@ -1347,6 +1506,7 @@
           fd.append('scheduled_at', probe.toISOString());
         }
         fd.append('inline_buttons', JSON.stringify(keyboard || []));
+        fd.append('tags', JSON.stringify(normalizeTagList(modalState.tags)));
         fd.append('existing_media', JSON.stringify(existingMediaPayload(modalState.mediaFiles)));
         modalState.mediaFiles.forEach(function (m) {
           var file = fileFromMediaEntry(m);
@@ -1575,13 +1735,14 @@
         renderContentOnly();
       });
     }
-    ['apFilterChannel', 'apFilterStatus', 'apFilterType', 'apFilterFrom', 'apFilterTo'].forEach(function (id) {
+    ['apFilterChannel', 'apFilterStatus', 'apFilterType', 'apFilterTag', 'apFilterFrom', 'apFilterTo'].forEach(function (id) {
       var el = qs('#' + id, root);
       if (!el) return;
       el.addEventListener('change', function () {
         state.filters.channelId = qs('#apFilterChannel', root) ? qs('#apFilterChannel', root).value : '';
         state.filters.status = qs('#apFilterStatus', root) ? qs('#apFilterStatus', root).value : '';
         state.filters.scheduleType = qs('#apFilterType', root) ? qs('#apFilterType', root).value : '';
+        state.filters.tag = qs('#apFilterTag', root) ? qs('#apFilterTag', root).value : '';
         state.filters.from = qs('#apFilterFrom', root) ? qs('#apFilterFrom', root).value : '';
         state.filters.to = qs('#apFilterTo', root) ? qs('#apFilterTo', root).value : '';
         state.postsPage = 1;

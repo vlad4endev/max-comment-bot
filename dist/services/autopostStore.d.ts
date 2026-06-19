@@ -7,6 +7,12 @@ export interface AutopostMediaItem {
     type: AutopostMediaType;
     path: string;
 }
+/** Палитра цветов для тегов автопостов. */
+export declare const AUTOPOST_TAG_COLORS: readonly ["#7F77DD", "#1D9E75", "#BA7517", "#3B82F6", "#EC4899", "#EF4444", "#6B7280", "#EAB308"];
+export interface AutopostTag {
+    name: string;
+    color: string;
+}
 export interface AutopostInlineButton {
     text: string;
     url: string;
@@ -26,6 +32,7 @@ export interface AutopostRecord {
     media: AutopostMediaItem[];
     inline_button: AutopostInlineButton | null;
     inline_buttons: AutopostInlineKeyboard | null;
+    tags: AutopostTag[];
     target_channel_id: string;
     channel_title: string | null;
     series_id: string | null;
@@ -54,6 +61,7 @@ export interface CreateAutopostInput {
     media?: AutopostMediaItem[];
     inline_button?: AutopostInlineButton | null;
     inline_buttons?: AutopostInlineKeyboard | null;
+    tags?: AutopostTag[];
     target_channel_id: string;
     channel_title?: string | null;
     series_id?: string | null;
@@ -76,6 +84,7 @@ export interface UpdateAutopostInput {
     media?: AutopostMediaItem[];
     inline_button?: AutopostInlineButton | null;
     inline_buttons?: AutopostInlineKeyboard | null;
+    tags?: AutopostTag[];
     target_channel_id?: string;
     channel_title?: string | null;
     series_id?: string | null;
@@ -105,6 +114,7 @@ export interface PostChannelRecord {
 export declare function normalizeInlineKeyboard(input: unknown): AutopostInlineKeyboard | null;
 export declare function primaryInlineButton(keyboard: AutopostInlineKeyboard | null): AutopostInlineButton | null;
 export declare function resolveInlineKeyboard(buttons?: AutopostInlineKeyboard | null, legacy?: AutopostInlineButton | null): AutopostInlineKeyboard | null;
+export declare function normalizeAutopostTags(input: unknown): AutopostTag[];
 export declare function upsertPostChannel(input: {
     id: string;
     platform: PostPlatform;
@@ -128,6 +138,7 @@ export interface AutopostListFilters {
     platform?: PostPlatform;
     scheduleType?: AutopostScheduleType;
     search?: string;
+    tag?: string;
     from?: string;
     to?: string;
 }

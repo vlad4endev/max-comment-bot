@@ -1,8 +1,10 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.AUTOPOST_TAG_COLORS = void 0;
 exports.normalizeInlineKeyboard = normalizeInlineKeyboard;
 exports.primaryInlineButton = primaryInlineButton;
 exports.resolveInlineKeyboard = resolveInlineKeyboard;
+exports.normalizeAutopostTags = normalizeAutopostTags;
 exports.upsertPostChannel = upsertPostChannel;
 exports.listPostChannels = listPostChannels;
 exports.logPostPublish = logPostPublish;
@@ -20,6 +22,17 @@ exports.setAutopostStatus = setAutopostStatus;
 exports.purgeAutopostsForChannel = purgeAutopostsForChannel;
 const node_crypto_1 = require("node:crypto");
 const postsDatabase_1 = require("../db/postsDatabase");
+/** Палитра цветов для тегов автопостов. */
+exports.AUTOPOST_TAG_COLORS = [
+    '#7F77DD',
+    '#1D9E75',
+    '#BA7517',
+    '#3B82F6',
+    '#EC4899',
+    '#EF4444',
+    '#6B7280',
+    '#EAB308',
+];
 function parseMediaJson(raw) {
     try {
         const parsed = JSON.parse(raw);
@@ -108,6 +121,44 @@ function resolveInlineKeyboard(buttons, legacy) {
     }
     return null;
 }
+function isAllowedTagColor(color) {
+    const normalized = color.trim().toUpperCase();
+    return exports.AUTOPOST_TAG_COLORS.some((c) => c.toUpperCase() === normalized);
+}
+function normalizeAutopostTags(input) {
+    if (!Array.isArray(input))
+        return [];
+    const out = [];
+    const seen = new Set();
+    for (const raw of input.slice(0, 10)) {
+        if (typeof raw !== 'object' || raw === null)
+            continue;
+        const row = raw;
+        const name = typeof row.name === 'string' ? row.name.trim().replace(/\s+/g, ' ').slice(0, 32) : '';
+        if (!name)
+            continue;
+        const key = name.toLowerCase();
+        if (seen.has(key))
+            continue;
+        let color = typeof row.color === 'string' ? row.color.trim() : '';
+        if (!isAllowedTagColor(color)) {
+            color = exports.AUTOPOST_TAG_COLORS[out.length % exports.AUTOPOST_TAG_COLORS.length];
+        }
+        seen.add(key);
+        out.push({ name, color });
+    }
+    return out;
+}
+function parseTagsJson(raw) {
+    if (!raw)
+        return [];
+    try {
+        return normalizeAutopostTags(JSON.parse(raw));
+    }
+    catch {
+        return [];
+    }
+}
 function parseWeekdays(raw) {
     if (!raw)
         return null;
@@ -169,6 +220,7 @@ function rowToRecord(row) {
         media: parseMediaJson(row.media_json),
         inline_buttons,
         inline_button: primaryInlineButton(inline_buttons),
+        tags: parseTagsJson(row.tags_json),
         target_channel_id: row.target_channel_id,
         channel_title: row.channel_title,
         series_id: row.series_id,
@@ -257,7 +309,12 @@ function listAutopostsFiltered(filters = {}) {
         posts = posts.filter((p) => p.schedule_type === filters.scheduleType);
     if (filters.search) {
         const q = filters.search.toLowerCase();
-        posts = posts.filter((p) => p.text.toLowerCase().includes(q));
+        posts = posts.filter((p) => p.text.toLowerCase().includes(q) ||
+            p.tags.some((t) => t.name.toLowerCase().includes(q)));
+    }
+    if (filters.tag) {
+        const tagQ = filters.tag.toLowerCase();
+        posts = posts.filter((p) => p.tags.some((t) => t.name.toLowerCase() === tagQ));
     }
     if (filters.from) {
         const fromMs = Date.parse(filters.from);
@@ -346,6 +403,7 @@ function createAutopost(input) {
     const status = input.status ?? 'active';
     const inline_buttons = resolveInlineKeyboard(input.inline_buttons, input.inline_button ?? null);
     const inline_button = primaryInlineButton(inline_buttons);
+    const tags = normalizeAutopostTags(input.tags ?? []);
     upsertPostChannel({
         id: input.target_channel_id,
         platform,
@@ -354,16 +412,16 @@ function createAutopost(input) {
     (0, postsDatabase_1.getPostsDb)()
         .prepare(`INSERT INTO autoposts (
         id, platform, target_channel_id, channel_title, series_id, text, media_json,
-        inline_button_json, inline_buttons_json, status, schedule_type, scheduled_at, recurring_time,
+        inline_button_json, inline_buttons_json, tags_json, status, schedule_type, scheduled_at, recurring_time,
         weekdays_json, daily_times_json, timezone, start_date, end_date, repeat_limit,
         on_failure, conditions_json, last_sent_at, last_error, sent_count, created_at, updated_at
       ) VALUES (
         ?, ?, ?, ?, ?, ?, ?,
-        ?, ?, ?, ?, ?, ?,
+        ?, ?, ?, ?, ?, ?, ?,
         ?, ?, ?, ?, ?, ?,
         ?, ?, NULL, NULL, 0, ?, ?
       )`)
-        .run(id, platform, input.target_channel_id, input.channel_title ?? null, input.series_id ?? null, input.text, JSON.stringify(media), inline_button ? JSON.stringify(inline_button) : null, inline_buttons ? JSON.stringify(inline_buttons) : null, status, input.schedule_type, input.scheduled_at, input.recurring_time ?? null, weekdays ? JSON.stringify(weekdays) : null, input.daily_times ? JSON.stringify(input.daily_times) : null, input.timezone ?? 'Europe/Moscow', input.start_date ?? null, input.end_date ?? null, input.repeat_limit ?? null, input.on_failure ?? 'skip', JSON.stringify(input.conditions ?? []), now, now);
+        .run(id, platform, input.target_channel_id, input.channel_title ?? null, input.series_id ?? null, input.text, JSON.stringify(media), inline_button ? JSON.stringify(inline_button) : null, inline_buttons ? JSON.stringify(inline_buttons) : null, JSON.stringify(tags), status, input.schedule_type, input.scheduled_at, input.recurring_time ?? null, weekdays ? JSON.stringify(weekdays) : null, input.daily_times ? JSON.stringify(input.daily_times) : null, input.timezone ?? 'Europe/Moscow', input.start_date ?? null, input.end_date ?? null, input.repeat_limit ?? null, input.on_failure ?? 'skip', JSON.stringify(input.conditions ?? []), now, now);
     return getAutopostById(id);
 }
 function updateAutopost(id, patch) {
@@ -380,6 +438,7 @@ function updateAutopost(id, patch) {
         media: patch.media ?? current.media,
         inline_buttons: resolvedKeyboard,
         inline_button: primaryInlineButton(resolvedKeyboard),
+        tags: patch.tags !== undefined ? normalizeAutopostTags(patch.tags) : current.tags,
         target_channel_id: patch.target_channel_id ?? current.target_channel_id,
         channel_title: patch.channel_title !== undefined ? patch.channel_title : current.channel_title,
         series_id: patch.series_id !== undefined ? patch.series_id : current.series_id,
@@ -407,7 +466,7 @@ function updateAutopost(id, patch) {
     }
     (0, postsDatabase_1.getPostsDb)()
         .prepare(`UPDATE autoposts SET
-        platform = ?, text = ?, media_json = ?, inline_button_json = ?, inline_buttons_json = ?,
+        platform = ?, text = ?, media_json = ?, inline_button_json = ?, inline_buttons_json = ?, tags_json = ?,
         target_channel_id = ?, channel_title = ?, series_id = ?,
         status = ?, schedule_type = ?, scheduled_at = ?,
         recurring_time = ?, weekdays_json = ?, daily_times_json = ?, timezone = ?,
@@ -415,7 +474,7 @@ function updateAutopost(id, patch) {
         on_failure = ?, conditions_json = ?, platform_message_id = ?,
         updated_at = ?
        WHERE id = ?`)
-        .run(next.platform, next.text, JSON.stringify(next.media), next.inline_button ? JSON.stringify(next.inline_button) : null, next.inline_buttons ? JSON.stringify(next.inline_buttons) : null, next.target_channel_id, next.channel_title, next.series_id, next.status, next.schedule_type, next.scheduled_at, next.recurring_time, next.weekdays ? JSON.stringify(next.weekdays) : null, next.daily_times ? JSON.stringify(next.daily_times) : null, next.timezone, next.start_date, next.end_date, next.repeat_limit, next.on_failure, JSON.stringify(next.conditions), next.platform_message_id, next.updated_at, id);
+        .run(next.platform, next.text, JSON.stringify(next.media), next.inline_button ? JSON.stringify(next.inline_button) : null, next.inline_buttons ? JSON.stringify(next.inline_buttons) : null, JSON.stringify(next.tags), next.target_channel_id, next.channel_title, next.series_id, next.status, next.schedule_type, next.scheduled_at, next.recurring_time, next.weekdays ? JSON.stringify(next.weekdays) : null, next.daily_times ? JSON.stringify(next.daily_times) : null, next.timezone, next.start_date, next.end_date, next.repeat_limit, next.on_failure, JSON.stringify(next.conditions), next.platform_message_id, next.updated_at, id);
     return getAutopostById(id);
 }
 function markAutopostSent(id, opts) {

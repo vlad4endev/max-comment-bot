@@ -91,6 +91,7 @@ function initPostsSchema(db: Database.Database): void {
       on_failure            TEXT NOT NULL DEFAULT 'skip'
                             CHECK (on_failure IN ('skip', 'retry_15m', 'stop_series', 'notify')),
       conditions_json       TEXT NOT NULL DEFAULT '[]',
+      tags_json               TEXT NOT NULL DEFAULT '[]',
       last_sent_at          TEXT,
       last_error            TEXT,
       sent_count            INTEGER NOT NULL DEFAULT 0,
@@ -148,6 +149,7 @@ function migrateAutopostsColumns(db: Database.Database): void {
     ['on_failure', "TEXT NOT NULL DEFAULT 'skip'"],
     ['conditions_json', "TEXT NOT NULL DEFAULT '[]'"],
     ['platform_message_id', 'TEXT'],
+    ['tags_json', "TEXT NOT NULL DEFAULT '[]'"],
   ]
   for (const [col, ddl] of additions) {
     if (!names.has(col)) {

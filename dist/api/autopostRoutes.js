@@ -132,6 +132,25 @@ function resolveAutopostMediaFile(fileId) {
     }
     return resolved;
 }
+function parseTagsFromBody(body) {
+    const raw = body.tags;
+    if (typeof raw === 'string') {
+        const trimmed = raw.trim();
+        if (!trimmed || trimmed === '[]') {
+            return [];
+        }
+        try {
+            return (0, autopostStore_1.normalizeAutopostTags)(JSON.parse(trimmed));
+        }
+        catch {
+            throw new Error('tags must be valid JSON');
+        }
+    }
+    if (Array.isArray(raw)) {
+        return (0, autopostStore_1.normalizeAutopostTags)(raw);
+    }
+    return [];
+}
 function parseInlineButton(body) {
     const text = parseNonEmptyString(body.inline_button_text);
     const url = parseNonEmptyString(body.inline_button_url);
@@ -334,7 +353,8 @@ function createAutopostRouter() {
         const search = parseNonEmptyString(req.query.search) ?? undefined;
         const from = parseNonEmptyString(req.query.from) ?? undefined;
         const to = parseNonEmptyString(req.query.to) ?? undefined;
-        const posts = (0, autopostStore_1.listAutopostsFiltered)({ status, channelId, scheduleType, search, from, to });
+        const tag = parseNonEmptyString(req.query.tag) ?? undefined;
+        const posts = (0, autopostStore_1.listAutopostsFiltered)({ status, channelId, scheduleType, search, tag, from, to });
         res.json({ posts });
     });
     router.get('/media/:fileId', (req, res) => {
@@ -378,6 +398,7 @@ function createAutopostRouter() {
             }
             const schedule = validateScheduleInput(body);
             const inline_buttons = parseInlineButtonsFromBody(body);
+            const tags = parseTagsFromBody(body);
             const media = mergeAutopostMedia(body, req.files ?? []);
             const platformRaw = parseNonEmptyString(body.platform);
             const platform = platformRaw === 'max' ? 'max' : 'telegram';
@@ -393,6 +414,7 @@ function createAutopostRouter() {
                 text,
                 media,
                 inline_buttons,
+                tags,
                 target_channel_id,
                 channel_title: parseNonEmptyString(body.channel_title),
                 ...schedule,
@@ -436,6 +458,9 @@ function createAutopostRouter() {
             }
             else if (body.inline_button_text !== undefined || body.inline_button_url !== undefined) {
                 patch.inline_buttons = parseInlineButtonsFromBody(body);
+            }
+            if (body.tags !== undefined) {
+                patch.tags = parseTagsFromBody(body);
             }
             if (body.existing_media !== undefined ||
                 (req.files && req.files.length > 0)) {
