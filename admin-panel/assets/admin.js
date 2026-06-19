@@ -135,7 +135,7 @@
     ailog: {
       title: 'ИИ-анализ',
       group: 'Система',
-      desc: 'Настройка оператора (OpenRouter/OpenAI) и отчёты о проблемах бота простым языком.',
+      desc: 'Отчёты о проблемах бота простым языком. Настройка оператора — в разделе «Настройки».',
     },
     settings: {
       title: 'Настройки',
@@ -6994,7 +6994,7 @@
     var preset = presets[provider] || presets.openrouter || {};
     var configured = !!(ai && ai.configured);
     var html = '<div class="panel ai-operator-panel" id="ai_operator_panel" style="margin-bottom:0.75rem">';
-    html += sectionHead('OpenRouter / ИИ', 'Ключ и модель для ИИ-анализа логов (раздел «ИИ-анализ»)');
+    html += sectionHead('Оператор ИИ', 'Ключ и модель для ИИ-анализа логов');
     html +=
       '<div class="ai-operator-status ' +
       (configured ? 'is-ok' : 'is-off') +
@@ -7247,7 +7247,7 @@
     html +=
       '<button type="button" class="btn btn-primary" id="log_ai_run"><i data-lucide="sparkles"></i> Запустить ИИ-анализ</button>';
     if (compact) {
-      html += '<a class="btn btn-ghost" href="#/ailog">Настроить оператора</a>';
+      html += '<a class="btn btn-ghost" href="#/settings">Настройки оператора</a>';
     }
     html += '</div>';
     html += '<div id="log_ai_report" class="log-ai-panel" hidden></div>';
@@ -7300,7 +7300,7 @@
               '<p>' +
               esc(msg) +
               '</p>' +
-              '<p class="muted text-sm">Сначала настройте оператора в этом разделе или в <a href="#/ailog">ИИ-анализ</a>: ключ и модель.</p>' +
+              '<p class="muted text-sm">Настройте оператора в <a href="#/settings">Настройках → Оператор ИИ</a>: ключ и модель.</p>' +
               '</div>';
           }
           showToast(msg, 'error');
@@ -7320,6 +7320,26 @@
     }
   }
 
+  function renderAiOperatorStatusBanner(ai) {
+    var preset = (ai && ai.presets && ai.presets[ai.provider]) || {};
+    if (!ai || !ai.configured) {
+      return (
+        '<div class="panel" style="margin-bottom:0.75rem;border-color:color-mix(in srgb, var(--warning) 40%, var(--border))">' +
+        '<p class="muted text-sm" style="margin:0">Оператор не настроен. Укажите ключ и модель в <a href="#/settings">Настройках → Оператор ИИ</a>, затем вернитесь сюда.</p>' +
+        '</div>'
+      );
+    }
+    return (
+      '<p class="text-sm muted" style="margin-bottom:0.75rem">' +
+      'Оператор: <strong>' +
+      esc(ai.provider_label || preset.label || ai.provider || '—') +
+      '</strong>, модель <strong>' +
+      esc(ai.model || '—') +
+      '</strong>. <a href="#/settings">Изменить в настройках</a>' +
+      '</p>'
+    );
+  }
+
   function renderAiLogPage() {
     var main = qs('#mainContent');
     if (!main) return;
@@ -7327,13 +7347,9 @@
     getJson('/logs/ai-config')
       .then(function (ai) {
         if (currentRoute !== 'ailog') return;
-        var html = '<p class="text-sm muted" style="margin-bottom:0.75rem">';
-        html += '1) Выберите оператора и укажите ключ · 2) Выберите модель · 3) Нажмите «Проверить» · 4) Запустите анализ ниже.';
-        html += '</p>';
-        html += renderAiOperatorPanel(ai || {});
+        var html = renderAiOperatorStatusBanner(ai || {});
         html += renderLogAiAnalysisControls({ limit: 200, compact: false });
         main.innerHTML = html;
-        bindAiOperatorPanel(main, ai || {});
         bindLogAiAnalysis(main, 'ailog');
         refreshIcons();
       })
