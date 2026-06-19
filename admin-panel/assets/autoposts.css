@@ -579,10 +579,13 @@
   font-size: 0.85rem;
 }
 
-/* Modal */
+/* Modal — #modalRoot вне .ap-hub, переменные задаём здесь явно */
 #modalRoot {
   position: relative;
   z-index: 9000;
+  --ap-card: #1a1a1f;
+  --ap-border: rgba(255, 255, 255, 0.12);
+  --ap-accent: #7f77dd;
 }
 
 body.ap-modal-open {
@@ -598,7 +601,7 @@ body.ap-modal-open .sidebar {
 .ap-modal-backdrop {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.72);
+  background: rgba(0, 0, 0, 0.78);
   z-index: 9100;
   display: flex;
   align-items: center;
@@ -606,6 +609,9 @@ body.ap-modal-open .sidebar {
   padding: 1rem;
   animation: apFadeIn 0.15s ease;
   isolation: isolate;
+  --ap-card: #1a1a1f;
+  --ap-border: rgba(255, 255, 255, 0.12);
+  --ap-accent: #7f77dd;
 }
 
 .ap-modal {
@@ -617,10 +623,10 @@ body.ap-modal-open .sidebar {
   flex-direction: column;
   position: relative;
   z-index: 1;
-  background: var(--ap-card);
-  border: 1px solid var(--ap-border);
+  background: #1a1a1f;
+  border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 10px;
-  box-shadow: var(--shadow-lg);
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.65);
   animation: apScaleIn 0.15s ease;
 }
 
@@ -639,7 +645,8 @@ body.ap-modal-open .sidebar {
   align-items: center;
   justify-content: space-between;
   padding: 1rem 1.15rem;
-  border-bottom: 1px solid var(--ap-border);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+  background: #1a1a1f;
 }
 
 .ap-modal-header h2 {
@@ -690,7 +697,7 @@ body.ap-modal-open .sidebar {
   overflow-y: auto;
   flex: 1;
   min-height: 220px;
-  background: var(--ap-card);
+  background: #1a1a1f;
   position: relative;
   z-index: 2;
 }
@@ -739,7 +746,8 @@ body.ap-modal-open .sidebar {
   justify-content: space-between;
   gap: 0.75rem;
   padding: 0.85rem 1.15rem;
-  border-top: 1px solid var(--ap-border);
+  border-top: 1px solid rgba(255, 255, 255, 0.12);
+  background: #1a1a1f;
   flex-shrink: 0;
 }
 
@@ -760,9 +768,9 @@ body.ap-modal-open .sidebar {
 }
 
 .ap-modal-preview-wrap {
-  border-top: 1px solid var(--ap-border);
+  border-top: 1px solid rgba(255, 255, 255, 0.12);
   padding: 0.85rem 1.15rem 1rem;
-  background: rgba(0, 0, 0, 0.28);
+  background: #141418;
   flex-shrink: 0;
   max-height: 280px;
   overflow-y: auto;
