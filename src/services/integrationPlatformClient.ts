@@ -1149,22 +1149,116 @@ export async function publishVkWallPost(
   token: string,
   groupId: string,
   message: string,
-): Promise<void> {
+): Promise<number | null> {
   const ownerId = groupId.startsWith('-') ? groupId : `-${groupId.replace(/^public/, '')}`
-  const { data } = await axios.get<{ error?: { error_msg?: string } }>(
-    'https://api.vk.com/method/wall.post',
-    {
+  const { data } = await axios.get<{
+    response?: { post_id?: number }
+    error?: { error_msg?: string }
+  }>('https://api.vk.com/method/wall.post', {
+    params: {
+      access_token: token,
+      owner_id: ownerId,
+      from_group: 1,
+      message,
+      v: '5.199',
+    },
+    timeout: 15_000,
+  })
+  if (data.error) {
+    throw new Error(data.error.error_msg ?? 'VK wall.post failed')
+  }
+  return data.response?.post_id ?? null
+}
+
+export interface VkComment {
+  id: number
+  from_id: number
+  date: number
+  text: string
+  reply_to_comment?: number
+}
+
+export async function fetchVkWallComments(
+  token: string,
+  groupId: string,
+  postId: number,
+  afterCommentId: number,
+): Promise<{ comments: VkComment[]; lastCommentId: number }> {
+  const ownerId = groupId.startsWith('-') ? groupId : `-${groupId.replace(/^public/, '')}`
+  try {
+    const { data } = await axios.get<{
+      response?: { items?: Array<Record<string, unknown>> }
+      error?: { error_msg?: string }
+    }>('https://api.vk.com/method/wall.getComments', {
       params: {
         access_token: token,
         owner_id: ownerId,
-        from_group: 1,
-        message,
+        post_id: postId,
+        count: 100,
+        sort: 'asc',
+        thread_items_count: 10,
         v: '5.199',
       },
       timeout: 15_000,
-    },
-  )
-  if (data.error) {
-    throw new Error(data.error.error_msg ?? 'VK wall.post failed')
+    })
+    if (data.error || !data.response?.items) {
+      return { comments: [], lastCommentId: afterCommentId }
+    }
+    const comments: VkComment[] = []
+    let maxId = afterCommentId
+    for (const item of data.response.items) {
+      const id = typeof item.id === 'number' ? item.id : 0
+      if (id > maxId) maxId = id
+      if (id <= afterCommentId) continue
+      const text = typeof item.text === 'string' ? item.text : ''
+      if (!text.trim()) continue
+      comments.push({
+        id,
+        from_id: typeof item.from_id === 'number' ? item.from_id : 0,
+        date: typeof item.date === 'number' ? item.date : 0,
+        text,
+        reply_to_comment:
+          typeof item.reply_to_comment === 'number' ? item.reply_to_comment : undefined,
+      })
+    }
+    return { comments, lastCommentId: maxId }
+  } catch (err: unknown) {
+    logger.warn('fetchVkWallComments failed', { groupId, postId, err })
+    return { comments: [], lastCommentId: afterCommentId }
+  }
+}
+
+export async function publishVkWallComment(
+  token: string,
+  groupId: string,
+  postId: number,
+  message: string,
+  replyToCommentId?: number,
+): Promise<number | null> {
+  const ownerId = groupId.startsWith('-') ? groupId : `-${groupId.replace(/^public/, '')}`
+  try {
+    const params: Record<string, string | number> = {
+      access_token: token,
+      owner_id: ownerId,
+      post_id: postId,
+      message,
+      from_group: Number(Math.abs(Number(ownerId))),
+      v: '5.199',
+    }
+    if (replyToCommentId != null && replyToCommentId > 0) {
+      params.reply_to_comment = replyToCommentId
+    }
+    const { data } = await axios.get<{
+      response?: { comment_id?: number }
+      error?: { error_msg?: string }
+    }>('https://api.vk.com/method/wall.createComment', { params, timeout: 15_000 })
+    if (data.error) {
+      logger.warn('publishVkWallComment failed', { error: data.error.error_msg })
+      return null
+    }
+    return data.response?.comment_id ?? null
+  } catch (err: unknown) {
+    logger.warn('publishVkWallComment threw', { groupId, postId, err })
+    return null
   }
 }

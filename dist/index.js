@@ -63,6 +63,7 @@ const adminPanelState_1 = require("./api/adminPanelState");
 const channelLinkService_1 = require("./services/channelLinkService");
 const tgChainChannelRef_1 = require("./services/tgChainChannelRef");
 const tgChainForwarder_1 = require("./services/tgChainForwarder");
+const vkChainForwarder_1 = require("./services/vkChainForwarder");
 const telegramTgChainLifecycle_1 = require("./services/telegramTgChainLifecycle");
 const redisClient_1 = require("./cache/redisClient");
 const createWebhookApp_1 = require("./webhook/createWebhookApp");
@@ -103,6 +104,7 @@ async function main() {
     }
     flowProcessor_1.flowProcessor.setBot(bot);
     (0, tgChainForwarder_1.setTgChainForwarderBot)(bot);
+    (0, vkChainForwarder_1.setVkChainForwarderBot)(bot);
     (0, telegramTgChainLifecycle_1.setTelegramTgChainLifecycleBot)(bot);
     (0, logger_1.startRuntimeLogRotationScheduler)();
     (0, channelRegistry_1.setChannelRegistryChangeHandler)(() => (0, channelPoller_1.notifyChannelRegistryChanged)());
@@ -117,6 +119,9 @@ async function main() {
     const stopCommentSync = startMaxCommentSync(bot, { intervalMs: 15_000 });
     process.once('SIGINT', () => stopCommentSync());
     process.once('SIGTERM', () => stopCommentSync());
+    (0, vkChainForwarder_1.startVkChainForwarder)();
+    process.once('SIGINT', () => (0, vkChainForwarder_1.stopVkChainForwarder)());
+    process.once('SIGTERM', () => (0, vkChainForwarder_1.stopVkChainForwarder)());
     const channelCount = channelRegistry_1.channelRegistry
         .getAllChannels()
         .filter((c) => c.type === 'channel').length;

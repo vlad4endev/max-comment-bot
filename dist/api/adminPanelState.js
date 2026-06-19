@@ -13,6 +13,11 @@ exports.ensureAdminPanelStateLoaded = ensureAdminPanelStateLoaded;
 exports.createTgChain = createTgChain;
 exports.updateTgChain = updateTgChain;
 exports.deleteTgChain = deleteTgChain;
+exports.listVkChains = listVkChains;
+exports.listVkChainsSync = listVkChainsSync;
+exports.createVkChain = createVkChain;
+exports.updateVkChain = updateVkChain;
+exports.deleteVkChain = deleteVkChain;
 exports.listAutoposts = listAutoposts;
 exports.createAutopost = createAutopost;
 exports.deleteAutopost = deleteAutopost;
@@ -47,6 +52,7 @@ function defaultState() {
         antispam_log: [],
         channel_extras: {},
         tg_chains: [],
+        vk_chains: [],
         autoposts: [],
     };
 }
@@ -73,6 +79,7 @@ async function loadState() {
                     ? parsed.channel_extras
                     : {},
                 tg_chains: Array.isArray(parsed.tg_chains) ? parsed.tg_chains : [],
+                vk_chains: Array.isArray(parsed.vk_chains) ? parsed.vk_chains : [],
                 autoposts: Array.isArray(parsed.autoposts) ? parsed.autoposts : [],
             };
         }
@@ -203,6 +210,51 @@ async function deleteTgChain(id) {
     await persist();
     return true;
 }
+// ── VK chains ────────────────────────────────────────────────────────────────
+async function listVkChains() {
+    const s = await loadState();
+    return [...s.vk_chains];
+}
+/** Synchronous snapshot for hot paths — call {@link ensureAdminPanelStateLoaded} at startup. */
+function listVkChainsSync() {
+    if (!cache) {
+        return [];
+    }
+    return [...cache.vk_chains];
+}
+async function createVkChain(input) {
+    const s = await loadState();
+    const row = {
+        ...input,
+        id: (0, node_crypto_1.randomUUID)(),
+        created_at: new Date().toISOString(),
+        forwarded_today: 0,
+        errors_today: 0,
+    };
+    s.vk_chains.push(row);
+    await persist();
+    return row;
+}
+async function updateVkChain(id, patch) {
+    const s = await loadState();
+    const idx = s.vk_chains.findIndex((c) => c.id === id);
+    if (idx < 0) {
+        return null;
+    }
+    s.vk_chains[idx] = { ...s.vk_chains[idx], ...patch, id };
+    await persist();
+    return s.vk_chains[idx];
+}
+async function deleteVkChain(id) {
+    const s = await loadState();
+    const before = s.vk_chains.length;
+    s.vk_chains = s.vk_chains.filter((c) => c.id !== id);
+    if (s.vk_chains.length === before) {
+        return false;
+    }
+    await persist();
+    return true;
+}
 async function listAutoposts() {
     const s = await loadState();
     return [...s.autoposts].sort((a, b) => a.scheduled_at.localeCompare(b.scheduled_at));
@@ -244,6 +296,7 @@ async function purgeChannelFromAdminState(chatId) {
         }
     }
     s.tg_chains = s.tg_chains.filter((c) => Math.abs(c.max_chat_id) !== targetAbs);
+    s.vk_chains = s.vk_chains.filter((c) => Math.abs(c.max_chat_id) !== targetAbs);
     s.autoposts = s.autoposts.filter((p) => Math.abs(p.chat_id) !== targetAbs);
     s.antispam_log = s.antispam_log.filter((e) => Math.abs(e.channel_chat_id) !== targetAbs);
     await persist();

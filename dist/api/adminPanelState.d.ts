@@ -15,6 +15,24 @@ export interface ChannelAdminExtras {
     flood_protection: boolean;
     auto_mute: boolean;
 }
+export interface VkChainRecord {
+    id: string;
+    /** ID канала MAX, с которым связана VK-группа. */
+    max_chat_id: number;
+    max_title: string | null;
+    /** ID сообщества VK (без минуса, например "12345678"). */
+    vk_group_id: string;
+    /** Токен сообщества VK с правами wall и comments. */
+    vk_token: string;
+    /** Пересылать посты из MAX → VK (вызывается хуком из tgChainForwarder). */
+    forward_posts: boolean;
+    /** Синхронизировать комментарии VK ↔ MAX miniapp. */
+    sync_comments: boolean;
+    active: boolean;
+    created_at: string;
+    forwarded_today: number;
+    errors_today: number;
+}
 export interface TgChainRecord {
     id: string;
     max_chat_id: number;
@@ -74,6 +92,7 @@ interface StateFile {
     antispam_log: AntispamLogEntry[];
     channel_extras: Record<string, ChannelAdminExtras>;
     tg_chains: TgChainRecord[];
+    vk_chains: VkChainRecord[];
     autoposts: AutopostRecord[];
 }
 export declare function getAdminPanelState(): Promise<StateFile>;
@@ -97,6 +116,12 @@ export declare function ensureAdminPanelStateLoaded(): Promise<void>;
 export declare function createTgChain(input: Omit<TgChainRecord, 'id' | 'created_at' | 'forwarded_today' | 'errors_today'>): Promise<TgChainRecord>;
 export declare function updateTgChain(id: string, patch: Partial<TgChainRecord>): Promise<TgChainRecord | null>;
 export declare function deleteTgChain(id: string): Promise<boolean>;
+export declare function listVkChains(): Promise<VkChainRecord[]>;
+/** Synchronous snapshot for hot paths — call {@link ensureAdminPanelStateLoaded} at startup. */
+export declare function listVkChainsSync(): VkChainRecord[];
+export declare function createVkChain(input: Omit<VkChainRecord, 'id' | 'created_at' | 'forwarded_today' | 'errors_today'>): Promise<VkChainRecord>;
+export declare function updateVkChain(id: string, patch: Partial<VkChainRecord>): Promise<VkChainRecord | null>;
+export declare function deleteVkChain(id: string): Promise<boolean>;
 export declare function listAutoposts(): Promise<AutopostRecord[]>;
 export declare function createAutopost(input: Omit<AutopostRecord, 'id' | 'created_at' | 'status'>): Promise<AutopostRecord>;
 export declare function deleteAutopost(id: string): Promise<boolean>;

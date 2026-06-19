@@ -32,6 +32,7 @@ import {
   handleTgComment,
   isDiscussionAutoForward,
 } from './tgCommentSyncService'
+import { onMaxPostPublished } from './vkChainForwarder'
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
@@ -783,6 +784,11 @@ async function processChainMessageGroup(
             for (const msg of chunk) {
               markForwarded(chain.id, msg, maxMid, i)
             }
+            void onMaxPostPublished(chain.max_chat_id, maxMid, i === 0 ? firstCaption : '').catch(
+              (err: unknown) => {
+                logger.warn('[tgChain] VK hook (album) failed', { chainId: chain.id, maxMid, err })
+              },
+            )
           } else {
             logger.warn('[tgChain] chunk not marked forwarded — comment gate rollback, TG retry later', {
               chainId: chain.id,
@@ -816,6 +822,9 @@ async function processChainMessageGroup(
         if (keepPublished) {
           published = 1
           markForwarded(chain.id, msg, maxMid, null)
+          void onMaxPostPublished(chain.max_chat_id, maxMid, caption).catch((err: unknown) => {
+            logger.warn('[tgChain] VK hook (single) failed', { chainId: chain.id, maxMid, err })
+          })
         } else {
           logger.warn('[tgChain] post not marked forwarded — comment gate rollback, TG retry later', {
             chainId: chain.id,

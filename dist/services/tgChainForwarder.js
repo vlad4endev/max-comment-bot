@@ -26,6 +26,7 @@ const telegramMiniappService_1 = require("./telegramMiniappService");
 const postCommentMappingStore_1 = require("./postCommentMappingStore");
 const telegramDiscussionThreadResolver_1 = require("./telegramDiscussionThreadResolver");
 const tgCommentSyncService_1 = require("./tgCommentSyncService");
+const vkChainForwarder_1 = require("./vkChainForwarder");
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 /** Long-poll Telegram for new channel_post (сек). */
 const TG_CHAIN_LONG_POLL_SEC = 25;
@@ -641,6 +642,9 @@ async function processChainMessageGroup(chain, messages, tgToken) {
                         for (const msg of chunk) {
                             markForwarded(chain.id, msg, maxMid, i);
                         }
+                        void (0, vkChainForwarder_1.onMaxPostPublished)(chain.max_chat_id, maxMid, i === 0 ? firstCaption : '').catch((err) => {
+                            logger_1.logger.warn('[tgChain] VK hook (album) failed', { chainId: chain.id, maxMid, err });
+                        });
                     }
                     else {
                         logger_1.logger.warn('[tgChain] chunk not marked forwarded — comment gate rollback, TG retry later', {
@@ -670,6 +674,9 @@ async function processChainMessageGroup(chain, messages, tgToken) {
                 if (keepPublished) {
                     published = 1;
                     markForwarded(chain.id, msg, maxMid, null);
+                    void (0, vkChainForwarder_1.onMaxPostPublished)(chain.max_chat_id, maxMid, caption).catch((err) => {
+                        logger_1.logger.warn('[tgChain] VK hook (single) failed', { chainId: chain.id, maxMid, err });
+                    });
                 }
                 else {
                     logger_1.logger.warn('[tgChain] post not marked forwarded — comment gate rollback, TG retry later', {

@@ -54,6 +54,8 @@ exports.listVkGroups = listVkGroups;
 exports.fetchTelegramChannelPosts = fetchTelegramChannelPosts;
 exports.fetchVkWallPosts = fetchVkWallPosts;
 exports.publishVkWallPost = publishVkWallPost;
+exports.fetchVkWallComments = fetchVkWallComments;
+exports.publishVkWallComment = publishVkWallComment;
 const axios_1 = __importDefault(require("axios"));
 const adminPanelState_1 = require("../api/adminPanelState");
 const logger_1 = require("../utils/logger");
@@ -971,6 +973,77 @@ async function publishVkWallPost(token, groupId, message) {
     });
     if (data.error) {
         throw new Error(data.error.error_msg ?? 'VK wall.post failed');
+    }
+    return data.response?.post_id ?? null;
+}
+async function fetchVkWallComments(token, groupId, postId, afterCommentId) {
+    const ownerId = groupId.startsWith('-') ? groupId : `-${groupId.replace(/^public/, '')}`;
+    try {
+        const { data } = await axios_1.default.get('https://api.vk.com/method/wall.getComments', {
+            params: {
+                access_token: token,
+                owner_id: ownerId,
+                post_id: postId,
+                count: 100,
+                sort: 'asc',
+                thread_items_count: 10,
+                v: '5.199',
+            },
+            timeout: 15_000,
+        });
+        if (data.error || !data.response?.items) {
+            return { comments: [], lastCommentId: afterCommentId };
+        }
+        const comments = [];
+        let maxId = afterCommentId;
+        for (const item of data.response.items) {
+            const id = typeof item.id === 'number' ? item.id : 0;
+            if (id > maxId)
+                maxId = id;
+            if (id <= afterCommentId)
+                continue;
+            const text = typeof item.text === 'string' ? item.text : '';
+            if (!text.trim())
+                continue;
+            comments.push({
+                id,
+                from_id: typeof item.from_id === 'number' ? item.from_id : 0,
+                date: typeof item.date === 'number' ? item.date : 0,
+                text,
+                reply_to_comment: typeof item.reply_to_comment === 'number' ? item.reply_to_comment : undefined,
+            });
+        }
+        return { comments, lastCommentId: maxId };
+    }
+    catch (err) {
+        logger_1.logger.warn('fetchVkWallComments failed', { groupId, postId, err });
+        return { comments: [], lastCommentId: afterCommentId };
+    }
+}
+async function publishVkWallComment(token, groupId, postId, message, replyToCommentId) {
+    const ownerId = groupId.startsWith('-') ? groupId : `-${groupId.replace(/^public/, '')}`;
+    try {
+        const params = {
+            access_token: token,
+            owner_id: ownerId,
+            post_id: postId,
+            message,
+            from_group: Number(Math.abs(Number(ownerId))),
+            v: '5.199',
+        };
+        if (replyToCommentId != null && replyToCommentId > 0) {
+            params.reply_to_comment = replyToCommentId;
+        }
+        const { data } = await axios_1.default.get('https://api.vk.com/method/wall.createComment', { params, timeout: 15_000 });
+        if (data.error) {
+            logger_1.logger.warn('publishVkWallComment failed', { error: data.error.error_msg });
+            return null;
+        }
+        return data.response?.comment_id ?? null;
+    }
+    catch (err) {
+        logger_1.logger.warn('publishVkWallComment threw', { groupId, postId, err });
+        return null;
     }
 }
 //# sourceMappingURL=integrationPlatformClient.js.map

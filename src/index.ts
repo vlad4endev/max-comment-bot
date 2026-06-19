@@ -41,6 +41,7 @@ import { ensureAdminPanelStateLoaded } from './api/adminPanelState'
 import { repairLegacyMiniappTgChains } from './services/channelLinkService'
 import { repairTgChainsForForwarding } from './services/tgChainChannelRef'
 import { setTgChainForwarderBot, startTgChainForwarder } from './services/tgChainForwarder'
+import { setVkChainForwarderBot, startVkChainForwarder, stopVkChainForwarder } from './services/vkChainForwarder'
 import { setTelegramTgChainLifecycleBot } from './services/telegramTgChainLifecycle'
 import { initRedis } from './cache/redisClient'
 import { createHttpApp, createWebhookApp } from './webhook/createWebhookApp'
@@ -81,6 +82,7 @@ async function main(): Promise<void> {
   }
   flowProcessor.setBot(bot)
   setTgChainForwarderBot(bot)
+  setVkChainForwarderBot(bot)
   setTelegramTgChainLifecycleBot(bot)
   startRuntimeLogRotationScheduler()
   setChannelRegistryChangeHandler(() => notifyChannelRegistryChanged())
@@ -96,6 +98,10 @@ async function main(): Promise<void> {
   const stopCommentSync = startMaxCommentSync(bot, { intervalMs: 15_000 })
   process.once('SIGINT', () => stopCommentSync())
   process.once('SIGTERM', () => stopCommentSync())
+
+  startVkChainForwarder()
+  process.once('SIGINT', () => stopVkChainForwarder())
+  process.once('SIGTERM', () => stopVkChainForwarder())
 
   const channelCount = channelRegistry
     .getAllChannels()

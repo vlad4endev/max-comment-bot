@@ -25,6 +25,25 @@ export interface ChannelAdminExtras {
   auto_mute: boolean
 }
 
+export interface VkChainRecord {
+  id: string
+  /** ID канала MAX, с которым связана VK-группа. */
+  max_chat_id: number
+  max_title: string | null
+  /** ID сообщества VK (без минуса, например "12345678"). */
+  vk_group_id: string
+  /** Токен сообщества VK с правами wall и comments. */
+  vk_token: string
+  /** Пересылать посты из MAX → VK (вызывается хуком из tgChainForwarder). */
+  forward_posts: boolean
+  /** Синхронизировать комментарии VK ↔ MAX miniapp. */
+  sync_comments: boolean
+  active: boolean
+  created_at: string
+  forwarded_today: number
+  errors_today: number
+}
+
 export interface TgChainRecord {
   id: string
   max_chat_id: number
@@ -87,6 +106,7 @@ interface StateFile {
   antispam_log: AntispamLogEntry[]
   channel_extras: Record<string, ChannelAdminExtras>
   tg_chains: TgChainRecord[]
+  vk_chains: VkChainRecord[]
   autoposts: AutopostRecord[]
 }
 
@@ -116,6 +136,7 @@ function defaultState(): StateFile {
     antispam_log: [],
     channel_extras: {},
     tg_chains: [],
+    vk_chains: [],
     autoposts: [],
   }
 }
@@ -145,6 +166,7 @@ async function loadState(): Promise<StateFile> {
             ? parsed.channel_extras
             : {},
         tg_chains: Array.isArray(parsed.tg_chains) ? parsed.tg_chains : [],
+        vk_chains: Array.isArray(parsed.vk_chains) ? parsed.vk_chains : [],
         autoposts: Array.isArray(parsed.autoposts) ? parsed.autoposts : [],
       }
     } catch (e) {
@@ -296,6 +318,62 @@ export async function deleteTgChain(id: string): Promise<boolean> {
   return true
 }
 
+// ── VK chains ────────────────────────────────────────────────────────────────
+
+export async function listVkChains(): Promise<VkChainRecord[]> {
+  const s = await loadState()
+  return [...s.vk_chains]
+}
+
+/** Synchronous snapshot for hot paths — call {@link ensureAdminPanelStateLoaded} at startup. */
+export function listVkChainsSync(): VkChainRecord[] {
+  if (!cache) {
+    return []
+  }
+  return [...cache.vk_chains]
+}
+
+export async function createVkChain(
+  input: Omit<VkChainRecord, 'id' | 'created_at' | 'forwarded_today' | 'errors_today'>,
+): Promise<VkChainRecord> {
+  const s = await loadState()
+  const row: VkChainRecord = {
+    ...input,
+    id: randomUUID(),
+    created_at: new Date().toISOString(),
+    forwarded_today: 0,
+    errors_today: 0,
+  }
+  s.vk_chains.push(row)
+  await persist()
+  return row
+}
+
+export async function updateVkChain(
+  id: string,
+  patch: Partial<VkChainRecord>,
+): Promise<VkChainRecord | null> {
+  const s = await loadState()
+  const idx = s.vk_chains.findIndex((c) => c.id === id)
+  if (idx < 0) {
+    return null
+  }
+  s.vk_chains[idx] = { ...s.vk_chains[idx], ...patch, id }
+  await persist()
+  return s.vk_chains[idx]
+}
+
+export async function deleteVkChain(id: string): Promise<boolean> {
+  const s = await loadState()
+  const before = s.vk_chains.length
+  s.vk_chains = s.vk_chains.filter((c) => c.id !== id)
+  if (s.vk_chains.length === before) {
+    return false
+  }
+  await persist()
+  return true
+}
+
 export async function listAutoposts(): Promise<AutopostRecord[]> {
   const s = await loadState()
   return [...s.autoposts].sort((a, b) => a.scheduled_at.localeCompare(b.scheduled_at))
@@ -341,6 +419,7 @@ export async function purgeChannelFromAdminState(chatId: number): Promise<void> 
     }
   }
   s.tg_chains = s.tg_chains.filter((c) => Math.abs(c.max_chat_id) !== targetAbs)
+  s.vk_chains = s.vk_chains.filter((c) => Math.abs(c.max_chat_id) !== targetAbs)
   s.autoposts = s.autoposts.filter((p) => Math.abs(p.chat_id) !== targetAbs)
   s.antispam_log = s.antispam_log.filter((e) => Math.abs(e.channel_chat_id) !== targetAbs)
   await persist()

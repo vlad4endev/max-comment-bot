@@ -82,4 +82,16 @@ export declare function fetchVkWallPosts(token: string, groupId: string, afterPo
     posts: ExternalPost[];
     lastPostId: number;
 }>;
-export declare function publishVkWallPost(token: string, groupId: string, message: string): Promise<void>;
+export declare function publishVkWallPost(token: string, groupId: string, message: string): Promise<number | null>;
+export interface VkComment {
+    id: number;
+    from_id: number;
+    date: number;
+    text: string;
+    reply_to_comment?: number;
+}
+export declare function fetchVkWallComments(token: string, groupId: string, postId: number, afterCommentId: number): Promise<{
+    comments: VkComment[];
+    lastCommentId: number;
+}>;
+export declare function publishVkWallComment(token: string, groupId: string, postId: number, message: string, replyToCommentId?: number): Promise<number | null>;
