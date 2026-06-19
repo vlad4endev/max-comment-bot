@@ -182,11 +182,29 @@ body {
 
 .bot-status {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 0.4rem;
   font-size: 0.75rem;
   color: var(--text-muted);
   margin-bottom: 0.5rem;
+}
+
+.bot-status-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  min-width: 0;
+}
+
+.bot-status-label {
+  line-height: 1.3;
+}
+
+.bot-status-sub {
+  font-size: 0.68rem;
+  line-height: 1.35;
+  color: var(--text-muted);
+  opacity: 0.9;
 }
 
 .status-dot {
@@ -2716,6 +2734,57 @@ tbody tr:hover td {
 /* TG → MAX цепочки */
 .tg-chains-page {
   max-width: 920px;
+}
+
+.chains-platform-tabs {
+  display: flex;
+  gap: 0.35rem;
+  margin-bottom: 1rem;
+  flex-wrap: wrap;
+}
+
+.chains-platform-tab {
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  color: var(--text-secondary);
+  border-radius: var(--radius-sm);
+  padding: 0.4rem 0.75rem;
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background var(--transition), border-color var(--transition), color var(--transition);
+}
+
+.chains-platform-tab:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.chains-platform-tab.active {
+  background: var(--accent-muted);
+  border-color: var(--accent-border);
+  color: var(--accent-hover);
+}
+
+.chains-connect-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  padding: 0.75rem 0.9rem;
+  margin-bottom: 1rem;
+  border-radius: var(--radius);
+  border: 1px solid var(--warning-muted);
+  background: var(--warning-muted);
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+}
+
+.tg-chain-node.vk-dest .tg-chain-node-badge {
+  background: rgba(76, 117, 163, 0.18);
+  color: #7eb0e8;
+  border-color: rgba(76, 117, 163, 0.35);
 }
 .tg-chain-hero {
   margin-bottom: 16px;

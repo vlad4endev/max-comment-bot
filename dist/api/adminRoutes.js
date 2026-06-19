@@ -348,8 +348,37 @@ function createAdminRouter(deps) {
         })));
         res.json({ channels: rows.filter((row) => row !== null) });
     });
-    secured.get('/bot-status', (_req, res) => {
-        res.json({ active: true, label: 'Бот активен' });
+    secured.get('/bot-status', async (_req, res) => {
+        await integrationsStore_1.integrationsStore.load();
+        const tgInteg = integrationsStore_1.integrationsStore.getTelegramIntegration();
+        const vkInteg = integrationsStore_1.integrationsStore
+            .getIntegrations()
+            .find((i) => i.platform === 'vk' && i.status === 'connected');
+        const tgToken = (tgInteg?.token?.trim() || (0, config_1.getTelegramToken)()).trim();
+        const tgChains = await (0, adminPanelState_1.listTgChains)();
+        const vkChains = await (0, adminPanelState_1.listVkChains)();
+        const tgLinked = tgInteg?.linkedChats ?? [];
+        res.json({
+            active: true,
+            label: 'MAX бот активен',
+            platforms: {
+                max: { active: true, label: 'MAX бот' },
+                telegram: {
+                    connected: Boolean(tgInteg && tgToken),
+                    has_token: Boolean(tgToken),
+                    label: tgInteg && tgToken ? 'Telegram подключён' : 'Telegram не подключён',
+                    chains_active: tgChains.filter((c) => c.active).length,
+                    channels_total: tgLinked.length,
+                    channels_admin: tgLinked.filter((c) => c.botIsAdmin === true).length,
+                },
+                vk: {
+                    connected: Boolean(vkInteg),
+                    label: vkInteg ? 'VK подключён' : 'VK не подключён',
+                    chains_active: vkChains.filter((c) => c.active).length,
+                },
+            },
+            mtproto_ready: (0, mtprotoConfigStore_1.isMtprotoSessionReady)(),
+        });
     });
     secured.get('/activity', (req, res) => {
         const limitRaw = typeof req.query.limit === 'string' ? Number.parseInt(req.query.limit, 10) : 15;
@@ -1083,6 +1112,91 @@ function createAdminRouter(deps) {
             return;
         }
         const ok = await (0, adminPanelState_1.deleteTgChain)(id);
+        if (!ok) {
+            res.status(404).json({ error: 'not found' });
+            return;
+        }
+        res.json({ ok: true });
+    });
+    // ── VK-chains ──────────────────────────────────────────────────────────────
+    secured.get('/vk-chains', async (_req, res) => {
+        const chains = await (0, adminPanelState_1.listVkChains)();
+        const active = chains.filter((c) => c.active).length;
+        const forwardedToday = chains.reduce((s, c) => s + c.forwarded_today, 0);
+        const errorsToday = chains.reduce((s, c) => s + c.errors_today, 0);
+        res.json({
+            chains,
+            stats: { active, forwarded_today: forwardedToday, errors_today: errorsToday },
+        });
+    });
+    secured.post('/vk-chains', async (req, res) => {
+        if (!isRecord(req.body)) {
+            res.status(400).json({ error: 'invalid body' });
+            return;
+        }
+        const maxChatId = parseNonZeroInt(req.body.max_chat_id);
+        const vkGroupId = parseNonEmptyString(req.body.vk_group_id);
+        const vkToken = parseNonEmptyString(req.body.vk_token);
+        if (maxChatId === null || !vkGroupId || !vkToken) {
+            res.status(400).json({ error: 'max_chat_id, vk_group_id and vk_token required' });
+            return;
+        }
+        const existing = (await (0, adminPanelState_1.listVkChains)()).find((c) => c.active &&
+            Math.abs(c.max_chat_id) === Math.abs(maxChatId) &&
+            c.vk_group_id.replace(/^-/, '') === vkGroupId.replace(/^-/, ''));
+        if (existing) {
+            res.status(400).json({ error: 'Активная VK-связка для этой пары MAX ↔ VK уже есть' });
+            return;
+        }
+        const ch = channelRegistry_1.channelRegistry.getChannel(maxChatId);
+        const row = await (0, adminPanelState_1.createVkChain)({
+            max_chat_id: maxChatId,
+            max_title: ch?.title ?? null,
+            vk_group_id: vkGroupId.replace(/^-/, ''),
+            vk_token: vkToken,
+            forward_posts: req.body.forward_posts !== false,
+            sync_comments: Boolean(req.body.sync_comments),
+            active: true,
+        });
+        res.json({ ok: true, chain: row });
+    });
+    secured.patch('/vk-chains/:id', async (req, res) => {
+        if (!isRecord(req.body)) {
+            res.status(400).json({ error: 'invalid body' });
+            return;
+        }
+        const id = parseNonEmptyString(req.params.id);
+        if (!id) {
+            res.status(400).json({ error: 'invalid id' });
+            return;
+        }
+        const patch = {};
+        if (typeof req.body.active === 'boolean')
+            patch.active = req.body.active;
+        if (typeof req.body.forward_posts === 'boolean')
+            patch.forward_posts = req.body.forward_posts;
+        if (typeof req.body.sync_comments === 'boolean')
+            patch.sync_comments = req.body.sync_comments;
+        const vkToken = parseNonEmptyString(req.body.vk_token);
+        if (vkToken)
+            patch.vk_token = vkToken;
+        const vkGroupId = parseNonEmptyString(req.body.vk_group_id);
+        if (vkGroupId)
+            patch.vk_group_id = vkGroupId.replace(/^-/, '');
+        const updated = await (0, adminPanelState_1.updateVkChain)(id, patch);
+        if (!updated) {
+            res.status(404).json({ error: 'not found' });
+            return;
+        }
+        res.json({ ok: true, chain: updated });
+    });
+    secured.delete('/vk-chains/:id', async (req, res) => {
+        const id = parseNonEmptyString(req.params.id);
+        if (!id) {
+            res.status(400).json({ error: 'invalid id' });
+            return;
+        }
+        const ok = await (0, adminPanelState_1.deleteVkChain)(id);
         if (!ok) {
             res.status(404).json({ error: 'not found' });
             return;

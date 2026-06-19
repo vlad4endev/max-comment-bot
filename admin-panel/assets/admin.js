@@ -35,6 +35,7 @@
   var usersFilterChannel = 'all';
   var channelImportPollTimer = null;
   var channelImportJobId = null;
+  var chainsPlatformTab = 'tg';
 
   var NAV = [
     {
@@ -52,7 +53,7 @@
     {
       group: 'Telegram → MAX',
       items: [
-        { id: 'tgchains', label: 'Цепочки TG→MAX', icon: 'link-2' },
+        { id: 'tgchains', label: 'Цепочки', icon: 'link-2' },
         { id: 'channelimport', label: 'Импорт архива', icon: 'upload-cloud' },
         { id: 'integrations', label: 'Интеграции', icon: 'plug' },
       ],
@@ -95,9 +96,9 @@
       desc: 'Расписание публикаций с медиа и повторениями.',
     },
     tgchains: {
-      title: 'Цепочки TG→MAX',
+      title: 'Цепочки',
       group: 'Telegram → MAX',
-      desc: 'Пересылка постов из Telegram в MAX и синхронизация комментариев.',
+      desc: 'Пересылка Telegram → MAX и публикация MAX → VK, синхронизация комментариев.',
     },
     channelimport: {
       title: 'Импорт архива',
@@ -134,7 +135,7 @@
   var PAGE_TITLES = {
     dashboard: 'Дашборд',
     channels: 'Каналы',
-    tgchains: 'Цепочки TG→MAX',
+    tgchains: 'Цепочки',
     channelimport: 'Импорт архива',
     autoposts: 'Автопосты',
     integrations: 'Интеграции',
@@ -551,54 +552,127 @@
 
   function patchJson(path, body) {
     return authFetch(apiPath(path), { method: 'PATCH', body: body || {} }).then(function (r) {
-      if (!r.ok) throw new Error('Ошибка');
-      return r.json();
+      return parseApiJsonResponse(r).then(function (j) {
+        if (!r.ok) throw new Error((j && j.error) || (j && j.message) || 'Ошибка');
+        return j;
+      });
     });
   }
 
   function deleteReq(path) {
     return authFetch(apiPath(path), { method: 'DELETE' }).then(function (r) {
-      if (!r.ok) throw new Error('Ошибка');
-      return r.json();
+      return parseApiJsonResponse(r).then(function (j) {
+        if (!r.ok) throw new Error((j && j.error) || (j && j.message) || 'Ошибка');
+        return j;
+      });
     });
   }
 
   function putJsonAbs(url, body) {
     return authFetch(url, { method: 'PUT', body: body || {} }).then(function (r) {
-      if (!r.ok) throw new Error('Ошибка');
-      return r.json();
+      return parseApiJsonResponse(r).then(function (j) {
+        if (!r.ok) throw new Error((j && j.error) || (j && j.message) || 'Ошибка');
+        return j;
+      });
     });
   }
 
   function getJsonAbs(url) {
     return authFetch(url).then(function (r) {
-      if (!r.ok) throw new Error('HTTP ' + r.status);
-      return r.json();
+      return parseApiJsonResponse(r).then(function (j) {
+        if (!r.ok) throw new Error((j && j.error) || 'HTTP ' + r.status);
+        return j;
+      });
     });
   }
 
   function postJsonAbs(url, body) {
     return authFetch(url, { method: 'POST', body: body || {} }).then(function (r) {
-      if (!r.ok) {
-        return r.json().then(function (j) {
-          throw new Error(j.error || 'Ошибка');
-        });
-      }
-      return r.json();
+      return parseApiJsonResponse(r).then(function (j) {
+        if (!r.ok) throw new Error((j && j.error) || (j && j.message) || 'Ошибка');
+        return j;
+      });
     });
   }
 
   function deleteAbs(url) {
     return authFetch(url, { method: 'DELETE' }).then(function (r) {
-      if (!r.ok) throw new Error('Ошибка');
-      return r.json();
+      return parseApiJsonResponse(r).then(function (j) {
+        if (!r.ok) throw new Error((j && j.error) || (j && j.message) || 'Ошибка');
+        return j;
+      });
     });
   }
 
   function patchJsonAbs(url, body) {
     return authFetch(url, { method: 'PATCH', body: body || {} }).then(function (r) {
-      if (!r.ok) throw new Error('Ошибка');
-      return r.json();
+      return parseApiJsonResponse(r).then(function (j) {
+        if (!r.ok) throw new Error((j && j.error) || (j && j.message) || 'Ошибка');
+        return j;
+      });
+    });
+  }
+
+  function ensureIntegrationsCache() {
+    if (integrationsCache.length) {
+      return Promise.resolve(integrationsCache);
+    }
+    return getJsonAbs(API_INTEGRATIONS)
+      .then(function (data) {
+        integrationsCache = data.integrations || [];
+        var tgRec = integrationsCache.find(function (i) {
+          return i.platform === 'telegram' && i.status === 'connected';
+        });
+        if (tgRec && tgRec.linkedChats && tgRec.linkedChats.length) {
+          tgLinkedChatsCache = tgRec.linkedChats;
+        }
+        return integrationsCache;
+      })
+      .catch(function () {
+        return integrationsCache;
+      });
+  }
+
+  function renderChainsPlatformTabs(active) {
+    return (
+      '<div class="chains-platform-tabs">' +
+      '<button type="button" class="chains-platform-tab' +
+      (active === 'tg' ? ' active' : '') +
+      '" data-chains-tab="tg">Telegram → MAX</button>' +
+      '<button type="button" class="chains-platform-tab' +
+      (active === 'vk' ? ' active' : '') +
+      '" data-chains-tab="vk">MAX → VK</button>' +
+      '</div>'
+    );
+  }
+
+  function bindChainsPlatformTabs(root) {
+    qsa('[data-chains-tab]', root).forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        chainsPlatformTab = btn.getAttribute('data-chains-tab') || 'tg';
+        renderTgChains();
+      });
+    });
+  }
+
+  function renderTelegramConnectBanner() {
+    var tgInt = integrationsCache.find(function (i) {
+      return i.platform === 'telegram' && i.status === 'connected';
+    });
+    if (tgInt) return '';
+    return (
+      '<div class="chains-connect-banner">' +
+      '<span>Telegram-бот не подключён — списки каналов могут быть пустыми.</span>' +
+      '<button type="button" class="btn btn-ghost btn-sm" data-route-jump="integrations">Подключить в «Интеграции»</button>' +
+      '</div>'
+    );
+  }
+
+  function bindRouteJumpButtons(root) {
+    qsa('[data-route-jump]', root).forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        navigate(btn.getAttribute('data-route-jump') || 'integrations');
+      });
     });
   }
 
@@ -1416,7 +1490,7 @@
     var items = [
       { route: 'channels', icon: 'radio', label: 'Каналы', desc: 'MAX-каналы' },
       { route: 'comments', icon: 'message-square', label: 'Комментарии', desc: 'Модерация' },
-      { route: 'tgchains', icon: 'link-2', label: 'TG→MAX', desc: 'Пересылка' },
+      { route: 'tgchains', icon: 'link-2', label: 'Цепочки', desc: 'TG→MAX и MAX→VK' },
       { route: 'autoposts', icon: 'calendar-clock', label: 'Автопосты', desc: 'Расписание' },
       { route: 'antispam', icon: 'shield', label: 'Антиспам', desc: 'Фильтры' },
       { route: 'users', icon: 'users', label: 'Пользователи', desc: 'Ограничения' },
@@ -1834,7 +1908,8 @@
           html += '</div>';
         });
         if (!channels.length) {
-          html += '<p class="muted">Telegram каналы не найдены. Подключите Telegram интеграцию.</p>';
+          html +=
+            '<p class="muted">Telegram каналы не найдены. <button type="button" class="btn btn-ghost btn-sm" data-route-jump="integrations">Подключить Telegram</button></p>';
         }
         html += '</div>';
 
@@ -1897,6 +1972,7 @@
             var slot = qs('#dashTgSlot', main);
             if (!slot) return;
             slot.outerHTML = renderTelegramDashboardSection(tgData);
+            bindRouteJumpButtons(main);
             refreshIcons(main);
           })
           .catch(function () {
@@ -2836,6 +2912,16 @@
     var main = qs('#mainContent');
     if (!main) return;
     main.innerHTML = '<div class="dash-loading muted">Загрузка…</div>';
+    ensureIntegrationsCache().then(function () {
+      if (chainsPlatformTab === 'vk') {
+        renderVkChainsPage(main);
+        return;
+      }
+      renderTgChainsPage(main);
+    });
+  }
+
+  function renderTgChainsPage(main) {
     Promise.all([
       getJson('/tg-chains'),
       fetchMaxLinkedChannels(false).catch(function () {
@@ -2846,7 +2932,7 @@
       }),
     ])
       .then(function (bundle) {
-        if (currentRoute !== 'tgchains') return;
+        if (currentRoute !== 'tgchains' || chainsPlatformTab !== 'tg') return;
         var data = bundle[0];
         var maxChannels = bundle[1].channels || maxLinkedChatsCache || [];
         var tgChats = bundle[2].channels || tgLinkedChatsCache || [];
@@ -2857,6 +2943,8 @@
         });
 
         var html = '<div class="tg-chains-page">';
+        html += renderChainsPlatformTabs('tg');
+        html += renderTelegramConnectBanner();
         html += '<h2 style="margin:0 0 8px">Пересылка Telegram → MAX</h2>';
 
         html += '<section class="card-like tg-chain-hero">';
@@ -2941,6 +3029,8 @@
         }
         html += '</div>';
         main.innerHTML = html;
+        bindChainsPlatformTabs(main);
+        bindRouteJumpButtons(main);
         bindMtprotoPanel(main);
         refreshMtprotoPanel(main);
         qsa('.tg-chain-card', main).forEach(function (card) {
@@ -2951,6 +3041,256 @@
           if (chain) bindTgChainCard(card, chain);
         });
         bindTgChainSetupPage(main);
+        refreshIcons();
+      })
+      .catch(function (err) {
+        if (err && err.message === 'auth') return;
+        main.innerHTML = '<p class="muted">Ошибка: ' + esc(err.message || '') + '</p>';
+      });
+  }
+
+  function renderVkConnectBanner() {
+    var vkInt = integrationsCache.find(function (i) {
+      return i.platform === 'vk' && i.status === 'connected';
+    });
+    if (vkInt) return '';
+    return (
+      '<div class="chains-connect-banner">' +
+      '<span>VK не подключён — укажите токен сообщества вручную или подключите в «Интеграции».</span>' +
+      '<button type="button" class="btn btn-ghost btn-sm" data-route-jump="integrations">Подключить VK</button>' +
+      '</div>'
+    );
+  }
+
+  function renderVkChainCardHtml(c) {
+    var mx = tgChainMaxDisplayName(c);
+    var html =
+      '<article class="tg-chain-card' +
+      (c.active ? '' : ' is-paused') +
+      '" data-vk-chain-id="' +
+      esc(c.id) +
+      '">';
+    html += '<div class="tg-chain-card-flow">';
+    html += '<div class="tg-chain-card-end"><div class="tg-chain-card-end-label">MAX</div>';
+    html += '<div class="tg-chain-card-end-name">' + esc(mx.title) + '</div>';
+    if (mx.sub) html += '<div class="mono text-sm muted">' + esc(mx.sub) + '</div>';
+    html += '</div><span class="tg-chain-arrow">→</span>';
+    html += '<div class="tg-chain-card-end"><div class="tg-chain-card-end-label">VK</div>';
+    html +=
+      '<div class="tg-chain-card-end-name">Сообщество ' +
+      esc(c.vk_group_id || '—') +
+      '</div></div></div>';
+    html +=
+      '<div class="tg-chain-card-meta"><span>Сегодня: <strong>' +
+      esc(fmtNum(c.forwarded_today)) +
+      '</strong></span><span>Ошибки: <strong>' +
+      esc(fmtNum(c.errors_today)) +
+      '</strong></span></div>';
+    html += '<div class="tg-chain-card-toggles">';
+    html +=
+      '<label class="tg-chain-mini-toggle"><span>Посты</span><span class="switch' +
+      (c.forward_posts !== false ? ' on' : '') +
+      '" data-vk-chain-field="forward_posts" role="switch" tabindex="0"></span></label>';
+    html +=
+      '<label class="tg-chain-mini-toggle"><span>Комментарии</span><span class="switch' +
+      (c.sync_comments ? ' on' : '') +
+      '" data-vk-chain-field="sync_comments" role="switch" tabindex="0"></span></label>';
+    html += '</div>';
+    html +=
+      '<div class="tg-chain-card-actions"><label class="tg-chain-mini-toggle"><span>' +
+      (c.active ? 'Активна' : 'На паузе') +
+      '</span><span class="switch' +
+      (c.active ? ' on' : '') +
+      '" data-vk-chain-field="active" role="switch" tabindex="0"></span></label>';
+    html +=
+      '<button type="button" class="btn btn-ghost btn-sm btn-danger-text" data-del-vk-chain><i data-lucide="trash-2"></i> Удалить</button></div>';
+    html += '</article>';
+    return html;
+  }
+
+  function bindVkChainCard(card, chain) {
+    var chainId = chain.id;
+    qsa('[data-vk-chain-field]', card).forEach(function (sw) {
+      sw.addEventListener('click', function (e) {
+        e.stopPropagation();
+        var field = sw.getAttribute('data-vk-chain-field');
+        var next = !sw.classList.contains('on');
+        var patch = {};
+        patch[field] = next;
+        patchJson('/vk-chains/' + encodeURIComponent(chainId), patch)
+          .then(function () {
+            sw.classList.toggle('on', next);
+            if (field === 'active') card.classList.toggle('is-paused', !next);
+            showToast('Сохранено', 'success');
+          })
+          .catch(function (err) {
+            showToast(err.message || 'Ошибка', 'error');
+          });
+      });
+    });
+    var del = qs('[data-del-vk-chain]', card);
+    if (del) {
+      del.addEventListener('click', function () {
+        showConfirm('Удалить VK-связку?', 'Публикация в VK для этого канала прекратится.', function () {
+          deleteReq('/vk-chains/' + encodeURIComponent(chainId))
+            .then(function () {
+              showToast('Удалено', 'success');
+              renderTgChains();
+            })
+            .catch(function (err) {
+              showToast(err.message || 'Ошибка', 'error');
+            });
+        });
+      });
+    }
+  }
+
+  function submitVkChainFromForm(root) {
+    var maxId = Number(qs('#vc_max', root) ? qs('#vc_max', root).value : '');
+    var groupEl = qs('#vc_group', root);
+    var tokenEl = qs('#vc_token', root);
+    var vkGroup = groupEl ? String(groupEl.value || '').trim().replace(/^-/, '') : '';
+    var vkToken = tokenEl ? String(tokenEl.value || '').trim() : '';
+    var vkInt = integrationsCache.find(function (i) {
+      return i.platform === 'vk' && i.status === 'connected';
+    });
+    if (!vkToken && vkInt && vkInt.token) vkToken = String(vkInt.token).trim();
+    if (!vkGroup && vkInt && vkInt.groupId) vkGroup = String(vkInt.groupId).trim().replace(/^-/, '');
+    var sw = readSwitches(root);
+    if (!maxId || !vkGroup || !vkToken) {
+      showToast('Укажите канал MAX, ID сообщества VK и токен', 'error');
+      return;
+    }
+    var btn = qs('#vc_submit', root);
+    if (btn) btn.disabled = true;
+    postJson('/vk-chains', {
+      max_chat_id: maxId,
+      vk_group_id: vkGroup,
+      vk_token: vkToken,
+      forward_posts: sw.forward_posts !== false,
+      sync_comments: !!sw.sync_comments,
+    })
+      .then(function () {
+        showToast('VK-связка создана', 'success');
+        renderTgChains();
+      })
+      .catch(function (e) {
+        showToast(e.message || 'Ошибка', 'error');
+      })
+      .finally(function () {
+        if (btn) btn.disabled = false;
+      });
+  }
+
+  function renderVkChainsPage(main) {
+    Promise.all([
+      getJson('/vk-chains'),
+      fetchMaxLinkedChannels(false).catch(function () {
+        return { channels: maxLinkedChatsCache };
+      }),
+    ])
+      .then(function (bundle) {
+        if (currentRoute !== 'tgchains' || chainsPlatformTab !== 'vk') return;
+        var data = bundle[0];
+        var maxChannels = bundle[1].channels || maxLinkedChatsCache || [];
+        var chains = data.chains || [];
+        var st = data.stats || {};
+        var vkInt = integrationsCache.find(function (i) {
+          return i.platform === 'vk' && i.status === 'connected';
+        });
+        var html = '<div class="tg-chains-page">';
+        html += renderChainsPlatformTabs('vk');
+        html += renderVkConnectBanner();
+        html += '<h2 style="margin:0 0 8px">Публикация MAX → VK</h2>';
+        html += '<section class="card-like tg-chain-hero">';
+        html += '<div class="tg-chain-flow-diagram">';
+        html += '<div class="tg-chain-node max-dest"><div class="tg-chain-node-badge">MAX</div>';
+        html += '<div class="tg-chain-node-title">MAX</div><div class="tg-chain-node-sub">источник постов</div></div>';
+        html += '<div class="tg-chain-arrow">→</div>';
+        html += '<div class="tg-chain-node vk-dest"><div class="tg-chain-node-badge">VK</div>';
+        html += '<div class="tg-chain-node-title">ВКонтакте</div><div class="tg-chain-node-sub">стена сообщества</div></div>';
+        html += '</div>';
+        html +=
+          '<p class="muted text-sm" style="margin:12px 0 10px;line-height:1.5">После публикации поста в MAX-канале бот дублирует его на стену VK. Комментарии можно синхронизировать в обе стороны.</p>';
+        html += '</section>';
+        html += '<section class="card-like forwarding-section">';
+        html += '<h3 class="tg-chain-setup-title">Настроить связку</h3>';
+        html += '<div class="forwarding-add-form forwarding-add-form--picks">';
+        html +=
+          '<div class="form-group"><div class="flex-between" style="align-items:center;gap:8px;margin-bottom:6px"><label style="margin:0">① Канал MAX</label><button type="button" class="btn btn-ghost btn-sm" id="vc_refresh_max"><i data-lucide="refresh-cw"></i> Обновить</button></div>';
+        html +=
+          '<select class="select" id="vc_max">' +
+          buildMaxChannelSelectOptions(maxChannels, { adminOnly: true }) +
+          '</select></div>';
+        html +=
+          '<div class="form-group"><label>② ID сообщества VK</label><input class="input mono" id="vc_group" placeholder="12345678" value="' +
+          esc(vkInt && vkInt.groupId ? String(vkInt.groupId).replace(/^-/, '') : '') +
+          '"/></div>';
+        if (!vkInt) {
+          html +=
+            '<div class="form-group"><label>Токен сообщества VK</label><input class="input mono" id="vc_token" type="password" placeholder="access_token с правами wall, comments"/></div>';
+        } else {
+          html +=
+            '<div class="form-group"><label>Токен (необязательно)</label><input class="input mono" id="vc_token" type="password" placeholder="Оставьте пустым — возьмём из интеграции"/></div>';
+        }
+        html += '<div id="vcToggles">';
+        html += toggleRow('forward_posts', 'Публиковать посты в VK', '', true);
+        html += toggleRow('sync_comments', 'Синхронизировать комментарии', 'VK ↔ MAX miniapp', false);
+        html += '</div>';
+        html += '<div class="forwarding-add-form-actions" style="margin-top:14px">';
+        html +=
+          '<button type="button" class="btn btn-primary" id="vc_submit"><i data-lucide="zap"></i> Создать связку</button>';
+        html += '</div></div></section>';
+        html += '<div class="stats-grid" style="margin:16px 0">';
+        html +=
+          '<div class="stat-card"><div class="label">Активных</div><div class="value">' +
+          esc(fmtNum(st.active)) +
+          '</div></div>';
+        html +=
+          '<div class="stat-card"><div class="label">Сегодня опубликовано</div><div class="value">' +
+          esc(fmtNum(st.forwarded_today)) +
+          '</div></div>';
+        html +=
+          '<div class="stat-card"><div class="label">Ошибки</div><div class="value">' +
+          esc(fmtNum(st.errors_today)) +
+          '</div></div>';
+        html += '</div>';
+        html += '<h3 class="tg-chain-list-title">Настроенные связки</h3>';
+        if (chains.length) {
+          chains.forEach(function (c) {
+            html += renderVkChainCardHtml(c);
+          });
+        } else {
+          html +=
+            '<div class="tg-chain-empty"><p style="margin:0 0 6px">Пока нет связок MAX → VK</p><p class="text-sm muted" style="margin:0">Выберите канал MAX и сообщество VK выше</p></div>';
+        }
+        html += '</div>';
+        main.innerHTML = html;
+        bindChainsPlatformTabs(main);
+        bindRouteJumpButtons(main);
+        var refreshMax = qs('#vc_refresh_max', main);
+        if (refreshMax) {
+          refreshMax.addEventListener('click', function () {
+            fetchMaxLinkedChannels(true)
+              .then(function (data) {
+                var sel = qs('#vc_max', main);
+                if (sel) sel.innerHTML = buildMaxChannelSelectOptions(data.channels || [], { adminOnly: true });
+                showToast((data.channels || []).length ? 'MAX обновлён' : 'Каналы не найдены', 'info');
+                refreshIcons();
+              })
+              .catch(function (e) {
+                showToast(e.message || 'Ошибка', 'error');
+              });
+          });
+        }
+        var submit = qs('#vc_submit', main);
+        if (submit) submit.addEventListener('click', function () { submitVkChainFromForm(main); });
+        bindToggleRows(main, null);
+        qsa('[data-vk-chain-id]', main).forEach(function (card) {
+          var chainId = card.getAttribute('data-vk-chain-id');
+          var chain = chains.find(function (c) { return c.id === chainId; });
+          if (chain) bindVkChainCard(card, chain);
+        });
         refreshIcons();
       })
       .catch(function (err) {
@@ -3953,8 +4293,7 @@
           html += '<select class="select" id="flow-filter-select"><option value="">Все потоки</option>';
           flowsCache.forEach(function (f) { html += '<option value="' + esc(f.id) + '">' + esc(f.name) + '</option>'; });
           html += '</select></div>';
-          html = html.replace('', '');
-          html = html.replace('', '<div class="forwarded-list">');
+          html += '<div class="forwarded-list">';
           logItems.forEach(function (item) { html += forwardedItemHtml(item); });
           if (!logItems.length) html += '<p class="muted" style="padding:12px">Пока нет пересланных постов</p>';
           html += '</div></div>';
@@ -5646,19 +5985,38 @@
         if (!el) return;
         var dot = qs('.status-dot', el);
         var labelEl = qs('.bot-status-label', el);
-        if (s.active) {
-          if (labelEl) labelEl.textContent = s.label || 'Бот активен';
-          if (dot) dot.style.background = 'var(--success)';
-        } else {
-          if (labelEl) labelEl.textContent = s.label || 'Неактивен';
-          if (dot) dot.style.background = 'var(--danger)';
+        var subEl = qs('.bot-status-sub', el);
+        var platforms = s.platforms || {};
+        var tg = platforms.telegram || {};
+        var vk = platforms.vk || {};
+        var ok = s.active !== false;
+        if (labelEl) labelEl.textContent = s.label || (ok ? 'MAX бот активен' : 'Неактивен');
+        if (subEl) {
+          var parts = [];
+          if (tg.label) parts.push(tg.label);
+          if (typeof tg.chains_active === 'number' && tg.chains_active > 0) {
+            parts.push('TG→MAX: ' + tg.chains_active);
+          }
+          if (vk.label) parts.push(vk.label);
+          if (typeof vk.chains_active === 'number' && vk.chains_active > 0) {
+            parts.push('MAX→VK: ' + vk.chains_active);
+          }
+          if (s.mtproto_ready === false) parts.push('MTProto: нет');
+          else if (s.mtproto_ready === true) parts.push('MTProto: OK');
+          subEl.textContent = parts.join(' · ');
+        }
+        if (dot) {
+          var tgOk = tg.connected !== false;
+          dot.style.background = ok && tgOk ? 'var(--success)' : ok ? 'var(--warning)' : 'var(--danger)';
         }
       })
       .catch(function () {
         var el = qs('#botStatus');
         if (!el) return;
         var labelEl = qs('.bot-status-label', el);
-        if (labelEl) labelEl.textContent = 'Статус неизвестен';
+        var subEl = qs('.bot-status-sub', el);
+        if (labelEl) labelEl.textContent = 'Нет связи с API';
+        if (subEl) subEl.textContent = 'Проверьте, что бот запущен';
       });
   }
 
