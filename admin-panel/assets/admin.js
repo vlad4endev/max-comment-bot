@@ -75,6 +75,7 @@
       group: 'Система',
       items: [
         { id: 'logs', label: 'Логи', icon: 'terminal' },
+        { id: 'ailog', label: 'ИИ-анализ', icon: 'sparkles' },
         { id: 'settings', label: 'Настройки', icon: 'settings' },
       ],
     },
@@ -131,6 +132,11 @@
       group: 'Система',
       desc: 'Журнал работы бота, статистика БД и ИИ-анализ проблем.',
     },
+    ailog: {
+      title: 'ИИ-анализ',
+      group: 'Система',
+      desc: 'Настройка оператора (OpenRouter/OpenAI) и отчёты о проблемах бота простым языком.',
+    },
     settings: {
       title: 'Настройки',
       group: 'Система',
@@ -149,6 +155,7 @@
     comments: 'Комментарии',
     users: 'Пользователи',
     logs: 'Логи',
+    ailog: 'ИИ-анализ',
     settings: 'Настройки',
   };
 
@@ -1650,6 +1657,7 @@
       comments: 1,
       users: 1,
       logs: 1,
+      ailog: 1,
       settings: 1,
     };
     return allowed[id] ? id : 'dashboard';
@@ -7206,6 +7214,136 @@
     }
   }
 
+  function renderLogAiAnalysisControls(options) {
+    options = options || {};
+    var compact = !!options.compact;
+    var html = '';
+    if (!compact) {
+      html += '<div class="panel log-ai-action-panel">';
+      html += sectionHead('Анализ журнала', 'ИИ прочитает логи и метрики БД, выдаст отчёт на русском');
+    } else {
+      html += '<div class="log-ai-action-panel log-ai-action-panel--inline">';
+    }
+    html += '<div class="log-ai-action-row">';
+    if (!compact) {
+      html +=
+        '<select class="select" id="log_level" style="max-width:150px"><option value="">Все уровни</option>' +
+        '<option value="ERROR">Ошибки</option><option value="WARN">Предупреждения</option>' +
+        '<option value="INFO">Инфо</option><option value="DEBUG">Отладка</option></select>';
+      html += '<input class="input" id="log_filter" placeholder="Поиск по тексту…" style="max-width:220px"/>';
+      html +=
+        '<input class="input mono" id="log_limit" style="max-width:80px" placeholder="200" value="' +
+        esc(String(options.limit || 200)) +
+        '" title="Сколько строк"/>';
+    }
+    html += '<select class="select" id="log_ai_focus" style="max-width:200px" title="Фокус ИИ-анализа">';
+    html += '<option value="general">Общий обзор</option>';
+    html += '<option value="errors">Только ошибки</option>';
+    html += '<option value="comment_buttons">Кнопки комментариев</option>';
+    html += '<option value="database">База данных</option>';
+    html += '<option value="rate_limit">Rate limit</option>';
+    html += '<option value="integrations">Интеграции</option>';
+    html += '</select>';
+    html +=
+      '<button type="button" class="btn btn-primary" id="log_ai_run"><i data-lucide="sparkles"></i> Запустить ИИ-анализ</button>';
+    if (compact) {
+      html += '<a class="btn btn-ghost" href="#/ailog">Настроить оператора</a>';
+    }
+    html += '</div>';
+    html += '<div id="log_ai_report" class="log-ai-panel" hidden></div>';
+    html += '</div>';
+    return html;
+  }
+
+  function bindLogAiAnalysis(main, routeGuard) {
+    var aiLoading = false;
+    var btn = qs('#log_ai_run', main);
+    if (!btn) return;
+    btn.addEventListener('click', function () {
+      if (aiLoading) return;
+      var guardRoute = routeGuard || currentRoute;
+      var levelEl = qs('#log_level', main);
+      var filterEl = qs('#log_filter', main);
+      var level = (levelEl && levelEl.value) || '';
+      var filter = (filterEl && filterEl.value) || '';
+      var lim = (qs('#log_limit', main) && qs('#log_limit', main).value) || '200';
+      var focusEl = qs('#log_ai_focus', main);
+      var focus = (focusEl && focusEl.value) || 'general';
+      var panel = qs('#log_ai_report', main);
+      aiLoading = true;
+      btn.disabled = true;
+      btn.innerHTML = '<span class="log-ai-spinner"></span> Анализ…';
+      if (panel) {
+        panel.hidden = false;
+        panel.innerHTML =
+          '<div class="log-ai-loading"><span class="log-ai-spinner"></span> ИИ изучает логи и метрики БД…</div>';
+      }
+      postJson('/logs/analyze', {
+        limit: Number(lim) || 200,
+        level: level || undefined,
+        filter: filter || undefined,
+        focus: focus,
+      })
+        .then(function (report) {
+          if (currentRoute !== guardRoute) return;
+          renderLogAiReport(report, main);
+          showToast('ИИ-отчёт готов', 'success');
+        })
+        .catch(function (e) {
+          if (currentRoute !== guardRoute) return;
+          var msg = e.message || 'Ошибка анализа';
+          if (panel) {
+            panel.hidden = false;
+            panel.innerHTML =
+              '<div class="log-ai-error">' +
+              '<strong>Не удалось выполнить анализ</strong>' +
+              '<p>' +
+              esc(msg) +
+              '</p>' +
+              '<p class="muted text-sm">Сначала настройте оператора в этом разделе или в <a href="#/ailog">ИИ-анализ</a>: ключ и модель.</p>' +
+              '</div>';
+          }
+          showToast(msg, 'error');
+        })
+        .finally(function () {
+          aiLoading = false;
+          btn.disabled = false;
+          btn.innerHTML = '<i data-lucide="sparkles"></i> Запустить ИИ-анализ';
+          refreshIcons();
+        });
+    });
+    var filterInput = qs('#log_filter', main);
+    if (filterInput) {
+      filterInput.addEventListener('keydown', function (ev) {
+        if (ev.key === 'Enter') btn.click();
+      });
+    }
+  }
+
+  function renderAiLogPage() {
+    var main = qs('#mainContent');
+    if (!main) return;
+    main.innerHTML = skeletonPage();
+    getJson('/logs/ai-config')
+      .then(function (ai) {
+        if (currentRoute !== 'ailog') return;
+        var html = '<p class="text-sm muted" style="margin-bottom:0.75rem">';
+        html += '1) Выберите оператора и укажите ключ · 2) Выберите модель · 3) Нажмите «Проверить» · 4) Запустите анализ ниже.';
+        html += '</p>';
+        html += renderAiOperatorPanel(ai || {});
+        html += renderLogAiAnalysisControls({ limit: 200, compact: false });
+        main.innerHTML = html;
+        bindAiOperatorPanel(main, ai || {});
+        bindLogAiAnalysis(main, 'ailog');
+        refreshIcons();
+      })
+      .catch(function (e) {
+        if (currentRoute !== 'ailog') return;
+        main.innerHTML =
+          '<p class="muted">Не удалось загрузить настройки ИИ: ' + esc(e.message || 'ошибка') + '</p>';
+      });
+  }
+
   function renderLogs() {
     var main = qs('#mainContent');
     if (!main) return;
@@ -7232,18 +7370,9 @@
       '<input class="input" id="log_filter" placeholder="Поиск по тексту…" style="max-width:220px"/>' +
       '<input class="input mono" id="log_limit" style="max-width:80px" placeholder="200" value="200" title="Сколько строк"/>' +
       '<label class="log-auto-label"><input type="checkbox" id="log_auto" checked/> Авто 5 с</label>' +
-      '<select class="select" id="log_ai_focus" style="max-width:190px" title="Фокус ИИ-анализа">' +
-      '<option value="general">ИИ: общий обзор</option>' +
-      '<option value="errors">ИИ: ошибки</option>' +
-      '<option value="comment_buttons">ИИ: кнопки</option>' +
-      '<option value="database">ИИ: база данных</option>' +
-      '<option value="rate_limit">ИИ: rate limit</option>' +
-      '<option value="integrations">ИИ: интеграции</option>' +
-      '</select>' +
-      '<button type="button" class="btn btn-primary" id="log_ai_run"><i data-lucide="sparkles"></i> ИИ-анализ</button>' +
       '<button type="button" class="btn btn-primary" id="log_run">Обновить</button>' +
       '</div>' +
-      '<div id="log_ai_report" class="log-ai-panel" hidden></div>' +
+      renderLogAiAnalysisControls({ limit: 200, compact: true }) +
       '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px">' +
       '<button type="button" class="btn btn-ghost btn-sm log-quick-filter" data-filter="db:">🗄 БД</button>' +
       '<button type="button" class="btn btn-ghost btn-sm log-quick-filter" data-filter="commentButton">🔘 Кнопки</button>' +
@@ -7257,62 +7386,6 @@
       '<div class="log-stats" id="log_stats"></div>' +
       '<div class="log-viewer" id="log_body"></div>';
     var loading = false;
-    var aiLoading = false;
-
-    function runAiAnalysis() {
-      if (aiLoading) return;
-      var level = (qs('#log_level', main) && qs('#log_level', main).value) || '';
-      var filter = (qs('#log_filter', main) && qs('#log_filter', main).value) || '';
-      var lim = (qs('#log_limit', main) && qs('#log_limit', main).value) || '200';
-      var focusEl = qs('#log_ai_focus', main);
-      var focus = (focusEl && focusEl.value) || 'general';
-      var panel = qs('#log_ai_report', main);
-      var btn = qs('#log_ai_run', main);
-      aiLoading = true;
-      if (btn) {
-        btn.disabled = true;
-        btn.innerHTML = '<span class="log-ai-spinner"></span> Анализ…';
-      }
-      if (panel) {
-        panel.hidden = false;
-        panel.innerHTML = '<div class="log-ai-loading"><span class="log-ai-spinner"></span> ИИ изучает логи и метрики БД…</div>';
-      }
-      postJson('/logs/analyze', {
-        limit: Number(lim) || 200,
-        level: level || undefined,
-        filter: filter || undefined,
-        focus: focus,
-      })
-        .then(function (report) {
-          if (currentRoute !== 'logs') return;
-          renderLogAiReport(report, main);
-          showToast('ИИ-отчёт готов', 'success');
-        })
-        .catch(function (e) {
-          if (currentRoute !== 'logs') return;
-          var msg = e.message || 'Ошибка анализа';
-          if (panel) {
-            panel.hidden = false;
-            panel.innerHTML =
-              '<div class="log-ai-error">' +
-              '<strong>Не удалось выполнить анализ</strong>' +
-              '<p>' +
-              esc(msg) +
-              '</p>' +
-              '<p class="muted text-sm">Настройте оператора ИИ в <a href="#/settings">Настройках → Оператор ИИ</a>: укажите ключ и модель</p>' +
-              '</div>';
-          }
-          showToast(msg, 'error');
-        })
-        .finally(function () {
-          aiLoading = false;
-          if (btn) {
-            btn.disabled = false;
-            btn.innerHTML = '<i data-lucide="sparkles"></i> ИИ-анализ';
-            refreshIcons();
-          }
-        });
-    }
 
     function renderStats(stats) {
       var el = qs('#log_stats', main);
@@ -7474,8 +7547,7 @@
     qs('#log_run', main).addEventListener('click', function () {
       run(false);
     });
-    var aiBtn = qs('#log_ai_run', main);
-    if (aiBtn) aiBtn.addEventListener('click', runAiAnalysis);
+    bindLogAiAnalysis(main, 'logs');
     var autoEl = qs('#log_auto', main);
     if (autoEl) {
       autoEl.addEventListener('change', scheduleLogsRefresh);
@@ -7495,9 +7567,16 @@
     var main = qs('#mainContent');
     if (!main) return;
     main.innerHTML = skeletonPage();
-    getJson('/settings')
-      .then(function (s) {
+    Promise.all([
+      getJson('/settings'),
+      getJson('/logs/ai-config').catch(function () {
+        return {};
+      }),
+    ])
+      .then(function (results) {
         if (currentRoute !== 'settings') return;
+        var s = results[0] || {};
+        s.log_ai = results[1] && results[1].provider ? results[1] : s.log_ai || results[1] || {};
         var sec = s.poll_interval_sec != null ? s.poll_interval_sec : 30;
         var html = '<div class="two-col">';
 
@@ -7692,6 +7771,8 @@
       renderUsers();
     } else if (currentRoute === 'logs') {
       renderLogs();
+    } else if (currentRoute === 'ailog') {
+      renderAiLogPage();
     } else if (currentRoute === 'settings') {
       renderSettings();
     }

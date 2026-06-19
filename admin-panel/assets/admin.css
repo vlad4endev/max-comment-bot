@@ -2125,6 +2125,25 @@ tbody tr:hover td {
   margin-top: 0.25rem;
 }
 
+.log-ai-action-panel {
+  margin-bottom: 0.75rem;
+  padding: 0.85rem 1rem;
+  border-radius: var(--radius-md);
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--border));
+  background: color-mix(in srgb, var(--accent) 5%, var(--bg-card));
+}
+
+.log-ai-action-panel--inline {
+  padding: 0.75rem;
+}
+
+.log-ai-action-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+}
+
 /* AI operator settings */
 .ai-operator-panel {
   border-color: color-mix(in srgb, var(--accent) 28%, var(--border));
