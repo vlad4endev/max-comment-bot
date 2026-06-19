@@ -5,6 +5,7 @@
  */
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.ensurePostThreadMapping = ensurePostThreadMapping;
+exports.refreshPostThreadMapping = refreshPostThreadMapping;
 const telegram_1 = require("telegram");
 const adminPanelState_1 = require("../api/adminPanelState");
 const logger_1 = require("../utils/logger");
@@ -115,6 +116,15 @@ async function resolveThreadViaMtproto(chain, mapping) {
  * @returns mapping с заполненными thread id или null, если восстановить не удалось
  */
 async function ensurePostThreadMapping(maxMid) {
+    return ensurePostThreadMappingInternal(maxMid, false);
+}
+/**
+ * Принудительно пересоздаёт thread mapping (сбрасывает старые id и вызывает GetDiscussionMessage).
+ */
+async function refreshPostThreadMapping(maxMid) {
+    return ensurePostThreadMappingInternal(maxMid, true);
+}
+async function ensurePostThreadMappingInternal(maxMid, forceRefresh) {
     const normalized = maxMid.trim();
     if (!normalized) {
         return null;
@@ -123,7 +133,14 @@ async function ensurePostThreadMapping(maxMid) {
     if (!mapping) {
         return null;
     }
-    if (mapping.tg_thread_chat_id && mapping.tg_thread_msg_id) {
+    if (forceRefresh && typeof mapping.tg_msg_id === 'number' && mapping.tg_msg_id > 0) {
+        (0, postCommentMappingStore_1.clearPostThreadMapping)(mapping.chain_id, mapping.tg_msg_id);
+        mapping = (0, postCommentMappingStore_1.findMappingByMaxMid)(normalized);
+        if (!mapping) {
+            return null;
+        }
+    }
+    else if (mapping.tg_thread_chat_id && mapping.tg_thread_msg_id) {
         return mapping;
     }
     const chain = (0, adminPanelState_1.listTgChainsSync)().find((c) => c.id === mapping.chain_id);

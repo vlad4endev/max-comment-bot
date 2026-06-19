@@ -49,6 +49,58 @@ export function linkThreadMessageToChannelPost(
     .run(threadChatId, threadMsgId, chainId, channelMsgId)
 }
 
+/** Сбрасывает устаревший thread id — для повторного resolve через GetDiscussionMessage. */
+export function clearPostThreadMapping(chainId: string, tgMsgId: number): void {
+  getDb()
+    .prepare(
+      `UPDATE post_comment_mapping
+       SET tg_thread_chat_id = NULL, tg_thread_msg_id = NULL
+       WHERE chain_id = ? AND tg_msg_id = ?`,
+    )
+    .run(chainId, tgMsgId)
+}
+
+export interface PostMappingThreadStats {
+  total: number
+  with_thread: number
+  missing_thread: number
+}
+
+export function countPostMappingThreadStats(chainId?: string): PostMappingThreadStats {
+  const where = chainId ? 'WHERE chain_id = ?' : ''
+  const params = chainId ? [chainId] : []
+  const row = getDb()
+    .prepare(
+      `SELECT
+         COUNT(*) AS total,
+         SUM(CASE WHEN tg_thread_msg_id IS NOT NULL AND tg_thread_msg_id > 0 THEN 1 ELSE 0 END) AS with_thread,
+         SUM(CASE WHEN tg_thread_msg_id IS NULL OR tg_thread_msg_id <= 0 THEN 1 ELSE 0 END) AS missing_thread
+       FROM post_comment_mapping
+       ${where}`,
+    )
+    .get(...params) as { total: number; with_thread: number; missing_thread: number }
+  return {
+    total: Number(row.total) || 0,
+    with_thread: Number(row.with_thread) || 0,
+    missing_thread: Number(row.missing_thread) || 0,
+  }
+}
+
+export function listMappingsMissingThread(chainId: string, limit = 50): PostCommentMappingRow[] {
+  const safeLimit = Math.min(Math.max(limit, 1), 200)
+  return getDb()
+    .prepare(
+      `SELECT chain_id, tg_msg_id, max_mid, tg_chat_id, tg_thread_chat_id, tg_thread_msg_id
+       FROM post_comment_mapping
+       WHERE chain_id = ?
+         AND (tg_thread_msg_id IS NULL OR tg_thread_msg_id <= 0)
+         AND tg_msg_id IS NOT NULL AND tg_msg_id > 0
+       ORDER BY id DESC
+       LIMIT ?`,
+    )
+    .all(chainId, safeLimit) as PostCommentMappingRow[]
+}
+
 export function findMappingByThreadMsgId(
   chainId: string,
   threadMsgId: number,

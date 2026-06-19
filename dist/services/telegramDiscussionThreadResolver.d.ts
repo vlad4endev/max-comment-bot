@@ -8,3 +8,7 @@ import { type PostCommentMappingRow } from './postCommentMappingStore';
  * @returns mapping с заполненными thread id или null, если восстановить не удалось
  */
 export declare function ensurePostThreadMapping(maxMid: string): Promise<PostCommentMappingRow | null>;
+/**
+ * Принудительно пересоздаёт thread mapping (сбрасывает старые id и вызывает GetDiscussionMessage).
+ */
+export declare function refreshPostThreadMapping(maxMid: string): Promise<PostCommentMappingRow | null>;

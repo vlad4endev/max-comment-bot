@@ -8,6 +8,11 @@ import { generateRandomLong } from 'telegram/Helpers'
 
 import { logger } from '../utils/logger'
 import {
+  extractTelegramErrorText,
+  isSendAsPeerInvalidError,
+  suggestActionForTelegramSyncError,
+} from '../utils/telegramSyncErrors'
+import {
   connectTelegramUserClient,
   resolveTelegramChannelEntity,
   telegramUserArchiveConfigured,
@@ -94,6 +99,18 @@ export async function sendDiscussionMessageAsPeer(
       })
     }
     return messageId
+  } catch (err: unknown) {
+    const errText = extractTelegramErrorText(err)
+    logger.warn('[telegramMtprotoDiscussionSender] sendAs failed', {
+      mode,
+      discussionChatId,
+      channelKey,
+      replyToMessageId,
+      err,
+      errorKind: isSendAsPeerInvalidError(errText) ? 'send_as_peer_invalid' : 'other',
+      suggestion: suggestActionForTelegramSyncError(errText),
+    })
+    return null
   } finally {
     await client.disconnect()
   }

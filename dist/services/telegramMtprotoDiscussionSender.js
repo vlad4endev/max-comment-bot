@@ -10,6 +10,7 @@ exports.sendDiscussionMessageAsChannel = sendDiscussionMessageAsChannel;
 const telegram_1 = require("telegram");
 const Helpers_1 = require("telegram/Helpers");
 const logger_1 = require("../utils/logger");
+const telegramSyncErrors_1 = require("../utils/telegramSyncErrors");
 const telegramUserArchive_1 = require("./telegramUserArchive");
 function mtprotoDiscussionSenderConfigured() {
     return (0, telegramUserArchive_1.telegramUserArchiveConfigured)();
@@ -74,6 +75,19 @@ async function sendDiscussionMessageAsPeer(mode, discussionChatId, channelKey, t
             });
         }
         return messageId;
+    }
+    catch (err) {
+        const errText = (0, telegramSyncErrors_1.extractTelegramErrorText)(err);
+        logger_1.logger.warn('[telegramMtprotoDiscussionSender] sendAs failed', {
+            mode,
+            discussionChatId,
+            channelKey,
+            replyToMessageId,
+            err,
+            errorKind: (0, telegramSyncErrors_1.isSendAsPeerInvalidError)(errText) ? 'send_as_peer_invalid' : 'other',
+            suggestion: (0, telegramSyncErrors_1.suggestActionForTelegramSyncError)(errText),
+        });
+        return null;
     }
     finally {
         await client.disconnect();

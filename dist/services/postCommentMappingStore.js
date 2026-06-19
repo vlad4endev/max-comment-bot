@@ -5,6 +5,9 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.upsertPostCommentMapping = upsertPostCommentMapping;
 exports.linkThreadMessageToChannelPost = linkThreadMessageToChannelPost;
+exports.clearPostThreadMapping = clearPostThreadMapping;
+exports.countPostMappingThreadStats = countPostMappingThreadStats;
+exports.listMappingsMissingThread = listMappingsMissingThread;
 exports.findMappingByThreadMsgId = findMappingByThreadMsgId;
 exports.findMappingByTgMsgId = findMappingByTgMsgId;
 exports.findMappingByMaxMid = findMappingByMaxMid;
@@ -31,6 +34,43 @@ function linkThreadMessageToChannelPost(chainId, channelMsgId, threadChatId, thr
        SET tg_thread_chat_id = ?, tg_thread_msg_id = ?
        WHERE chain_id = ? AND tg_msg_id = ?`)
         .run(threadChatId, threadMsgId, chainId, channelMsgId);
+}
+/** Сбрасывает устаревший thread id — для повторного resolve через GetDiscussionMessage. */
+function clearPostThreadMapping(chainId, tgMsgId) {
+    (0, database_1.getDb)()
+        .prepare(`UPDATE post_comment_mapping
+       SET tg_thread_chat_id = NULL, tg_thread_msg_id = NULL
+       WHERE chain_id = ? AND tg_msg_id = ?`)
+        .run(chainId, tgMsgId);
+}
+function countPostMappingThreadStats(chainId) {
+    const where = chainId ? 'WHERE chain_id = ?' : '';
+    const params = chainId ? [chainId] : [];
+    const row = (0, database_1.getDb)()
+        .prepare(`SELECT
+         COUNT(*) AS total,
+         SUM(CASE WHEN tg_thread_msg_id IS NOT NULL AND tg_thread_msg_id > 0 THEN 1 ELSE 0 END) AS with_thread,
+         SUM(CASE WHEN tg_thread_msg_id IS NULL OR tg_thread_msg_id <= 0 THEN 1 ELSE 0 END) AS missing_thread
+       FROM post_comment_mapping
+       ${where}`)
+        .get(...params);
+    return {
+        total: Number(row.total) || 0,
+        with_thread: Number(row.with_thread) || 0,
+        missing_thread: Number(row.missing_thread) || 0,
+    };
+}
+function listMappingsMissingThread(chainId, limit = 50) {
+    const safeLimit = Math.min(Math.max(limit, 1), 200);
+    return (0, database_1.getDb)()
+        .prepare(`SELECT chain_id, tg_msg_id, max_mid, tg_chat_id, tg_thread_chat_id, tg_thread_msg_id
+       FROM post_comment_mapping
+       WHERE chain_id = ?
+         AND (tg_thread_msg_id IS NULL OR tg_thread_msg_id <= 0)
+         AND tg_msg_id IS NOT NULL AND tg_msg_id > 0
+       ORDER BY id DESC
+       LIMIT ?`)
+        .all(chainId, safeLimit);
 }
 function findMappingByThreadMsgId(chainId, threadMsgId) {
     const row = (0, database_1.getDb)()

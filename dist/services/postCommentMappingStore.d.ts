@@ -9,6 +9,15 @@ export interface PostCommentMappingRow {
 }
 export declare function upsertPostCommentMapping(chainId: string, tgMsgId: number, maxMid: string, tgChatId: number | null): void;
 export declare function linkThreadMessageToChannelPost(chainId: string, channelMsgId: number, threadChatId: number, threadMsgId: number): void;
+/** Сбрасывает устаревший thread id — для повторного resolve через GetDiscussionMessage. */
+export declare function clearPostThreadMapping(chainId: string, tgMsgId: number): void;
+export interface PostMappingThreadStats {
+    total: number;
+    with_thread: number;
+    missing_thread: number;
+}
+export declare function countPostMappingThreadStats(chainId?: string): PostMappingThreadStats;
+export declare function listMappingsMissingThread(chainId: string, limit?: number): PostCommentMappingRow[];
 export declare function findMappingByThreadMsgId(chainId: string, threadMsgId: number): PostCommentMappingRow | null;
 export declare function findMappingByTgMsgId(chainId: string, tgMsgId: number): PostCommentMappingRow | null;
 export declare function findMappingByMaxMid(maxMid: string): PostCommentMappingRow | null;

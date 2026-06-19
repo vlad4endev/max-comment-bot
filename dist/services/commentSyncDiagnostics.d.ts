@@ -1,0 +1,54 @@
+/**
+ * Диагностика и восстановление синхронизации комментариев MAX ↔ Telegram.
+ */
+export type CommentSyncIssueSeverity = 'critical' | 'warning' | 'info';
+export interface CommentSyncIssue {
+    severity: CommentSyncIssueSeverity;
+    code: string;
+    title: string;
+    description: string;
+    what_to_do: string;
+}
+export interface CommentSyncChainDiagnostics {
+    chain_id: string;
+    chain_name: string;
+    active: boolean;
+    forward_comments: boolean;
+    discussion_chat_id: number | null;
+    discussion_linked: boolean;
+    bot_channel_admin: boolean | null;
+    bot_discussion_member: boolean | null;
+    mtproto_ready: boolean;
+    send_as_mode: 'channel' | 'chat';
+    mapping_stats: {
+        total: number;
+        with_thread: number;
+        missing_thread: number;
+    };
+    pending_max_to_tg: number;
+    issues: CommentSyncIssue[];
+}
+export interface CommentSyncDiagnosticsReport {
+    checked_at: string;
+    chains: CommentSyncChainDiagnostics[];
+    log_signals_24h: {
+        invalid_message_id: number;
+        send_as_peer_invalid: number;
+        forbidden: number;
+        no_thread_mapping: number;
+    };
+    recommendations: string[];
+}
+export declare function diagnoseCommentSync(chainIdFilter?: string): Promise<CommentSyncDiagnosticsReport>;
+export interface RepairThreadMappingsResult {
+    chain_id: string;
+    attempted: number;
+    repaired: number;
+    failed: number;
+    samples: Array<{
+        max_mid: string;
+        tg_msg_id: number;
+        ok: boolean;
+    }>;
+}
+export declare function repairMissingThreadMappings(chainId: string, limit?: number): Promise<RepairThreadMappingsResult>;

@@ -22,6 +22,7 @@ const commentSyncGuard_1 = require("../utils/commentSyncGuard");
 const commentSyncFilter_1 = require("../utils/commentSyncFilter");
 const commentsBookingService_1 = require("./commentsBookingService");
 const logger_1 = require("../utils/logger");
+const telegramSyncErrors_1 = require("../utils/telegramSyncErrors");
 const telegramMtprotoDiscussionSender_1 = require("./telegramMtprotoDiscussionSender");
 const TG_API = 'https://api.telegram.org';
 function resolveDiscussionSendAs(chainId) {
@@ -115,9 +116,16 @@ async function callTelegramBot(token, method, payload, logContext) {
         timeout: 20_000,
     });
     if (!data.ok) {
+        const description = data.description ?? '';
         logger_1.logger.warn(`[telegramThreadReplySync] ${method} failed`, {
             ...logContext,
-            description: data.description,
+            description,
+            errorKind: (0, telegramSyncErrors_1.isInvalidTelegramMessageIdError)(description)
+                ? 'invalid_message_id'
+                : (0, telegramSyncErrors_1.isTelegramForbiddenError)(description)
+                    ? 'forbidden'
+                    : 'other',
+            suggestion: (0, telegramSyncErrors_1.suggestActionForTelegramSyncError)(description),
         });
     }
     return data;
@@ -136,11 +144,14 @@ async function deliverTelegramThreadMessage(target, text, replyToId, useMtprotoS
             });
         }
         catch (err) {
+            const errText = (0, telegramSyncErrors_1.extractTelegramErrorText)(err);
             logger_1.logger.warn('[telegramThreadReplySync] sendAs peer failed, fallback to bot', {
                 chainId: target.chainId,
                 sendAsMode: target.sendAsMode,
                 channelKey: target.channelKey,
                 err,
+                errorKind: (0, telegramSyncErrors_1.isSendAsPeerInvalidError)(errText) ? 'send_as_peer_invalid' : 'other',
+                suggestion: (0, telegramSyncErrors_1.suggestActionForTelegramSyncError)(errText),
             });
         }
     }
@@ -162,6 +173,31 @@ async function sendTelegramThreadMessage(token, chatId, text, replyToMessageId, 
     }
     const messageId = data.result?.message_id;
     return typeof messageId === 'number' ? messageId : null;
+}
+async function deliverTelegramThreadMessageWithRetry(messageMid, target, text, replyToId, useMtprotoSendAs, botFallbackText) {
+    try {
+        return await deliverTelegramThreadMessage(target, text, replyToId, useMtprotoSendAs, botFallbackText);
+    }
+    catch (err) {
+        const errText = (0, telegramSyncErrors_1.extractTelegramErrorText)(err);
+        if (!(0, telegramSyncErrors_1.isInvalidTelegramMessageIdError)(errText)) {
+            throw err;
+        }
+        logger_1.logger.warn('[telegramThreadReplySync] invalid thread message id, refreshing mapping', {
+            messageMid,
+            chainId: target.chainId,
+            threadChatId: target.threadChatId,
+            threadMsgId: target.threadMsgId,
+            replyToId,
+            errText,
+        });
+        const refreshed = await (0, telegramDiscussionThreadResolver_1.refreshPostThreadMapping)(messageMid);
+        const refreshedTarget = refreshed ? resolvePostThreadTargetFromMapping(refreshed) : null;
+        if (!refreshedTarget) {
+            throw err;
+        }
+        return deliverTelegramThreadMessage(refreshedTarget, text, refreshedTarget.threadMsgId, useMtprotoSendAs, botFallbackText);
+    }
 }
 async function tryEditTelegramMessageText(target, text) {
     const data = await callTelegramBot(target.token, 'editMessageText', tgPayload(target, { text }), { chatId: target.chatId, messageId: target.messageId });
@@ -322,7 +358,7 @@ async function syncMaxCommentToTelegramThread(_bot, comment, post) {
         return;
     }
     try {
-        const tgMsgId = await deliverTelegramThreadMessage(target, body, target.threadMsgId, false);
+        const tgMsgId = await deliverTelegramThreadMessageWithRetry(post.message_mid, target, body, target.threadMsgId, false);
         if (tgMsgId == null) {
             return;
         }
@@ -436,7 +472,7 @@ async function syncAdminReplyToTelegramThread(_bot, comment, post) {
     const { threadMsgId: mappingThreadMsgId } = target;
     let replyToId = mappingThreadMsgId;
     try {
-        const tgMsgId = await deliverTelegramThreadMessage(target, replyText, replyToId, true, `${commentSyncFilter_1.MAX_REPLY_TG_PREFIX} ${replyText}`);
+        const tgMsgId = await deliverTelegramThreadMessageWithRetry(post.message_mid, target, replyText, replyToId, true, `${commentSyncFilter_1.MAX_REPLY_TG_PREFIX} ${replyText}`);
         if (tgMsgId == null) {
             return;
         }

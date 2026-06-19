@@ -55,6 +55,7 @@ const channelPostActions_1 = require("../services/channelPostActions");
 const commentStore_1 = require("../services/commentStore");
 const postLinkAutoRecovery_1 = require("../services/postLinkAutoRecovery");
 const postLinkDiagnostics_1 = require("../services/postLinkDiagnostics");
+const commentSyncDiagnostics_1 = require("../services/commentSyncDiagnostics");
 const postStore_1 = require("../services/postStore");
 const stateManager_1 = require("../services/stateManager");
 const subscriberStore_1 = require("../services/subscriberStore");
@@ -1526,6 +1527,35 @@ function createAdminRouter(deps) {
                 return;
             }
             logger_1.logger.error('admin refresh-buttons', err);
+            res.status(500).json({ error: 'failed' });
+        }
+    });
+    secured.get('/comment-sync/diagnostics', async (req, res) => {
+        const chainId = parseNonEmptyString(req.query.chain_id);
+        try {
+            const report = await (0, commentSyncDiagnostics_1.diagnoseCommentSync)(chainId ?? undefined);
+            res.json({ ok: true, ...report });
+        }
+        catch (err) {
+            logger_1.logger.error('admin comment-sync/diagnostics', err);
+            res.status(500).json({ error: 'failed' });
+        }
+    });
+    secured.post('/comment-sync/repair-threads', async (req, res) => {
+        const body = req.body;
+        const chainId = isRecord(body) ? parseNonEmptyString(body.chain_id) : null;
+        if (!chainId) {
+            res.status(400).json({ error: 'chain_id required' });
+            return;
+        }
+        const limit = isRecord(body) ? parsePositiveInt(body.limit) : null;
+        try {
+            const result = await (0, commentSyncDiagnostics_1.repairMissingThreadMappings)(chainId, limit ?? 30);
+            const diagnostics = await (0, commentSyncDiagnostics_1.diagnoseCommentSync)(chainId);
+            res.json({ ok: true, repair: result, diagnostics });
+        }
+        catch (err) {
+            logger_1.logger.error('admin comment-sync/repair-threads', err);
             res.status(500).json({ error: 'failed' });
         }
     });

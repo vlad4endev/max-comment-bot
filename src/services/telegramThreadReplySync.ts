@@ -11,7 +11,7 @@ import { listTgChainsSync } from '../api/adminPanelState'
 import type { Comment } from './commentStore'
 import { commentStore } from './commentStore'
 import { findMappingByMaxMid } from './postCommentMappingStore'
-import { ensurePostThreadMapping } from './telegramDiscussionThreadResolver'
+import { ensurePostThreadMapping, refreshPostThreadMapping } from './telegramDiscussionThreadResolver'
 import type { Post } from './postStore'
 import { postStore } from './postStore'
 import { resolveTelegramBotToken } from './resolveTelegramBotToken'
@@ -27,6 +27,13 @@ import {
   isCommentSyncBlockedByBooking,
 } from './commentsBookingService'
 import { logger } from '../utils/logger'
+import {
+  extractTelegramErrorText,
+  isInvalidTelegramMessageIdError,
+  isSendAsPeerInvalidError,
+  isTelegramForbiddenError,
+  suggestActionForTelegramSyncError,
+} from '../utils/telegramSyncErrors'
 import {
   sendDiscussionMessageAsPeer,
   type DiscussionSendAsMode,
@@ -158,9 +165,16 @@ async function callTelegramBot<T extends { ok: boolean; description?: string }>(
     timeout: 20_000,
   })
   if (!data.ok) {
+    const description = data.description ?? ''
     logger.warn(`[telegramThreadReplySync] ${method} failed`, {
       ...logContext,
-      description: data.description,
+      description,
+      errorKind: isInvalidTelegramMessageIdError(description)
+        ? 'invalid_message_id'
+        : isTelegramForbiddenError(description)
+          ? 'forbidden'
+          : 'other',
+      suggestion: suggestActionForTelegramSyncError(description),
     })
   }
   return data
@@ -191,11 +205,14 @@ async function deliverTelegramThreadMessage(
         channelKey: target.channelKey,
       })
     } catch (err: unknown) {
+      const errText = extractTelegramErrorText(err)
       logger.warn('[telegramThreadReplySync] sendAs peer failed, fallback to bot', {
         chainId: target.chainId,
         sendAsMode: target.sendAsMode,
         channelKey: target.channelKey,
         err,
+        errorKind: isSendAsPeerInvalidError(errText) ? 'send_as_peer_invalid' : 'other',
+        suggestion: suggestActionForTelegramSyncError(errText),
       })
     }
   }
@@ -235,6 +252,47 @@ async function sendTelegramThreadMessage(
   }
   const messageId = data.result?.message_id
   return typeof messageId === 'number' ? messageId : null
+}
+
+async function deliverTelegramThreadMessageWithRetry(
+  messageMid: string,
+  target: ThreadTarget,
+  text: string,
+  replyToId: number,
+  useMtprotoSendAs: boolean,
+  botFallbackText?: string,
+): Promise<number | null> {
+  try {
+    return await deliverTelegramThreadMessage(target, text, replyToId, useMtprotoSendAs, botFallbackText)
+  } catch (err: unknown) {
+    const errText = extractTelegramErrorText(err)
+    if (!isInvalidTelegramMessageIdError(errText)) {
+      throw err
+    }
+
+    logger.warn('[telegramThreadReplySync] invalid thread message id, refreshing mapping', {
+      messageMid,
+      chainId: target.chainId,
+      threadChatId: target.threadChatId,
+      threadMsgId: target.threadMsgId,
+      replyToId,
+      errText,
+    })
+
+    const refreshed = await refreshPostThreadMapping(messageMid)
+    const refreshedTarget = refreshed ? resolvePostThreadTargetFromMapping(refreshed) : null
+    if (!refreshedTarget) {
+      throw err
+    }
+
+    return deliverTelegramThreadMessage(
+      refreshedTarget,
+      text,
+      refreshedTarget.threadMsgId,
+      useMtprotoSendAs,
+      botFallbackText,
+    )
+  }
 }
 
 async function tryEditTelegramMessageText(
@@ -474,7 +532,8 @@ export async function syncMaxCommentToTelegramThread(
   }
 
   try {
-    const tgMsgId = await deliverTelegramThreadMessage(
+    const tgMsgId = await deliverTelegramThreadMessageWithRetry(
+      post.message_mid,
       target,
       body,
       target.threadMsgId,
@@ -617,7 +676,8 @@ export async function syncAdminReplyToTelegramThread(
   let replyToId = mappingThreadMsgId
 
   try {
-    const tgMsgId = await deliverTelegramThreadMessage(
+    const tgMsgId = await deliverTelegramThreadMessageWithRetry(
+      post.message_mid,
       target,
       replyText,
       replyToId,

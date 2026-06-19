@@ -11,6 +11,7 @@ import { logger } from '../utils/logger'
 import {
   findMappingByMaxMid,
   linkThreadMessageToChannelPost,
+  clearPostThreadMapping,
   resolveDiscussionChatId,
   type PostCommentMappingRow,
 } from './postCommentMappingStore'
@@ -136,6 +137,20 @@ async function resolveThreadViaMtproto(
  * @returns mapping с заполненными thread id или null, если восстановить не удалось
  */
 export async function ensurePostThreadMapping(maxMid: string): Promise<PostCommentMappingRow | null> {
+  return ensurePostThreadMappingInternal(maxMid, false)
+}
+
+/**
+ * Принудительно пересоздаёт thread mapping (сбрасывает старые id и вызывает GetDiscussionMessage).
+ */
+export async function refreshPostThreadMapping(maxMid: string): Promise<PostCommentMappingRow | null> {
+  return ensurePostThreadMappingInternal(maxMid, true)
+}
+
+async function ensurePostThreadMappingInternal(
+  maxMid: string,
+  forceRefresh: boolean,
+): Promise<PostCommentMappingRow | null> {
   const normalized = maxMid.trim()
   if (!normalized) {
     return null
@@ -145,7 +160,14 @@ export async function ensurePostThreadMapping(maxMid: string): Promise<PostComme
   if (!mapping) {
     return null
   }
-  if (mapping.tg_thread_chat_id && mapping.tg_thread_msg_id) {
+
+  if (forceRefresh && typeof mapping.tg_msg_id === 'number' && mapping.tg_msg_id > 0) {
+    clearPostThreadMapping(mapping.chain_id, mapping.tg_msg_id)
+    mapping = findMappingByMaxMid(normalized)
+    if (!mapping) {
+      return null
+    }
+  } else if (mapping.tg_thread_chat_id && mapping.tg_thread_msg_id) {
     return mapping
   }
 
