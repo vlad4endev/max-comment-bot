@@ -245,41 +245,27 @@ class PostStore {
     async updateButtonCaption(bot, post) {
         const fresh = this.getPost(post.post_id) ?? post;
         const bookedByTelegram = fresh.comments_booked_by === 'telegram';
-        if (!bookedByTelegram && !isMiniAppOpenUrlConfigured()) {
+        if (!isMiniAppOpenUrlConfigured()) {
             logger_1.logger.warn('postStore.updateButtonCaption: BOT_NICKNAME / MINI_APP_URL not usable for links');
             return false;
         }
-        if (!bookedByTelegram) {
-            const url = buildCommentMiniAppUrl(fresh.post_id, fresh.chat_id, fresh.message_mid);
-            const startParam = (() => {
-                try {
-                    return new URL(url).searchParams.get('startapp');
-                }
-                catch {
-                    return null;
-                }
-            })();
-            logger_1.logger.info('commentButton: creating button', {
-                postId: fresh.post_id,
-                chatId: fresh.chat_id,
-                messageMid: fresh.message_mid,
-                buttonUrl: url,
-            });
-            logger_1.logger.info('commentButton: button payload', {
-                buttonUrl: url,
-                startParam,
-                postId: fresh.post_id,
-                chatId: fresh.chat_id,
-                messageMid: fresh.message_mid,
-            });
-        }
-        else {
-            logger_1.logger.info('commentButton: booked-by-TG button', {
-                postId: fresh.post_id,
-                chatId: fresh.chat_id,
-                commentCount: fresh.comment_count,
-            });
-        }
+        const url = buildCommentMiniAppUrl(fresh.post_id, fresh.chat_id, fresh.message_mid);
+        const startParam = (() => {
+            try {
+                return new URL(url).searchParams.get('startapp');
+            }
+            catch {
+                return null;
+            }
+        })();
+        logger_1.logger.info(bookedByTelegram ? 'commentButton: booked-by-TG button' : 'commentButton: creating button', {
+            postId: fresh.post_id,
+            chatId: fresh.chat_id,
+            messageMid: fresh.message_mid,
+            commentCount: fresh.comment_count,
+            buttonUrl: url,
+            startParam,
+        });
         const kb = buildPostCommentKeyboard(fresh);
         const editText = fresh.comments_ui_message_mid !== undefined
             ? '\u00a0'
@@ -301,22 +287,11 @@ class PostStore {
                 inlineOnly: false,
             });
         };
-        const tryBookedLinkFallback = async (reason) => {
-            if (!bookedByTelegram) {
-                return tryAttachFallback(reason);
-            }
-            const channelUrl = await resolveChannelPostUrl(bot, fresh);
-            if (!channelUrl) {
-                return tryAttachFallback(reason);
-            }
-            const linkKb = buildPostCommentKeyboard(fresh, channelUrl);
-            return tryAttachFallback(`${reason}_booked_link`, linkKb);
-        };
         if (!usesReplyUi && warnMissingSnapshot) {
-            return tryBookedLinkFallback('no_media_snapshot');
+            return tryAttachFallback('no_media_snapshot');
         }
         if (!usesReplyUi && media.length > 0 && !canMergeKeyboardWithMedia(media.length)) {
-            return tryBookedLinkFallback('too_many_media');
+            return tryAttachFallback('too_many_media');
         }
         const attachments = usesReplyUi || media.length === 0 ? [kb] : [...media, kb];
         try {
@@ -329,7 +304,7 @@ class PostStore {
                 targetMid,
                 err,
             });
-            return tryBookedLinkFallback('edit_failed');
+            return tryAttachFallback('edit_failed');
         }
     }
     /** Сохраняет поля брони при частичных обновлениях поста. */
@@ -703,19 +678,14 @@ function buildMiniAppUrl(postId, chatId, extra, messageMid) {
     }
     return buttonUrl;
 }
-/** Inline-клавиатура под постом: обычная ссылка или неактивная «Забронировано в ТГ». */
-function buildPostCommentKeyboard(post, bookedFallbackUrl) {
+/** Inline-клавиатура под постом: комментарии или «Забронировано в ТГ» с той же ссылкой в miniapp. */
+function buildPostCommentKeyboard(post) {
+    const url = buildCommentMiniAppUrl(post.post_id, post.chat_id, post.message_mid);
     if (post.comments_booked_by === 'telegram') {
-        const label = (0, commentSyncFilter_1.formatMaxBookedInTgButtonLabel)(post.comment_count);
-        const fallbackUrl = bookedFallbackUrl?.trim();
-        if (fallbackUrl) {
-            return max_bot_api_1.Keyboard.inlineKeyboard([[max_bot_api_1.Keyboard.button.link(label, fallbackUrl)]]);
-        }
         return max_bot_api_1.Keyboard.inlineKeyboard([
-            [max_bot_api_1.Keyboard.button.callback(label, commentSyncFilter_1.MAX_BOOKED_IN_TG_CALLBACK)],
+            [max_bot_api_1.Keyboard.button.link((0, commentSyncFilter_1.formatMaxBookedInTgButtonLabel)(post.comment_count), url)],
         ]);
     }
-    const url = buildCommentMiniAppUrl(post.post_id, post.chat_id, post.message_mid);
     return max_bot_api_1.Keyboard.inlineKeyboard([
         [max_bot_api_1.Keyboard.button.link(`💬 Комментарии (${post.comment_count})`, url)],
     ]);

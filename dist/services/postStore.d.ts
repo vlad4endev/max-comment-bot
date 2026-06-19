@@ -111,6 +111,6 @@ export declare function resolveChannelPostUrl(bot: Bot, post: Post): Promise<str
 export declare function buildCommentMiniAppUrl(postId: string, chatId: number, messageMid: string): string;
 export declare function commentButtonStartappHasMid(postId: string, chatId: number, messageMid: string): boolean;
 export declare function buildMiniAppUrl(postId: string, chatId: number, extra?: Record<string, string>, messageMid?: string): string;
-/** Inline-клавиатура под постом: обычная ссылка или неактивная «Забронировано в ТГ». */
-export declare function buildPostCommentKeyboard(post: Post, bookedFallbackUrl?: string | null): InlineKeyboardAttachmentRequest;
+/** Inline-клавиатура под постом: комментарии или «Забронировано в ТГ» с той же ссылкой в miniapp. */
+export declare function buildPostCommentKeyboard(post: Post): InlineKeyboardAttachmentRequest;
 export declare const postStore: PostStore;
