@@ -37,6 +37,8 @@
   var channelImportPollTimer = null;
   var channelImportJobId = null;
   var chainsPlatformTab = 'tg';
+  var antispamTab = 'overview';
+  var antispamLogCache = [];
 
   var NAV = [
     {
@@ -114,7 +116,7 @@
     antispam: {
       title: 'Антиспам',
       group: 'Модерация',
-      desc: 'Глобальные стоп-слова, правила фильтрации и журнал блокировок.',
+      desc: 'Скоринг комментариев, стоп-слова, пороги и журнал срабатываний.',
     },
     users: {
       title: 'Пользователи',
@@ -420,40 +422,50 @@
   }
 
   function renderChannelAntispamPanel(settings, editing) {
+    var words = Array.isArray(settings.stopwords) ? settings.stopwords : [];
+    var html = '<div class="as-channel-panel">';
+    html +=
+      '<div class="as-hint-box"><i data-lucide="info"></i><div><strong>Наследование правил</strong><p>Глобальные фильтры из раздела «Антиспам» действуют на все каналы. Здесь можно добавить стоп-слова и переопределить отдельные правила только для этого канала.</p></div></div>';
     if (!editing) {
-      var words = Array.isArray(settings.stopwords) ? settings.stopwords : [];
-      var html = '<div class="settings-summary">';
-      html += '<h3 class="settings-summary-title">Текущий антиспам</h3>';
-      html += '<dl class="settings-summary-list">';
-      html += settingsSummaryRow(
-        'Стоп-слова',
-        words.length ? words.join(', ') : '—',
-      );
-      html += settingsSummaryRow('Блокировать ссылки', boolLabel(!!settings.block_links));
-      html += settingsSummaryRow('Защита от флуда', boolLabel(!!settings.flood_protection));
-      html += settingsSummaryRow('Авто-мут', boolLabel(!!settings.auto_mute));
-      html += '</dl>';
+      html += '<div class="as-channel-rules">';
+      html += '<div class="as-rule-pill' + (settings.block_links ? ' on' : '') + '"><i data-lucide="link-2"></i> Ссылки: ' + esc(boolLabel(!!settings.block_links)) + '</div>';
+      html += '<div class="as-rule-pill' + (settings.flood_protection ? ' on' : '') + '"><i data-lucide="timer"></i> Антифлуд: ' + esc(boolLabel(!!settings.flood_protection)) + '</div>';
+      html += '<div class="as-rule-pill' + (settings.auto_mute ? ' on' : '') + '"><i data-lucide="volume-x"></i> Авто-мут: ' + esc(boolLabel(!!settings.auto_mute)) + '</div>';
+      html += '</div>';
+      html += '<div class="settings-summary mt-sm">';
+      html += '<h3 class="settings-summary-title">Стоп-слова канала</h3>';
+      if (words.length) {
+        html += '<div class="as-word-chips">';
+        words.forEach(function (w) {
+          html += '<span class="as-word-chip">' + esc(w) + '</span>';
+        });
+        html += '</div>';
+      } else {
+        html += '<p class="muted text-sm" style="margin:0">Дополнительных стоп-слов нет — используются только глобальные.</p>';
+      }
+      html += '</div>';
       html +=
-        '<button type="button" class="btn btn-primary mt-sm" id="btnEditChannelAntispam">Изменить</button>';
+        '<button type="button" class="btn btn-primary mt-sm" id="btnEditChannelAntispam">Настроить для канала</button>';
       html += '</div>';
       return html;
     }
-    var form = '<div class="settings-editor" id="chAntispamForm">';
-    form += '<p class="muted text-sm mb-sm">Подтвердите сохранение — правила применятся к каналу.</p>';
-    form += '<div class="form-group"><label>Стоп-слова канала</label>';
-    form += '<div class="tags-input-wrap" id="chStopwords"></div></div>';
-    form += '<div id="asToggles">';
-    form += toggleRow('block_links', 'Блокировать ссылки', '', !!settings.block_links);
-    form += toggleRow('flood_protection', 'Защита от флуда', '', !!settings.flood_protection);
-    form += toggleRow('auto_mute', 'Авто-мут', '', !!settings.auto_mute);
-    form += '</div>';
-    form += '<div class="flex gap-sm mt-sm">';
-    form +=
+    html += '<div class="settings-editor" id="chAntispamForm">';
+    html += '<div class="form-group"><label>Дополнительные стоп-слова</label>';
+    html += '<p class="field-hint">Добавляются к глобальному списку. Одно слово или фраза — Enter.</p>';
+    html += '<div class="tags-input-wrap" id="chStopwords"></div></div>';
+    html += '<h4 class="as-section-label">Правила канала</h4>';
+    html += '<div class="as-rule-cards" id="asToggles">';
+    html += antispamRuleCard('block_links', 'Блокировать ссылки', 'Удалять комментарии с URL и t.me-ссылками', !!settings.block_links);
+    html += antispamRuleCard('flood_protection', 'Антифлуд', 'Ограничивать слишком частые комментарии от одного пользователя', !!settings.flood_protection);
+    html += antispamRuleCard('auto_mute', 'Авто-мут при бане', 'Автоматически ограничивать пользователя при срабатывании бана', !!settings.auto_mute);
+    html += '</div>';
+    html += '<div class="flex gap-sm mt-md">';
+    html +=
       '<button type="button" class="btn btn-ghost" id="btnCancelChannelAntispam">Отмена</button>';
-    form +=
+    html +=
       '<button type="button" class="btn btn-primary" id="btnSaveAntispamCh">Сохранить</button>';
-    form += '</div></div>';
-    return form;
+    html += '</div></div></div>';
+    return html;
   }
 
   function apiPath(path) {
@@ -4618,82 +4630,567 @@
     });
     refreshIcons();
   }
+  function antispamRuleCard(key, label, desc, on) {
+    return (
+      '<div class="as-rule-card">' +
+      toggleRow(key, label, desc, on) +
+      '</div>'
+    );
+  }
+
+  function antispamScoreClass(score, engine) {
+    var captcha = engine.captcha_required_score != null ? engine.captcha_required_score : 15;
+    var spam = engine.spam_threshold != null ? engine.spam_threshold : 20;
+    var ban = engine.ban_threshold != null ? engine.ban_threshold : 100;
+    if (score >= ban) return 'danger';
+    if (score >= spam) return 'warn';
+    if (score >= captcha) return 'caution';
+    return 'ok';
+  }
+
+  function antispamOutcomeText(result) {
+    if (!result) return '—';
+    if (result.allowed) {
+      if (result.action === 'whitelist') return 'В белом списке';
+      if (result.action === 'leave') return 'Комментарий пропущен';
+      return 'Разрешено (режим журнала)';
+    }
+    var map = {
+      delete: 'Удаление комментария',
+      delete_and_ban: 'Удаление и бан',
+      captcha: 'Требуется капча',
+      flood: 'Антифлуд',
+      blacklist: 'Чёрный список',
+      restricted: 'Ограничен',
+    };
+    return map[result.action] || map[result.reason] || 'Заблокировано';
+  }
+
+  function renderAntispamScoreScale(engine) {
+    var captcha = engine.captcha_required_score != null ? engine.captcha_required_score : 15;
+    var spam = engine.spam_threshold != null ? engine.spam_threshold : 20;
+    var ban = engine.ban_threshold != null ? engine.ban_threshold : 100;
+    var max = Math.max(ban + 20, 120);
+    var pct = function (v) {
+      return Math.min(100, Math.max(0, (v / max) * 100));
+    };
+    var html = '<div class="as-score-scale">';
+    html += '<div class="as-score-track">';
+    html += '<div class="as-score-zone ok" style="width:' + pct(captcha) + '%"></div>';
+    html += '<div class="as-score-zone caution" style="width:' + (pct(spam) - pct(captcha)) + '%"></div>';
+    html += '<div class="as-score-zone warn" style="width:' + (pct(ban) - pct(spam)) + '%"></div>';
+    html += '<div class="as-score-zone danger" style="flex:1"></div>';
+    html += '<span class="as-score-marker" style="left:' + pct(captcha) + '%" title="Капча"><span>' + esc(String(captcha)) + '</span></span>';
+    html += '<span class="as-score-marker spam" style="left:' + pct(spam) + '%" title="Удаление"><span>' + esc(String(spam)) + '</span></span>';
+    html += '<span class="as-score-marker ban" style="left:' + pct(ban) + '%" title="Бан"><span>' + esc(String(ban)) + '</span></span>';
+    html += '</div>';
+    html += '<div class="as-score-legend">';
+    html += '<span><i class="as-dot ok"></i> Пропуск</span>';
+    html += '<span><i class="as-dot caution"></i> Капча ≥ ' + esc(String(captcha)) + '</span>';
+    html += '<span><i class="as-dot warn"></i> Удаление ≥ ' + esc(String(spam)) + '</span>';
+    html += '<span><i class="as-dot danger"></i> Бан ≥ ' + esc(String(ban)) + '</span>';
+    html += '</div></div>';
+    return html;
+  }
+
+  function renderAntispamThresholdField(id, label, hint, value, min, max) {
+    var v = value != null ? value : 0;
+    var lo = min != null ? min : 0;
+    var hi = max != null ? max : 200;
+    var html = '<div class="as-threshold-field">';
+    html += '<div class="as-threshold-head"><label for="' + esc(id) + '">' + esc(label) + '</label>';
+    html += '<input class="input as-threshold-num" id="' + esc(id) + '" type="number" min="' + lo + '" max="' + hi + '" value="' + esc(String(v)) + '"></div>';
+    if (hint) html += '<p class="field-hint">' + esc(hint) + '</p>';
+    html +=
+      '<input class="as-threshold-range" type="range" min="' +
+      lo +
+      '" max="' +
+      hi +
+      '" value="' +
+      esc(String(v)) +
+      '" data-range-for="' +
+      esc(id) +
+      '">';
+    html += '</div>';
+    return html;
+  }
+
+  function collectTagsFromWrap(wrap) {
+    if (!wrap) return [];
+    if (typeof wrap.__tagsGet === 'function') return wrap.__tagsGet(true);
+    var tags = [];
+    qsa('.tag', wrap).forEach(function (tg) {
+      var txt = tg.firstChild;
+      if (txt && txt.nodeType === 3) tags.push(String(txt.textContent || '').trim());
+    });
+    return tags.filter(Boolean);
+  }
+
+  function parseUserIdTags(tags) {
+    return (tags || [])
+      .map(function (s) {
+        return parseInt(String(s).trim(), 10);
+      })
+      .filter(function (n) {
+        return !isNaN(n) && n > 0;
+      });
+  }
+
+  function collectAntispamPayload(main) {
+    var gStop = qs('#g_stop', main);
+    var wlWrap = qs('#as_whitelist_wrap', main);
+    var blWrap = qs('#as_blacklist_wrap', main);
+    var sw = readSwitches(main);
+    return {
+      global: collectTagsFromWrap(gStop),
+      rules: {
+        block_links: !!sw.block_links,
+        flood_protection: !!sw.flood_protection,
+        emoji_spam: !!sw.emoji_spam,
+      },
+      engine: {
+        enabled: !!sw.antispam_enabled,
+        soft_mode: !!sw.soft_mode,
+        spam_threshold: parseInt(qs('#as_spam_threshold', main).value, 10) || 20,
+        ban_threshold: parseInt(qs('#as_ban_threshold', main).value, 10) || 100,
+        captcha_required_score: parseInt(qs('#as_captcha_score', main).value, 10) || 15,
+        emoji_overuse_limit: parseInt(qs('#as_emoji_limit', main).value, 10) || 20,
+        whitelist_user_ids: parseUserIdTags(collectTagsFromWrap(wlWrap)),
+        blacklist_user_ids: parseUserIdTags(collectTagsFromWrap(blWrap)),
+      },
+    };
+  }
+
+  function saveAntispamSettings(main) {
+    var btn = qs('#btnSaveGlobalAs', main);
+    if (btn) btn.disabled = true;
+    return postJson('/antispam/words', collectAntispamPayload(main))
+      .then(function () {
+        showToast('Настройки антиспама сохранены', 'success');
+        renderAntispam();
+      })
+      .catch(function (e) {
+        showToast(e.message || 'Ошибка сохранения', 'error');
+      })
+      .finally(function () {
+        if (btn) btn.disabled = false;
+      });
+  }
+
+  function bindAntispamThresholdRanges(root) {
+    qsa('.as-threshold-range', root).forEach(function (range) {
+      var targetId = range.getAttribute('data-range-for');
+      var num = targetId ? qs('#' + targetId, root) : null;
+      if (!num) return;
+      function syncFromRange() {
+        num.value = range.value;
+      }
+      function syncFromNum() {
+        var v = parseInt(num.value, 10);
+        if (!isNaN(v)) range.value = String(v);
+      }
+      range.addEventListener('input', syncFromRange);
+      num.addEventListener('input', syncFromNum);
+    });
+  }
+
+  function bindAntispamLogFilters(main, log) {
+    var tbody = qs('#asp_log_body', main);
+    if (!tbody) return;
+    var chanSel = qs('#asp_filter_chan', main);
+    var reasonSel = qs('#asp_filter_reason', main);
+    var qInput = qs('#asp_filter_q', main);
+    function apply() {
+      var chan = chanSel ? chanSel.value : '';
+      var reason = reasonSel ? reasonSel.value : '';
+      var q = qInput ? String(qInput.value || '').trim().toLowerCase() : '';
+      qsa('tr', tbody).forEach(function (row) {
+        var rChan = row.getAttribute('data-chan') || '';
+        var rReason = row.getAttribute('data-reason') || '';
+        var rText = row.getAttribute('data-text') || '';
+        var ok =
+          (!chan || rChan === chan) &&
+          (!reason || rReason === reason) &&
+          (!q || rText.indexOf(q) !== -1 || rReason.toLowerCase().indexOf(q) !== -1);
+        row.style.display = ok ? '' : 'none';
+      });
+    }
+    if (chanSel) chanSel.addEventListener('change', apply);
+    if (reasonSel) reasonSel.addEventListener('change', apply);
+    if (qInput) qInput.addEventListener('input', apply);
+  }
+
+  function renderAntispamTestResult(main, result) {
+    var host = qs('#as_test_result', main);
+    if (!host) return;
+    var r = result || {};
+    var engine = { captcha_required_score: 15, spam_threshold: 20, ban_threshold: 100 };
+    var score = r.spamScore != null ? r.spamScore : 0;
+    var cls = r.allowed ? 'ok' : antispamScoreClass(score, engine);
+    if (r.action === 'captcha') cls = 'caution';
+    var html = '<div class="as-test-card ' + cls + '">';
+    html += '<div class="as-test-verdict">' + esc(antispamOutcomeText(r)) + '</div>';
+    html += '<div class="as-test-meta">';
+    html += '<span>Баллы: <strong>' + esc(String(score)) + '</strong></span>';
+    if (r.categories && r.categories.length) {
+      html += '<span>Категории: ' + esc(r.categories.join(', ')) + '</span>';
+    }
+    if (r.reason) html += '<span>Причина: ' + esc(r.reason) + '</span>';
+    html += '</div>';
+    if (r.userMessage) {
+      html += '<p class="as-test-user-msg">' + esc(r.userMessage) + '</p>';
+    }
+    html += '</div>';
+    host.innerHTML = html;
+  }
+
+  function bindAntispamTabs(main) {
+    qsa('[data-as-tab]', main).forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        antispamTab = btn.getAttribute('data-as-tab') || 'overview';
+        renderAntispam();
+      });
+    });
+  }
+
   function renderAntispam() {
     var main = qs('#mainContent');
     if (!main) return;
     main.innerHTML = skeletonPage();
+    setTopbarActions('');
     Promise.all([getJson('/antispam/words'), getJson('/antispam/log?limit=100')])
       .then(function (pair) {
         if (currentRoute !== 'antispam') return;
         var w = pair[0];
         var log = pair[1].entries || [];
+        antispamLogCache = log;
         var rules = w.rules || {};
         var engine = w.engine || {};
-        var html = '<div class="panel">';
-        html += '<div class="content-block-head"><div><h2 style="margin:0;font-size:1rem">Движок antispam_v16</h2>';
-        html += '<p class="block-desc">Скоринговая система из n8n: стоп-слова, ссылки, эмодзи, пороги блокировки</p></div></div>';
-        html += '<p class="text-sm muted">Заблокировано сегодня: <strong>' + esc(String(w.blocked_today || 0)) + '</strong></p>';
-        html += '<div id="engineToggles">';
-        html += toggleRow('antispam_enabled', 'Антиспам включён', '', engine.enabled !== false);
-        html += toggleRow('soft_mode', 'Только журнал (без блокировки)', 'Режим тестирования', !!engine.soft_mode);
-        html += '</div>';
-        html += '<div class="form-row mt-sm">';
-        html += '<div class="form-group"><label>Порог спама</label><input class="input" id="as_spam_threshold" type="number" value="' + esc(String(engine.spam_threshold != null ? engine.spam_threshold : 20)) + '"></div>';
-        html += '<div class="form-group"><label>Порог бана</label><input class="input" id="as_ban_threshold" type="number" value="' + esc(String(engine.ban_threshold != null ? engine.ban_threshold : 100)) + '"></div>';
-        html += '<div class="form-group"><label>Порог captcha</label><input class="input" id="as_captcha_score" type="number" value="' + esc(String(engine.captcha_required_score != null ? engine.captcha_required_score : 15)) + '"></div>';
-        html += '</div>';
-        html += '<div class="form-group"><label>Whitelist user ID (через запятую)</label><input class="input" id="as_whitelist" value="' + esc((engine.whitelist_user_ids || []).join(', ')) + '"></div>';
-        html += '<div class="form-group"><label>Blacklist user ID (через запятую)</label><input class="input" id="as_blacklist" value="' + esc((engine.blacklist_user_ids || []).join(', ')) + '"></div>';
-        html += sectionHead('Глобальные правила', 'Дополнительные стоп-слова и переключатели');
-        html += '<div class="form-group"><label>Глобальные стоп-слова</label><div class="tags-input-wrap" id="g_stop"></div></div>';
-        html += '<div id="gRules">';
-        html += '<div class="toggle-grid">';
-        html += '<div class="toggle-grid-item">' + toggleRow('block_links', 'Блокировать ссылки', '', !!rules.block_links) + '</div>';
-        html += '<div class="toggle-grid-item">' + toggleRow('flood_protection', 'Антифлуд', '', !!rules.flood_protection) + '</div>';
-        html += '<div class="toggle-grid-item">' + toggleRow('caps_protection', 'КАПС защита', '', !!rules.caps_protection) + '</div>';
-        html += '<div class="toggle-grid-item">' + toggleRow('emoji_spam', 'Спам эмодзи', '', !!rules.emoji_spam) + '</div>';
-        html += '</div>';
-        html += '</div>';
-        html += '<button type="button" class="btn btn-primary mt-sm" id="btnSaveGlobalAs">Сохранить настройки</button>';
-        html += sectionHead('Проверка текста', 'Тест без публикации комментария');
-        html += '<div class="form-group"><textarea class="input" id="as_test_text" rows="3" placeholder="Вставьте текст комментария…"></textarea></div>';
-        html += '<button type="button" class="btn btn-ghost mt-sm" id="btnTestAntispam">Проверить</button>';
-        html += '<pre class="mono text-sm mt-sm" id="as_test_result" style="white-space:pre-wrap"></pre>';
-        html += sectionHead('Журнал блокировок', 'Последние срабатывания антиспама');
-        html += '<div class="search-bar" style="margin-bottom:0.75rem">';
-        html += '<select class="select" id="asp_filter_chan" style="max-width:200px"><option value="">Все каналы</option></select>';
-        html += '<select class="select" id="asp_filter_reason" style="max-width:160px"><option value="">Все причины</option></select>';
-        html += '<button type="button" class="btn btn-danger btn-sm" style="margin-left:auto" id="asp_clear_log"><i data-lucide="trash-2"></i> Очистить журнал</button>';
-        html += '</div>';
-        if (!log.length) {
-          html += emptyState('shield-check', 'Блокировок нет', 'Антиспам не срабатывал за выбранный период');
+        var globalWords = w.global || [];
+        var tabLabels = {
+          overview: 'Обзор',
+          settings: 'Настройки',
+          test: 'Проверка',
+          log: 'Журнал',
+        };
+
+        var html = '<div class="as-page">';
+        html += '<div class="as-page-head">';
+        html += '<div><h2 class="as-page-title">Антиспам</h2>';
+        html += '<p class="as-page-desc">Скоринговая фильтрация комментариев: стоп-слова, ссылки, эмодзи и пороги реакции</p></div>';
+        html += '<div class="as-status-pills">';
+        if (engine.enabled === false) {
+          html += '<span class="as-status-pill off"><i data-lucide="shield-off"></i> Выключен</span>';
+        } else if (engine.soft_mode) {
+          html += '<span class="as-status-pill soft"><i data-lucide="eye"></i> Только журнал</span>';
         } else {
-          html += '<div class="table-wrap"><table><thead><tr>';
-          html += '<th>Время</th><th>Канал</th><th>Пользователь</th><th>Score</th><th>Причина</th><th>Текст</th>';
-          html += '</tr></thead><tbody>';
-          log.forEach(function (e) {
-            html += '<tr>';
-            html += '<td class="mono text-sm">' + esc(fmtDateTime(e.created_at)) + '</td>';
-            html += '<td>' + esc(e.channel_title || String(e.channel_chat_id)) + '</td>';
-            html += '<td>' + esc(e.username || String(e.user_id)) + '</td>';
-            html += '<td>' + esc(e.spam_score != null ? String(e.spam_score) : '—') + '</td>';
-            html += '<td>' + esc(e.reason) + '</td>';
-            html +=
-              '<td style="max-width:200px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="' +
-              esc(e.text) +
-              '">' +
-              esc(truncateText(e.text, 80)) +
-              '</td>';
-            html += '</tr>';
-          });
-          html += '</tbody></table></div>';
+          html += '<span class="as-status-pill on"><i data-lucide="shield-check"></i> Активен</span>';
         }
+        html += '</div></div>';
+
+        html += '<div class="as-tabs">';
+        Object.keys(tabLabels).forEach(function (tab) {
+          html +=
+            '<button type="button" class="as-tab' +
+            (antispamTab === tab ? ' active' : '') +
+            '" data-as-tab="' +
+            tab +
+            '">' +
+            esc(tabLabels[tab]) +
+            '</button>';
+        });
+        html += '</div>';
+
+        if (antispamTab === 'overview') {
+          html += '<div class="metrics-grid as-metrics">';
+          html +=
+            '<div class="metric-card"><div class="label">Блокировок сегодня</div><div class="value">' +
+            esc(String(w.blocked_today || 0)) +
+            '</div></div>';
+          html +=
+            '<div class="metric-card"><div class="label">Глобальных стоп-слов</div><div class="value">' +
+            esc(String(globalWords.length)) +
+            '</div></div>';
+          html +=
+            '<div class="metric-card"><div class="label">Белый список</div><div class="value">' +
+            esc(String((engine.whitelist_user_ids || []).length)) +
+            '</div></div>';
+          html +=
+            '<div class="metric-card"><div class="label">Чёрный список</div><div class="value">' +
+            esc(String((engine.blacklist_user_ids || []).length)) +
+            '</div></div>';
+          html += '</div>';
+
+          html += '<div class="panel">';
+          html += sectionHead('Как работает скоринг', 'Каждому комментарию начисляются баллы за подозрительные признаки. Итоговое действие зависит от суммы.');
+          html += renderAntispamScoreScale(engine);
+          html += '<div class="as-scoring-hints">';
+          html += '<div class="as-scoring-item"><strong>Телефон, крипто, adult</strong><span>+60…150 баллов, категория hard</span></div>';
+          html += '<div class="as-scoring-item"><strong>Ссылки</strong><span>+60 баллов при включённом фильтре</span></div>';
+          html += '<div class="as-scoring-item"><strong>Стоп-слова</strong><span>вес зависит от слова, до +90 за кастомные</span></div>';
+          html += '<div class="as-scoring-item"><strong>Эмодзи-спам</strong><span>+30 при превышении лимита, +50 за «чистые» эмодзи</span></div>';
+          html += '<div class="as-scoring-item"><strong>Антифлуд</strong><span>80 баллов при слишком частых комментариях</span></div>';
+          html += '</div></div>';
+
+          html += '<div class="panel mt-md">';
+          html += sectionHead('Активные фильтры', 'Текущее состояние глобальных правил');
+          html += '<div class="as-channel-rules">';
+          html += '<div class="as-rule-pill' + (rules.block_links ? ' on' : '') + '"><i data-lucide="link-2"></i> Ссылки</div>';
+          html += '<div class="as-rule-pill' + (rules.flood_protection ? ' on' : '') + '"><i data-lucide="timer"></i> Антифлуд</div>';
+          html += '<div class="as-rule-pill' + (rules.emoji_spam ? ' on' : '') + '"><i data-lucide="smile"></i> Эмодзи</div>';
+          html += '</div>';
+          html +=
+            '<p class="muted text-sm mt-sm" style="margin-bottom:0">Для канала можно задать дополнительные стоп-слова в карточке канала → вкладка «Антиспам».</p>';
+          html += '</div>';
+        } else if (antispamTab === 'settings') {
+          html += '<div class="panel">';
+          html += sectionHead('Режим работы', 'Глобальные переключатели движка');
+          html += '<div id="engineToggles" class="as-mode-toggles">';
+          html += toggleRow('antispam_enabled', 'Антиспам включён', 'Полностью отключает проверку комментариев', engine.enabled !== false);
+          html += toggleRow('soft_mode', 'Режим наблюдения', 'Записывать срабатывания в журнал, но не блокировать комментарии', !!engine.soft_mode);
+          html += '</div></div>';
+
+          html += '<div class="panel mt-md">';
+          html += sectionHead('Фильтры контента', 'Что именно проверять в каждом комментарии');
+          html += '<div class="as-rule-cards" id="gRules">';
+          html += antispamRuleCard('block_links', 'Блокировать ссылки', 'URL, t.me и www в тексте комментария', !!rules.block_links);
+          html += antispamRuleCard('flood_protection', 'Антифлуд', 'Ограничение частоты комментариев от одного пользователя', !!rules.flood_protection);
+          html += antispamRuleCard('emoji_spam', 'Контроль эмодзи', 'Штраф за избыток эмодзи и сообщения только из эмодзи', !!rules.emoji_spam);
+          html += '</div></div>';
+
+          html += '<div class="panel mt-md">';
+          html += sectionHead('Стоп-слова', 'Дополнительные слова и фразы поверх встроенной базы');
+          html += '<div class="form-group"><div class="tags-input-wrap" id="g_stop"></div>';
+          html += '<p class="field-hint">Одно слово или фраза — Enter. Совпадение добавляет до 90 баллов.</p></div>';
+          html += '</div>';
+
+          html += '<div class="panel mt-md">';
+          html += sectionHead('Пороги реакции', 'При какой сумме баллов применяется каждое действие');
+          html += renderAntispamScoreScale(engine);
+          html += '<div class="as-thresholds-grid mt-md">';
+          html += renderAntispamThresholdField(
+            'as_captcha_score',
+            'Капча',
+            'Пользователю предлагается пройти проверку',
+            engine.captcha_required_score != null ? engine.captcha_required_score : 15,
+            1,
+            80,
+          );
+          html += renderAntispamThresholdField(
+            'as_spam_threshold',
+            'Удаление',
+            'Комментарий удаляется при достаточном числе категорий или hard-нарушении',
+            engine.spam_threshold != null ? engine.spam_threshold : 20,
+            5,
+            120,
+          );
+          html += renderAntispamThresholdField(
+            'as_ban_threshold',
+            'Бан',
+            'Удаление комментария и блокировка пользователя',
+            engine.ban_threshold != null ? engine.ban_threshold : 100,
+            40,
+            250,
+          );
+          html += renderAntispamThresholdField(
+            'as_emoji_limit',
+            'Лимит эмодзи',
+            'Сколько эмодзи в одном комментарии считается избыточным',
+            engine.emoji_overuse_limit != null ? engine.emoji_overuse_limit : 20,
+            5,
+            60,
+          );
+          html += '</div></div>';
+
+          html += '<div class="panel mt-md">';
+          html += sectionHead('Списки доступа', 'ID пользователей MAX — всегда пропускать или всегда блокировать');
+          html += '<div class="form-row">';
+          html += '<div class="form-group"><label>Белый список</label><div class="tags-input-wrap" id="as_whitelist_wrap"></div>';
+          html += '<p class="field-hint">Комментарии этих пользователей не проверяются</p></div>';
+          html += '<div class="form-group"><label>Чёрный список</label><div class="tags-input-wrap" id="as_blacklist_wrap"></div>';
+          html += '<p class="field-hint">Комментарии блокируются без проверки текста</p></div>';
+          html += '</div></div>';
+
+          html += '<div class="as-save-bar">';
+          html +=
+            '<button type="button" class="btn btn-primary" id="btnSaveGlobalAs"><i data-lucide="save"></i> Сохранить настройки</button>';
+          html += '</div>';
+        } else if (antispamTab === 'test') {
+          html += '<div class="panel">';
+          html += sectionHead('Проверка текста', 'Симуляция без публикации комментария в канал');
+          html += '<div class="form-group"><label>Канал (необязательно)</label>';
+          html += '<select class="select" id="as_test_chan" style="max-width:320px"><option value="">Глобальные правила</option></select>';
+          html += '<p class="field-hint">Если выбрать канал — учтутся его дополнительные стоп-слова и переопределения</p></div>';
+          html += '<div class="form-group"><label>Текст комментария</label>';
+          html += '<textarea class="input" id="as_test_text" rows="4" placeholder="Вставьте текст для проверки…"></textarea></div>';
+          html += '<button type="button" class="btn btn-primary" id="btnTestAntispam"><i data-lucide="scan-search"></i> Проверить</button>';
+          html += '<div id="as_test_result" class="mt-md"></div>';
+          html += '</div>';
+        } else {
+          html += '<div class="panel">';
+          html += '<div class="flex-between mb-sm">';
+          html += sectionHead('Журнал срабатываний', 'Последние ' + log.length + ' записей');
+          html += '<button type="button" class="btn btn-danger btn-sm" id="asp_clear_log"><i data-lucide="trash-2"></i> Очистить</button>';
+          html += '</div>';
+          if (log.length) {
+            html += '<div class="search-bar as-log-filters">';
+            html += '<input class="input" id="asp_filter_q" placeholder="Поиск по тексту или причине" style="flex:1;min-width:140px">';
+            html += '<select class="select" id="asp_filter_chan"><option value="">Все каналы</option></select>';
+            html += '<select class="select" id="asp_filter_reason"><option value="">Все причины</option></select>';
+            html += '</div>';
+            html += '<div class="table-wrap"><table><thead><tr>';
+            html += '<th>Время</th><th>Канал</th><th>Пользователь</th><th>Баллы</th><th>Действие</th><th>Текст</th>';
+            html += '</tr></thead><tbody id="asp_log_body">';
+            log.forEach(function (e) {
+              var chan = e.channel_title || String(e.channel_chat_id);
+              var score = e.spam_score != null ? e.spam_score : 0;
+              var scoreCls = antispamScoreClass(score, engine);
+              html +=
+                '<tr data-chan="' +
+                esc(chan) +
+                '" data-reason="' +
+                esc(e.reason || '') +
+                '" data-text="' +
+                esc(String(e.text || '').toLowerCase()) +
+                '">';
+              html += '<td class="mono text-sm">' + esc(fmtDateTime(e.created_at)) + '</td>';
+              html += '<td>' + esc(chan) + '</td>';
+              html += '<td>' + esc(e.username || String(e.user_id)) + '</td>';
+              html += '<td><span class="as-score-badge ' + scoreCls + '">' + esc(String(score)) + '</span></td>';
+              html += '<td class="text-sm">' + esc(e.reason || '—') + '</td>';
+              html +=
+                '<td class="as-log-text" title="' +
+                esc(e.text) +
+                '">' +
+                esc(truncateText(e.text, 72)) +
+                '</td>';
+              html += '</tr>';
+            });
+            html += '</tbody></table></div>';
+          } else {
+            html += emptyState('shield-check', 'Срабатываний нет', 'Антиспам ещё не блокировал комментарии');
+          }
+          html += '</div>';
+        }
+
         html += '</div>';
         main.innerHTML = html;
+
+        if (antispamTab === 'settings') {
+          var gStop = qs('#g_stop', main);
+          if (gStop) bindTagsInput(gStop, globalWords, function () {});
+          var wlWrap = qs('#as_whitelist_wrap', main);
+          if (wlWrap) {
+            bindTagsInput(
+              wlWrap,
+              (engine.whitelist_user_ids || []).map(String),
+              function () {},
+            );
+          }
+          var blWrap = qs('#as_blacklist_wrap', main);
+          if (blWrap) {
+            bindTagsInput(
+              blWrap,
+              (engine.blacklist_user_ids || []).map(String),
+              function () {},
+            );
+          }
+          bindToggleRows(main, null);
+          bindAntispamThresholdRanges(main);
+          var saveBtn = qs('#btnSaveGlobalAs', main);
+          if (saveBtn) {
+            saveBtn.addEventListener('click', function () {
+              saveAntispamSettings(main);
+            });
+          }
+          setTopbarActions(
+            '<button type="button" class="btn btn-primary btn-sm" id="topbarSaveAntispam"><i data-lucide="save"></i> Сохранить</button>',
+          );
+          var topSave = qs('#topbarSaveAntispam');
+          if (topSave) {
+            topSave.addEventListener('click', function () {
+              saveAntispamSettings(main);
+            });
+          }
+        }
+
+        if (antispamTab === 'test') {
+          var chanSel = qs('#as_test_chan', main);
+          if (chanSel) {
+            var chans = channelsCache.length ? channelsCache : [];
+            var loadChans = chans.length
+              ? Promise.resolve({ channels: chans })
+              : getJson('/channels?summary=1');
+            loadChans.then(function (data) {
+              if (currentRoute !== 'antispam') return;
+              var list = data.channels || [];
+              if (!channelsCache.length) channelsCache = list;
+              chanSel.innerHTML =
+                '<option value="">Глобальные правила</option>' +
+                list
+                  .map(function (c) {
+                    return (
+                      '<option value="' +
+                      esc(String(c.chat_id)) +
+                      '">' +
+                      esc(c.title || String(c.chat_id)) +
+                      '</option>'
+                    );
+                  })
+                  .join('');
+            });
+          }
+          var btnTest = qs('#btnTestAntispam', main);
+          if (btnTest) {
+            btnTest.addEventListener('click', function () {
+              var text = String(qs('#as_test_text', main).value || '');
+              if (!text.trim()) {
+                showToast('Введите текст для проверки', 'error');
+                return;
+              }
+              var chatId = chanSel ? Number(chanSel.value) || 0 : 0;
+              btnTest.disabled = true;
+              postJson('/antispam/test', { text: text, chat_id: chatId })
+                .then(function (data) {
+                  renderAntispamTestResult(main, data.result || {});
+                })
+                .catch(function (e) {
+                  showToast(e.message || 'Ошибка', 'error');
+                })
+                .finally(function () {
+                  btnTest.disabled = false;
+                });
+            });
+          }
+        }
+
+        if (antispamTab === 'log' && log.length) {
+          var chanFilter = qs('#asp_filter_chan', main);
+          var reasonFilter = qs('#asp_filter_reason', main);
+          var chans = [];
+          var reasons = [];
+          log.forEach(function (e) {
+            var ch = e.channel_title || String(e.channel_chat_id);
+            if (chans.indexOf(ch) === -1) chans.push(ch);
+            if (e.reason && reasons.indexOf(e.reason) === -1) reasons.push(e.reason);
+          });
+          if (chanFilter) {
+            chans.forEach(function (ch) {
+              chanFilter.innerHTML += '<option value="' + esc(ch) + '">' + esc(ch) + '</option>';
+            });
+          }
+          if (reasonFilter) {
+            reasons.forEach(function (r) {
+              reasonFilter.innerHTML += '<option value="' + esc(r) + '">' + esc(r) + '</option>';
+            });
+          }
+          bindAntispamLogFilters(main, log);
+        }
+
         var clearBtn = qs('#asp_clear_log', main);
         if (clearBtn) {
           clearBtn.addEventListener('click', function () {
-            showConfirm('Очистить журнал?', 'Все записи журнала блокировок будут удалены.', function () {
+            showConfirm('Очистить журнал?', 'Все записи будут удалены без возможности восстановления.', function () {
               postJson('/antispam/log/clear', {})
                 .then(function () {
                   showToast('Журнал очищен', 'success');
@@ -4705,101 +5202,13 @@
             });
           });
         }
-        var chanSel = qs('#asp_filter_chan', main);
-        var reasonSel = qs('#asp_filter_reason', main);
-        if (chanSel && log.length) {
-          var chans = [];
-          var reasons = [];
-          log.forEach(function (e) {
-            var ch = e.channel_title || String(e.channel_chat_id);
-            if (chans.indexOf(ch) === -1) chans.push(ch);
-            if (e.reason && reasons.indexOf(e.reason) === -1) reasons.push(e.reason);
-          });
-          chans.forEach(function (ch) {
-            chanSel.innerHTML += '<option value="' + esc(ch) + '">' + esc(ch) + '</option>';
-          });
-          if (reasonSel) {
-            reasons.forEach(function (r) {
-              reasonSel.innerHTML += '<option value="' + esc(r) + '">' + esc(r) + '</option>';
-            });
-          }
-        }
-        var wrap = qs('#g_stop', main);
-        if (wrap) bindTagsInput(wrap, w.global || [], function () {});
-        bindToggleRows(main, null);
-        qs('#btnSaveGlobalAs', main).addEventListener('click', function () {
-          var tags = [];
-          qsa('.tag', wrap).forEach(function (tg) {
-            var txt = tg.firstChild;
-            if (txt && txt.nodeType === 3) tags.push(String(txt.textContent || '').trim());
-          });
-          var sw = readSwitches(main);
-          var wl = String(qs('#as_whitelist', main).value || '')
-            .split(',')
-            .map(function (s) { return parseInt(s.trim(), 10); })
-            .filter(function (n) { return !isNaN(n) && n > 0; });
-          var bl = String(qs('#as_blacklist', main).value || '')
-            .split(',')
-            .map(function (s) { return parseInt(s.trim(), 10); })
-            .filter(function (n) { return !isNaN(n) && n > 0; });
-          postJson('/antispam/words', {
-            global: tags,
-            rules: {
-              block_links: !!sw.block_links,
-              flood_protection: !!sw.flood_protection,
-              caps_protection: !!sw.caps_protection,
-              emoji_spam: !!sw.emoji_spam,
-            },
-            engine: {
-              enabled: !!sw.antispam_enabled,
-              soft_mode: !!sw.soft_mode,
-              spam_threshold: parseInt(qs('#as_spam_threshold', main).value, 10) || 20,
-              ban_threshold: parseInt(qs('#as_ban_threshold', main).value, 10) || 100,
-              captcha_required_score: parseInt(qs('#as_captcha_score', main).value, 10) || 15,
-              whitelist_user_ids: wl,
-              blacklist_user_ids: bl,
-            },
-          })
-            .then(function () {
-              showToast('Сохранено', 'success');
-              renderAntispam();
-            })
-            .catch(function (e) {
-              showToast(e.message || 'Ошибка', 'error');
-            });
-        });
-        var btnTest = qs('#btnTestAntispam', main);
-        if (btnTest) {
-          btnTest.addEventListener('click', function () {
-            var text = String(qs('#as_test_text', main).value || '');
-            postJson('/antispam/test', { text: text, chat_id: 0 })
-              .then(function (data) {
-                var r = data.result || {};
-                var out = qs('#as_test_result', main);
-                if (out) {
-                  out.textContent =
-                    'action: ' +
-                    (r.action || '—') +
-                    '\nallowed: ' +
-                    String(r.allowed) +
-                    '\nscore: ' +
-                    String(r.spamScore != null ? r.spamScore : '—') +
-                    '\ncategories: ' +
-                    (r.categories && r.categories.length ? r.categories.join(', ') : '—') +
-                    '\nreason: ' +
-                    (r.reason || '—');
-                }
-              })
-              .catch(function (e) {
-                showToast(e.message || 'Ошибка', 'error');
-              });
-          });
-        }
+
+        bindAntispamTabs(main);
         refreshIcons();
       })
       .catch(function (err) {
         if (err && err.message === 'auth') return;
-        main.innerHTML = '<p class="muted">Ошибка</p>';
+        main.innerHTML = '<p class="muted">Ошибка загрузки настроек антиспама</p>';
       });
   }
 
