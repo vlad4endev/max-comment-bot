@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 
 import { getPostsDb, type PostPlatform } from '../db/postsDatabase'
+import { isAutopostDue } from './autopostSchedule'
 
 export type AutopostStatus = 'draft' | 'active' | 'sent' | 'paused' | 'failed'
 export type AutopostScheduleType = 'once' | 'recurring'
@@ -600,14 +601,17 @@ export function getAutopostById(id: string): AutopostRecord | null {
 }
 
 export function listDueAutoposts(nowIso: string): AutopostRecord[] {
+  const now = new Date(nowIso)
   const rows = getPostsDb()
     .prepare(
       `SELECT * FROM autoposts
-       WHERE status = 'active' AND scheduled_at <= ?
+       WHERE status = 'active'
        ORDER BY scheduled_at ASC`,
     )
-    .all(nowIso) as AutopostDbRow[]
-  return rows.map(rowToRecord)
+    .all() as AutopostDbRow[]
+  return rows
+    .map(rowToRecord)
+    .filter((post) => isAutopostDue(post.scheduled_at, now))
 }
 
 export function createAutopost(input: CreateAutopostInput): AutopostRecord {
@@ -791,9 +795,28 @@ export function markAutopostFailed(id: string, error: string): AutopostRecord | 
   const current = getAutopostById(id)
   if (!current) return null
   const now = new Date().toISOString()
+  const trimmedError = error.slice(0, 2000)
+
+  if (current.on_failure === 'retry_15m') {
+    const retryAt = new Date(Date.now() + 15 * 60_000).toISOString()
+    getPostsDb()
+      .prepare(
+        `UPDATE autoposts SET status = 'active', scheduled_at = ?, last_error = ?, updated_at = ? WHERE id = ?`,
+      )
+      .run(retryAt, trimmedError, now, id)
+    logPostPublish({
+      autopost_id: id,
+      platform: current.platform,
+      target_channel_id: current.target_channel_id,
+      status: 'skipped',
+      message: `retry at ${retryAt}: ${trimmedError}`,
+    })
+    return getAutopostById(id)
+  }
+
   getPostsDb()
     .prepare(`UPDATE autoposts SET status = 'failed', last_error = ?, updated_at = ? WHERE id = ?`)
-    .run(error.slice(0, 2000), now, id)
+    .run(trimmedError, now, id)
   logPostPublish({
     autopost_id: id,
     platform: current.platform,

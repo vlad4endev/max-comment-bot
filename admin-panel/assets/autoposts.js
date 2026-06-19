@@ -5,8 +5,11 @@
 (function () {
   'use strict';
 
-  var AP_UI_BUILD = '20260619-tags-v9';
+  var AP_UI_BUILD = '20260619-publish-fix-v10';
   var AP_TAG_COLORS = ['#7F77DD', '#1D9E75', '#BA7517', '#3B82F6', '#EC4899', '#EF4444', '#6B7280', '#EAB308'];
+  var AP_DEFAULT_TZ = (typeof Intl !== 'undefined' && Intl.DateTimeFormat)
+    ? (Intl.DateTimeFormat().resolvedOptions().timeZone || 'Europe/Moscow')
+    : 'Europe/Moscow';
   var API_BASE = '/api/admin';
   var CHANNEL_COLORS = ['#534AB7', '#1D9E75', '#BA7517', '#7F77DD', '#3B82F6', '#EC4899'];
   var WEEKDAY_LABELS = ['Вс', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб'];
@@ -1507,6 +1510,8 @@
         }
         fd.append('inline_buttons', JSON.stringify(keyboard || []));
         fd.append('tags', JSON.stringify(normalizeTagList(modalState.tags)));
+        fd.append('timezone', AP_DEFAULT_TZ);
+        fd.append('status', asDraft ? 'draft' : 'active');
         fd.append('existing_media', JSON.stringify(existingMediaPayload(modalState.mediaFiles)));
         modalState.mediaFiles.forEach(function (m) {
           var file = fileFromMediaEntry(m);
@@ -1690,6 +1695,8 @@
           var ch = state.channels.find(function (c) { return String(c.id) === channelId; });
           if (ch) fd.append('channel_title', channelLabel(ch));
           fd.append('text', text);
+          fd.append('timezone', AP_DEFAULT_TZ);
+          fd.append('status', 'active');
           if (qType === 'once') {
             fd.append('schedule_type', 'once');
             var d = qs('#apQuickDate', root).value;

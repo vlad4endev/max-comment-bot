@@ -2,6 +2,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.startAutopostScheduler = startAutopostScheduler;
 exports.stopAutopostScheduler = stopAutopostScheduler;
+exports.triggerAutopostTick = triggerAutopostTick;
 const config_1 = require("../config");
 const logger_1 = require("../utils/logger");
 const integrationsStore_1 = require("./integrationsStore");
@@ -44,7 +45,7 @@ async function afterSuccessfulSend(post) {
         (0, autopostStore_1.markAutopostFailed)(post.id, 'recurring schedule misconfigured');
         return;
     }
-    const nextAt = (0, autopostSchedule_1.computeNextRecurringAt)(recurringTime, weekdays);
+    const nextAt = (0, autopostSchedule_1.computeNextRecurringAt)(recurringTime, weekdays, new Date(), post.timezone);
     (0, autopostStore_1.markAutopostSent)(post.id, { nextScheduledAt: nextAt, status: 'active' });
     logger_1.logger.info('autopostScheduler: recurring post sent, next scheduled', {
         id: post.id,
@@ -88,6 +89,9 @@ async function tick() {
     try {
         const nowIso = new Date().toISOString();
         const due = (0, autopostStore_1.listDueAutoposts)(nowIso);
+        if (due.length > 0) {
+            logger_1.logger.info('autopostScheduler: processing due posts', { count: due.length, ids: due.map((p) => p.id) });
+        }
         for (const post of due) {
             await processDuePost(post);
         }
@@ -115,5 +119,9 @@ function stopAutopostScheduler() {
         clearInterval(intervalHandle);
         intervalHandle = null;
     }
+}
+/** Немедленный проход планировщика (после создания/обновления поста). */
+function triggerAutopostTick() {
+    void tick();
 }
 //# sourceMappingURL=autopostScheduler.js.map

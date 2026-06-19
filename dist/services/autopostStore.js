@@ -22,6 +22,7 @@ exports.setAutopostStatus = setAutopostStatus;
 exports.purgeAutopostsForChannel = purgeAutopostsForChannel;
 const node_crypto_1 = require("node:crypto");
 const postsDatabase_1 = require("../db/postsDatabase");
+const autopostSchedule_1 = require("./autopostSchedule");
 /** Палитра цветов для тегов автопостов. */
 exports.AUTOPOST_TAG_COLORS = [
     '#7F77DD',
@@ -387,12 +388,15 @@ function getAutopostById(id) {
     return row ? rowToRecord(row) : null;
 }
 function listDueAutoposts(nowIso) {
+    const now = new Date(nowIso);
     const rows = (0, postsDatabase_1.getPostsDb)()
         .prepare(`SELECT * FROM autoposts
-       WHERE status = 'active' AND scheduled_at <= ?
+       WHERE status = 'active'
        ORDER BY scheduled_at ASC`)
-        .all(nowIso);
-    return rows.map(rowToRecord);
+        .all();
+    return rows
+        .map(rowToRecord)
+        .filter((post) => (0, autopostSchedule_1.isAutopostDue)(post.scheduled_at, now));
 }
 function createAutopost(input) {
     const now = new Date().toISOString();
@@ -505,9 +509,24 @@ function markAutopostFailed(id, error) {
     if (!current)
         return null;
     const now = new Date().toISOString();
+    const trimmedError = error.slice(0, 2000);
+    if (current.on_failure === 'retry_15m') {
+        const retryAt = new Date(Date.now() + 15 * 60_000).toISOString();
+        (0, postsDatabase_1.getPostsDb)()
+            .prepare(`UPDATE autoposts SET status = 'active', scheduled_at = ?, last_error = ?, updated_at = ? WHERE id = ?`)
+            .run(retryAt, trimmedError, now, id);
+        logPostPublish({
+            autopost_id: id,
+            platform: current.platform,
+            target_channel_id: current.target_channel_id,
+            status: 'skipped',
+            message: `retry at ${retryAt}: ${trimmedError}`,
+        });
+        return getAutopostById(id);
+    }
     (0, postsDatabase_1.getPostsDb)()
         .prepare(`UPDATE autoposts SET status = 'failed', last_error = ?, updated_at = ? WHERE id = ?`)
-        .run(error.slice(0, 2000), now, id);
+        .run(trimmedError, now, id);
     logPostPublish({
         autopost_id: id,
         platform: current.platform,

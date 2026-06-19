@@ -51,7 +51,7 @@ async function afterSuccessfulSend(post: AutopostRecord): Promise<void> {
     markAutopostFailed(post.id, 'recurring schedule misconfigured')
     return
   }
-  const nextAt = computeNextRecurringAt(recurringTime, weekdays)
+  const nextAt = computeNextRecurringAt(recurringTime, weekdays, new Date(), post.timezone)
   markAutopostSent(post.id, { nextScheduledAt: nextAt, status: 'active' })
   logger.info('autopostScheduler: recurring post sent, next scheduled', {
     id: post.id,
@@ -97,6 +97,9 @@ async function tick(): Promise<void> {
   try {
     const nowIso = new Date().toISOString()
     const due = listDueAutoposts(nowIso)
+    if (due.length > 0) {
+      logger.info('autopostScheduler: processing due posts', { count: due.length, ids: due.map((p) => p.id) })
+    }
     for (const post of due) {
       await processDuePost(post)
     }
@@ -125,4 +128,9 @@ export function stopAutopostScheduler(): void {
     clearInterval(intervalHandle)
     intervalHandle = null
   }
+}
+
+/** Немедленный проход планировщика (после создания/обновления поста). */
+export function triggerAutopostTick(): void {
+  void tick()
 }

@@ -31,6 +31,10 @@ import {
   normalizeInlineKeyboard,
   normalizeAutopostTags,
   type AutopostTag,
+  type AutopostStatus,
+  markAutopostSent,
+  markAutopostFailed,
+  type AutopostRecord,
 } from '../services/autopostStore'
 import { channelRegistry } from '../services/channelRegistry'
 import {
@@ -41,6 +45,9 @@ import {
   updatePostTemplate,
 } from '../services/postTemplateStore'
 import { POSTS_DB_PATH } from '../db/postsDatabase'
+import { triggerAutopostTick } from '../services/autopostScheduler'
+import { resolveMaxToken, sendAutopostToMax } from '../services/autopostMaxSender'
+import { sendAutopostToTelegram } from '../services/autopostTelegramSender'
 
 const AUTOPOST_MEDIA_DIR = path.join(process.cwd(), 'data', 'autoposts-media')
 const MAX_MEDIA_FILES = 10
@@ -283,7 +290,9 @@ function validateScheduleInput(body: Record<string, unknown>): {
   scheduled_at: string
   recurring_time: string | null
   weekdays: number[] | null
+  timezone: string
 } {
+  const timezone = parseNonEmptyString(body.timezone) ?? 'Europe/Moscow'
   const scheduleTypeRaw = parseNonEmptyString(body.schedule_type) ?? 'once'
   const schedule_type: AutopostScheduleType =
     scheduleTypeRaw === 'recurring' ? 'recurring' : 'once'
@@ -292,16 +301,61 @@ function validateScheduleInput(body: Record<string, unknown>): {
     throw new Error('scheduled_at required (ISO datetime)')
   }
   if (schedule_type === 'once') {
-    return { schedule_type, scheduled_at, recurring_time: null, weekdays: null }
+    return { schedule_type, scheduled_at, recurring_time: null, weekdays: null, timezone }
   }
   const recurring_time =
-    parseNonEmptyString(body.recurring_time) ?? extractRecurringTimeFromIso(scheduled_at)
+    parseNonEmptyString(body.recurring_time) ?? extractRecurringTimeFromIso(scheduled_at, timezone)
   const weekdays = parseWeekdays(body.weekdays)
   if (!weekdays?.length) {
     throw new Error('weekdays required for recurring schedule (0=Sun … 6=Sat)')
   }
-  const nextAt = computeNextRecurringAt(recurring_time, weekdays)
-  return { schedule_type, scheduled_at: nextAt, recurring_time, weekdays }
+  const nextAt = computeNextRecurringAt(recurring_time, weekdays, new Date(), timezone)
+  return { schedule_type, scheduled_at: nextAt, recurring_time, weekdays, timezone }
+}
+
+function parseAutopostStatus(raw: unknown): AutopostStatus | undefined {
+  if (raw !== 'draft' && raw !== 'active' && raw !== 'paused' && raw !== 'sent' && raw !== 'failed') {
+    return undefined
+  }
+  return raw
+}
+
+async function publishAutopostNow(postId: string): Promise<{ ok: true; post: AutopostRecord }> {
+  const post = getAutopostById(postId)
+  if (!post) {
+    throw new Error('not found')
+  }
+  if (post.platform === 'max') {
+    const maxToken = resolveMaxToken()
+    if (!maxToken) {
+      throw new Error('MAX bot token not configured')
+    }
+    await sendAutopostToMax(maxToken, post)
+  } else {
+    const tgToken = getTelegramToken() || integrationsStore.getTelegramIntegration()?.token?.trim()
+    if (!tgToken) {
+      throw new Error('Telegram bot token not configured')
+    }
+    await sendAutopostToTelegram(tgToken, post)
+  }
+  if (post.schedule_type === 'once') {
+    markAutopostSent(post.id, { status: 'sent' })
+  } else if (post.recurring_time && post.weekdays?.length) {
+    const nextAt = computeNextRecurringAt(
+      post.recurring_time,
+      post.weekdays,
+      new Date(),
+      post.timezone,
+    )
+    markAutopostSent(post.id, { nextScheduledAt: nextAt, status: 'active' })
+  } else {
+    markAutopostSent(post.id, { status: 'sent' })
+  }
+  const updated = getAutopostById(postId)
+  if (!updated) {
+    throw new Error('not found after publish')
+  }
+  return { ok: true, post: updated }
 }
 
 export function createAutopostRouter(): express.Router {
@@ -464,6 +518,7 @@ export function createAutopostRouter(): express.Router {
       const media = mergeAutopostMedia(body, (req.files as Express.Multer.File[]) ?? [])
       const platformRaw = parseNonEmptyString(body.platform)
       const platform = platformRaw === 'max' ? 'max' : 'telegram'
+      const status = parseAutopostStatus(body.status) ?? 'active'
       if (media.length > 1 && inline_buttons && platform === 'telegram') {
         res.status(400).json({
           error: 'album_inline_button',
@@ -480,8 +535,10 @@ export function createAutopostRouter(): express.Router {
         tags,
         target_channel_id,
         channel_title: parseNonEmptyString(body.channel_title),
+        status,
         ...schedule,
       })
+      triggerAutopostTick()
       res.json({ ok: true, post: row })
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'invalid body'
@@ -533,6 +590,12 @@ export function createAutopostRouter(): express.Router {
       if (body.schedule_type !== undefined || body.scheduled_at !== undefined) {
         Object.assign(patch, validateScheduleInput(body))
       }
+      if (body.status !== undefined) {
+        const status = parseAutopostStatus(body.status)
+        if (status) {
+          patch.status = status
+        }
+      }
       const current = getAutopostById(id)
       if (!current) {
         res.status(404).json({ error: 'not found' })
@@ -555,6 +618,7 @@ export function createAutopostRouter(): express.Router {
         res.status(404).json({ error: 'not found' })
         return
       }
+      triggerAutopostTick()
       res.json({ ok: true, post: row })
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'invalid body'
@@ -589,7 +653,12 @@ export function createAutopostRouter(): express.Router {
     }
     let scheduled_at = current.scheduled_at
     if (current.schedule_type === 'recurring' && current.recurring_time && current.weekdays?.length) {
-      scheduled_at = computeNextRecurringAt(current.recurring_time, current.weekdays)
+      scheduled_at = computeNextRecurringAt(
+        current.recurring_time,
+        current.weekdays,
+        new Date(),
+        current.timezone,
+      )
     } else if (new Date(scheduled_at).getTime() <= Date.now()) {
       res.status(400).json({ error: 'scheduled_at in the past; update schedule first' })
       return
@@ -600,6 +669,26 @@ export function createAutopostRouter(): express.Router {
       return
     }
     res.json({ ok: true, post: row })
+  })
+
+  router.post('/:id/publish-now', async (req, res) => {
+    const id = parseNonEmptyString(req.params.id)
+    if (!id) {
+      res.status(400).json({ error: 'invalid id' })
+      return
+    }
+    try {
+      const result = await publishAutopostNow(id)
+      res.json(result)
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err)
+      if (message === 'not found') {
+        res.status(404).json({ error: message })
+        return
+      }
+      markAutopostFailed(id, message)
+      res.status(502).json({ error: message })
+    }
   })
 
   router.delete('/:id', (req, res) => {

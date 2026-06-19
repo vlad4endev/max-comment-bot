@@ -18,6 +18,9 @@ const autopostStore_1 = require("../services/autopostStore");
 const channelRegistry_1 = require("../services/channelRegistry");
 const postTemplateStore_1 = require("../services/postTemplateStore");
 const postsDatabase_1 = require("../db/postsDatabase");
+const autopostScheduler_1 = require("../services/autopostScheduler");
+const autopostMaxSender_1 = require("../services/autopostMaxSender");
+const autopostTelegramSender_1 = require("../services/autopostTelegramSender");
 const AUTOPOST_MEDIA_DIR = node_path_1.default.join(process.cwd(), 'data', 'autoposts-media');
 const MAX_MEDIA_FILES = 10;
 const MAX_MEDIA_BYTES = 50 * 1024 * 1024;
@@ -234,6 +237,7 @@ function listMaxChannelsForAutopost() {
     }));
 }
 function validateScheduleInput(body) {
+    const timezone = parseNonEmptyString(body.timezone) ?? 'Europe/Moscow';
     const scheduleTypeRaw = parseNonEmptyString(body.schedule_type) ?? 'once';
     const schedule_type = scheduleTypeRaw === 'recurring' ? 'recurring' : 'once';
     const scheduled_at = parseNonEmptyString(body.scheduled_at);
@@ -241,15 +245,56 @@ function validateScheduleInput(body) {
         throw new Error('scheduled_at required (ISO datetime)');
     }
     if (schedule_type === 'once') {
-        return { schedule_type, scheduled_at, recurring_time: null, weekdays: null };
+        return { schedule_type, scheduled_at, recurring_time: null, weekdays: null, timezone };
     }
-    const recurring_time = parseNonEmptyString(body.recurring_time) ?? (0, autopostSchedule_1.extractRecurringTimeFromIso)(scheduled_at);
+    const recurring_time = parseNonEmptyString(body.recurring_time) ?? (0, autopostSchedule_1.extractRecurringTimeFromIso)(scheduled_at, timezone);
     const weekdays = parseWeekdays(body.weekdays);
     if (!weekdays?.length) {
         throw new Error('weekdays required for recurring schedule (0=Sun … 6=Sat)');
     }
-    const nextAt = (0, autopostSchedule_1.computeNextRecurringAt)(recurring_time, weekdays);
-    return { schedule_type, scheduled_at: nextAt, recurring_time, weekdays };
+    const nextAt = (0, autopostSchedule_1.computeNextRecurringAt)(recurring_time, weekdays, new Date(), timezone);
+    return { schedule_type, scheduled_at: nextAt, recurring_time, weekdays, timezone };
+}
+function parseAutopostStatus(raw) {
+    if (raw !== 'draft' && raw !== 'active' && raw !== 'paused' && raw !== 'sent' && raw !== 'failed') {
+        return undefined;
+    }
+    return raw;
+}
+async function publishAutopostNow(postId) {
+    const post = (0, autopostStore_1.getAutopostById)(postId);
+    if (!post) {
+        throw new Error('not found');
+    }
+    if (post.platform === 'max') {
+        const maxToken = (0, autopostMaxSender_1.resolveMaxToken)();
+        if (!maxToken) {
+            throw new Error('MAX bot token not configured');
+        }
+        await (0, autopostMaxSender_1.sendAutopostToMax)(maxToken, post);
+    }
+    else {
+        const tgToken = (0, config_1.getTelegramToken)() || integrationsStore_1.integrationsStore.getTelegramIntegration()?.token?.trim();
+        if (!tgToken) {
+            throw new Error('Telegram bot token not configured');
+        }
+        await (0, autopostTelegramSender_1.sendAutopostToTelegram)(tgToken, post);
+    }
+    if (post.schedule_type === 'once') {
+        (0, autopostStore_1.markAutopostSent)(post.id, { status: 'sent' });
+    }
+    else if (post.recurring_time && post.weekdays?.length) {
+        const nextAt = (0, autopostSchedule_1.computeNextRecurringAt)(post.recurring_time, post.weekdays, new Date(), post.timezone);
+        (0, autopostStore_1.markAutopostSent)(post.id, { nextScheduledAt: nextAt, status: 'active' });
+    }
+    else {
+        (0, autopostStore_1.markAutopostSent)(post.id, { status: 'sent' });
+    }
+    const updated = (0, autopostStore_1.getAutopostById)(postId);
+    if (!updated) {
+        throw new Error('not found after publish');
+    }
+    return { ok: true, post: updated };
 }
 function createAutopostRouter() {
     const router = express_1.default.Router();
@@ -402,6 +447,7 @@ function createAutopostRouter() {
             const media = mergeAutopostMedia(body, req.files ?? []);
             const platformRaw = parseNonEmptyString(body.platform);
             const platform = platformRaw === 'max' ? 'max' : 'telegram';
+            const status = parseAutopostStatus(body.status) ?? 'active';
             if (media.length > 1 && inline_buttons && platform === 'telegram') {
                 res.status(400).json({
                     error: 'album_inline_button',
@@ -417,8 +463,10 @@ function createAutopostRouter() {
                 tags,
                 target_channel_id,
                 channel_title: parseNonEmptyString(body.channel_title),
+                status,
                 ...schedule,
             });
+            (0, autopostScheduler_1.triggerAutopostTick)();
             res.json({ ok: true, post: row });
         }
         catch (err) {
@@ -469,6 +517,12 @@ function createAutopostRouter() {
             if (body.schedule_type !== undefined || body.scheduled_at !== undefined) {
                 Object.assign(patch, validateScheduleInput(body));
             }
+            if (body.status !== undefined) {
+                const status = parseAutopostStatus(body.status);
+                if (status) {
+                    patch.status = status;
+                }
+            }
             const current = (0, autopostStore_1.getAutopostById)(id);
             if (!current) {
                 res.status(404).json({ error: 'not found' });
@@ -489,6 +543,7 @@ function createAutopostRouter() {
                 res.status(404).json({ error: 'not found' });
                 return;
             }
+            (0, autopostScheduler_1.triggerAutopostTick)();
             res.json({ ok: true, post: row });
         }
         catch (err) {
@@ -522,7 +577,7 @@ function createAutopostRouter() {
         }
         let scheduled_at = current.scheduled_at;
         if (current.schedule_type === 'recurring' && current.recurring_time && current.weekdays?.length) {
-            scheduled_at = (0, autopostSchedule_1.computeNextRecurringAt)(current.recurring_time, current.weekdays);
+            scheduled_at = (0, autopostSchedule_1.computeNextRecurringAt)(current.recurring_time, current.weekdays, new Date(), current.timezone);
         }
         else if (new Date(scheduled_at).getTime() <= Date.now()) {
             res.status(400).json({ error: 'scheduled_at in the past; update schedule first' });
@@ -534,6 +589,26 @@ function createAutopostRouter() {
             return;
         }
         res.json({ ok: true, post: row });
+    });
+    router.post('/:id/publish-now', async (req, res) => {
+        const id = parseNonEmptyString(req.params.id);
+        if (!id) {
+            res.status(400).json({ error: 'invalid id' });
+            return;
+        }
+        try {
+            const result = await publishAutopostNow(id);
+            res.json(result);
+        }
+        catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            if (message === 'not found') {
+                res.status(404).json({ error: message });
+                return;
+            }
+            (0, autopostStore_1.markAutopostFailed)(id, message);
+            res.status(502).json({ error: message });
+        }
     });
     router.delete('/:id', (req, res) => {
         const id = parseNonEmptyString(req.params.id);

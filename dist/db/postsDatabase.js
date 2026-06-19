@@ -23,6 +23,11 @@ function getPostsDb() {
         return postsDb;
     }
     node_fs_1.default.mkdirSync(DATA_DIR, { recursive: true });
+    // Пустой файл (0 байт) ломает SQLite — пересоздаём схему.
+    if (node_fs_1.default.existsSync(exports.POSTS_DB_PATH) && node_fs_1.default.statSync(exports.POSTS_DB_PATH).size === 0) {
+        node_fs_1.default.unlinkSync(exports.POSTS_DB_PATH);
+        getLogger().warn('postsDatabase: removed empty posts.db, reinitializing schema');
+    }
     const instance = new better_sqlite3_1.default(exports.POSTS_DB_PATH);
     instance.pragma('journal_mode = WAL');
     instance.pragma('synchronous = NORMAL');

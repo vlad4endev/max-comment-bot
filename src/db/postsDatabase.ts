@@ -22,6 +22,11 @@ export function getPostsDb(): Database.Database {
     return postsDb
   }
   fs.mkdirSync(DATA_DIR, { recursive: true })
+  // Пустой файл (0 байт) ломает SQLite — пересоздаём схему.
+  if (fs.existsSync(POSTS_DB_PATH) && fs.statSync(POSTS_DB_PATH).size === 0) {
+    fs.unlinkSync(POSTS_DB_PATH)
+    getLogger().warn('postsDatabase: removed empty posts.db, reinitializing schema')
+  }
   const instance = new Database(POSTS_DB_PATH)
   instance.pragma('journal_mode = WAL')
   instance.pragma('synchronous = NORMAL')
