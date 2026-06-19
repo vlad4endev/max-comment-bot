@@ -818,59 +818,72 @@ export interface VkGroupInfo {
   photo?: string
 }
 
-export async function listVkGroups(token: string, groupId?: string): Promise<PlatformChannelInfo[]> {
-  if (!groupId || groupId.trim() === '') {
-    return []
+export interface VkGroupResolveResult {
+  group: VkGroupInfo | null
+  error?: string
+}
+
+interface VkGroupApiItem {
+  id: number
+  name?: string
+  screen_name?: string
+  photo_50?: string
+  photo_100?: string
+}
+
+/** Нормализует ввод: URL, club123, public123, clubslug → slug/id для VK API. */
+function normalizeVkGroupLookup(input: string): string {
+  const raw = input.trim()
+  if (!raw) return ''
+
+  const urlMatch = /(?:https?:\/\/)?(?:www\.|m\.)?vk\.com\/([a-zA-Z0-9_.-]+)/i.exec(raw)
+  let lookup = urlMatch ? urlMatch[1]! : raw
+  lookup = lookup.replace(/^@/, '').replace(/^-/, '')
+
+  const prefixedNumeric = /^(?:club|public|event)(\d+)$/i.exec(lookup)
+  if (prefixedNumeric) return prefixedNumeric[1]!
+
+  // vk.com/clubostrovskidok → ostrovskidok (лишний префикс club перед буквами)
+  if (/^club[a-zA-Z_]/i.test(lookup)) return lookup.slice(4)
+  if (/^public[a-zA-Z_]/i.test(lookup)) return lookup.slice(6)
+
+  return lookup
+}
+
+/** VK API 5.139+: response — объект { groups, profiles }; раньше — массив. */
+function parseVkGroupsGetByIdItems(response: unknown): VkGroupApiItem[] {
+  if (!response) return []
+  if (Array.isArray(response)) return response as VkGroupApiItem[]
+  if (typeof response === 'object' && response !== null) {
+    const groups = (response as { groups?: unknown }).groups
+    if (Array.isArray(groups)) return groups as VkGroupApiItem[]
   }
-  try {
-    const { data } = await axios.get<{
-      response?: Array<{ id: number; name?: string; screen_name?: string }>
-      error?: { error_msg?: string }
-    }>('https://api.vk.com/method/groups.getById', {
-      params: {
-        access_token: token,
-        group_id: groupId.replace(/^-/, '').replace(/^public/, ''),
-        v: '5.199',
-      },
-      timeout: 15_000,
-    })
-    if (data.error || !data.response?.length) return []
-    return data.response.map((g) => ({
-      id: String(-g.id),
-      title: g.name ?? String(g.id),
-      username: g.screen_name ? g.screen_name : undefined,
-    }))
-  } catch (err: unknown) {
-    logger.debug('listVkGroups failed', err)
-    return []
+  return []
+}
+
+function mapVkGroupApiItem(g: VkGroupApiItem): VkGroupInfo {
+  const screenName = g.screen_name?.trim() || `club${g.id}`
+  return {
+    id: String(g.id),
+    name: g.name?.trim() || screenName,
+    screenName,
+    url: `https://vk.com/${screenName}`,
+    photo: g.photo_100 ?? g.photo_50,
   }
 }
 
-/**
- * Разрешает VK-сообщество из любого формата ввода:
- * числовой ID, -ID, URL (vk.com/...), slug (ostrovskidok).
- */
-export async function resolveVkGroup(token: string, input: string): Promise<VkGroupInfo | null> {
-  const raw = input.trim()
-  if (!raw) return null
-
-  // Извлекаем slug/id из URL: vk.com/club123, vk.com/public123, vk.com/slug
-  const urlMatch = /(?:https?:\/\/)?(?:www\.)?vk\.com\/([a-zA-Z0-9_.-]+)/i.exec(raw)
-  let lookup = urlMatch ? urlMatch[1] : raw
-
-  // Убираем минус в начале, чтобы VK API принял ID без знака
-  lookup = lookup.replace(/^-/, '')
+async function fetchVkGroupByLookup(
+  token: string,
+  lookup: string,
+): Promise<VkGroupResolveResult> {
+  if (!lookup) {
+    return { group: null, error: 'Пустой ввод' }
+  }
 
   try {
     const { data } = await axios.get<{
-      response?: Array<{
-        id: number
-        name?: string
-        screen_name?: string
-        photo_50?: string
-        photo_100?: string
-      }>
-      error?: { error_msg?: string }
+      response?: unknown
+      error?: { error_code?: number; error_msg?: string }
     }>('https://api.vk.com/method/groups.getById', {
       params: {
         access_token: token,
@@ -880,22 +893,50 @@ export async function resolveVkGroup(token: string, input: string): Promise<VkGr
       },
       timeout: 15_000,
     })
-    if (data.error || !data.response?.length) {
-      return null
+
+    if (data.error) {
+      const msg = data.error.error_msg?.trim() || 'Ошибка VK API'
+      logger.debug('fetchVkGroupByLookup vk error', { lookup, error: data.error })
+      return { group: null, error: msg }
     }
-    const g = data.response[0]!
-    const screenName = g.screen_name ?? `club${g.id}`
-    return {
-      id: String(g.id),
-      name: g.name?.trim() || `club${g.id}`,
-      screenName,
-      url: `https://vk.com/${screenName}`,
-      photo: g.photo_100 ?? g.photo_50,
+
+    const items = parseVkGroupsGetByIdItems(data.response)
+    if (!items.length) {
+      return { group: null, error: 'Сообщество не найдено. Проверьте ссылку или ID.' }
     }
+
+    return { group: mapVkGroupApiItem(items[0]!) }
   } catch (err: unknown) {
-    logger.debug('resolveVkGroup failed', { input, err })
-    return null
+    logger.debug('fetchVkGroupByLookup failed', { lookup, err })
+    return { group: null, error: 'Не удалось связаться с VK API' }
   }
+}
+
+export async function listVkGroups(token: string, groupId?: string): Promise<PlatformChannelInfo[]> {
+  if (!groupId || groupId.trim() === '') {
+    return []
+  }
+  const lookup = normalizeVkGroupLookup(groupId)
+  const result = await fetchVkGroupByLookup(token, lookup)
+  if (!result.group) return []
+  const g = result.group
+  return [{
+    id: String(-Number(g.id)),
+    title: g.name,
+    username: g.screenName !== `club${g.id}` ? g.screenName : undefined,
+  }]
+}
+
+/**
+ * Разрешает VK-сообщество из любого формата ввода:
+ * числовой ID, -ID, URL (vk.com/...), slug (ostrovskidok).
+ */
+export async function resolveVkGroup(
+  token: string,
+  input: string,
+): Promise<VkGroupResolveResult> {
+  const lookup = normalizeVkGroupLookup(input)
+  return fetchVkGroupByLookup(token, lookup)
 }
 
 /**

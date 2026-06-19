@@ -1271,12 +1271,12 @@ function createAdminRouter(deps) {
             res.status(400).json({ error: 'token and input required' });
             return;
         }
-        const group = await (0, integrationPlatformClient_1.resolveVkGroup)(token, input);
-        if (!group) {
-            res.status(404).json({ error: 'Сообщество не найдено. Проверьте ссылку или ID.' });
+        const result = await (0, integrationPlatformClient_1.resolveVkGroup)(token, input);
+        if (!result.group) {
+            res.status(404).json({ error: result.error ?? 'Сообщество не найдено. Проверьте ссылку или ID.' });
             return;
         }
-        res.json({ group });
+        res.json({ group: result.group });
     });
     secured.post('/vk-chains', async (req, res) => {
         if (!isRecord(req.body)) {
@@ -1302,9 +1302,9 @@ function createAdminRouter(deps) {
         let vkName;
         try {
             const info = await (0, integrationPlatformClient_1.resolveVkGroup)(vkToken, vkGroupId);
-            if (info) {
-                vkScreenName = info.screenName;
-                vkName = info.name;
+            if (info.group) {
+                vkScreenName = info.group.screenName;
+                vkName = info.group.name;
             }
         }
         catch {

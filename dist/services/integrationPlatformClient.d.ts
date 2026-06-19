@@ -64,12 +64,16 @@ export interface VkGroupInfo {
     url: string;
     photo?: string;
 }
+export interface VkGroupResolveResult {
+    group: VkGroupInfo | null;
+    error?: string;
+}
 export declare function listVkGroups(token: string, groupId?: string): Promise<PlatformChannelInfo[]>;
 /**
  * Разрешает VK-сообщество из любого формата ввода:
  * числовой ID, -ID, URL (vk.com/...), slug (ostrovskidok).
  */
-export declare function resolveVkGroup(token: string, input: string): Promise<VkGroupInfo | null>;
+export declare function resolveVkGroup(token: string, input: string): Promise<VkGroupResolveResult>;
 /**
  * Список сообществ, где токен имеет права администратора/редактора.
  */
