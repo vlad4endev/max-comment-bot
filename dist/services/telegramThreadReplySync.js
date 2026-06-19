@@ -196,28 +196,60 @@ async function trySendBookedMarkerReply(token, chatId, replyToMessageId, message
     const data = await callTelegramBot(token, 'sendMessage', payload, { chatId, replyToMessageId, messageThreadId });
     return data.ok === true;
 }
-async function sendPostBookedInMaxMarker(target, post) {
-    if (post.tg_booked_marker_msg_id) {
+async function tryEditTelegramPostBody(target, markedText) {
+    return ((await tryEditTelegramMessageCaption(target, markedText)) ||
+        (await tryEditTelegramMessageText(target, markedText)));
+}
+async function applyPostBookedInMaxMarker(target, post) {
+    const freshPost = postStore_1.postStore.getPost(post.post_id) ?? post;
+    if (freshPost.tg_booked_in_max_applied) {
         return;
     }
-    try {
-        const tgMsgId = await deliverTelegramThreadMessage(target, commentSyncFilter_1.TG_BOOKED_IN_MAX_MARKER, target.threadMsgId, false);
-        if (tgMsgId != null) {
-            postStore_1.postStore.setTgBookedMarkerMsgId(post.post_id, tgMsgId);
-            logger_1.logger.info('[telegramThreadReplySync] posted TG booked-in-MAX marker', {
-                postId: post.post_id,
-                tgMsgId,
-                threadChatId: target.threadChatId,
-            });
-        }
+    const baseText = freshPost.text?.trim() || '';
+    if (!baseText) {
+        logger_1.logger.warn('[telegramThreadReplySync] empty post text for booked marker', {
+            postId: freshPost.post_id,
+        });
+        return;
     }
-    catch (err) {
-        logger_1.logger.warn('[telegramThreadReplySync] failed to post TG booked-in-MAX marker', {
-            postId: post.post_id,
-            threadChatId: target.threadChatId,
-            err,
+    if ((0, commentSyncFilter_1.isTelegramPostMarkedBookedInMax)(baseText)) {
+        postStore_1.postStore.markTgBookedInMaxApplied(freshPost.post_id);
+        return;
+    }
+    const markedText = (0, commentSyncFilter_1.appendTgBookedInMaxMarker)(baseText);
+    const mapping = (0, postCommentMappingStore_1.findMappingByMaxMid)(freshPost.message_mid);
+    const editTargets = [];
+    if (typeof mapping?.tg_chat_id === 'number' && mapping.tg_msg_id > 0) {
+        editTargets.push({
+            token: target.token,
+            chatId: mapping.tg_chat_id,
+            messageId: mapping.tg_msg_id,
         });
     }
+    editTargets.push({
+        token: target.token,
+        chatId: target.threadChatId,
+        messageId: target.threadMsgId,
+        messageThreadId: target.threadMsgId,
+    });
+    for (const editTarget of editTargets) {
+        if (await tryEditTelegramPostBody(editTarget, markedText)) {
+            postStore_1.postStore.markTgBookedInMaxApplied(freshPost.post_id);
+            logger_1.logger.info('[telegramThreadReplySync] appended booked-in-MAX marker to TG post text', {
+                postId: freshPost.post_id,
+                chatId: editTarget.chatId,
+                messageId: editTarget.messageId,
+            });
+            return;
+        }
+    }
+    logger_1.logger.warn('[telegramThreadReplySync] failed to append booked-in-MAX marker to TG post', {
+        postId: freshPost.post_id,
+        threadChatId: target.threadChatId,
+        threadMsgId: target.threadMsgId,
+        channelChatId: mapping?.tg_chat_id ?? null,
+        channelMsgId: mapping?.tg_msg_id ?? null,
+    });
 }
 /**
  * Помечает исходный комментарий в TG-треде как отвеченный в MAX.
@@ -349,7 +381,7 @@ async function syncMaxCommentToTelegramThread(_bot, comment, post) {
         const claimed = postStore_1.postStore.tryClaimCommentsBooking(freshPost.post_id, 'max');
         if (claimed) {
             const postForMarker = postStore_1.postStore.getPost(freshPost.post_id) ?? freshPost;
-            await sendPostBookedInMaxMarker(target, postForMarker);
+            await applyPostBookedInMaxMarker(target, postForMarker);
         }
         logger_1.logger.info('[telegramThreadReplySync] delivered MAX comment to TG thread', {
             commentId: freshComment.comment_id,

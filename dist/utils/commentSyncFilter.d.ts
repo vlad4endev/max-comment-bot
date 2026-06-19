@@ -37,6 +37,8 @@ export declare const TG_BOOKED_IN_MAX_MARKER = "\uD83D\uDD12 \u0417\u0430\u0431\
 /** MAX inline callback для неактивной кнопки «Забронировано в ТГ». */
 export declare const MAX_BOOKED_IN_TG_CALLBACK = "max:booked_tg";
 export declare function formatMaxBookedInTgButtonLabel(commentCount: number): string;
+export declare function isTelegramPostMarkedBookedInMax(text: string): boolean;
+export declare function appendTgBookedInMaxMarker(text: string): string;
 export declare function isTelegramCommentMarkedAnsweredInMax(text: string): boolean;
 /** Префикс ответа админа из MAX в TG-треде (не синхронизировать обратно в miniapp). */
 export declare const MAX_REPLY_TG_PREFIX = "MAX \u043E\u0442\u0432\u0435\u0442:";

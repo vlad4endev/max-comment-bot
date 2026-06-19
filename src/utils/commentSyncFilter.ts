@@ -269,6 +269,18 @@ export function formatMaxBookedInTgButtonLabel(commentCount: number): string {
   return `🔒 Забронировано в ТГ (${n})`
 }
 
+export function isTelegramPostMarkedBookedInMax(text: string): boolean {
+  return text.includes(TG_BOOKED_IN_MAX_MARKER)
+}
+
+export function appendTgBookedInMaxMarker(text: string): string {
+  const base = text.trim()
+  if (!base || isTelegramPostMarkedBookedInMax(base)) {
+    return base
+  }
+  return `${base}\n\n${TG_BOOKED_IN_MAX_MARKER}`
+}
+
 export function isTelegramCommentMarkedAnsweredInMax(text: string): boolean {
   return (
     text.includes(MAX_ANSWERED_IN_MAX_MARKER) ||

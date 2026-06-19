@@ -20,8 +20,10 @@ import {
   MAX_ANSWERED_IN_MAX_MARKER,
   MAX_REPLY_TG_PREFIX,
   TG_BOOKED_IN_MAX_MARKER,
+  appendTgBookedInMaxMarker,
   formatMaxCommentForTelegram,
   isTelegramCommentMarkedAnsweredInMax,
+  isTelegramPostMarkedBookedInMax,
 } from '../utils/commentSyncFilter'
 import { logger } from '../utils/logger'
 import {
@@ -312,32 +314,71 @@ async function trySendBookedMarkerReply(
   return data.ok === true
 }
 
-async function sendPostBookedInMaxMarker(target: ThreadTarget, post: Post): Promise<void> {
-  if (post.tg_booked_marker_msg_id) {
+async function tryEditTelegramPostBody(
+  target: TgMessageTarget,
+  markedText: string,
+): Promise<boolean> {
+  return (
+    (await tryEditTelegramMessageCaption(target, markedText)) ||
+    (await tryEditTelegramMessageText(target, markedText))
+  )
+}
+
+async function applyPostBookedInMaxMarker(target: ThreadTarget, post: Post): Promise<void> {
+  const freshPost = postStore.getPost(post.post_id) ?? post
+  if (freshPost.tg_booked_in_max_applied) {
     return
   }
-  try {
-    const tgMsgId = await deliverTelegramThreadMessage(
-      target,
-      TG_BOOKED_IN_MAX_MARKER,
-      target.threadMsgId,
-      false,
-    )
-    if (tgMsgId != null) {
-      postStore.setTgBookedMarkerMsgId(post.post_id, tgMsgId)
-      logger.info('[telegramThreadReplySync] posted TG booked-in-MAX marker', {
-        postId: post.post_id,
-        tgMsgId,
-        threadChatId: target.threadChatId,
-      })
-    }
-  } catch (err: unknown) {
-    logger.warn('[telegramThreadReplySync] failed to post TG booked-in-MAX marker', {
-      postId: post.post_id,
-      threadChatId: target.threadChatId,
-      err,
+
+  const baseText = freshPost.text?.trim() || ''
+  if (!baseText) {
+    logger.warn('[telegramThreadReplySync] empty post text for booked marker', {
+      postId: freshPost.post_id,
+    })
+    return
+  }
+  if (isTelegramPostMarkedBookedInMax(baseText)) {
+    postStore.markTgBookedInMaxApplied(freshPost.post_id)
+    return
+  }
+
+  const markedText = appendTgBookedInMaxMarker(baseText)
+  const mapping = findMappingByMaxMid(freshPost.message_mid)
+  const editTargets: TgMessageTarget[] = []
+
+  if (typeof mapping?.tg_chat_id === 'number' && mapping.tg_msg_id > 0) {
+    editTargets.push({
+      token: target.token,
+      chatId: mapping.tg_chat_id,
+      messageId: mapping.tg_msg_id,
     })
   }
+  editTargets.push({
+    token: target.token,
+    chatId: target.threadChatId,
+    messageId: target.threadMsgId,
+    messageThreadId: target.threadMsgId,
+  })
+
+  for (const editTarget of editTargets) {
+    if (await tryEditTelegramPostBody(editTarget, markedText)) {
+      postStore.markTgBookedInMaxApplied(freshPost.post_id)
+      logger.info('[telegramThreadReplySync] appended booked-in-MAX marker to TG post text', {
+        postId: freshPost.post_id,
+        chatId: editTarget.chatId,
+        messageId: editTarget.messageId,
+      })
+      return
+    }
+  }
+
+  logger.warn('[telegramThreadReplySync] failed to append booked-in-MAX marker to TG post', {
+    postId: freshPost.post_id,
+    threadChatId: target.threadChatId,
+    threadMsgId: target.threadMsgId,
+    channelChatId: mapping?.tg_chat_id ?? null,
+    channelMsgId: mapping?.tg_msg_id ?? null,
+  })
 }
 
 /**
@@ -505,7 +546,7 @@ export async function syncMaxCommentToTelegramThread(
     const claimed = postStore.tryClaimCommentsBooking(freshPost.post_id, 'max')
     if (claimed) {
       const postForMarker = postStore.getPost(freshPost.post_id) ?? freshPost
-      await sendPostBookedInMaxMarker(target, postForMarker)
+      await applyPostBookedInMaxMarker(target, postForMarker)
     }
 
     logger.info('[telegramThreadReplySync] delivered MAX comment to TG thread', {

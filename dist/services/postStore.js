@@ -232,6 +232,13 @@ class PostStore {
         }
         this.savePost({ ...post, tg_booked_marker_msg_id: msgId });
     }
+    markTgBookedInMaxApplied(postId) {
+        const post = this.getPost(postId);
+        if (!post) {
+            return;
+        }
+        this.savePost({ ...post, tg_booked_in_max_applied: true });
+    }
     /**
      * Updates the channel message inline keyboard to show the current comment count.
      */
@@ -338,6 +345,9 @@ class PostStore {
             ...post,
             comments_booked_by: post.comments_booked_by ?? existing.comments_booked_by,
             tg_booked_marker_msg_id: post.tg_booked_marker_msg_id ?? existing.tg_booked_marker_msg_id,
+            tg_booked_in_max_applied: post.tg_booked_in_max_applied === true
+                ? true
+                : existing.tg_booked_in_max_applied,
         };
     }
     parsePost(raw) {

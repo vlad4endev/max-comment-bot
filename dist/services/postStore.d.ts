@@ -30,8 +30,10 @@ export interface Post {
     button_attach_pending?: boolean;
     /** Кросс-платформенная бронь поста: кто первым синхронизировал комментарий. */
     comments_booked_by?: CommentsBookedBy;
-    /** ID служебного сообщения «Забронировано в МАКСе» в TG-треде. */
+    /** ID служебного сообщения «Забронировано в МАКСе» в TG-треде (legacy). */
     tg_booked_marker_msg_id?: number;
+    /** Маркер «Забронировано в МАКСе» дописан в текст TG-поста. */
+    tg_booked_in_max_applied?: boolean;
 }
 export declare class PostStore {
     private statements;
@@ -69,6 +71,7 @@ export declare class PostStore {
      */
     tryClaimCommentsBooking(postId: string, by: CommentsBookedBy): boolean;
     setTgBookedMarkerMsgId(postId: string, msgId: number): void;
+    markTgBookedInMaxApplied(postId: string): void;
     /**
      * Updates the channel message inline keyboard to show the current comment count.
      */

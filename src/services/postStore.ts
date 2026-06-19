@@ -53,8 +53,10 @@ export interface Post {
   button_attach_pending?: boolean
   /** Кросс-платформенная бронь поста: кто первым синхронизировал комментарий. */
   comments_booked_by?: CommentsBookedBy
-  /** ID служебного сообщения «Забронировано в МАКСе» в TG-треде. */
+  /** ID служебного сообщения «Забронировано в МАКСе» в TG-треде (legacy). */
   tg_booked_marker_msg_id?: number
+  /** Маркер «Забронировано в МАКСе» дописан в текст TG-поста. */
+  tg_booked_in_max_applied?: boolean
 }
 
 export class PostStore {
@@ -331,6 +333,14 @@ export class PostStore {
     this.savePost({ ...post, tg_booked_marker_msg_id: msgId })
   }
 
+  markTgBookedInMaxApplied(postId: string): void {
+    const post = this.getPost(postId)
+    if (!post) {
+      return
+    }
+    this.savePost({ ...post, tg_booked_in_max_applied: true })
+  }
+
   /**
    * Updates the channel message inline keyboard to show the current comment count.
    */
@@ -442,6 +452,10 @@ export class PostStore {
       ...post,
       comments_booked_by: post.comments_booked_by ?? existing.comments_booked_by,
       tg_booked_marker_msg_id: post.tg_booked_marker_msg_id ?? existing.tg_booked_marker_msg_id,
+      tg_booked_in_max_applied:
+        post.tg_booked_in_max_applied === true
+          ? true
+          : existing.tg_booked_in_max_applied,
     }
   }
 

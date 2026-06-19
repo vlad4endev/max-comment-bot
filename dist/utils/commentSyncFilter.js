@@ -13,6 +13,8 @@ exports.resolveChannelMsgIdFromThreadRoot = resolveChannelMsgIdFromThreadRoot;
 exports.resolveTgCommentAuthor = resolveTgCommentAuthor;
 exports.isTelegramOriginComment = isTelegramOriginComment;
 exports.formatMaxBookedInTgButtonLabel = formatMaxBookedInTgButtonLabel;
+exports.isTelegramPostMarkedBookedInMax = isTelegramPostMarkedBookedInMax;
+exports.appendTgBookedInMaxMarker = appendTgBookedInMaxMarker;
 exports.isTelegramCommentMarkedAnsweredInMax = isTelegramCommentMarkedAnsweredInMax;
 exports.isMaxAdminReplyInTelegram = isMaxAdminReplyInTelegram;
 exports.isMaxCommentInTelegram = isMaxCommentInTelegram;
@@ -219,6 +221,16 @@ exports.MAX_BOOKED_IN_TG_CALLBACK = 'max:booked_tg';
 function formatMaxBookedInTgButtonLabel(commentCount) {
     const n = Math.max(0, commentCount);
     return `🔒 Забронировано в ТГ (${n})`;
+}
+function isTelegramPostMarkedBookedInMax(text) {
+    return text.includes(exports.TG_BOOKED_IN_MAX_MARKER);
+}
+function appendTgBookedInMaxMarker(text) {
+    const base = text.trim();
+    if (!base || isTelegramPostMarkedBookedInMax(base)) {
+        return base;
+    }
+    return `${base}\n\n${exports.TG_BOOKED_IN_MAX_MARKER}`;
 }
 function isTelegramCommentMarkedAnsweredInMax(text) {
     return (text.includes(exports.MAX_ANSWERED_IN_MAX_MARKER) ||
