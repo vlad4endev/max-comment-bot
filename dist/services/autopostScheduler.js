@@ -3,16 +3,23 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.startAutopostScheduler = startAutopostScheduler;
 exports.stopAutopostScheduler = stopAutopostScheduler;
 exports.triggerAutopostTick = triggerAutopostTick;
+exports.getAutopostSchedulerStatus = getAutopostSchedulerStatus;
 const config_1 = require("../config");
 const logger_1 = require("../utils/logger");
 const integrationsStore_1 = require("./integrationsStore");
 const autopostSchedule_1 = require("./autopostSchedule");
+const postsDatabase_1 = require("../db/postsDatabase");
 const autopostStore_1 = require("./autopostStore");
 const autopostMaxSender_1 = require("./autopostMaxSender");
 const autopostTelegramSender_1 = require("./autopostTelegramSender");
-const DEFAULT_TICK_MS = 60_000;
+const DEFAULT_TICK_MS = 15_000;
 let intervalHandle = null;
 let ticking = false;
+let tickMs = DEFAULT_TICK_MS;
+let startedAt = null;
+let lastTickAt = null;
+let lastDueCount = 0;
+let lastError = null;
 function getTickMs() {
     const raw = (process.env.AUTOPOST_TICK_MS ?? '').trim();
     if (raw === '') {
@@ -89,12 +96,19 @@ async function tick() {
     try {
         const nowIso = new Date().toISOString();
         const due = (0, autopostStore_1.listDueAutoposts)(nowIso);
+        lastTickAt = nowIso;
+        lastDueCount = due.length;
+        lastError = null;
         if (due.length > 0) {
             logger_1.logger.info('autopostScheduler: processing due posts', { count: due.length, ids: due.map((p) => p.id) });
         }
         for (const post of due) {
             await processDuePost(post);
         }
+    }
+    catch (err) {
+        lastError = err instanceof Error ? err.message : String(err);
+        logger_1.logger.error('autopostScheduler: tick failed', { error: lastError });
     }
     finally {
         ticking = false;
@@ -107,12 +121,20 @@ function startAutopostScheduler() {
     if (intervalHandle) {
         return;
     }
-    const tickMs = getTickMs();
+    tickMs = getTickMs();
+    startedAt = new Date().toISOString();
+    const posts = (0, autopostStore_1.listAutoposts)();
+    const active = posts.filter((p) => p.status === 'active').length;
     intervalHandle = setInterval(() => {
         void tick();
     }, tickMs);
     void tick();
-    logger_1.logger.info('autopostScheduler: started', { tickMs });
+    logger_1.logger.info('autopostScheduler: started', {
+        tickMs,
+        dbPath: postsDatabase_1.POSTS_DB_PATH,
+        totalPosts: posts.length,
+        activePosts: active,
+    });
 }
 function stopAutopostScheduler() {
     if (intervalHandle) {
@@ -123,5 +145,21 @@ function stopAutopostScheduler() {
 /** Немедленный проход планировщика (после создания/обновления поста). */
 function triggerAutopostTick() {
     void tick();
+}
+function getAutopostSchedulerStatus() {
+    const posts = (0, autopostStore_1.listAutoposts)();
+    const nowIso = new Date().toISOString();
+    return {
+        running: intervalHandle !== null,
+        tickMs,
+        startedAt,
+        lastTickAt,
+        lastDueCount,
+        lastError,
+        dbPath: postsDatabase_1.POSTS_DB_PATH,
+        totalPosts: posts.length,
+        activePosts: posts.filter((p) => p.status === 'active').length,
+        dueNow: (0, autopostStore_1.listDueAutoposts)(nowIso).length,
+    };
 }
 //# sourceMappingURL=autopostScheduler.js.map

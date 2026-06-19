@@ -383,12 +383,15 @@ function createAutopostRouter() {
         try {
             const channels = await listTelegramChannelsForAutopost();
             const posts = (0, autopostStore_1.listAutoposts)();
-            res.json({ stats: (0, autopostStore_1.computeAutopostStats)(posts, channels.length) });
+            res.json({ stats: (0, autopostStore_1.computeAutopostStats)(posts, channels.length), scheduler: (0, autopostScheduler_1.getAutopostSchedulerStatus)() });
         }
         catch (err) {
             logger_1.logger.error('GET /autoposts/stats failed', err);
             res.status(500).json({ error: 'Не удалось загрузить статистику' });
         }
+    });
+    router.get('/scheduler', (_req, res) => {
+        res.json({ scheduler: (0, autopostScheduler_1.getAutopostSchedulerStatus)() });
     });
     router.get('/', (req, res) => {
         const status = parseNonEmptyString(req.query.status) ?? undefined;
@@ -465,6 +468,13 @@ function createAutopostRouter() {
                 channel_title: parseNonEmptyString(body.channel_title),
                 status,
                 ...schedule,
+            });
+            logger_1.logger.info('autopost created', {
+                id: row.id,
+                platform: row.platform,
+                status: row.status,
+                scheduled_at: row.scheduled_at,
+                channel: row.target_channel_id,
             });
             (0, autopostScheduler_1.triggerAutopostTick)();
             res.json({ ok: true, post: row });

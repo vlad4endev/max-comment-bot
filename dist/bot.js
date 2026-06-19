@@ -11,6 +11,7 @@ const subscriptions_1 = require("./maxPlatform/subscriptions");
 const channelPoller_1 = require("./services/channelPoller");
 const commentButtonRetryQueue_1 = require("./services/commentButtonRetryQueue");
 const postLinkAutoRecovery_1 = require("./services/postLinkAutoRecovery");
+const autopostScheduler_1 = require("./services/autopostScheduler");
 const flowProcessor_1 = require("./services/flowProcessor");
 const stateManager_1 = require("./services/stateManager");
 const redisClient_1 = require("./cache/redisClient");
@@ -50,6 +51,7 @@ function setupGracefulShutdown(bot, options) {
             (0, channelPoller_1.stopChannelPostPoller)();
             (0, commentButtonRetryQueue_1.stopCommentButtonRetryLoop)();
             (0, postLinkAutoRecovery_1.stopPostLinkAutoRecovery)();
+            (0, autopostScheduler_1.stopAutopostScheduler)();
             flowProcessor_1.flowProcessor.stop();
             (0, logger_1.stopRuntimeLogRotationScheduler)();
             stateManager_1.stateManager.destroy();

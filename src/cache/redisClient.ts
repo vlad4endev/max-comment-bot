@@ -56,7 +56,7 @@ async function connectOnce(url: string): Promise<RedisInitStatus> {
       connectTimeout: 5_000,
       commandTimeout: 3_000,
       lazyConnect: true,
-      retryStrategy: (times) => (times > 4 ? null : Math.min(times * 200, 2_000)),
+      retryStrategy: (times: number) => (times > 4 ? null : Math.min(times * 200, 2_000)),
     })
     redis.on('error', (err: unknown) => {
       logger.warn('redis: client error', { err: String(err) })

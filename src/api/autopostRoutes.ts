@@ -45,7 +45,7 @@ import {
   updatePostTemplate,
 } from '../services/postTemplateStore'
 import { POSTS_DB_PATH } from '../db/postsDatabase'
-import { triggerAutopostTick } from '../services/autopostScheduler'
+import { triggerAutopostTick, getAutopostSchedulerStatus } from '../services/autopostScheduler'
 import { resolveMaxToken, sendAutopostToMax } from '../services/autopostMaxSender'
 import { sendAutopostToTelegram } from '../services/autopostTelegramSender'
 
@@ -450,11 +450,15 @@ export function createAutopostRouter(): express.Router {
     try {
       const channels = await listTelegramChannelsForAutopost()
       const posts = listAutoposts()
-      res.json({ stats: computeAutopostStats(posts, channels.length) })
+      res.json({ stats: computeAutopostStats(posts, channels.length), scheduler: getAutopostSchedulerStatus() })
     } catch (err: unknown) {
       logger.error('GET /autoposts/stats failed', err)
       res.status(500).json({ error: 'Не удалось загрузить статистику' })
     }
+  })
+
+  router.get('/scheduler', (_req, res) => {
+    res.json({ scheduler: getAutopostSchedulerStatus() })
   })
 
   router.get('/', (req, res) => {
@@ -537,6 +541,13 @@ export function createAutopostRouter(): express.Router {
         channel_title: parseNonEmptyString(body.channel_title),
         status,
         ...schedule,
+      })
+      logger.info('autopost created', {
+        id: row.id,
+        platform: row.platform,
+        status: row.status,
+        scheduled_at: row.scheduled_at,
+        channel: row.target_channel_id,
       })
       triggerAutopostTick()
       res.json({ ok: true, post: row })

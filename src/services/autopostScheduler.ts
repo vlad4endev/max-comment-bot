@@ -2,7 +2,9 @@ import { getTelegramToken } from '../config'
 import { logger } from '../utils/logger'
 import { integrationsStore } from './integrationsStore'
 import { computeNextRecurringAt } from './autopostSchedule'
+import { POSTS_DB_PATH } from '../db/postsDatabase'
 import {
+  listAutoposts,
   listDueAutoposts,
   markAutopostFailed,
   markAutopostSent,
@@ -11,10 +13,15 @@ import {
 import { resolveMaxToken, sendAutopostToMax } from './autopostMaxSender'
 import { sendAutopostToTelegram } from './autopostTelegramSender'
 
-const DEFAULT_TICK_MS = 60_000
+const DEFAULT_TICK_MS = 15_000
 
 let intervalHandle: ReturnType<typeof setInterval> | null = null
 let ticking = false
+let tickMs = DEFAULT_TICK_MS
+let startedAt: string | null = null
+let lastTickAt: string | null = null
+let lastDueCount = 0
+let lastError: string | null = null
 
 function getTickMs(): number {
   const raw = (process.env.AUTOPOST_TICK_MS ?? '').trim()
@@ -97,12 +104,18 @@ async function tick(): Promise<void> {
   try {
     const nowIso = new Date().toISOString()
     const due = listDueAutoposts(nowIso)
+    lastTickAt = nowIso
+    lastDueCount = due.length
+    lastError = null
     if (due.length > 0) {
       logger.info('autopostScheduler: processing due posts', { count: due.length, ids: due.map((p) => p.id) })
     }
     for (const post of due) {
       await processDuePost(post)
     }
+  } catch (err: unknown) {
+    lastError = err instanceof Error ? err.message : String(err)
+    logger.error('autopostScheduler: tick failed', { error: lastError })
   } finally {
     ticking = false
   }
@@ -115,12 +128,20 @@ export function startAutopostScheduler(): void {
   if (intervalHandle) {
     return
   }
-  const tickMs = getTickMs()
+  tickMs = getTickMs()
+  startedAt = new Date().toISOString()
+  const posts = listAutoposts()
+  const active = posts.filter((p) => p.status === 'active').length
   intervalHandle = setInterval(() => {
     void tick()
   }, tickMs)
   void tick()
-  logger.info('autopostScheduler: started', { tickMs })
+  logger.info('autopostScheduler: started', {
+    tickMs,
+    dbPath: POSTS_DB_PATH,
+    totalPosts: posts.length,
+    activePosts: active,
+  })
 }
 
 export function stopAutopostScheduler(): void {
@@ -133,4 +154,32 @@ export function stopAutopostScheduler(): void {
 /** Немедленный проход планировщика (после создания/обновления поста). */
 export function triggerAutopostTick(): void {
   void tick()
+}
+
+export function getAutopostSchedulerStatus(): {
+  running: boolean
+  tickMs: number
+  startedAt: string | null
+  lastTickAt: string | null
+  lastDueCount: number
+  lastError: string | null
+  dbPath: string
+  totalPosts: number
+  activePosts: number
+  dueNow: number
+} {
+  const posts = listAutoposts()
+  const nowIso = new Date().toISOString()
+  return {
+    running: intervalHandle !== null,
+    tickMs,
+    startedAt,
+    lastTickAt,
+    lastDueCount,
+    lastError,
+    dbPath: POSTS_DB_PATH,
+    totalPosts: posts.length,
+    activePosts: posts.filter((p) => p.status === 'active').length,
+    dueNow: listDueAutoposts(nowIso).length,
+  }
 }
