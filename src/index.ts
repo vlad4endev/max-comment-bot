@@ -21,6 +21,7 @@ import { channelRegistry, setChannelRegistryChangeHandler } from './services/cha
 import { channelSettingsStore } from './services/channelSettingsStore'
 import { commentStore } from './services/commentStore'
 import { adminRuntimeSettingsStore } from './services/adminRuntimeSettingsStore'
+import { logAiSettingsStore } from './services/logAiSettingsStore'
 import { disabledAdminStore } from './services/disabledAdminStore'
 import { subscriberStore } from './services/subscriberStore'
 import {
@@ -67,11 +68,19 @@ async function main(): Promise<void> {
   await subscriberStore.loadFromDisk()
   await adminRuntimeSettingsStore.loadFromDisk()
   await disabledAdminStore.loadFromDisk()
-  await ensureBotProfile(bot)
+  await logAiSettingsStore.loadFromDisk()
   await integrationsStore.load()
   await ensureAdminPanelStateLoaded()
   await repairLegacyMiniappTgChains()
   await repairTgChainsForForwarding()
+  try {
+    await ensureBotProfile(bot)
+  } catch (err: unknown) {
+    logger.error(
+      'MAX API недоступен (ensureBotProfile) — HTTP и автопостинг всё равно запускаются; проверьте BOT_TOKEN',
+      err,
+    )
+  }
   const tgIntegration = integrationsStore
     .getIntegrations()
     .find((i) => i.platform === 'telegram' && i.status === 'connected')

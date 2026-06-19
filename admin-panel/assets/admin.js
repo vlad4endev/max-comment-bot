@@ -129,12 +129,12 @@
     logs: {
       title: 'Логи',
       group: 'Система',
-      desc: 'Журнал работы бота и статистика базы данных.',
+      desc: 'Журнал работы бота, статистика БД и ИИ-анализ проблем.',
     },
     settings: {
       title: 'Настройки',
       group: 'Система',
-      desc: 'Интервал опроса каналов и опасные операции сброса данных.',
+      desc: 'Интервал опроса, оператор ИИ для анализа логов и опасные операции.',
     },
   };
 
@@ -541,10 +541,14 @@
   }
 
   function postJson(path, body) {
+    var timeoutMs = 20000;
+    if (path === '/refresh-buttons') timeoutMs = 60000;
+    if (path === '/logs/analyze') timeoutMs = 120000;
+    if (path === '/logs/ai-test') timeoutMs = 60000;
     return authFetch(apiPath(path), {
       method: 'POST',
       body: body || {},
-      timeoutMs: path === '/refresh-buttons' ? 60000 : 20000,
+      timeoutMs: timeoutMs,
     }).then(function (r) {
       return parseApiJsonResponse(r).then(function (j) {
         if (!r.ok) {
@@ -6845,6 +6849,363 @@
     });
   }
 
+  function logAiStatusLabel(status) {
+    if (status === 'ok') return 'В норме';
+    if (status === 'critical') return 'Критично';
+    return 'Нужно внимание';
+  }
+
+  function logAiSeverityLabel(severity) {
+    if (severity === 'critical') return 'Критично';
+    if (severity === 'warning') return 'Внимание';
+    return 'Инфо';
+  }
+
+  function renderLogAiReport(report, root) {
+    var panel = qs('#log_ai_report', root);
+    if (!panel || !report) return;
+    var score = typeof report.health_score === 'number' ? report.health_score : 0;
+    var status = report.status || 'attention';
+    var html = '<div class="log-ai-head">';
+    html += '<div class="log-ai-score log-ai-score-' + esc(status) + '" title="Оценка здоровья проекта">' + esc(String(score)) + '</div>';
+    html += '<div class="log-ai-head-text">';
+    html += '<div class="log-ai-status log-ai-status-' + esc(status) + '">' + esc(logAiStatusLabel(status)) + '</div>';
+    html += '<p class="log-ai-summary">' + esc(report.summary || '') + '</p>';
+    html += '<div class="log-ai-meta muted text-sm">Проанализировано записей: ' + esc(String(report.logs_analyzed || 0));
+    if (report.model) html += ' · модель: ' + esc(report.model);
+    if (report.analyzed_at) html += ' · ' + esc(fmtDateTime(report.analyzed_at));
+    html += '</div></div>';
+    html += '<div class="log-ai-head-actions">';
+    html += '<button type="button" class="btn btn-ghost btn-sm" id="log_ai_copy"><i data-lucide="copy"></i> Копировать</button>';
+    html += '<button type="button" class="btn btn-ghost btn-sm" id="log_ai_close"><i data-lucide="x"></i></button>';
+    html += '</div></div>';
+
+    var problems = Array.isArray(report.problems) ? report.problems : [];
+    if (problems.length) {
+      html += '<div class="log-ai-section"><h4 class="log-ai-section-title"><i data-lucide="alert-circle"></i> Проблемы</h4><div class="log-ai-problems">';
+      problems.forEach(function (p) {
+        var sev = p.severity || 'info';
+        html += '<article class="log-ai-problem log-ai-problem-' + esc(sev) + '">';
+        html += '<div class="log-ai-problem-head"><span class="log-ai-badge log-ai-badge-' + esc(sev) + '">' + esc(logAiSeverityLabel(sev)) + '</span>';
+        html += '<strong>' + esc(p.title || 'Проблема') + '</strong>';
+        if (p.count) html += '<span class="muted text-sm">×' + esc(String(p.count)) + '</span>';
+        html += '</div>';
+        html += '<p>' + esc(p.description || '') + '</p>';
+        if (p.what_to_do) html += '<div class="log-ai-fix"><span>Что сделать:</span> ' + esc(p.what_to_do) + '</div>';
+        html += '</article>';
+      });
+      html += '</div></div>';
+    }
+
+    var working = Array.isArray(report.working_well) ? report.working_well : [];
+    if (working.length) {
+      html += '<div class="log-ai-section"><h4 class="log-ai-section-title"><i data-lucide="check-circle-2"></i> Работает нормально</h4><ul class="log-ai-list">';
+      working.forEach(function (item) {
+        html += '<li>' + esc(item) + '</li>';
+      });
+      html += '</ul></div>';
+    }
+
+    var recs = Array.isArray(report.recommendations) ? report.recommendations : [];
+    if (recs.length) {
+      html += '<div class="log-ai-section"><h4 class="log-ai-section-title"><i data-lucide="lightbulb"></i> Рекомендации</h4><ul class="log-ai-list log-ai-recs">';
+      recs.forEach(function (item) {
+        html += '<li>' + esc(item) + '</li>';
+      });
+      html += '</ul></div>';
+    }
+
+    panel.innerHTML = html;
+    panel.hidden = false;
+    refreshIcons();
+
+    var copyBtn = qs('#log_ai_copy', panel);
+    if (copyBtn) {
+      copyBtn.addEventListener('click', function () {
+        var text = report.summary || '';
+        if (problems.length) {
+          text += '\n\nПроблемы:\n';
+          problems.forEach(function (p, i) {
+            text += i + 1 + '. [' + logAiSeverityLabel(p.severity) + '] ' + (p.title || '') + '\n';
+            text += (p.description || '') + '\n';
+            if (p.what_to_do) text += 'Что сделать: ' + p.what_to_do + '\n';
+          });
+        }
+        if (recs.length) {
+          text += '\nРекомендации:\n' + recs.map(function (r, i) { return i + 1 + '. ' + r; }).join('\n');
+        }
+        copyTextToClipboard(text, 'Отчёт скопирован');
+      });
+    }
+    var closeBtn = qs('#log_ai_close', panel);
+    if (closeBtn) {
+      closeBtn.addEventListener('click', function () {
+        panel.hidden = true;
+      });
+    }
+  }
+
+  function renderAiOperatorModelFields(presets, provider, currentModel) {
+    var preset = presets && presets[provider] ? presets[provider] : {};
+    var models = Array.isArray(preset.models) ? preset.models : [];
+    var current = currentModel || preset.default_model || '';
+    var isCustom = current && models.indexOf(current) === -1;
+    var html = '<div class="form-group"><label>Модель</label>';
+    if (provider === 'custom') {
+      html +=
+        '<input class="input mono" id="set_ai_model_custom" value="' +
+        esc(current) +
+        '" placeholder="название-модели"/>';
+      html += '<input type="hidden" id="set_ai_model" value="' + esc(current) + '"/>';
+    } else {
+      html += '<select class="select" id="set_ai_model_select">';
+      models.forEach(function (m) {
+        html += '<option value="' + esc(m) + '"' + (m === current && !isCustom ? ' selected' : '') + '>' + esc(m) + '</option>';
+      });
+      html += '<option value="__custom__"' + (isCustom ? ' selected' : '') + '>Другая модель…</option>';
+      html += '</select>';
+      html +=
+        '<input class="input mono" id="set_ai_model_custom" value="' +
+        esc(isCustom ? current : '') +
+        '" placeholder="Введите ID модели" style="margin-top:0.45rem;' +
+        (isCustom ? '' : 'display:none') +
+        '"/>';
+      html += '<input type="hidden" id="set_ai_model" value="' + esc(current) + '"/>';
+    }
+    if (provider === 'openrouter') {
+      html +=
+        '<p class="muted text-sm" style="margin-top:0.35rem">Каталог: <a href="https://openrouter.ai/models" target="_blank" rel="noopener">openrouter.ai/models</a></p>';
+    }
+    html += '</div>';
+    return html;
+  }
+
+  function renderAiOperatorPanel(ai) {
+    var provider = (ai && ai.provider) || 'openrouter';
+    var presets = (ai && ai.presets) || {};
+    var preset = presets[provider] || presets.openrouter || {};
+    var configured = !!(ai && ai.configured);
+    var html = '<div class="panel ai-operator-panel" id="ai_operator_panel">';
+    html += sectionHead('Оператор ИИ', 'Ключ и модель для ИИ-анализа логов — только через эту панель');
+    html +=
+      '<div class="ai-operator-status ' +
+      (configured ? 'is-ok' : 'is-off') +
+      '"><span class="ai-operator-status-dot"></span>' +
+      (configured
+        ? esc((ai.provider_label || preset.label || 'Оператор') + ' подключён')
+        : 'Оператор не настроен') +
+      '</div>';
+
+    if (configured) {
+      html += '<dl class="settings-summary-list ai-operator-summary">';
+      html += settingsSummaryRow('Оператор', ai.provider_label || preset.label || provider);
+      html += settingsSummaryRow('Модель', ai.model || '—');
+      html += settingsSummaryRow('Base URL', ai.base_url || '—');
+      if (ai.api_key_preview) html += settingsSummaryRow('Ключ', ai.api_key_preview);
+      html += '</dl>';
+    }
+
+    html += '<div class="form-group"><label>Оператор</label>';
+    html += '<select class="select" id="set_ai_provider">';
+    html += '<option value="openrouter"' + (provider === 'openrouter' ? ' selected' : '') + '>OpenRouter</option>';
+    html += '<option value="openai"' + (provider === 'openai' ? ' selected' : '') + '>OpenAI</option>';
+    html += '<option value="custom"' + (provider === 'custom' ? ' selected' : '') + '>Свой API (OpenAI-совместимый)</option>';
+    html += '</select></div>';
+
+    html += '<div class="form-group"><label>API-ключ</label>';
+    html +=
+      '<input class="input mono" id="set_ai_key" type="password" autocomplete="new-password" placeholder="' +
+      (configured ? 'Оставьте пустым, чтобы не менять' : provider === 'openai' ? 'sk-…' : 'sk-or-v1-…') +
+      '"/>';
+    if (preset.docs_url) {
+      html +=
+        '<p class="muted text-sm" style="margin-top:0.35rem"><a href="' +
+        esc(preset.docs_url) +
+        '" target="_blank" rel="noopener">Получить ключ</a></p>';
+    }
+    html += '</div>';
+
+    html += '<div class="form-group" id="set_ai_base_wrap"' + (provider === 'custom' ? '' : ' hidden') + '>';
+    html += '<label>Base URL</label>';
+    html +=
+      '<input class="input mono" id="set_ai_base" value="' +
+      esc(ai.base_url || preset.base_url || '') +
+      '" placeholder="https://…/v1"/></div>';
+
+    html += '<div id="set_ai_model_fields">';
+    html += renderAiOperatorModelFields(presets, provider, ai.model || preset.default_model || '');
+    html += '</div>';
+
+    html += '<div id="set_ai_test_result" class="ai-operator-test-result" hidden></div>';
+    html += '<div class="ai-operator-actions">';
+    html += '<button type="button" class="btn btn-primary" id="set_save_ai"><i data-lucide="save"></i> Сохранить</button>';
+    html += '<button type="button" class="btn btn-ghost" id="set_test_ai"><i data-lucide="plug-zap"></i> Проверить</button>';
+    html += '</div>';
+    html += '</div>';
+    return html;
+  }
+
+  function bindAiOperatorPanel(main, ai) {
+    var presets = (ai && ai.presets) || {};
+    var providerEl = qs('#set_ai_provider', main);
+    var baseWrap = qs('#set_ai_base_wrap', main);
+    var baseEl = qs('#set_ai_base', main);
+    var keyEl = qs('#set_ai_key', main);
+    var testResult = qs('#set_ai_test_result', main);
+    var configured = !!(ai && ai.configured);
+
+    function getSelectedModel() {
+      var provider = providerEl ? providerEl.value : 'openrouter';
+      if (provider === 'custom') {
+        var customOnly = qs('#set_ai_model_custom', main);
+        return customOnly ? String(customOnly.value || '').trim() : '';
+      }
+      var selectEl = qs('#set_ai_model_select', main);
+      var customEl = qs('#set_ai_model_custom', main);
+      if (!selectEl) {
+        var hidden = qs('#set_ai_model', main);
+        return hidden ? String(hidden.value || '').trim() : '';
+      }
+      if (selectEl.value === '__custom__') {
+        return customEl ? String(customEl.value || '').trim() : '';
+      }
+      return String(selectEl.value || '').trim();
+    }
+
+    function syncHiddenModelField() {
+      var hidden = qs('#set_ai_model', main);
+      if (hidden) hidden.value = getSelectedModel();
+    }
+
+    function bindModelControls() {
+      var selectEl = qs('#set_ai_model_select', main);
+      var customEl = qs('#set_ai_model_custom', main);
+      if (selectEl) {
+        selectEl.addEventListener('change', function () {
+          if (customEl) {
+            customEl.style.display = selectEl.value === '__custom__' ? '' : 'none';
+            if (selectEl.value !== '__custom__') customEl.value = '';
+          }
+          syncHiddenModelField();
+        });
+      }
+      if (customEl) {
+        customEl.addEventListener('input', syncHiddenModelField);
+      }
+      syncHiddenModelField();
+    }
+
+    function replaceModelFields(nextProvider, modelValue) {
+      var preset = presets[nextProvider] || {};
+      var wrap = qs('#set_ai_model_fields', main);
+      if (!wrap) return;
+      wrap.innerHTML = renderAiOperatorModelFields(presets, nextProvider, modelValue || preset.default_model || '');
+      bindModelControls();
+    }
+
+    function applyProviderPreset(nextProvider, forceDefaults) {
+      var preset = presets[nextProvider] || {};
+      if (baseWrap) baseWrap.hidden = nextProvider !== 'custom';
+      if (baseEl && (forceDefaults || !baseEl.value.trim())) {
+        baseEl.value = preset.base_url || '';
+      }
+      if (keyEl && forceDefaults) {
+        keyEl.placeholder =
+          nextProvider === 'openai' ? 'sk-…' : nextProvider === 'openrouter' ? 'sk-or-v1-…' : 'API-ключ';
+      }
+      if (forceDefaults) {
+        replaceModelFields(nextProvider, preset.default_model || '');
+      }
+    }
+
+    bindModelControls();
+
+    if (providerEl) {
+      providerEl.addEventListener('change', function () {
+        applyProviderPreset(providerEl.value, true);
+      });
+    }
+
+    var saveAiBtn = qs('#set_save_ai', main);
+    if (saveAiBtn) {
+      saveAiBtn.addEventListener('click', function () {
+        syncHiddenModelField();
+        var model = getSelectedModel();
+        if (!model) {
+          showToast('Выберите или введите модель', 'error');
+          return;
+        }
+        var payload = {
+          provider: providerEl ? providerEl.value : undefined,
+          model: model,
+        };
+        if (providerEl && providerEl.value === 'custom' && baseEl) {
+          payload.base_url = baseEl.value || undefined;
+        }
+        if (keyEl && String(keyEl.value || '').trim()) {
+          payload.api_key = String(keyEl.value).trim();
+        } else if (!configured) {
+          showToast('Укажите API-ключ оператора', 'error');
+          return;
+        }
+        postJson('/logs/ai-config', payload)
+          .then(function (saved) {
+            showToast('Настройки оператора сохранены', 'success');
+            if (keyEl) keyEl.value = '';
+            if (testResult) testResult.hidden = true;
+            configured = !!saved.configured;
+            var panel = qs('#ai_operator_panel', main);
+            var statusEl = panel ? qs('.ai-operator-status', panel) : null;
+            if (statusEl && saved.configured) {
+              statusEl.className = 'ai-operator-status is-ok';
+              statusEl.innerHTML =
+                '<span class="ai-operator-status-dot"></span>' + esc((saved.provider_label || 'Оператор') + ' подключён');
+            }
+          })
+          .catch(function (e) {
+            showToast(e.message || 'Ошибка', 'error');
+          });
+      });
+    }
+
+    var testAiBtn = qs('#set_test_ai', main);
+    if (testAiBtn) {
+      testAiBtn.addEventListener('click', function () {
+        if (testResult) {
+          testResult.hidden = false;
+          testResult.className = 'ai-operator-test-result is-loading';
+          testResult.textContent = 'Проверяем подключение к оператору…';
+        }
+        testAiBtn.disabled = true;
+        postJson('/logs/ai-test', {})
+          .then(function (r) {
+            if (testResult) {
+              testResult.hidden = false;
+              testResult.className = 'ai-operator-test-result is-ok';
+              testResult.innerHTML =
+                '<strong>Подключение успешно</strong><br><span class="muted text-sm">Ответ: ' +
+                esc(r.reply || 'OK') +
+                ' · ' +
+                esc(r.model || '') +
+                '</span>';
+            }
+            showToast('Оператор отвечает', 'success');
+          })
+          .catch(function (e) {
+            if (testResult) {
+              testResult.hidden = false;
+              testResult.className = 'ai-operator-test-result is-error';
+              testResult.innerHTML = '<strong>Ошибка подключения</strong><br><span class="muted text-sm">' + esc(e.message || 'Ошибка') + '</span>';
+            }
+            showToast(e.message || 'Ошибка', 'error');
+          })
+          .finally(function () {
+            testAiBtn.disabled = false;
+          });
+      });
+    }
+  }
+
   function renderLogs() {
     var main = qs('#mainContent');
     if (!main) return;
@@ -6871,8 +7232,18 @@
       '<input class="input" id="log_filter" placeholder="Поиск по тексту…" style="max-width:220px"/>' +
       '<input class="input mono" id="log_limit" style="max-width:80px" placeholder="200" value="200" title="Сколько строк"/>' +
       '<label class="log-auto-label"><input type="checkbox" id="log_auto" checked/> Авто 5 с</label>' +
+      '<select class="select" id="log_ai_focus" style="max-width:190px" title="Фокус ИИ-анализа">' +
+      '<option value="general">ИИ: общий обзор</option>' +
+      '<option value="errors">ИИ: ошибки</option>' +
+      '<option value="comment_buttons">ИИ: кнопки</option>' +
+      '<option value="database">ИИ: база данных</option>' +
+      '<option value="rate_limit">ИИ: rate limit</option>' +
+      '<option value="integrations">ИИ: интеграции</option>' +
+      '</select>' +
+      '<button type="button" class="btn btn-primary" id="log_ai_run"><i data-lucide="sparkles"></i> ИИ-анализ</button>' +
       '<button type="button" class="btn btn-primary" id="log_run">Обновить</button>' +
       '</div>' +
+      '<div id="log_ai_report" class="log-ai-panel" hidden></div>' +
       '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px">' +
       '<button type="button" class="btn btn-ghost btn-sm log-quick-filter" data-filter="db:">🗄 БД</button>' +
       '<button type="button" class="btn btn-ghost btn-sm log-quick-filter" data-filter="commentButton">🔘 Кнопки</button>' +
@@ -6886,6 +7257,62 @@
       '<div class="log-stats" id="log_stats"></div>' +
       '<div class="log-viewer" id="log_body"></div>';
     var loading = false;
+    var aiLoading = false;
+
+    function runAiAnalysis() {
+      if (aiLoading) return;
+      var level = (qs('#log_level', main) && qs('#log_level', main).value) || '';
+      var filter = (qs('#log_filter', main) && qs('#log_filter', main).value) || '';
+      var lim = (qs('#log_limit', main) && qs('#log_limit', main).value) || '200';
+      var focusEl = qs('#log_ai_focus', main);
+      var focus = (focusEl && focusEl.value) || 'general';
+      var panel = qs('#log_ai_report', main);
+      var btn = qs('#log_ai_run', main);
+      aiLoading = true;
+      if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = '<span class="log-ai-spinner"></span> Анализ…';
+      }
+      if (panel) {
+        panel.hidden = false;
+        panel.innerHTML = '<div class="log-ai-loading"><span class="log-ai-spinner"></span> ИИ изучает логи и метрики БД…</div>';
+      }
+      postJson('/logs/analyze', {
+        limit: Number(lim) || 200,
+        level: level || undefined,
+        filter: filter || undefined,
+        focus: focus,
+      })
+        .then(function (report) {
+          if (currentRoute !== 'logs') return;
+          renderLogAiReport(report, main);
+          showToast('ИИ-отчёт готов', 'success');
+        })
+        .catch(function (e) {
+          if (currentRoute !== 'logs') return;
+          var msg = e.message || 'Ошибка анализа';
+          if (panel) {
+            panel.hidden = false;
+            panel.innerHTML =
+              '<div class="log-ai-error">' +
+              '<strong>Не удалось выполнить анализ</strong>' +
+              '<p>' +
+              esc(msg) +
+              '</p>' +
+              '<p class="muted text-sm">Настройте оператора ИИ в <a href="#/settings">Настройках → Оператор ИИ</a>: укажите ключ и модель</p>' +
+              '</div>';
+          }
+          showToast(msg, 'error');
+        })
+        .finally(function () {
+          aiLoading = false;
+          if (btn) {
+            btn.disabled = false;
+            btn.innerHTML = '<i data-lucide="sparkles"></i> ИИ-анализ';
+            refreshIcons();
+          }
+        });
+    }
 
     function renderStats(stats) {
       var el = qs('#log_stats', main);
@@ -7047,6 +7474,8 @@
     qs('#log_run', main).addEventListener('click', function () {
       run(false);
     });
+    var aiBtn = qs('#log_ai_run', main);
+    if (aiBtn) aiBtn.addEventListener('click', runAiAnalysis);
     var autoEl = qs('#log_auto', main);
     if (autoEl) {
       autoEl.addEventListener('change', scheduleLogsRefresh);
@@ -7096,7 +7525,10 @@
         html += '</div>';
         html += '</div>';
 
-        html += '<div class="panel panel-danger" style="border-color:rgba(239,68,68,0.3)">';
+        html += '<div>';
+        html += renderAiOperatorPanel(s.log_ai || {});
+
+        html += '<div class="panel panel-danger" style="border-color:rgba(239,68,68,0.3);margin-top:0.75rem">';
         html += '<div class="content-block-head"><div><h3 style="color:var(--danger)"><i data-lucide="alert-triangle" style="width:14px;height:14px;vertical-align:-2px;margin-right:4px"></i>Опасная зона</h3>';
         html += '<p class="block-desc">Необратимые операции — только при необходимости</p></div></div>';
 
@@ -7116,6 +7548,7 @@
         html += '</div>';
         main.innerHTML = html;
         bindToggleRows(main, null);
+        bindAiOperatorPanel(main, s.log_ai || {});
         qs('#set_save_poll', main).addEventListener('click', function () {
           var v = Number(qs('#set_poll', main).value);
           postJson('/settings', { poll_interval: v })

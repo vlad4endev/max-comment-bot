@@ -1898,6 +1898,302 @@ tbody tr:hover td {
   text-align: center;
 }
 
+/* AI log analysis */
+.log-ai-panel {
+  margin-bottom: 0.75rem;
+  padding: 0.85rem 1rem;
+  border-radius: var(--radius-md);
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border));
+  background: color-mix(in srgb, var(--accent) 4%, var(--bg-card));
+}
+
+.log-ai-loading,
+.log-ai-error {
+  padding: 0.75rem 0.25rem;
+  text-align: center;
+}
+
+.log-ai-error {
+  text-align: left;
+  color: var(--danger);
+}
+
+.log-ai-error p {
+  margin: 0.35rem 0 0;
+  color: var(--text-secondary);
+}
+
+.log-ai-spinner {
+  display: inline-block;
+  width: 0.95rem;
+  height: 0.95rem;
+  margin-right: 0.35rem;
+  border: 2px solid color-mix(in srgb, var(--accent) 25%, transparent);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: log-ai-spin 0.8s linear infinite;
+  vertical-align: -2px;
+}
+
+@keyframes log-ai-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.log-ai-head {
+  display: flex;
+  gap: 0.85rem;
+  align-items: flex-start;
+}
+
+.log-ai-score {
+  flex-shrink: 0;
+  width: 3.25rem;
+  height: 3.25rem;
+  border-radius: 999px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.05rem;
+  font-weight: 700;
+  border: 2px solid var(--border);
+}
+
+.log-ai-score-ok {
+  border-color: rgba(16, 185, 129, 0.45);
+  color: #10b981;
+  background: color-mix(in srgb, #10b981 8%, transparent);
+}
+
+.log-ai-score-attention {
+  border-color: rgba(245, 158, 11, 0.45);
+  color: var(--warning);
+  background: color-mix(in srgb, var(--warning) 8%, transparent);
+}
+
+.log-ai-score-critical {
+  border-color: rgba(239, 68, 68, 0.45);
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 8%, transparent);
+}
+
+.log-ai-head-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.log-ai-status {
+  display: inline-block;
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  margin-bottom: 0.25rem;
+}
+
+.log-ai-status-ok {
+  color: #10b981;
+}
+
+.log-ai-status-attention {
+  color: var(--warning);
+}
+
+.log-ai-status-critical {
+  color: var(--danger);
+}
+
+.log-ai-summary {
+  margin: 0;
+  line-height: 1.5;
+}
+
+.log-ai-meta {
+  margin-top: 0.35rem;
+}
+
+.log-ai-head-actions {
+  display: flex;
+  gap: 0.25rem;
+  flex-shrink: 0;
+}
+
+.log-ai-section {
+  margin-top: 0.85rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--border);
+}
+
+.log-ai-section-title {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin: 0 0 0.55rem;
+  font-size: 0.92rem;
+}
+
+.log-ai-section-title i {
+  width: 1rem;
+  height: 1rem;
+}
+
+.log-ai-problems {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+
+.log-ai-problem {
+  border-radius: var(--radius-sm);
+  padding: 0.65rem 0.75rem;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-left-width: 3px;
+}
+
+.log-ai-problem-critical {
+  border-left-color: var(--danger);
+}
+
+.log-ai-problem-warning {
+  border-left-color: var(--warning);
+}
+
+.log-ai-problem-info {
+  border-left-color: var(--accent);
+}
+
+.log-ai-problem p {
+  margin: 0.35rem 0 0;
+  color: var(--text-secondary);
+  line-height: 1.45;
+}
+
+.log-ai-problem-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.log-ai-badge {
+  font-size: 0.65rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  padding: 0.1rem 0.4rem;
+  border-radius: 999px;
+}
+
+.log-ai-badge-critical {
+  background: color-mix(in srgb, var(--danger) 16%, transparent);
+  color: var(--danger);
+}
+
+.log-ai-badge-warning {
+  background: color-mix(in srgb, var(--warning) 16%, transparent);
+  color: var(--warning);
+}
+
+.log-ai-badge-info {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: var(--accent);
+}
+
+.log-ai-fix {
+  margin-top: 0.45rem;
+  padding: 0.45rem 0.55rem;
+  border-radius: var(--radius-sm);
+  background: var(--bg-input);
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
+.log-ai-fix span {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.log-ai-list {
+  margin: 0;
+  padding-left: 1.15rem;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.log-ai-recs li + li {
+  margin-top: 0.25rem;
+}
+
+/* AI operator settings */
+.ai-operator-panel {
+  border-color: color-mix(in srgb, var(--accent) 28%, var(--border));
+}
+
+.ai-operator-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.84rem;
+  font-weight: 600;
+  margin-bottom: 0.75rem;
+  padding: 0.35rem 0.55rem;
+  border-radius: 999px;
+  background: var(--bg-input);
+}
+
+.ai-operator-status.is-ok {
+  color: #10b981;
+  background: color-mix(in srgb, #10b981 10%, var(--bg-input));
+}
+
+.ai-operator-status.is-off {
+  color: var(--text-muted);
+}
+
+.ai-operator-status-dot {
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.ai-operator-summary {
+  margin-bottom: 0.85rem;
+}
+
+.ai-operator-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.25rem;
+}
+
+.ai-operator-test-result {
+  margin: 0.65rem 0 0.25rem;
+  padding: 0.6rem 0.75rem;
+  border-radius: var(--radius-sm);
+  font-size: 0.84rem;
+  line-height: 1.45;
+}
+
+.ai-operator-test-result.is-loading {
+  background: var(--bg-input);
+  color: var(--text-secondary);
+}
+
+.ai-operator-test-result.is-ok {
+  background: color-mix(in srgb, #10b981 10%, var(--bg-input));
+  border: 1px solid color-mix(in srgb, #10b981 30%, var(--border));
+  color: var(--text-primary);
+}
+
+.ai-operator-test-result.is-error {
+  background: color-mix(in srgb, var(--danger) 8%, var(--bg-input));
+  border: 1px solid color-mix(in srgb, var(--danger) 28%, var(--border));
+  color: var(--danger);
+}
+
 /* Legacy one-line logs (fallback) */
 .log-line {
   padding: 0.1rem 0;

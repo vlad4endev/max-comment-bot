@@ -7,4 +7,5 @@ channels.json
 data/channels.json
 data/subscribers.json
 data/mtproto-config.json
+data/log-ai-config.json
 miniapp/uploads/

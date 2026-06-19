@@ -73,6 +73,7 @@ import {
   analyzeLogs,
   getLogAiPublicConfig,
   saveLogAiConfig,
+  testLogAiConnection,
   type LogAnalysisFocus,
 } from '../services/logAnalysisService'
 import { getAdminLogTail, logger } from '../utils/logger'
@@ -988,14 +989,45 @@ export function createAdminRouter(deps: AdminRouterDeps): express.Router {
     }
     try {
       const saved = await saveLogAiConfig({
+        provider: typeof body.provider === 'string' ? body.provider : undefined,
         api_key: typeof body.api_key === 'string' ? body.api_key : undefined,
         base_url: typeof body.base_url === 'string' ? body.base_url : undefined,
         model: typeof body.model === 'string' ? body.model : undefined,
       })
       res.json({ ok: true, ...saved })
     } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'save failed'
+      if (message === 'api_key required' || message === 'model required' || message === 'base_url required for custom provider') {
+        res.status(400).json({ error: 'validation_error', message })
+        return
+      }
       logger.error('admin /logs/ai-config failed', err)
       res.status(500).json({ error: 'failed to save AI config' })
+    }
+  })
+
+  secured.post('/logs/ai-test', async (_req, res) => {
+    try {
+      const result = await testLogAiConnection()
+      res.json(result)
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'test failed'
+      if (message === 'LOG_AI_NOT_CONFIGURED') {
+        res.status(503).json({
+          error: 'ai_not_configured',
+          message: 'Сначала укажите ключ оператора ИИ',
+        })
+        return
+      }
+      if (message.startsWith('LOG_AI_REQUEST_FAILED:')) {
+        res.status(502).json({
+          error: 'ai_request_failed',
+          message: message.replace(/^LOG_AI_REQUEST_FAILED:\s*/, ''),
+        })
+        return
+      }
+      logger.error('admin /logs/ai-test failed', err)
+      res.status(500).json({ error: 'internal error' })
     }
   })
 
@@ -1030,7 +1062,7 @@ export function createAdminRouter(deps: AdminRouterDeps): express.Router {
       if (message === 'LOG_AI_NOT_CONFIGURED') {
         res.status(503).json({
           error: 'ai_not_configured',
-          message: 'Укажите OPENROUTER_API_KEY в .env или ключ OpenRouter в настройках ИИ-анализа',
+          message: 'Настройте оператора ИИ в разделе Настройки',
         })
         return
       }

@@ -47,6 +47,7 @@ const channelRegistry_1 = require("./services/channelRegistry");
 const channelSettingsStore_1 = require("./services/channelSettingsStore");
 const commentStore_1 = require("./services/commentStore");
 const adminRuntimeSettingsStore_1 = require("./services/adminRuntimeSettingsStore");
+const logAiSettingsStore_1 = require("./services/logAiSettingsStore");
 const disabledAdminStore_1 = require("./services/disabledAdminStore");
 const subscriberStore_1 = require("./services/subscriberStore");
 const channelPoller_1 = require("./services/channelPoller");
@@ -88,11 +89,17 @@ async function main() {
     await subscriberStore_1.subscriberStore.loadFromDisk();
     await adminRuntimeSettingsStore_1.adminRuntimeSettingsStore.loadFromDisk();
     await disabledAdminStore_1.disabledAdminStore.loadFromDisk();
-    await (0, bot_1.ensureBotProfile)(bot);
+    await logAiSettingsStore_1.logAiSettingsStore.loadFromDisk();
     await integrationsStore_1.integrationsStore.load();
     await (0, adminPanelState_1.ensureAdminPanelStateLoaded)();
     await (0, channelLinkService_1.repairLegacyMiniappTgChains)();
     await (0, tgChainChannelRef_1.repairTgChainsForForwarding)();
+    try {
+        await (0, bot_1.ensureBotProfile)(bot);
+    }
+    catch (err) {
+        logger_1.logger.error('MAX API недоступен (ensureBotProfile) — HTTP и автопостинг всё равно запускаются; проверьте BOT_TOKEN', err);
+    }
     const tgIntegration = integrationsStore_1.integrationsStore
         .getIntegrations()
         .find((i) => i.platform === 'telegram' && i.status === 'connected');

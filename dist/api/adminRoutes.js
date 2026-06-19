@@ -879,6 +879,7 @@ function createAdminRouter(deps) {
         }
         try {
             const saved = await (0, logAnalysisService_1.saveLogAiConfig)({
+                provider: typeof body.provider === 'string' ? body.provider : undefined,
                 api_key: typeof body.api_key === 'string' ? body.api_key : undefined,
                 base_url: typeof body.base_url === 'string' ? body.base_url : undefined,
                 model: typeof body.model === 'string' ? body.model : undefined,
@@ -886,8 +887,38 @@ function createAdminRouter(deps) {
             res.json({ ok: true, ...saved });
         }
         catch (err) {
+            const message = err instanceof Error ? err.message : 'save failed';
+            if (message === 'api_key required' || message === 'model required' || message === 'base_url required for custom provider') {
+                res.status(400).json({ error: 'validation_error', message });
+                return;
+            }
             logger_1.logger.error('admin /logs/ai-config failed', err);
             res.status(500).json({ error: 'failed to save AI config' });
+        }
+    });
+    secured.post('/logs/ai-test', async (_req, res) => {
+        try {
+            const result = await (0, logAnalysisService_1.testLogAiConnection)();
+            res.json(result);
+        }
+        catch (err) {
+            const message = err instanceof Error ? err.message : 'test failed';
+            if (message === 'LOG_AI_NOT_CONFIGURED') {
+                res.status(503).json({
+                    error: 'ai_not_configured',
+                    message: 'Сначала укажите ключ оператора ИИ',
+                });
+                return;
+            }
+            if (message.startsWith('LOG_AI_REQUEST_FAILED:')) {
+                res.status(502).json({
+                    error: 'ai_request_failed',
+                    message: message.replace(/^LOG_AI_REQUEST_FAILED:\s*/, ''),
+                });
+                return;
+            }
+            logger_1.logger.error('admin /logs/ai-test failed', err);
+            res.status(500).json({ error: 'internal error' });
         }
     });
     secured.post('/logs/analyze', async (req, res) => {
@@ -920,7 +951,7 @@ function createAdminRouter(deps) {
             if (message === 'LOG_AI_NOT_CONFIGURED') {
                 res.status(503).json({
                     error: 'ai_not_configured',
-                    message: 'Укажите OPENROUTER_API_KEY в .env или ключ OpenRouter в настройках ИИ-анализа',
+                    message: 'Настройте оператора ИИ в разделе Настройки',
                 });
                 return;
             }
