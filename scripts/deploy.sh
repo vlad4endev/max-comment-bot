@@ -42,10 +42,13 @@ git pull --ff-only origin main
 
 echo "==> текущий коммит:"
 git log -1 --oneline
+export GIT_COMMIT="$(git rev-parse HEAD)"
+echo "==> GIT_COMMIT=${GIT_COMMIT}"
 
-echo "==> docker compose build & recreate"
+echo "==> docker compose build & recreate (сброс кэша admin-panel по коммиту)"
 docker compose down
-docker compose up -d --build --force-recreate
+docker compose build --build-arg "GIT_COMMIT=${GIT_COMMIT}" bot
+docker compose up -d --force-recreate
 
 echo "==> статус контейнера:"
 docker compose ps
@@ -65,7 +68,8 @@ if [[ -n "$AUTOPOST_JS" ]] && echo "$AUTOPOST_JS" | grep -q 'updateModalPreview'
   echo "  /admin/assets/autoposts.js -> OK (updateModalPreview найден)"
 else
   echo "  /admin/assets/autoposts.js -> СТАРАЯ ВЕРСИЯ или недоступен" >&2
-  echo "  Пересоберите образ: docker compose build --no-cache bot && docker compose up -d --force-recreate" >&2
+  echo "  Пересоберите образ: GIT_COMMIT=\$(git rev-parse HEAD) docker compose build --no-cache bot && docker compose up -d --force-recreate" >&2
+  exit 1
 fi
 ADMIN_HTML="$(curl -sS --max-time 8 "http://127.0.0.1:${HOST_PORT}/admin/login" 2>/dev/null || true)"
 if [[ -n "$ADMIN_HTML" ]] && echo "$ADMIN_HTML" | grep -q 'autoposts.js'; then
