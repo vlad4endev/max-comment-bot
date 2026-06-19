@@ -58,6 +58,13 @@ async function uploadFileToMaxAttachmentToken(token, item) {
     const uploadToken = await uploadBufferToMax(token, item.type, buffer, filename, contentType);
     return { type: item.type, payload: { token: uploadToken } };
 }
+function resolveMaxKeyboard(options) {
+    if (options?.keyboard?.length)
+        return options.keyboard;
+    if (options?.button)
+        return [[options.button]];
+    return null;
+}
 function buildMaxTextPayload(text, maxLen = 4096) {
     const prepared = (0, messengerHtml_1.prepareMessengerHtmlText)(text);
     const payload = {
@@ -68,17 +75,18 @@ function buildMaxTextPayload(text, maxLen = 4096) {
     }
     return payload;
 }
-function maxInlineKeyboardAttachment(button) {
+function maxInlineKeyboardAttachment(keyboard) {
     return {
         type: 'inline_keyboard',
         payload: {
-            buttons: [[{ type: 'link', text: button.text.slice(0, 64), url: button.url }]],
+            buttons: keyboard.map((row) => row.map((btn) => ({ type: 'link', text: btn.text.slice(0, 64), url: btn.url }))),
         },
     };
 }
 async function sendTextToMax(token, chatId, text, options) {
     const body = buildMaxTextPayload(text);
-    const attachments = options?.button ? [maxInlineKeyboardAttachment(options.button)] : undefined;
+    const keyboard = resolveMaxKeyboard(options);
+    const attachments = keyboard ? [maxInlineKeyboardAttachment(keyboard)] : undefined;
     await postMessage(token, chatId, {
         ...body,
         ...(attachments ? { attachments } : {}),
@@ -91,8 +99,9 @@ async function sendPhotoFileToMax(token, chatId, filePath, caption, options) {
     const attachments = [
         { type: 'image', payload: { token: uploadToken } },
     ];
-    if (options?.button) {
-        attachments.push(maxInlineKeyboardAttachment(options.button));
+    const keyboard = resolveMaxKeyboard(options);
+    if (keyboard) {
+        attachments.push(maxInlineKeyboardAttachment(keyboard));
     }
     await postMessage(token, chatId, {
         ...buildMaxTextPayload(caption, 1024),
@@ -108,8 +117,9 @@ async function sendVideoFileToMax(token, chatId, filePath, caption, options) {
     const attachments = [
         { type: 'video', payload: { token: uploadToken } },
     ];
-    if (options?.button) {
-        attachments.push(maxInlineKeyboardAttachment(options.button));
+    const keyboard = resolveMaxKeyboard(options);
+    if (keyboard) {
+        attachments.push(maxInlineKeyboardAttachment(keyboard));
     }
     await postMessage(token, chatId, {
         ...buildMaxTextPayload(caption, 1024),
@@ -164,8 +174,9 @@ async function sendMediaAlbumFilesToMax(token, chatId, caption, media, options) 
         throw new Error('MAX album: empty media list');
     }
     const attachments = await Promise.all(media.map((item) => uploadFileToMaxAttachmentToken(token, item)));
-    if (options?.button) {
-        attachments.push(maxInlineKeyboardAttachment(options.button));
+    const keyboard = resolveMaxKeyboard(options);
+    if (keyboard) {
+        attachments.push(maxInlineKeyboardAttachment(keyboard));
     }
     await postMessage(token, chatId, {
         ...buildMaxTextPayload(caption, 1024),

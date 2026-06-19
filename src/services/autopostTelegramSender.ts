@@ -6,7 +6,7 @@ import FormData from 'form-data'
 
 import { prepareMessengerHtmlText } from '../utils/messengerHtml'
 import { logger } from '../utils/logger'
-import type { AutopostInlineButton, AutopostMediaItem, AutopostRecord } from './autopostStore'
+import type { AutopostInlineKeyboard, AutopostMediaItem, AutopostRecord } from './autopostStore'
 
 const TG_API = 'https://api.telegram.org'
 
@@ -17,11 +17,19 @@ export interface AutopostSendResult {
   warning?: string
 }
 
-function buildInlineKeyboard(button: AutopostInlineButton): {
-  inline_keyboard: [[{ text: string; url: string }]]
+function resolveKeyboard(post: AutopostRecord): AutopostInlineKeyboard | null {
+  if (post.inline_buttons?.length) return post.inline_buttons
+  if (post.inline_button) return [[post.inline_button]]
+  return null
+}
+
+function buildInlineKeyboard(keyboard: AutopostInlineKeyboard): {
+  inline_keyboard: { text: string; url: string }[][]
 } {
   return {
-    inline_keyboard: [[{ text: button.text.slice(0, 64), url: button.url }]],
+    inline_keyboard: keyboard.map((row) =>
+      row.map((btn) => ({ text: btn.text.slice(0, 64), url: btn.url })),
+    ),
   }
 }
 
@@ -46,7 +54,7 @@ async function sendText(
   token: string,
   chatId: string,
   text: string,
-  button: AutopostInlineButton | null,
+  keyboard: AutopostInlineKeyboard | null,
 ): Promise<void> {
   const prepared = prepareMessengerHtmlText(text)
   const payload: Record<string, unknown> = {
@@ -56,8 +64,8 @@ async function sendText(
   if (prepared.parseMode) {
     payload.parse_mode = prepared.parseMode
   }
-  if (button) {
-    payload.reply_markup = JSON.stringify(buildInlineKeyboard(button))
+  if (keyboard?.length) {
+    payload.reply_markup = JSON.stringify(buildInlineKeyboard(keyboard))
   }
   await tgPost(token, 'sendMessage', payload)
 }
@@ -67,7 +75,7 @@ async function sendSingleMedia(
   chatId: string,
   item: AutopostMediaItem,
   caption: string,
-  button: AutopostInlineButton | null,
+  keyboard: AutopostInlineKeyboard | null,
 ): Promise<void> {
   const method = item.type === 'video' ? 'sendVideo' : 'sendPhoto'
   const field = item.type === 'video' ? 'video' : 'photo'
@@ -80,8 +88,8 @@ async function sendSingleMedia(
       form.append('parse_mode', prepared.parseMode)
     }
   }
-  if (button) {
-    form.append('reply_markup', JSON.stringify(buildInlineKeyboard(button)))
+  if (keyboard?.length) {
+    form.append('reply_markup', JSON.stringify(buildInlineKeyboard(keyboard)))
   }
   form.append(field, fs.createReadStream(item.path), {
     filename: path.basename(item.path),
@@ -122,7 +130,7 @@ async function sendMediaGroup(
 
 /**
  * Публикует автопост в Telegram-канал.
- * sendMediaGroup не поддерживает inline-кнопки — при альбоме кнопка уходит отдельным сообщением.
+ * sendMediaGroup не поддерживает inline-кнопки — при альбоме кнопки уходят отдельным сообщением.
  */
 export async function sendAutopostToTelegram(
   token: string,
@@ -131,27 +139,27 @@ export async function sendAutopostToTelegram(
   const chatId = post.target_channel_id
   const text = post.text.trim()
   const media = post.media.filter((m) => fs.existsSync(m.path))
-  const button = post.inline_button
+  const keyboard = resolveKeyboard(post)
 
   if (media.length === 0) {
-    await sendText(token, chatId, text, button)
+    await sendText(token, chatId, text, keyboard)
     return { ok: true }
   }
 
   if (media.length === 1) {
-    await sendSingleMedia(token, chatId, media[0], text, button)
+    await sendSingleMedia(token, chatId, media[0], text, keyboard)
     return { ok: true }
   }
 
   await sendMediaGroup(token, chatId, media, text)
-  if (!button) {
+  if (!keyboard?.length) {
     return { ok: true }
   }
 
   const warning =
-    'Инлайн-кнопка не поддерживается в альбоме Telegram — отправлено отдельным сообщением'
+    'Инлайн-кнопки не поддерживаются в альбоме Telegram — отправлены отдельным сообщением'
   try {
-    await sendText(token, chatId, button.text, button)
+    await sendText(token, chatId, '\u00a0', keyboard)
     return { ok: true, buttonSentSeparately: true, warning }
   } catch (err: unknown) {
     logger.warn('autopost: album sent, separate button message failed', err)

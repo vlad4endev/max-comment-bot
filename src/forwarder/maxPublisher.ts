@@ -77,7 +77,15 @@ async function uploadFileToMaxAttachmentToken(
 }
 
 export interface MaxSendOptions {
+  keyboard?: { text: string; url: string }[][] | null
+  /** @deprecated use keyboard */
   button?: { text: string; url: string }
+}
+
+function resolveMaxKeyboard(options?: MaxSendOptions): { text: string; url: string }[][] | null {
+  if (options?.keyboard?.length) return options.keyboard
+  if (options?.button) return [[options.button]]
+  return null
 }
 
 function buildMaxTextPayload(text: string, maxLen = 4096): { text: string; format?: 'html' } {
@@ -91,14 +99,16 @@ function buildMaxTextPayload(text: string, maxLen = 4096): { text: string; forma
   return payload
 }
 
-function maxInlineKeyboardAttachment(button: { text: string; url: string }): {
+function maxInlineKeyboardAttachment(keyboard: { text: string; url: string }[][]): {
   type: 'inline_keyboard'
-  payload: { buttons: [[{ type: 'link'; text: string; url: string }]] }
+  payload: { buttons: { type: 'link'; text: string; url: string }[][] }
 } {
   return {
     type: 'inline_keyboard',
     payload: {
-      buttons: [[{ type: 'link', text: button.text.slice(0, 64), url: button.url }]],
+      buttons: keyboard.map((row) =>
+        row.map((btn) => ({ type: 'link' as const, text: btn.text.slice(0, 64), url: btn.url })),
+      ),
     },
   }
 }
@@ -110,7 +120,8 @@ export async function sendTextToMax(
   options?: MaxSendOptions,
 ): Promise<void> {
   const body = buildMaxTextPayload(text)
-  const attachments = options?.button ? [maxInlineKeyboardAttachment(options.button)] : undefined
+  const keyboard = resolveMaxKeyboard(options)
+  const attachments = keyboard ? [maxInlineKeyboardAttachment(keyboard)] : undefined
   await postMessage(token, chatId, {
     ...body,
     ...(attachments ? { attachments } : {}),
@@ -130,8 +141,9 @@ export async function sendPhotoFileToMax(
   const attachments: Record<string, unknown>[] = [
     { type: 'image', payload: { token: uploadToken } },
   ]
-  if (options?.button) {
-    attachments.push(maxInlineKeyboardAttachment(options.button))
+  const keyboard = resolveMaxKeyboard(options)
+  if (keyboard) {
+    attachments.push(maxInlineKeyboardAttachment(keyboard))
   }
   await postMessage(token, chatId, {
     ...buildMaxTextPayload(caption, 1024),
@@ -155,8 +167,9 @@ export async function sendVideoFileToMax(
   const attachments: Record<string, unknown>[] = [
     { type: 'video', payload: { token: uploadToken } },
   ]
-  if (options?.button) {
-    attachments.push(maxInlineKeyboardAttachment(options.button))
+  const keyboard = resolveMaxKeyboard(options)
+  if (keyboard) {
+    attachments.push(maxInlineKeyboardAttachment(keyboard))
   }
   await postMessage(token, chatId, {
     ...buildMaxTextPayload(caption, 1024),
@@ -253,8 +266,9 @@ export async function sendMediaAlbumFilesToMax(
   const attachments: Record<string, unknown>[] = await Promise.all(
     media.map((item) => uploadFileToMaxAttachmentToken(token, item)),
   )
-  if (options?.button) {
-    attachments.push(maxInlineKeyboardAttachment(options.button))
+  const keyboard = resolveMaxKeyboard(options)
+  if (keyboard) {
+    attachments.push(maxInlineKeyboardAttachment(keyboard))
   }
   await postMessage(token, chatId, {
     ...buildMaxTextPayload(caption, 1024),

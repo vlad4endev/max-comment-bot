@@ -11,6 +11,8 @@ export interface AutopostInlineButton {
     text: string;
     url: string;
 }
+/** Rows of inline link buttons (each inner array = one row in Telegram / MAX). */
+export type AutopostInlineKeyboard = AutopostInlineButton[][];
 export interface AutopostCondition {
     id: string;
     type: 'min_subscribers' | 'max_posts_per_day' | 'min_interval_hours' | 'hours_range' | 'weekdays_only';
@@ -23,6 +25,7 @@ export interface AutopostRecord {
     text: string;
     media: AutopostMediaItem[];
     inline_button: AutopostInlineButton | null;
+    inline_buttons: AutopostInlineKeyboard | null;
     target_channel_id: string;
     channel_title: string | null;
     series_id: string | null;
@@ -50,6 +53,7 @@ export interface CreateAutopostInput {
     text: string;
     media?: AutopostMediaItem[];
     inline_button?: AutopostInlineButton | null;
+    inline_buttons?: AutopostInlineKeyboard | null;
     target_channel_id: string;
     channel_title?: string | null;
     series_id?: string | null;
@@ -71,6 +75,7 @@ export interface UpdateAutopostInput {
     text?: string;
     media?: AutopostMediaItem[];
     inline_button?: AutopostInlineButton | null;
+    inline_buttons?: AutopostInlineKeyboard | null;
     target_channel_id?: string;
     channel_title?: string | null;
     series_id?: string | null;
@@ -97,6 +102,9 @@ export interface PostChannelRecord {
     is_active: boolean;
     subscribers_count: number;
 }
+export declare function normalizeInlineKeyboard(input: unknown): AutopostInlineKeyboard | null;
+export declare function primaryInlineButton(keyboard: AutopostInlineKeyboard | null): AutopostInlineButton | null;
+export declare function resolveInlineKeyboard(buttons?: AutopostInlineKeyboard | null, legacy?: AutopostInlineButton | null): AutopostInlineKeyboard | null;
 export declare function upsertPostChannel(input: {
     id: string;
     platform: PostPlatform;

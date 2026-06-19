@@ -5,7 +5,7 @@
 (function () {
   'use strict';
 
-  var AP_UI_BUILD = '20260619-platform-v5';
+  var AP_UI_BUILD = '20260619-inline-rows-v8';
   var API_BASE = '/api/admin';
   var CHANNEL_COLORS = ['#534AB7', '#1D9E75', '#BA7517', '#7F77DD', '#3B82F6', '#EC4899'];
   var WEEKDAY_LABELS = ['Вс', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб'];
@@ -38,6 +38,83 @@
       .replace(/</g, '&lt;')
       .replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;');
+  }
+
+  function inlineRowsFromPost(p) {
+    var raw = p && p.inline_buttons;
+    if (Array.isArray(raw) && raw.length) {
+      return raw.map(function (row) {
+        var btns = (row || []).map(function (b) {
+          return { text: (b && b.text) || '', url: (b && b.url) || '' };
+        });
+        if (btns.length >= 2) {
+          return {
+            layout: '2',
+            buttons: [btns[0] || { text: '', url: '' }, btns[1] || { text: '', url: '' }],
+          };
+        }
+        return { layout: '1', buttons: [btns[0] || { text: '', url: '' }] };
+      });
+    }
+    if (p && p.inline_button && (p.inline_button.text || p.inline_button.url)) {
+      return [{
+        layout: '1',
+        buttons: [{ text: p.inline_button.text || '', url: p.inline_button.url || '' }],
+      }];
+    }
+    return [];
+  }
+
+  function serializeInlineKeyboard(rows) {
+    if (!Array.isArray(rows) || !rows.length) return null;
+    var out = [];
+    rows.forEach(function (row) {
+      var cells = [];
+      var limit = row.layout === '2' ? 2 : 1;
+      for (var i = 0; i < limit; i++) {
+        var b = row.buttons && row.buttons[i];
+        if (!b) continue;
+        var text = (b.text || '').trim();
+        var url = (b.url || '').trim();
+        if (text && url && /^https?:\/\//i.test(url)) {
+          cells.push({ text: text, url: url });
+        }
+      }
+      if (cells.length) out.push(cells);
+    });
+    return out.length ? out : null;
+  }
+
+  function hasInlineKeyboard(rows) {
+    return !!serializeInlineKeyboard(rows);
+  }
+
+  function buildInlineRowsEditorHtml(rows) {
+    if (!rows.length) {
+      return '<p class="text-sm muted ap-inline-empty">Нет кнопок. Добавьте ряд, если нужны ссылки под постом.</p>';
+    }
+    return rows.map(function (row, ri) {
+      var layout2 = row.layout === '2';
+      var btns = row.buttons || [{ text: '', url: '' }];
+      if (layout2 && btns.length < 2) btns.push({ text: '', url: '' });
+      var btnHtml = btns.slice(0, layout2 ? 2 : 1).map(function (b, bi) {
+        return '<div class="ap-inline-btn-fields" data-inline-btn="' + bi + '">' +
+          '<input class="input" data-inline-field="text" placeholder="Текст кнопки" value="' + esc(b.text || '') + '"/>' +
+          '<input class="input" data-inline-field="url" placeholder="https://…" value="' + esc(b.url || '') + '"/>' +
+          '</div>';
+      }).join('');
+      return '<div class="ap-inline-row" data-inline-row="' + ri + '">' +
+        '<div class="ap-inline-row-head">' +
+        '<span class="ap-inline-row-label">Ряд ' + (ri + 1) + '</span>' +
+        '<div class="ap-inline-layout">' +
+        '<button type="button" class="ap-inline-layout-btn' + (!layout2 ? ' active' : '') + '" data-inline-layout="1">1 кн.</button>' +
+        '<button type="button" class="ap-inline-layout-btn' + (layout2 ? ' active' : '') + '" data-inline-layout="2">2 кн.</button>' +
+        '</div>' +
+        '<button type="button" class="ap-inline-row-rm" data-rm-inline-row="' + ri + '" title="Удалить ряд">✕</button>' +
+        '</div>' +
+        '<div class="ap-inline-row-body' + (layout2 ? ' ap-inline-row-body--2' : '') + '">' + btnHtml + '</div>' +
+        '</div>';
+    }).join('');
   }
   function fmtTime(iso) {
     if (!iso) return '—';
@@ -185,6 +262,46 @@
     return state.channels.filter(function (c) {
       return channelPlatform(c) === platform;
     });
+  }
+
+  function mediaBasename(itemPath) {
+    var parts = String(itemPath || '').split('/');
+    return parts[parts.length - 1] || '';
+  }
+
+  function mediaPreviewUrl(item) {
+    var base = mediaBasename(item.path);
+    if (!base) return null;
+    return API_BASE + '/autoposts/media/' + encodeURIComponent(base);
+  }
+
+  function buildMediaFilesFromPost(p) {
+    if (!p || !p.media || !p.media.length) return [];
+    return p.media.map(function (m) {
+      return {
+        existing: true,
+        path: m.path,
+        type: m.type || 'photo',
+        preview: m.type === 'video' ? null : mediaPreviewUrl(m),
+      };
+    });
+  }
+
+  function fileFromMediaEntry(entry) {
+    if (!entry || entry.existing) return null;
+    if (entry.blob) {
+      return new File([entry.blob], entry.name || 'upload', {
+        type: entry.type || 'application/octet-stream',
+      });
+    }
+    if (entry.file) return entry.file;
+    return null;
+  }
+
+  function existingMediaPayload(files) {
+    return files
+      .filter(function (m) { return m.existing && m.path; })
+      .map(function (m) { return { type: m.type || 'photo', path: m.path }; });
   }
 
   function postChannelName(p) {
@@ -610,12 +727,24 @@
     modal.innerHTML =
       '<div class="ap-modal-header"><h2>' + (editPost && editPost.id ? 'Редактировать пост' : 'Новый пост') + '</h2>' +
       '<button type="button" class="ap-modal-close" data-ap-modal-close><i data-lucide="x"></i></button></div>' +
-      '<div class="ap-modal-body" id="apModalBody"></div>' +
-      '<div class="ap-modal-preview-wrap">' +
-      '<div class="ap-modal-preview-label" id="apModalPreviewLabel">Как будет выглядеть в Telegram</div>' +
-      '<div class="ap-preview-telegram" id="apModalPreview"></div>' +
-      '</div>' +
+      '<div class="ap-modal-split">' +
+      '<div class="ap-modal-editor">' +
       '<div id="apModalStatus" class="ap-modal-status hidden" role="alert"></div>' +
+      '<div class="ap-modal-body" id="apModalBody"></div>' +
+      '</div>' +
+      '<aside class="ap-modal-preview-pane" aria-label="Предпросмотр">' +
+      '<div class="ap-tg-phone">' +
+      '<div class="ap-tg-channel-header">' +
+      '<div class="ap-tg-channel-avatar" id="apPreviewAvatar">T</div>' +
+      '<div class="ap-tg-channel-meta">' +
+      '<div class="ap-tg-channel-name" id="apPreviewChannelName">Канал</div>' +
+      '<div class="ap-tg-channel-sub" id="apPreviewChannelSub">предпросмотр</div>' +
+      '</div></div>' +
+      '<div class="ap-tg-channel-feed">' +
+      '<div class="ap-tg-post" id="apModalPreview"></div>' +
+      '</div></div>' +
+      '<div class="ap-modal-preview-caption" id="apModalPreviewLabel">Telegram</div>' +
+      '</aside></div>' +
       '<div class="ap-modal-footer">' +
       '<span class="ap-modal-build">' + esc(AP_UI_BUILD) + '</span>' +
       '<div class="ap-modal-footer-actions">' +
@@ -639,9 +768,8 @@
       startDate: '',
       endDate: '',
       conditions: [],
-      mediaFiles: [],
-      btnText: (p.inline_button && p.inline_button.text) || '',
-      btnUrl: (p.inline_button && p.inline_button.url) || '',
+      mediaFiles: buildMediaFilesFromPost(p),
+      inlineRows: inlineRowsFromPost(p),
       onFailure: 'skip',
     };
 
@@ -693,10 +821,7 @@
         qsa('.apmodal_wd:checked', body).forEach(function (cb) { picked.push(Number(cb.value)); });
         modalState.weekdays = picked;
       }
-      var btnTextEl = qs('#apBtnText', body);
-      var btnUrlEl = qs('#apBtnUrl', body);
-      if (btnTextEl) modalState.btnText = btnTextEl.value;
-      if (btnUrlEl) modalState.btnUrl = btnUrlEl.value;
+      snapshotInlineRowsFromDom(body);
       var onFail = qs('#apOnFailure', body);
       if (onFail) modalState.onFailure = onFail.value;
       var activePlatform = qs('[data-ap-platform].active', body);
@@ -711,32 +836,141 @@
       modalState.weekdays = picked;
     }
 
+    function updatePreviewChannelMeta() {
+      var nameEl = qs('#apPreviewChannelName', modal);
+      var subEl = qs('#apPreviewChannelSub', modal);
+      var avatarEl = qs('#apPreviewAvatar', modal);
+      var phone = qs('.ap-tg-phone', modal);
+      var firstId = modalState.channels[0];
+      var ch = firstId ? state.channels.find(function (c) { return String(c.id) === firstId; }) : null;
+      var label = ch ? channelLabel(ch) : 'Канал';
+      if (nameEl) nameEl.textContent = label;
+      if (subEl) {
+        subEl.textContent = modalState.platform === 'max' ? 'MAX · предпросмотр' : 'Telegram · предпросмотр';
+      }
+      if (avatarEl) {
+        var letter = (label.replace(/^@/, '').charAt(0) || 'C').toUpperCase();
+        avatarEl.textContent = letter;
+        if (ch) {
+          var ci = state.channels.findIndex(function (c) { return String(c.id) === firstId; });
+          avatarEl.style.background = channelColor(firstId, ci);
+        }
+      }
+      if (phone) {
+        phone.classList.toggle('ap-tg-phone--max', modalState.platform === 'max');
+      }
+    }
+
+    function snapshotInlineRowsFromDom(body) {
+      var container = qs('#apInlineRows', body);
+      if (!container) return;
+      var next = [];
+      qsa('.ap-inline-row', container).forEach(function (rowEl) {
+        var layoutBtn = qs('[data-inline-layout].active', rowEl);
+        var layout = layoutBtn && layoutBtn.getAttribute('data-inline-layout') === '2' ? '2' : '1';
+        var buttons = [];
+        qsa('[data-inline-btn]', rowEl).forEach(function (cell, idx) {
+          if (layout === '1' && idx > 0) return;
+          var textEl = qs('[data-inline-field="text"]', cell);
+          var urlEl = qs('[data-inline-field="url"]', cell);
+          buttons.push({
+            text: textEl ? textEl.value : '',
+            url: urlEl ? urlEl.value : '',
+          });
+        });
+        if (layout === '2' && buttons.length < 2) {
+          buttons.push({ text: '', url: '' });
+        }
+        next.push({ layout: layout, buttons: buttons });
+      });
+      modalState.inlineRows = next;
+    }
+
+    function renderInlineRowsEditor(body) {
+      var wrap = qs('#apInlineRows', body);
+      if (!wrap) return;
+      wrap.innerHTML = buildInlineRowsEditorHtml(modalState.inlineRows);
+    }
+
+    function wireInlineRowsEditor(body) {
+      var addBtn = qs('#apAddInlineRow', body);
+      if (addBtn) {
+        addBtn.addEventListener('click', function () {
+          snapshotFromDom();
+          if (modalState.inlineRows.length >= 8) {
+            showModalStatus('Не более 8 рядов кнопок', 'error');
+            return;
+          }
+          modalState.inlineRows.push({ layout: '1', buttons: [{ text: '', url: '' }] });
+          renderInlineRowsEditor(body);
+          wireInlineRowsEditor(body);
+          updateModalPreview();
+        });
+      }
+      qsa('[data-rm-inline-row]', body).forEach(function (btn) {
+        btn.addEventListener('click', function () {
+          snapshotFromDom();
+          var idx = Number(btn.getAttribute('data-rm-inline-row'));
+          modalState.inlineRows.splice(idx, 1);
+          renderInlineRowsEditor(body);
+          wireInlineRowsEditor(body);
+          updateModalPreview();
+        });
+      });
+      qsa('[data-inline-layout]', body).forEach(function (btn) {
+        btn.addEventListener('click', function () {
+          snapshotFromDom();
+          var rowEl = btn.closest('.ap-inline-row');
+          if (!rowEl) return;
+          var idx = Number(rowEl.getAttribute('data-inline-row'));
+          var row = modalState.inlineRows[idx];
+          if (!row) return;
+          var nextLayout = btn.getAttribute('data-inline-layout') === '2' ? '2' : '1';
+          if (row.layout === nextLayout) return;
+          row.layout = nextLayout;
+          if (nextLayout === '2' && row.buttons.length < 2) {
+            row.buttons.push({ text: '', url: '' });
+          }
+          renderInlineRowsEditor(body);
+          wireInlineRowsEditor(body);
+          updateModalPreview();
+        });
+      });
+      qsa('#apInlineRows [data-inline-field]', body).forEach(function (el) {
+        el.addEventListener('input', function () {
+          snapshotInlineRowsFromDom(body);
+          updateModalPreview();
+        });
+      });
+    }
+
     function updateModalPreview() {
       var wrap = qs('#apModalPreview', modal);
       if (!wrap) return;
       var text = (modalState.text || '').trim();
-      var btnText = (modalState.btnText || '').trim();
-      var btnUrl = (modalState.btnUrl || '').trim();
+      var keyboard = serializeInlineKeyboard(modalState.inlineRows);
       var media = modalState.mediaFiles || [];
-      var html = '';
+      var html = '<div class="ap-tg-post-card">';
 
       if (media.length) {
         if (media.length === 1) {
           var single = media[0];
           if (single.preview) {
-            html += '<div class="ap-preview-media-single"><img src="' + single.preview + '" alt=""/></div>';
-          } else if (single.file && single.file.type && single.file.type.indexOf('video/') === 0) {
-            html += '<div class="ap-preview-media-single ap-preview-video"><span>🎬 ' + esc(single.file.name || 'Видео') + '</span></div>';
+            html += '<div class="ap-tg-post-media ap-tg-post-media--single"><img src="' + single.preview + '" alt=""/></div>';
+          } else if (single.type === 'video' || (single.file && single.file.type && single.file.type.indexOf('video/') === 0)) {
+            html += '<div class="ap-tg-post-media ap-tg-post-media--video"><span>▶ ' + esc((single.file && single.file.name) || single.name || 'Видео') + '</span></div>';
+          } else if (single.existing && single.type === 'video') {
+            html += '<div class="ap-tg-post-media ap-tg-post-media--video"><span>▶ Видео</span></div>';
           } else {
-            html += '<div class="ap-preview-media-single ap-preview-file"><span>📎 ' + esc((single.file && single.file.name) || 'Файл') + '</span></div>';
+            html += '<div class="ap-tg-post-media ap-tg-post-media--file"><span>📎 ' + esc((single.file && single.file.name) || single.name || 'Файл') + '</span></div>';
           }
         } else {
-          html += '<div class="ap-preview-media-album">';
+          html += '<div class="ap-tg-post-media ap-tg-post-media--album">';
           media.forEach(function (m) {
             if (m.preview) {
               html += '<img src="' + m.preview + '" alt=""/>';
             } else {
-              html += '<div class="ap-preview-album-placeholder">' + (m.file && m.file.type && m.file.type.indexOf('video/') === 0 ? '🎬' : '📎') + '</div>';
+              html += '<div class="ap-tg-album-ph">' + (m.type === 'video' ? '▶' : '📎') + '</div>';
             }
           });
           html += '</div>';
@@ -747,26 +981,39 @@
         var previewText = window.ApTextEditor
           ? window.ApTextEditor.previewHtml(text)
           : esc(text);
-        html += '<div class="ap-preview-bubble ap-preview-formatted">' + previewText + '</div>';
-      } else if (!media.length && !(btnText && btnUrl)) {
-        html += '<div class="ap-preview-bubble ap-preview-placeholder">Добавьте текст, фото или кнопку</div>';
+        html += '<div class="ap-tg-post-text ap-preview-formatted">' + previewText + '</div>';
+      } else if (!media.length && !keyboard) {
+        html += '<div class="ap-tg-post-text ap-tg-post-text--placeholder">Добавьте текст, фото или кнопку</div>';
       }
 
-      if (btnText && btnUrl) {
-        html += '<div class="ap-preview-inline"><span class="ap-preview-inline-btn">' + esc(btnText) + '</span></div>';
-      } else if (btnText) {
-        html += '<div class="ap-preview-inline"><span class="ap-preview-inline-btn ap-preview-inline-incomplete">Укажите URL кнопки</span></div>';
+      if (keyboard && keyboard.length) {
+        html += '<div class="ap-tg-post-actions">';
+        keyboard.forEach(function (row) {
+          html += '<div class="ap-tg-inline-row' + (row.length === 2 ? ' ap-tg-inline-row--2' : '') + '">';
+          row.forEach(function (btn) {
+            html += '<span class="ap-tg-inline-btn">' + esc(btn.text) + '</span>';
+          });
+          html += '</div>';
+        });
+        html += '</div>';
+      } else if (modalState.inlineRows.length) {
+        html += '<div class="ap-tg-post-actions"><span class="ap-tg-inline-btn ap-tg-inline-btn--warn">Заполните текст и URL кнопок</span></div>';
       }
+
+      html += '<div class="ap-tg-post-footer"><span class="ap-tg-views">👁 <span>0</span></span></div>';
+      html += '</div>';
 
       wrap.innerHTML = html;
       qsa('.ap-spoiler', wrap).forEach(function (el) {
         el.addEventListener('click', function () { el.classList.toggle('revealed'); });
       });
+      updatePreviewChannelMeta();
     }
 
     function updatePreviewLabel() {
       var lbl = qs('#apModalPreviewLabel', modal);
-      if (lbl) lbl.textContent = 'Как будет выглядеть в ' + platformLabel(modalState.platform);
+      if (lbl) lbl.textContent = 'Как в ' + platformLabel(modalState.platform);
+      updatePreviewChannelMeta();
     }
 
     function renderModalForm() {
@@ -833,10 +1080,14 @@
         '<div class="ap-dropzone" id="apDropzone">Нажмите или перетащите фото/видео<br><span class="text-sm muted">До 10 файлов</span></div>' +
         '<input type="file" id="apModalMedia" multiple accept="image/*,video/*" class="hidden"/>' +
         '<div class="ap-media-grid" id="apMediaGrid"></div>' +
-        '<div class="form-row" style="margin-top:0.75rem">' +
-        '<div class="form-group"><label>Текст кнопки</label><input class="input" id="apBtnText" placeholder="Открыть сайт" value="' + esc(modalState.btnText) + '"/></div>' +
-        '<div class="form-group"><label>URL кнопки</label><input class="input" id="apBtnUrl" placeholder="https://…" value="' + esc(modalState.btnUrl) + '"/></div></div>' +
-        '</section>';
+        '<div class="ap-inline-section">' +
+        '<div class="ap-inline-section-head">' +
+        '<label>Инлайн-кнопки</label>' +
+        '<button type="button" class="btn btn-ghost btn-sm" id="apAddInlineRow">+ Добавить ряд</button>' +
+        '</div>' +
+        '<p class="text-sm muted ap-inline-hint">До 8 рядов · 1 или 2 кнопки в ряду · URL с https://</p>' +
+        '<div id="apInlineRows" class="ap-inline-rows">' + buildInlineRowsEditorHtml(modalState.inlineRows) + '</div>' +
+        '</div></section>';
 
       var ta = qs('#apModalText', body);
       var editorWrap = qs('#apTextEditorMount', body);
@@ -965,7 +1216,8 @@
         if (!grid) return;
         grid.innerHTML = modalState.mediaFiles.map(function (f, i) {
           var url = f.preview || '';
-          return '<div class="ap-media-thumb">' + (url ? '<img src="' + url + '" alt=""/>' : '📎') +
+          var label = f.type === 'video' ? '🎬' : (url ? '' : '📎');
+          return '<div class="ap-media-thumb">' + (url ? '<img src="' + url + '" alt=""/>' : label) +
             '<button type="button" data-rm-media="' + i + '">✕</button></div>';
         }).join('');
         qsa('[data-rm-media]', grid).forEach(function (b) {
@@ -979,11 +1231,22 @@
       function addFiles(files) {
         for (var i = 0; i < files.length && modalState.mediaFiles.length < 10; i++) {
           var f = files[i];
+          var blob = f;
+          try {
+            if (typeof f.slice === 'function') {
+              blob = f.slice(0, f.size, f.type || 'application/octet-stream');
+            }
+          } catch (_sliceErr) {
+            blob = f;
+          }
           modalState.mediaFiles.push({
-            file: f,
-            preview: f.type.startsWith('image/') ? URL.createObjectURL(f) : null,
+            blob: blob,
+            name: f.name || ('upload-' + Date.now() + '.jpg'),
+            type: f.type || 'application/octet-stream',
+            preview: f.type && f.type.indexOf('image/') === 0 ? URL.createObjectURL(blob) : null,
           });
         }
+        if (fileInput) fileInput.value = '';
         renderMediaGrid();
         updateModalPreview();
       }
@@ -1001,13 +1264,7 @@
         });
       }
       renderMediaGrid();
-
-      qsa('#apBtnText, #apBtnUrl', body).forEach(function (el) {
-        el.addEventListener('input', function () {
-          snapshotFromDom();
-          updateModalPreview();
-        });
-      });
+      wireInlineRowsEditor(body);
 
       refreshIcons(body);
       updateModalPreview();
@@ -1035,8 +1292,7 @@
         if (sec) sec.scrollIntoView({ behavior: 'smooth', block: 'start' });
         return;
       }
-      var btnText = (modalState.btnText || '').trim();
-      var btnUrl = (modalState.btnUrl || '').trim();
+      var keyboard = serializeInlineKeyboard(modalState.inlineRows);
       var mediaCount = modalState.mediaFiles.length;
       if (textEmpty && !mediaCount) {
         showModalStatus('Введите текст или добавьте фото/видео', 'error');
@@ -1044,8 +1300,8 @@
         if (secText) secText.scrollIntoView({ behavior: 'smooth', block: 'start' });
         return;
       }
-      if (mediaCount > 1 && btnText && btnUrl && modalState.platform === 'telegram') {
-        showModalStatus('Инлайн-кнопка недоступна для альбома из нескольких файлов в Telegram', 'error');
+      if (mediaCount > 1 && keyboard && modalState.platform === 'telegram') {
+        showModalStatus('Инлайн-кнопки недоступны для альбома из нескольких файлов в Telegram', 'error');
         return;
       }
 
@@ -1090,12 +1346,11 @@
           probe.setHours(Number(parts[0]), Number(parts[1]), 0, 0);
           fd.append('scheduled_at', probe.toISOString());
         }
-        if (btnText && btnUrl) {
-          fd.append('inline_button_text', btnText);
-          fd.append('inline_button_url', btnUrl);
-        }
+        fd.append('inline_buttons', JSON.stringify(keyboard || []));
+        fd.append('existing_media', JSON.stringify(existingMediaPayload(modalState.mediaFiles)));
         modalState.mediaFiles.forEach(function (m) {
-          if (m.file) fd.append('media', m.file);
+          var file = fileFromMediaEntry(m);
+          if (file) fd.append('media', file);
         });
         if (state.editingId && modalState.channels.length === 1) {
           return fetch(API_BASE + '/autoposts/' + encodeURIComponent(state.editingId), {

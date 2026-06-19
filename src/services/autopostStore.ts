@@ -17,6 +17,9 @@ export interface AutopostInlineButton {
   url: string
 }
 
+/** Rows of inline link buttons (each inner array = one row in Telegram / MAX). */
+export type AutopostInlineKeyboard = AutopostInlineButton[][]
+
 export interface AutopostCondition {
   id: string
   type: 'min_subscribers' | 'max_posts_per_day' | 'min_interval_hours' | 'hours_range' | 'weekdays_only'
@@ -30,6 +33,7 @@ export interface AutopostRecord {
   text: string
   media: AutopostMediaItem[]
   inline_button: AutopostInlineButton | null
+  inline_buttons: AutopostInlineKeyboard | null
   target_channel_id: string
   channel_title: string | null
   series_id: string | null
@@ -58,6 +62,7 @@ export interface CreateAutopostInput {
   text: string
   media?: AutopostMediaItem[]
   inline_button?: AutopostInlineButton | null
+  inline_buttons?: AutopostInlineKeyboard | null
   target_channel_id: string
   channel_title?: string | null
   series_id?: string | null
@@ -80,6 +85,7 @@ export interface UpdateAutopostInput {
   text?: string
   media?: AutopostMediaItem[]
   inline_button?: AutopostInlineButton | null
+  inline_buttons?: AutopostInlineKeyboard | null
   target_channel_id?: string
   channel_title?: string | null
   series_id?: string | null
@@ -173,6 +179,63 @@ function parseInlineButton(raw: string | null): AutopostInlineButton | null {
   return null
 }
 
+function parseInlineButtonCell(raw: unknown): AutopostInlineButton | null {
+  if (typeof raw !== 'object' || raw === null) return null
+  const row = raw as { text?: unknown; url?: unknown }
+  if (typeof row.text !== 'string' || typeof row.url !== 'string') return null
+  const text = row.text.trim()
+  const url = row.url.trim()
+  if (!text || !url || !/^https?:\/\//i.test(url)) return null
+  return { text: text.slice(0, 64), url }
+}
+
+export function normalizeInlineKeyboard(input: unknown): AutopostInlineKeyboard | null {
+  if (!Array.isArray(input) || input.length === 0) return null
+  const rows: AutopostInlineKeyboard = []
+  for (const rowRaw of input.slice(0, 8)) {
+    if (!Array.isArray(rowRaw)) continue
+    const row: AutopostInlineButton[] = []
+    for (const cell of rowRaw.slice(0, 2)) {
+      const btn = parseInlineButtonCell(cell)
+      if (btn) row.push(btn)
+    }
+    if (row.length > 0) rows.push(row)
+  }
+  return rows.length > 0 ? rows : null
+}
+
+function parseInlineButtonsJson(
+  buttonsRaw: string | null,
+  legacyRaw: string | null,
+): AutopostInlineKeyboard | null {
+  if (buttonsRaw) {
+    try {
+      const parsed = normalizeInlineKeyboard(JSON.parse(buttonsRaw))
+      if (parsed) return parsed
+    } catch {
+      /* ignore */
+    }
+  }
+  const legacy = parseInlineButton(legacyRaw)
+  return legacy ? [[legacy]] : null
+}
+
+export function primaryInlineButton(keyboard: AutopostInlineKeyboard | null): AutopostInlineButton | null {
+  return keyboard?.[0]?.[0] ?? null
+}
+
+export function resolveInlineKeyboard(
+  buttons?: AutopostInlineKeyboard | null,
+  legacy?: AutopostInlineButton | null,
+): AutopostInlineKeyboard | null {
+  const normalized = normalizeInlineKeyboard(buttons ?? null)
+  if (normalized) return normalized
+  if (legacy?.text?.trim() && legacy.url?.trim()) {
+    return [[{ text: legacy.text.trim().slice(0, 64), url: legacy.url.trim() }]]
+  }
+  return null
+}
+
 function parseWeekdays(raw: string | null): number[] | null {
   if (!raw) return null
   try {
@@ -223,12 +286,14 @@ function rowToRecord(row: AutopostDbRow): AutopostRecord {
   const status = row.status as AutopostStatus
   const schedule_type = row.schedule_type as AutopostScheduleType
   const platform: PostPlatform = row.platform === 'max' ? 'max' : 'telegram'
+  const inline_buttons = parseInlineButtonsJson(row.inline_buttons_json, row.inline_button_json)
   return {
     id: row.id,
     platform,
     text: row.text,
     media: parseMediaJson(row.media_json),
-    inline_button: parseInlineButton(row.inline_button_json),
+    inline_buttons,
+    inline_button: primaryInlineButton(inline_buttons),
     target_channel_id: row.target_channel_id,
     channel_title: row.channel_title,
     series_id: row.series_id,
@@ -485,6 +550,8 @@ export function createAutopost(input: CreateAutopostInput): AutopostRecord {
   const weekdays = input.weekdays ?? null
   const platform = input.platform ?? 'telegram'
   const status = input.status ?? 'active'
+  const inline_buttons = resolveInlineKeyboard(input.inline_buttons, input.inline_button ?? null)
+  const inline_button = primaryInlineButton(inline_buttons)
 
   upsertPostChannel({
     id: input.target_channel_id,
@@ -496,12 +563,12 @@ export function createAutopost(input: CreateAutopostInput): AutopostRecord {
     .prepare(
       `INSERT INTO autoposts (
         id, platform, target_channel_id, channel_title, series_id, text, media_json,
-        inline_button_json, status, schedule_type, scheduled_at, recurring_time,
+        inline_button_json, inline_buttons_json, status, schedule_type, scheduled_at, recurring_time,
         weekdays_json, daily_times_json, timezone, start_date, end_date, repeat_limit,
         on_failure, conditions_json, last_sent_at, last_error, sent_count, created_at, updated_at
       ) VALUES (
         ?, ?, ?, ?, ?, ?, ?,
-        ?, ?, ?, ?, ?,
+        ?, ?, ?, ?, ?, ?,
         ?, ?, ?, ?, ?, ?,
         ?, ?, NULL, NULL, 0, ?, ?
       )`,
@@ -514,7 +581,8 @@ export function createAutopost(input: CreateAutopostInput): AutopostRecord {
       input.series_id ?? null,
       input.text,
       JSON.stringify(media),
-      input.inline_button ? JSON.stringify(input.inline_button) : null,
+      inline_button ? JSON.stringify(inline_button) : null,
+      inline_buttons ? JSON.stringify(inline_buttons) : null,
       status,
       input.schedule_type,
       input.scheduled_at,
@@ -537,12 +605,21 @@ export function updateAutopost(id: string, patch: UpdateAutopostInput): Autopost
   const current = getAutopostById(id)
   if (!current) return null
 
+  const resolvedKeyboard =
+    patch.inline_buttons !== undefined || patch.inline_button !== undefined
+      ? resolveInlineKeyboard(
+          patch.inline_buttons !== undefined ? patch.inline_buttons : current.inline_buttons,
+          patch.inline_button !== undefined ? patch.inline_button : current.inline_button,
+        )
+      : current.inline_buttons
+
   const next: AutopostRecord = {
     ...current,
     platform: patch.platform ?? current.platform,
     text: patch.text ?? current.text,
     media: patch.media ?? current.media,
-    inline_button: patch.inline_button !== undefined ? patch.inline_button : current.inline_button,
+    inline_buttons: resolvedKeyboard,
+    inline_button: primaryInlineButton(resolvedKeyboard),
     target_channel_id: patch.target_channel_id ?? current.target_channel_id,
     channel_title: patch.channel_title !== undefined ? patch.channel_title : current.channel_title,
     series_id: patch.series_id !== undefined ? patch.series_id : current.series_id,
@@ -574,7 +651,7 @@ export function updateAutopost(id: string, patch: UpdateAutopostInput): Autopost
   getPostsDb()
     .prepare(
       `UPDATE autoposts SET
-        platform = ?, text = ?, media_json = ?, inline_button_json = ?,
+        platform = ?, text = ?, media_json = ?, inline_button_json = ?, inline_buttons_json = ?,
         target_channel_id = ?, channel_title = ?, series_id = ?,
         status = ?, schedule_type = ?, scheduled_at = ?,
         recurring_time = ?, weekdays_json = ?, daily_times_json = ?, timezone = ?,
@@ -588,6 +665,7 @@ export function updateAutopost(id: string, patch: UpdateAutopostInput): Autopost
       next.text,
       JSON.stringify(next.media),
       next.inline_button ? JSON.stringify(next.inline_button) : null,
+      next.inline_buttons ? JSON.stringify(next.inline_buttons) : null,
       next.target_channel_id,
       next.channel_title,
       next.series_id,

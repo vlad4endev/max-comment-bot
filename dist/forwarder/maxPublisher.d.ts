@@ -6,6 +6,11 @@ interface MaxAttachmentFromFile {
     contentType?: string;
 }
 export interface MaxSendOptions {
+    keyboard?: {
+        text: string;
+        url: string;
+    }[][] | null;
+    /** @deprecated use keyboard */
     button?: {
         text: string;
         url: string;

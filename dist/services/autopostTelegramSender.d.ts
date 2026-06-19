@@ -7,6 +7,6 @@ export interface AutopostSendResult {
 }
 /**
  * Публикует автопост в Telegram-канал.
- * sendMediaGroup не поддерживает inline-кнопки — при альбоме кнопка уходит отдельным сообщением.
+ * sendMediaGroup не поддерживает inline-кнопки — при альбоме кнопки уходят отдельным сообщением.
  */
 export declare function sendAutopostToTelegram(token: string, post: AutopostRecord): Promise<AutopostSendResult>;

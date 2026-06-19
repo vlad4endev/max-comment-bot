@@ -616,8 +616,8 @@ body.ap-modal-open .sidebar {
 
 .ap-modal {
   width: 100%;
-  max-width: 680px;
-  max-height: 90vh;
+  max-width: 1060px;
+  max-height: 92vh;
   overflow: hidden;
   display: flex;
   flex-direction: column;
@@ -625,7 +625,7 @@ body.ap-modal-open .sidebar {
   z-index: 1;
   background: #1a1a1f;
   border: 1px solid rgba(255, 255, 255, 0.12);
-  border-radius: 10px;
+  border-radius: 12px;
   box-shadow: 0 16px 48px rgba(0, 0, 0, 0.65);
   animation: apScaleIn 0.15s ease;
 }
@@ -692,14 +692,361 @@ body.ap-modal-open .sidebar {
   border-bottom-color: var(--ap-accent);
 }
 
+.ap-modal-split {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 340px;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.ap-modal-editor {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  border-right: 1px solid rgba(255, 255, 255, 0.08);
+}
+
 .ap-modal-body {
   padding: 1rem 1.15rem;
   overflow-y: auto;
   flex: 1;
-  min-height: 220px;
+  min-height: 0;
   background: #1a1a1f;
   position: relative;
   z-index: 2;
+}
+
+.ap-modal-preview-pane {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: #12161c;
+  padding: 0.85rem 0.75rem 0.65rem;
+}
+
+.ap-modal-preview-caption {
+  margin-top: 0.55rem;
+  text-align: center;
+  font-size: 0.68rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #6b7280;
+}
+
+/* Telegram channel phone mock */
+.ap-tg-phone {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border-radius: 14px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  background: #17212b;
+}
+
+.ap-tg-phone--max {
+  background: #151820;
+}
+
+.ap-tg-phone--max .ap-tg-channel-header {
+  background: linear-gradient(180deg, #1e2430 0%, #181c26 100%);
+}
+
+.ap-tg-channel-header {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  padding: 0.75rem 0.85rem;
+  background: linear-gradient(180deg, #2b5278 0%, #17212b 100%);
+  border-bottom: 1px solid rgba(0, 0, 0, 0.25);
+  flex-shrink: 0;
+}
+
+.ap-tg-channel-avatar {
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 1rem;
+  color: #fff;
+  background: #5288c1;
+  flex-shrink: 0;
+}
+
+.ap-tg-channel-meta {
+  min-width: 0;
+}
+
+.ap-tg-channel-name {
+  font-size: 0.92rem;
+  font-weight: 700;
+  color: #fff;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ap-tg-channel-sub {
+  font-size: 0.72rem;
+  color: rgba(255, 255, 255, 0.55);
+  margin-top: 0.1rem;
+}
+
+.ap-tg-channel-feed {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0.65rem 0.55rem 0.85rem;
+  background:
+    radial-gradient(circle at 20% 20%, rgba(43, 82, 120, 0.08) 0%, transparent 45%),
+    #17212b;
+}
+
+.ap-tg-post {
+  width: 100%;
+}
+
+.ap-tg-post-card {
+  background: #242f3d;
+  border-radius: 0;
+  overflow: hidden;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+}
+
+.ap-tg-post-media--single img {
+  display: block;
+  width: 100%;
+  max-height: 220px;
+  object-fit: cover;
+}
+
+.ap-tg-post-media--video,
+.ap-tg-post-media--file {
+  min-height: 120px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.25);
+  color: #c5d0db;
+  font-size: 0.82rem;
+  padding: 1rem;
+}
+
+.ap-tg-post-media--album {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 2px;
+  background: #0e1621;
+}
+
+.ap-tg-post-media--album img {
+  width: 100%;
+  aspect-ratio: 1;
+  object-fit: cover;
+  display: block;
+}
+
+.ap-tg-album-ph {
+  aspect-ratio: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.06);
+  color: #9ca3af;
+  font-size: 1.25rem;
+}
+
+.ap-tg-post-text {
+  padding: 0.55rem 0.7rem 0.35rem;
+  font-size: 0.84rem;
+  line-height: 1.45;
+  color: #f5f5f5;
+  word-break: break-word;
+  white-space: pre-wrap;
+}
+
+.ap-tg-post-text--placeholder {
+  color: #7a8794;
+  font-style: italic;
+}
+
+.ap-tg-post-actions {
+  padding: 0 0.55rem 0.45rem;
+}
+
+.ap-tg-inline-row {
+  display: flex;
+  gap: 0.35rem;
+  margin-bottom: 0.35rem;
+}
+
+.ap-tg-inline-row:last-child {
+  margin-bottom: 0;
+}
+
+.ap-tg-inline-row--2 .ap-tg-inline-btn {
+  flex: 1;
+  width: auto;
+}
+
+.ap-inline-section {
+  margin-top: 0.85rem;
+  padding-top: 0.85rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.ap-inline-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.35rem;
+}
+
+.ap-inline-section-head label {
+  margin: 0;
+  font-weight: 600;
+}
+
+.ap-inline-hint {
+  margin: 0 0 0.65rem;
+}
+
+.ap-inline-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+
+.ap-inline-row {
+  padding: 0.55rem 0.65rem;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+.ap-inline-row-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.45rem;
+}
+
+.ap-inline-row-label {
+  font-size: 0.78rem;
+  color: #9ca3af;
+  flex: 1;
+}
+
+.ap-inline-layout {
+  display: inline-flex;
+  border-radius: 6px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.ap-inline-layout-btn {
+  padding: 0.2rem 0.45rem;
+  font-size: 0.72rem;
+  background: transparent;
+  border: none;
+  color: #9ca3af;
+  cursor: pointer;
+}
+
+.ap-inline-layout-btn.active {
+  background: rgba(82, 136, 193, 0.25);
+  color: #6ab2f2;
+}
+
+.ap-inline-row-rm {
+  background: transparent;
+  border: none;
+  color: #9ca3af;
+  cursor: pointer;
+  padding: 0.15rem 0.35rem;
+  line-height: 1;
+}
+
+.ap-inline-row-rm:hover {
+  color: #f87171;
+}
+
+.ap-inline-row-body {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.ap-inline-row-body--2 {
+  grid-template-columns: 1fr 1fr;
+}
+
+.ap-inline-btn-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.ap-inline-empty {
+  margin: 0;
+  padding: 0.35rem 0;
+}
+
+.ap-tg-inline-btn {
+  display: block;
+  width: 100%;
+  padding: 0.45rem 0.65rem;
+  border-radius: 6px;
+  background: rgba(82, 136, 193, 0.18);
+  border: 1px solid rgba(82, 136, 193, 0.35);
+  color: #6ab2f2;
+  font-size: 0.8rem;
+  text-align: center;
+}
+
+.ap-tg-inline-btn--warn {
+  color: #9ca3af;
+  border-style: dashed;
+  background: transparent;
+}
+
+.ap-tg-post-footer {
+  display: flex;
+  justify-content: flex-end;
+  padding: 0 0.65rem 0.5rem;
+}
+
+.ap-tg-views {
+  font-size: 0.72rem;
+  color: #6ab2f2;
+  opacity: 0.85;
+}
+
+@media (max-width: 900px) {
+  .ap-modal-split {
+    grid-template-columns: 1fr;
+    grid-template-rows: minmax(0, 1fr) auto;
+  }
+
+  .ap-modal-editor {
+    border-right: none;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  }
+
+  .ap-modal-preview-pane {
+    max-height: 320px;
+  }
+
+  .ap-tg-channel-feed {
+    max-height: 220px;
+  }
 }
 
 .ap-schedule-panel.hidden {
@@ -728,10 +1075,11 @@ body.ap-modal-open .sidebar {
 }
 
 .ap-modal-status {
-  margin: 0 1.15rem;
+  margin: 0.75rem 1.15rem 0;
   padding: 0.55rem 0.75rem;
   border-radius: 6px;
   font-size: 0.82rem;
+  flex-shrink: 0;
 }
 
 .ap-modal-status.error {
@@ -767,123 +1115,14 @@ body.ap-modal-open .sidebar {
   flex-shrink: 0;
 }
 
-.ap-modal-preview-wrap {
-  border-top: 1px solid rgba(255, 255, 255, 0.12);
-  padding: 0.85rem 1.15rem 1rem;
-  background: #141418;
-  flex-shrink: 0;
-  max-height: 280px;
-  overflow-y: auto;
-}
-
-.ap-modal-preview-label {
-  font-size: 0.68rem;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.07em;
-  color: var(--text-muted);
-  margin-bottom: 0.5rem;
-}
-
-.ap-preview-telegram {
-  display: flex;
-  flex-direction: column;
-  gap: 0.45rem;
-  align-items: flex-start;
-  width: 100%;
-}
-
-.ap-preview-media-single {
-  width: 100%;
-  max-width: 300px;
-  border-radius: 8px;
-  overflow: hidden;
-  background: rgba(255, 255, 255, 0.04);
-}
-
-.ap-preview-media-single img {
-  display: block;
-  width: 100%;
-  max-height: 150px;
-  object-fit: cover;
-}
-
-.ap-preview-video,
-.ap-preview-file {
-  padding: 1.25rem 1rem;
-  text-align: center;
-  font-size: 0.82rem;
-  color: var(--text-secondary);
-  border: 1px dashed var(--ap-border);
-  border-radius: 8px;
-}
-
-.ap-preview-media-album {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 3px;
-  width: 100%;
-  max-width: 280px;
-  border-radius: 8px;
-  overflow: hidden;
-}
-
-.ap-preview-media-album img {
-  width: 100%;
-  aspect-ratio: 1;
-  object-fit: cover;
-  display: block;
-}
-
-.ap-preview-album-placeholder {
-  aspect-ratio: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: rgba(255, 255, 255, 0.06);
-  font-size: 1.25rem;
-}
-
-.ap-preview-bubble {
-  background: #2b2b30;
-  border-radius: 12px 12px 12px 4px;
-  padding: 0.75rem 0.9rem;
-  font-size: 0.875rem;
-  line-height: 1.45;
-  white-space: pre-wrap;
-  word-break: break-word;
-  min-height: 2rem;
-  border: 1px solid var(--ap-border);
-  max-width: 100%;
-}
-
-.ap-preview-placeholder {
-  color: var(--text-muted);
-  font-style: italic;
-}
-
+.ap-modal-preview-wrap,
+.ap-modal-preview-label,
+.ap-preview-telegram,
+.ap-preview-media-single,
+.ap-preview-media-album,
+.ap-preview-bubble,
 .ap-preview-inline {
-  width: 100%;
-  max-width: 300px;
-}
-
-.ap-preview-inline-btn {
-  display: block;
-  width: 100%;
-  padding: 0.45rem 0.75rem;
-  background: rgba(127, 119, 221, 0.18);
-  border: 1px solid rgba(127, 119, 221, 0.35);
-  border-radius: 6px;
-  font-size: 0.8rem;
-  color: #b8b2f5;
-  text-align: center;
-  cursor: default;
-}
-
-.ap-preview-inline-incomplete {
-  color: var(--text-muted);
-  border-style: dashed;
-  background: transparent;
+  /* legacy — replaced by .ap-tg-* preview pane */
 }
 
 .ap-preview-formatted {
@@ -932,18 +1171,18 @@ body.ap-modal-open .sidebar {
 .ap-preview-formatted blockquote {
   margin: 0.35rem 0;
   padding-left: 0.65rem;
-  border-left: 3px solid rgba(127, 119, 221, 0.55);
-  color: var(--text-muted);
+  border-left: 3px solid rgba(106, 178, 242, 0.55);
+  color: #b8c5d0;
 }
 
 .ap-preview-formatted a {
-  color: #8b83f0;
+  color: #6ab2f2;
   text-decoration: underline;
 }
 
 .ap-preview-formatted .ap-spoiler {
-  background: #3a3a42;
-  color: #3a3a42;
+  background: #3a4552;
+  color: #3a4552;
   border-radius: 3px;
   padding: 0 0.15em;
   cursor: pointer;

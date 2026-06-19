@@ -8,12 +8,13 @@ import {
   sendVideoFileToMax,
   type MaxSendOptions,
 } from '../forwarder/maxPublisher'
-import type { AutopostInlineButton, AutopostMediaItem, AutopostRecord } from './autopostStore'
+import type { AutopostMediaItem, AutopostRecord } from './autopostStore'
 import type { AutopostSendResult } from './autopostTelegramSender'
 
-function toMaxButton(button: AutopostInlineButton | null): MaxSendOptions['button'] | undefined {
-  if (!button) return undefined
-  return { text: button.text, url: button.url }
+function resolveKeyboard(post: AutopostRecord): MaxSendOptions['keyboard'] {
+  if (post.inline_buttons?.length) return post.inline_buttons
+  if (post.inline_button) return [[post.inline_button]]
+  return null
 }
 
 function existingMedia(media: AutopostMediaItem[]): AutopostMediaItem[] {
@@ -21,7 +22,7 @@ function existingMedia(media: AutopostMediaItem[]): AutopostMediaItem[] {
 }
 
 /**
- * Публикует автопост в MAX-канал (HTML + медиа + инлайн-кнопка).
+ * Публикует автопост в MAX-канал (HTML + медиа + инлайн-кнопки).
  */
 export async function sendAutopostToMax(
   token: string,
@@ -30,7 +31,7 @@ export async function sendAutopostToMax(
   const chatId = post.target_channel_id
   const text = post.text.trim()
   const media = existingMedia(post.media)
-  const sendOpts: MaxSendOptions = { button: toMaxButton(post.inline_button) }
+  const sendOpts: MaxSendOptions = { keyboard: resolveKeyboard(post) }
 
   if (media.length === 0) {
     await sendTextToMax(token, chatId, text, sendOpts)

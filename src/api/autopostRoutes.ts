@@ -25,8 +25,10 @@ import {
   updateAutopost,
   upsertPostChannel,
   type AutopostInlineButton,
+  type AutopostInlineKeyboard,
   type AutopostMediaItem,
   type AutopostScheduleType,
+  normalizeInlineKeyboard,
 } from '../services/autopostStore'
 import { channelRegistry } from '../services/channelRegistry'
 import {
@@ -97,6 +99,73 @@ function mediaFromUploaded(files: Express.Multer.File[]): AutopostMediaItem[] {
   }))
 }
 
+const AUTOPOST_MEDIA_ROOT = path.resolve(AUTOPOST_MEDIA_DIR)
+
+function sanitizeStoredMediaItem(item: unknown): AutopostMediaItem | null {
+  if (typeof item !== 'object' || item === null) {
+    return null
+  }
+  const row = item as { type?: string; path?: string }
+  if (row.type !== 'photo' && row.type !== 'video') {
+    return null
+  }
+  if (typeof row.path !== 'string' || !row.path.trim()) {
+    return null
+  }
+  const resolved = path.resolve(row.path)
+  if (!resolved.startsWith(AUTOPOST_MEDIA_ROOT + path.sep)) {
+    return null
+  }
+  if (!fs.existsSync(resolved)) {
+    return null
+  }
+  return { type: row.type, path: resolved }
+}
+
+function parseExistingMediaBody(raw: unknown): AutopostMediaItem[] {
+  if (typeof raw === 'string' && raw.trim()) {
+    try {
+      return parseExistingMediaBody(JSON.parse(raw))
+    } catch {
+      return []
+    }
+  }
+  if (!Array.isArray(raw)) {
+    return []
+  }
+  const out: AutopostMediaItem[] = []
+  for (const item of raw) {
+    const parsed = sanitizeStoredMediaItem(item)
+    if (parsed) {
+      out.push(parsed)
+    }
+  }
+  return out
+}
+
+function mergeAutopostMedia(
+  body: Record<string, unknown>,
+  files: Express.Multer.File[],
+): AutopostMediaItem[] {
+  const kept = parseExistingMediaBody(body.existing_media)
+  const uploaded = mediaFromUploaded(files)
+  return [...kept, ...uploaded]
+}
+
+function resolveAutopostMediaFile(fileId: string): string | null {
+  if (!fileId || fileId.includes('..') || fileId.includes('/') || fileId.includes('\\')) {
+    return null
+  }
+  const resolved = path.resolve(AUTOPOST_MEDIA_DIR, fileId)
+  if (!resolved.startsWith(AUTOPOST_MEDIA_ROOT + path.sep)) {
+    return null
+  }
+  if (!fs.existsSync(resolved)) {
+    return null
+  }
+  return resolved
+}
+
 function parseInlineButton(body: Record<string, unknown>): AutopostInlineButton | null {
   const text = parseNonEmptyString(body.inline_button_text)
   const url = parseNonEmptyString(body.inline_button_url)
@@ -110,6 +179,26 @@ function parseInlineButton(body: Record<string, unknown>): AutopostInlineButton 
     throw new Error('inline_button_url must start with http:// or https://')
   }
   return { text, url }
+}
+
+function parseInlineButtonsFromBody(body: Record<string, unknown>): AutopostInlineKeyboard | null {
+  const raw = body.inline_buttons
+  if (typeof raw === 'string') {
+    const trimmed = raw.trim()
+    if (!trimmed || trimmed === '[]') {
+      return null
+    }
+    try {
+      return normalizeInlineKeyboard(JSON.parse(trimmed))
+    } catch {
+      throw new Error('inline_buttons must be valid JSON')
+    }
+  }
+  if (Array.isArray(raw)) {
+    return normalizeInlineKeyboard(raw)
+  }
+  const legacy = parseInlineButton(body)
+  return legacy ? [[legacy]] : null
 }
 
 async function listTelegramChannelsForAutopost(): Promise<
@@ -306,6 +395,20 @@ export function createAutopostRouter(): express.Router {
     res.json({ posts })
   })
 
+  router.get('/media/:fileId', (req, res) => {
+    const fileId = parseNonEmptyString(req.params.fileId)
+    if (!fileId) {
+      res.status(400).json({ error: 'invalid file id' })
+      return
+    }
+    const filePath = resolveAutopostMediaFile(fileId)
+    if (!filePath) {
+      res.status(404).json({ error: 'not found' })
+      return
+    }
+    res.sendFile(filePath)
+  })
+
   router.get('/:id', (req, res) => {
     const id = parseNonEmptyString(req.params.id)
     if (!id) {
@@ -329,16 +432,16 @@ export function createAutopostRouter(): express.Router {
         res.status(400).json({ error: 'target_channel_id required' })
         return
       }
-      if (!text && (!req.files || !(req.files as Express.Multer.File[]).length)) {
+      if (!text && (!req.files || !(req.files as Express.Multer.File[]).length) && !parseExistingMediaBody(body.existing_media).length) {
         res.status(400).json({ error: 'text or media required' })
         return
       }
       const schedule = validateScheduleInput(body)
-      const inline_button = parseInlineButton(body)
-      const media = mediaFromUploaded((req.files as Express.Multer.File[]) ?? [])
+      const inline_buttons = parseInlineButtonsFromBody(body)
+      const media = mergeAutopostMedia(body, (req.files as Express.Multer.File[]) ?? [])
       const platformRaw = parseNonEmptyString(body.platform)
       const platform = platformRaw === 'max' ? 'max' : 'telegram'
-      if (media.length > 1 && inline_button && platform === 'telegram') {
+      if (media.length > 1 && inline_buttons && platform === 'telegram') {
         res.status(400).json({
           error: 'album_inline_button',
           message:
@@ -350,7 +453,7 @@ export function createAutopostRouter(): express.Router {
         platform,
         text,
         media,
-        inline_button,
+        inline_buttons,
         target_channel_id,
         channel_title: parseNonEmptyString(body.channel_title),
         ...schedule,
@@ -389,14 +492,36 @@ export function createAutopostRouter(): express.Router {
         const platformRaw = parseNonEmptyString(body.platform)
         patch.platform = platformRaw === 'max' ? 'max' : 'telegram'
       }
-      if (body.inline_button_text !== undefined || body.inline_button_url !== undefined) {
-        patch.inline_button = parseInlineButton(body)
+      if (body.inline_buttons !== undefined) {
+        patch.inline_buttons = parseInlineButtonsFromBody(body)
+      } else if (body.inline_button_text !== undefined || body.inline_button_url !== undefined) {
+        patch.inline_buttons = parseInlineButtonsFromBody(body)
       }
-      if (req.files && (req.files as Express.Multer.File[]).length > 0) {
-        patch.media = mediaFromUploaded(req.files as Express.Multer.File[])
+      if (
+        body.existing_media !== undefined ||
+        (req.files && (req.files as Express.Multer.File[]).length > 0)
+      ) {
+        patch.media = mergeAutopostMedia(body, (req.files as Express.Multer.File[]) ?? [])
       }
       if (body.schedule_type !== undefined || body.scheduled_at !== undefined) {
         Object.assign(patch, validateScheduleInput(body))
+      }
+      const current = getAutopostById(id)
+      if (!current) {
+        res.status(404).json({ error: 'not found' })
+        return
+      }
+      const nextMedia = patch.media ?? current.media
+      const nextPlatform = patch.platform ?? current.platform
+      const nextButtons =
+        patch.inline_buttons !== undefined ? patch.inline_buttons : current.inline_buttons
+      if (nextMedia.length > 1 && nextButtons && nextPlatform === 'telegram') {
+        res.status(400).json({
+          error: 'album_inline_button',
+          message:
+            'Инлайн-кнопки не поддерживаются в альбоме Telegram. Используйте одно медиа или кнопки без альбома.',
+        })
+        return
       }
       const row = updateAutopost(id, patch)
       if (!row) {
