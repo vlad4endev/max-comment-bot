@@ -70,8 +70,8 @@ export interface Comment {
   tg_comment_id?: number
   /** Дублирует comment_id для индекса max_comment_id в SQLite. */
   max_comment_id?: string
-  /** Источник комментария: miniapp/max или telegram thread. */
-  source?: 'telegram' | 'max'
+  /** Источник комментария: miniapp/max, telegram thread или VK. */
+  source?: 'telegram' | 'max' | 'vk'
   /** Синхронизирован с другой платформой. */
   synced?: boolean
   /** ID ответа администратора, отправленного в TG-тред. */
@@ -293,7 +293,7 @@ function normalizeCommentFromDisk(raw: unknown): Comment | null {
         }
       : {}),
     ...(o.posted_as_channel === true ? { posted_as_channel: true } : {}),
-    ...(o.source === 'telegram' || o.source === 'max' ? { source: o.source } : {}),
+    ...(o.source === 'telegram' || o.source === 'max' || o.source === 'vk' ? { source: o.source } : {}),
     ...(typeof o.tg_comment_id === 'number' && o.tg_comment_id > 0
       ? { tg_comment_id: o.tg_comment_id }
       : {}),
@@ -324,7 +324,7 @@ interface CommentStorageRow {
 }
 
 function mergeCommentSyncMeta(comment: Comment, row: CommentStorageRow): Comment {
-  if (row.source === 'telegram' || row.source === 'max') {
+  if (row.source === 'telegram' || row.source === 'max' || row.source === 'vk') {
     comment.source = row.source
   }
   if (typeof row.tg_comment_id === 'number' && row.tg_comment_id > 0) {
@@ -914,19 +914,38 @@ export class CommentStore {
   }
 
   /**
+   * Сохраняет комментарий из внешней платформы (TG/VK) в miniapp с метаданными синхронизации.
+   */
+  saveExternalThreadComment(
+    input: Omit<Comment, 'comment_id' | 'timestamp' | 'source' | 'synced'>,
+    externalCommentId: number,
+    source: 'telegram' | 'vk',
+  ): Comment {
+    const comment = this.saveComment(input)
+    comment.tg_comment_id = externalCommentId
+    comment.max_comment_id = comment.comment_id
+    comment.source = source
+    comment.synced = true
+    this.saveRow(comment)
+    return comment
+  }
+
+  /**
    * Сохраняет комментарий из TG-треда в miniapp БД с метаданными синхронизации.
    */
   saveTelegramThreadComment(
     input: Omit<Comment, 'comment_id' | 'timestamp' | 'source' | 'synced'>,
     tgCommentId: number,
   ): Comment {
-    const comment = this.saveComment(input)
-    comment.tg_comment_id = tgCommentId
-    comment.max_comment_id = comment.comment_id
-    comment.source = 'telegram'
-    comment.synced = true
-    this.saveRow(comment)
-    return comment
+    return this.saveExternalThreadComment(input, tgCommentId, 'telegram')
+  }
+
+  /** Сохраняет комментарий из VK в miniapp. */
+  saveVkThreadComment(
+    input: Omit<Comment, 'comment_id' | 'timestamp' | 'source' | 'synced'>,
+    vkCommentId: number,
+  ): Comment {
+    return this.saveExternalThreadComment(input, vkCommentId, 'vk')
   }
 
   setTgThreadReplyId(commentId: string, tgMessageId: number): Comment | null {
@@ -1005,7 +1024,7 @@ export class CommentStore {
     const out: Comment[] = []
     for (const row of rows) {
       const c = commentFromStorageRow(row)
-      if (c && c.source !== 'telegram' && !c.tg_comment_id) {
+      if (c && c.source !== 'telegram' && c.source !== 'vk' && !c.tg_comment_id) {
         out.push(c)
       }
     }

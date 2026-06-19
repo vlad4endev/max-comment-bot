@@ -27,6 +27,11 @@ const VK_MAX_TO_VK_SYNC_INTERVAL_MS = 20_000;
 const VK_POST_MAX_AGE_DAYS = 30;
 /** Формат имени VK-пользователя в miniapp */
 const VK_USER_PREFIX = 'vk:';
+function formatVkCommentUsername(fromId) {
+    if (fromId > 0)
+        return 'Пользователь ВК';
+    return 'Сообщество ВК';
+}
 let botRef = null;
 let commentPollTimer = null;
 let maxToVkSyncTimer = null;
@@ -111,16 +116,17 @@ async function syncVkCommentsForChain(chain) {
                 continue;
             const existing = commentStore_1.commentStore
                 .getComments(post.post_id)
-                .find((c) => c.tg_comment_id === vkComment.id && c.source === 'telegram');
+                .find((c) => c.tg_comment_id === vkComment.id && c.source === 'vk');
             if (existing) {
                 (0, commentSyncGuard_1.markCommentSynced)(guardKey);
                 continue;
             }
-            const username = `${VK_USER_PREFIX}${vkComment.from_id}`;
+            const username = formatVkCommentUsername(vkComment.from_id);
+            const antispamUserKey = `${VK_USER_PREFIX}${vkComment.from_id}`;
             const antispam = (0, antispamService_1.evaluateComment)({
                 text: vkComment.text,
                 userId: vkComment.from_id,
-                username,
+                username: antispamUserKey,
                 channelChatId: mapping.maxChatId,
                 source: 'vk',
             });
@@ -134,7 +140,7 @@ async function syncVkCommentsForChain(chain) {
                 });
                 continue;
             }
-            const saved = commentStore_1.commentStore.saveTelegramThreadComment({
+            const saved = commentStore_1.commentStore.saveVkThreadComment({
                 post_id: post.post_id,
                 user_id: vkComment.from_id,
                 username,

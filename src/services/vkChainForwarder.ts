@@ -30,6 +30,11 @@ const VK_POST_MAX_AGE_DAYS = 30
 /** Формат имени VK-пользователя в miniapp */
 const VK_USER_PREFIX = 'vk:'
 
+function formatVkCommentUsername(fromId: number): string {
+  if (fromId > 0) return 'Пользователь ВК'
+  return 'Сообщество ВК'
+}
+
 let botRef: Bot | null = null
 let commentPollTimer: NodeJS.Timeout | null = null
 let maxToVkSyncTimer: NodeJS.Timeout | null = null
@@ -137,18 +142,19 @@ async function syncVkCommentsForChain(chain: VkChainRecord): Promise<void> {
 
       const existing = commentStore
         .getComments(post.post_id)
-        .find((c) => c.tg_comment_id === vkComment.id && c.source === 'telegram')
+        .find((c) => c.tg_comment_id === vkComment.id && c.source === 'vk')
       if (existing) {
         markCommentSynced(guardKey)
         continue
       }
 
-      const username = `${VK_USER_PREFIX}${vkComment.from_id}`
+      const username = formatVkCommentUsername(vkComment.from_id)
+      const antispamUserKey = `${VK_USER_PREFIX}${vkComment.from_id}`
 
       const antispam = evaluateComment({
         text: vkComment.text,
         userId: vkComment.from_id,
-        username,
+        username: antispamUserKey,
         channelChatId: mapping.maxChatId,
         source: 'vk',
       })
@@ -163,7 +169,7 @@ async function syncVkCommentsForChain(chain: VkChainRecord): Promise<void> {
         continue
       }
 
-      const saved = commentStore.saveTelegramThreadComment(
+      const saved = commentStore.saveVkThreadComment(
         {
           post_id: post.post_id,
           user_id: vkComment.from_id,

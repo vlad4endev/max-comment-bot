@@ -69,6 +69,12 @@ import { resolveTgChainChannelFields } from '../services/tgChainChannelRef'
 import { resolveVkGroup, listVkManagedGroups } from '../services/integrationPlatformClient'
 import { isMtprotoSessionReady, resolveMtprotoCredentials } from '../services/mtprotoConfigStore'
 import { findActiveTgChainForPair } from '../utils/tgChainPair'
+import {
+  analyzeLogs,
+  getLogAiPublicConfig,
+  saveLogAiConfig,
+  type LogAnalysisFocus,
+} from '../services/logAnalysisService'
 import { getAdminLogTail, logger } from '../utils/logger'
 import { extractMemberAvatarUrl } from '../utils/memberAvatar'
 import {
@@ -332,6 +338,7 @@ export function createAdminRouter(deps: AdminRouterDeps): express.Router {
       bot_nickname: config.BOT_NICKNAME,
       mini_app_url: config.miniAppUrl ?? null,
       admin_panel_user: config.adminPanelUser,
+      log_ai: getLogAiPublicConfig(),
     })
   })
 
@@ -969,6 +976,80 @@ export function createAdminRouter(deps: AdminRouterDeps): express.Router {
     })
   })
 
+  secured.get('/logs/ai-config', (_req, res) => {
+    res.json(getLogAiPublicConfig())
+  })
+
+  secured.post('/logs/ai-config', async (req, res) => {
+    const body = req.body
+    if (!isRecord(body)) {
+      res.status(400).json({ error: 'invalid body' })
+      return
+    }
+    try {
+      const saved = await saveLogAiConfig({
+        api_key: typeof body.api_key === 'string' ? body.api_key : undefined,
+        base_url: typeof body.base_url === 'string' ? body.base_url : undefined,
+        model: typeof body.model === 'string' ? body.model : undefined,
+      })
+      res.json({ ok: true, ...saved })
+    } catch (err: unknown) {
+      logger.error('admin /logs/ai-config failed', err)
+      res.status(500).json({ error: 'failed to save AI config' })
+    }
+  })
+
+  secured.post('/logs/analyze', async (req, res) => {
+    const body = isRecord(req.body) ? req.body : {}
+    const limitRaw = typeof body.limit === 'number' ? body.limit : Number.parseInt(String(body.limit ?? ''), 10)
+    const limit = Number.isInteger(limitRaw) && limitRaw > 0 ? limitRaw : 200
+    const levelRaw = typeof body.level === 'string' ? body.level.toUpperCase() : ''
+    const level =
+      levelRaw === 'INFO' || levelRaw === 'WARN' || levelRaw === 'ERROR' || levelRaw === 'DEBUG'
+        ? levelRaw
+        : null
+    const filter = typeof body.filter === 'string' ? body.filter.trim() : ''
+    const focusRaw = typeof body.focus === 'string' ? body.focus.trim() : 'general'
+    const focusAllowed: LogAnalysisFocus[] = [
+      'general',
+      'errors',
+      'comment_buttons',
+      'database',
+      'rate_limit',
+      'integrations',
+    ]
+    const focus: LogAnalysisFocus = focusAllowed.includes(focusRaw as LogAnalysisFocus)
+      ? (focusRaw as LogAnalysisFocus)
+      : 'general'
+
+    try {
+      const report = await analyzeLogs({ limit, level, filter, focus })
+      res.json(report)
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'analysis failed'
+      if (message === 'LOG_AI_NOT_CONFIGURED') {
+        res.status(503).json({
+          error: 'ai_not_configured',
+          message: 'Укажите OPENROUTER_API_KEY в .env или ключ OpenRouter в настройках ИИ-анализа',
+        })
+        return
+      }
+      if (message.startsWith('LOG_AI_REQUEST_FAILED:')) {
+        res.status(502).json({
+          error: 'ai_request_failed',
+          message: message.replace(/^LOG_AI_REQUEST_FAILED:\s*/, ''),
+        })
+        return
+      }
+      if (message === 'LOG_AI_PARSE_FAILED' || message === 'LOG_AI_EMPTY_RESPONSE') {
+        res.status(502).json({ error: 'ai_bad_response', message: 'ИИ вернул некорректный ответ, попробуйте ещё раз' })
+        return
+      }
+      logger.error('admin /logs/analyze failed', err)
+      res.status(500).json({ error: 'internal error' })
+    }
+  })
+
   secured.get('/channel/:chatId', async (req, res) => {
     const chatId = parseNonZeroInt(req.params.chatId)
     if (chatId === null) {
@@ -1000,7 +1081,7 @@ export function createAdminRouter(deps: AdminRouterDeps): express.Router {
         username: c.username,
         text: c.text,
         timestamp: c.timestamp,
-        ...(c.source === 'telegram' ? { source: 'telegram' as const } : {}),
+        ...(c.source === 'telegram' || c.source === 'vk' ? { source: c.source } : {}),
         reply_status: answered ? ('answered' as const) : ('unanswered' as const),
         reply: answered
           ? {

@@ -505,7 +505,7 @@ export async function syncMaxCommentToTelegramThread(
   await ensurePostThreadMapping(post.message_mid)
 
   const freshComment = commentStore.getComment(comment.comment_id) ?? comment
-  if (freshComment.source === 'telegram' || freshComment.tg_comment_id) {
+  if (freshComment.source === 'telegram' || freshComment.source === 'vk' || freshComment.tg_comment_id) {
     return
   }
 
@@ -623,8 +623,8 @@ export async function syncAdminReplyToTelegramThread(
 
   const { token, threadChatId } = target
 
-  // TG→MAX: ответы идут только TG→MAX, в Telegram ничего не отправляем.
-  if (freshComment.source === 'telegram') {
+  // TG→MAX / VK→MAX: ответы идут только в miniapp, в Telegram ничего не отправляем.
+  if (freshComment.source === 'telegram' || freshComment.source === 'vk') {
     markCommentSynced(guardKey)
     commentStore.markTelegramThreadReplyHandled(freshComment.comment_id)
     logger.info('[telegramThreadReplySync] skipped outbound TG reply for TG-origin comment', {

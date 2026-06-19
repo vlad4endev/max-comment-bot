@@ -422,7 +422,7 @@ function toWireComment(c: Comment): {
   avatar_url?: string
   photo_urls?: string[]
   posted_as_channel?: boolean
-  source?: 'telegram' | 'max'
+  source?: 'telegram' | 'max' | 'vk'
   answered_in_telegram?: boolean
   reply?: {
     reply_id?: string
@@ -459,7 +459,7 @@ function toWireComment(c: Comment): {
       ? { photo_urls: c.photo_urls }
       : {}),
     ...(c.posted_as_channel ? { posted_as_channel: true } : {}),
-    ...(c.source === 'telegram' ? { source: 'telegram' as const } : {}),
+    ...(c.source === 'telegram' || c.source === 'vk' ? { source: c.source } : {}),
     ...(c.answered_in_telegram ? { answered_in_telegram: true } : {}),
     ...(c.reply ? { reply: c.reply } : {}),
     ...(replies ? { replies } : {}),

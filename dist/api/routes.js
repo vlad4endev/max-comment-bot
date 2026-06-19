@@ -333,7 +333,7 @@ function toWireComment(c) {
             ? { photo_urls: c.photo_urls }
             : {}),
         ...(c.posted_as_channel ? { posted_as_channel: true } : {}),
-        ...(c.source === 'telegram' ? { source: 'telegram' } : {}),
+        ...(c.source === 'telegram' || c.source === 'vk' ? { source: c.source } : {}),
         ...(c.answered_in_telegram ? { answered_in_telegram: true } : {}),
         ...(c.reply ? { reply: c.reply } : {}),
         ...(replies ? { replies } : {}),

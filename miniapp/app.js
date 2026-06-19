@@ -3434,11 +3434,15 @@
         var userNameLabel = c.username || 'Пользователь';
         if (c.source === 'telegram') {
           userNameLabel = userNameLabel + ' · TG';
+        } else if (c.source === 'vk') {
+          userNameLabel = userNameLabel + ' · ВК';
         }
         var nameHtml = isOwnComment
           ? (c.source === 'telegram'
               ? '<div class="tg-name tg-source-tag">' + escDisplay('TG') + '</div>'
-              : '')
+              : c.source === 'vk'
+                ? '<div class="tg-name vk-source-tag">' + escDisplay('ВК') + '</div>'
+                : '')
           : '<div class="tg-name">' + escDisplay(userNameLabel) + '</div>';
         var answeredInTg =
           c.answered_in_telegram ||

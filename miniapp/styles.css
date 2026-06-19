@@ -1622,6 +1622,9 @@
       color: var(--tg-name);
       margin-bottom: 2px;
     }
+    #view-comments .tg-bubble .vk-source-tag {
+      color: #4a76a8;
+    }
     #view-comments .tg-bubble .tg-text {
       font-size: 16px;
       line-height: 1.3125;

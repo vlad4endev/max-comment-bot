@@ -71,6 +71,7 @@ const tgChainChannelRef_1 = require("../services/tgChainChannelRef");
 const integrationPlatformClient_1 = require("../services/integrationPlatformClient");
 const mtprotoConfigStore_1 = require("../services/mtprotoConfigStore");
 const tgChainPair_1 = require("../utils/tgChainPair");
+const logAnalysisService_1 = require("../services/logAnalysisService");
 const logger_1 = require("../utils/logger");
 const memberAvatar_1 = require("../utils/memberAvatar");
 const seedAntispamScoredWords_1 = require("../db/seedAntispamScoredWords");
@@ -288,6 +289,7 @@ function createAdminRouter(deps) {
             bot_nickname: config_1.config.BOT_NICKNAME,
             mini_app_url: config_1.config.miniAppUrl ?? null,
             admin_panel_user: config_1.config.adminPanelUser,
+            log_ai: (0, logAnalysisService_1.getLogAiPublicConfig)(),
         });
     });
     secured.get('/stats', (_req, res) => {
@@ -866,6 +868,77 @@ function createAdminRouter(deps) {
             lines: slice.map((e) => e.raw),
         });
     });
+    secured.get('/logs/ai-config', (_req, res) => {
+        res.json((0, logAnalysisService_1.getLogAiPublicConfig)());
+    });
+    secured.post('/logs/ai-config', async (req, res) => {
+        const body = req.body;
+        if (!isRecord(body)) {
+            res.status(400).json({ error: 'invalid body' });
+            return;
+        }
+        try {
+            const saved = await (0, logAnalysisService_1.saveLogAiConfig)({
+                api_key: typeof body.api_key === 'string' ? body.api_key : undefined,
+                base_url: typeof body.base_url === 'string' ? body.base_url : undefined,
+                model: typeof body.model === 'string' ? body.model : undefined,
+            });
+            res.json({ ok: true, ...saved });
+        }
+        catch (err) {
+            logger_1.logger.error('admin /logs/ai-config failed', err);
+            res.status(500).json({ error: 'failed to save AI config' });
+        }
+    });
+    secured.post('/logs/analyze', async (req, res) => {
+        const body = isRecord(req.body) ? req.body : {};
+        const limitRaw = typeof body.limit === 'number' ? body.limit : Number.parseInt(String(body.limit ?? ''), 10);
+        const limit = Number.isInteger(limitRaw) && limitRaw > 0 ? limitRaw : 200;
+        const levelRaw = typeof body.level === 'string' ? body.level.toUpperCase() : '';
+        const level = levelRaw === 'INFO' || levelRaw === 'WARN' || levelRaw === 'ERROR' || levelRaw === 'DEBUG'
+            ? levelRaw
+            : null;
+        const filter = typeof body.filter === 'string' ? body.filter.trim() : '';
+        const focusRaw = typeof body.focus === 'string' ? body.focus.trim() : 'general';
+        const focusAllowed = [
+            'general',
+            'errors',
+            'comment_buttons',
+            'database',
+            'rate_limit',
+            'integrations',
+        ];
+        const focus = focusAllowed.includes(focusRaw)
+            ? focusRaw
+            : 'general';
+        try {
+            const report = await (0, logAnalysisService_1.analyzeLogs)({ limit, level, filter, focus });
+            res.json(report);
+        }
+        catch (err) {
+            const message = err instanceof Error ? err.message : 'analysis failed';
+            if (message === 'LOG_AI_NOT_CONFIGURED') {
+                res.status(503).json({
+                    error: 'ai_not_configured',
+                    message: 'Укажите OPENROUTER_API_KEY в .env или ключ OpenRouter в настройках ИИ-анализа',
+                });
+                return;
+            }
+            if (message.startsWith('LOG_AI_REQUEST_FAILED:')) {
+                res.status(502).json({
+                    error: 'ai_request_failed',
+                    message: message.replace(/^LOG_AI_REQUEST_FAILED:\s*/, ''),
+                });
+                return;
+            }
+            if (message === 'LOG_AI_PARSE_FAILED' || message === 'LOG_AI_EMPTY_RESPONSE') {
+                res.status(502).json({ error: 'ai_bad_response', message: 'ИИ вернул некорректный ответ, попробуйте ещё раз' });
+                return;
+            }
+            logger_1.logger.error('admin /logs/analyze failed', err);
+            res.status(500).json({ error: 'internal error' });
+        }
+    });
     secured.get('/channel/:chatId', async (req, res) => {
         const chatId = parseNonZeroInt(req.params.chatId);
         if (chatId === null) {
@@ -897,7 +970,7 @@ function createAdminRouter(deps) {
                 username: c.username,
                 text: c.text,
                 timestamp: c.timestamp,
-                ...(c.source === 'telegram' ? { source: 'telegram' } : {}),
+                ...(c.source === 'telegram' || c.source === 'vk' ? { source: c.source } : {}),
                 reply_status: answered ? 'answered' : 'unanswered',
                 reply: answered
                     ? {
