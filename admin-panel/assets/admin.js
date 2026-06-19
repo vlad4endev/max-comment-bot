@@ -37,6 +37,9 @@
   var channelImportPollTimer = null;
   var channelImportJobId = null;
   var chainsPlatformTab = 'tg';
+  var chainsListFilter = 'all';
+  var chainsListSearch = '';
+  var chainsWizardCollapsed = false;
   var antispamTab = 'overview';
   var antispamLogCache = [];
 
@@ -116,7 +119,7 @@
     antispam: {
       title: 'Антиспам',
       group: 'Модерация',
-      desc: 'Скоринг комментариев, стоп-слова, пороги и журнал срабатываний.',
+      desc: 'Глобальные стоп-слова, правила фильтрации и журнал блокировок.',
     },
     users: {
       title: 'Пользователи',
@@ -646,23 +649,216 @@
       });
   }
 
-  function renderChainsPlatformTabs(active) {
+  function renderChainsPlatformTabs(active, counts) {
+    counts = counts || {};
+    var tgCount = counts.tg != null ? counts.tg : 0;
+    var vkCount = counts.vk != null ? counts.vk : 0;
     return (
-      '<div class="chains-platform-tabs">' +
-      '<button type="button" class="chains-platform-tab' +
+      '<div class="chains-platform-tabs" role="tablist">' +
+      '<button type="button" role="tab" class="chains-platform-tab' +
       (active === 'tg' ? ' active' : '') +
-      '" data-chains-tab="tg">Telegram → MAX</button>' +
-      '<button type="button" class="chains-platform-tab' +
+      '" data-chains-tab="tg" aria-selected="' +
+      (active === 'tg' ? 'true' : 'false') +
+      '"><i data-lucide="send"></i> Telegram → MAX<span class="chains-tab-count">' +
+      esc(String(tgCount)) +
+      '</span></button>' +
+      '<button type="button" role="tab" class="chains-platform-tab' +
       (active === 'vk' ? ' active' : '') +
-      '" data-chains-tab="vk">MAX → VK</button>' +
+      '" data-chains-tab="vk" aria-selected="' +
+      (active === 'vk' ? 'true' : 'false') +
+      '"><i data-lucide="share-2"></i> MAX → VK<span class="chains-tab-count">' +
+      esc(String(vkCount)) +
+      '</span></button>' +
       '</div>'
     );
+  }
+
+  function renderChainsPageHead(platform, stats) {
+    var st = stats || {};
+    var isTg = platform === 'tg';
+    var title = isTg ? 'Пересылка Telegram → MAX' : 'Публикация MAX → VK';
+    var desc = isTg
+      ? 'Автоматическая публикация постов из Telegram в MAX с опциональной синхронизацией комментариев.'
+      : 'Дублирование постов из MAX на стену VK и синхронизация комментариев.';
+    var errNum = Number(st.errors_today) || 0;
+    var html = '<header class="chains-page-head">';
+    html += '<div class="chains-page-head-text"><h2>' + esc(title) + '</h2><p>' + esc(desc) + '</p></div>';
+    html += '<div class="chains-inline-stats">';
+    html +=
+      '<span class="chains-stat-pill"><i data-lucide="link"></i> Активных: <strong>' +
+      esc(fmtNum(st.active)) +
+      '</strong></span>';
+    html +=
+      '<span class="chains-stat-pill"><i data-lucide="arrow-right-left"></i> Сегодня: <strong>' +
+      esc(fmtNum(st.forwarded_today)) +
+      '</strong></span>';
+    if (errNum > 0) {
+      html +=
+        '<span class="chains-stat-pill is-warn"><i data-lucide="alert-circle"></i> Ошибок: <strong>' +
+        esc(fmtNum(errNum)) +
+        '</strong></span>';
+    }
+    html += '</div></header>';
+    return html;
+  }
+
+  function renderChainsToolbar(filteredCount, totalCount) {
+    var html = '<div class="chains-toolbar">';
+    html += '<div class="chains-search-wrap"><i data-lucide="search"></i>';
+    html +=
+      '<input type="search" class="chains-search-input" id="chains_search" placeholder="Поиск по каналу…" value="' +
+      esc(chainsListSearch) +
+      '" autocomplete="off" /></div>';
+    html += '<div class="chains-filter-chips" role="group" aria-label="Фильтр">';
+    ['all', 'active', 'paused'].forEach(function (f) {
+      var labels = { all: 'Все', active: 'Активные', paused: 'На паузе' };
+      html +=
+        '<button type="button" class="chains-filter-chip' +
+        (chainsListFilter === f ? ' active' : '') +
+        '" data-chains-filter="' +
+        f +
+        '">' +
+        esc(labels[f]) +
+        '</button>';
+    });
+    html += '</div></div>';
+    if (totalCount > 0) {
+      html +=
+        '<div class="chains-list-meta">Показано ' +
+        esc(String(filteredCount)) +
+        ' из ' +
+        esc(String(totalCount)) +
+        '</div>';
+    }
+    return html;
+  }
+
+  function renderChainsEmptyState(platform, hasFilter) {
+    var isTg = platform === 'tg';
+    var html = '<div class="chains-empty">';
+    html += '<div class="chains-empty-icon"><i data-lucide="' + (hasFilter ? 'search-x' : 'link-2') + '"></i></div>';
+    if (hasFilter) {
+      html += '<p class="chains-empty-title">Ничего не найдено</p>';
+      html += '<p class="chains-empty-hint">Измените поиск или сбросьте фильтр</p>';
+    } else {
+      html +=
+        '<p class="chains-empty-title">' +
+        (isTg ? 'Пока нет цепочек' : 'Пока нет связок') +
+        '</p>';
+      html +=
+        '<p class="chains-empty-hint">' +
+        (isTg
+          ? 'Настройте пару каналов слева и нажмите «Включить пересылку»'
+          : 'Укажите канал MAX и сообщество VK слева') +
+        '</p>';
+    }
+    html += '</div>';
+    return html;
+  }
+
+  function chainMatchesSearch(chain, search, platform) {
+    if (!search) return true;
+    var q = search.toLowerCase();
+    if (platform === 'vk') {
+      var mx = tgChainMaxDisplayName(chain);
+      var parts = [mx.title, mx.sub, chain.vk_group_id, chain.id];
+      return parts.some(function (p) {
+        return p && String(p).toLowerCase().indexOf(q) !== -1;
+      });
+    }
+    var tg = tgChainTgDisplayName(chain);
+    var mx2 = tgChainMaxDisplayName(chain);
+    var parts2 = [tg.title, tg.sub, mx2.title, mx2.sub, chain.tg_username, chain.tg_channel_id, chain.id];
+    return parts2.some(function (p) {
+      return p && String(p).toLowerCase().indexOf(q) !== -1;
+    });
+  }
+
+  function filterChainsList(chains, platform) {
+    return (chains || []).filter(function (c) {
+      if (chainsListFilter === 'active' && !c.active) return false;
+      if (chainsListFilter === 'paused' && c.active) return false;
+      return chainMatchesSearch(c, chainsListSearch, platform);
+    });
+  }
+
+  function bindChainsListToolbar(main, platform, chains) {
+    var searchInp = qs('#chains_search', main);
+    if (searchInp && searchInp.getAttribute('data-bound') !== '1') {
+      var debounceTimer;
+      searchInp.addEventListener('input', function () {
+        chainsListSearch = String(searchInp.value || '');
+        window.clearTimeout(debounceTimer);
+        debounceTimer = window.setTimeout(function () {
+          renderTgChains();
+        }, 220);
+      });
+      searchInp.setAttribute('data-bound', '1');
+    }
+    qsa('[data-chains-filter]', main).forEach(function (btn) {
+      if (btn.getAttribute('data-bound') === '1') return;
+      btn.addEventListener('click', function () {
+        chainsListFilter = btn.getAttribute('data-chains-filter') || 'all';
+        renderTgChains();
+      });
+      btn.setAttribute('data-bound', '1');
+    });
+    var wizardToggle = qs('[data-chains-wizard-toggle]', main);
+    var wizardPanel = qs('[data-chains-wizard-panel]', main);
+    if (wizardToggle && wizardPanel && wizardToggle.getAttribute('data-bound') !== '1') {
+      wizardToggle.addEventListener('click', function () {
+        chainsWizardCollapsed = !chainsWizardCollapsed;
+        wizardPanel.classList.toggle('is-collapsed', chainsWizardCollapsed);
+        wizardToggle.setAttribute('aria-expanded', chainsWizardCollapsed ? 'false' : 'true');
+        refreshIcons();
+      });
+      wizardToggle.setAttribute('data-bound', '1');
+    }
+  }
+
+  function renderChainsWizardPanelHead(title, icon) {
+    var collapsed = chainsWizardCollapsed ? ' is-collapsed' : '';
+    var html =
+      '<section class="chains-panel chains-panel--wizard' +
+      collapsed +
+      '" data-chains-wizard-panel>';
+    html += '<div class="chains-panel-head">';
+    html += '<h3><i data-lucide="' + esc(icon) + '"></i> ' + esc(title) + '</h3>';
+    html +=
+      '<button type="button" class="chains-wizard-toggle" data-chains-wizard-toggle aria-expanded="' +
+      (chainsWizardCollapsed ? 'false' : 'true') +
+      '" aria-label="Свернуть панель"><i data-lucide="chevron-down"></i></button>';
+    html += '</div><div class="chains-panel-body">';
+    return html;
+  }
+
+  function renderChainsRequirementsTg() {
+    return (
+      '<div class="chains-requirements"><strong>Перед запуском</strong><ul>' +
+      '<li>Бот Telegram — админ в <em>исходном</em> канале</li>' +
+      '<li>Бот MAX — админ в <em>целевом</em> канале</li>' +
+      '<li>У TG-бота нет webhook (иначе перехват не работает)</li>' +
+      '</ul></div>'
+    );
+  }
+
+  function updateChainsWizardSteps(root) {
+    var tgRaw = readTelegramChannelPick('tc_tg_select', 'tc_tg_manual', root);
+    var maxId = qs('#tc_max', root) ? qs('#tc_max', root).value : '';
+    var step1 = qs('[data-wizard-step="1"]', root);
+    var step2 = qs('[data-wizard-step="2"]', root);
+    if (step1) step1.classList.toggle('is-done', !!tgRaw);
+    if (step2) step2.classList.toggle('is-done', !!maxId);
   }
 
   function bindChainsPlatformTabs(root) {
     qsa('[data-chains-tab]', root).forEach(function (btn) {
       btn.addEventListener('click', function () {
-        chainsPlatformTab = btn.getAttribute('data-chains-tab') || 'tg';
+        var next = btn.getAttribute('data-chains-tab') || 'tg';
+        if (next === chainsPlatformTab) return;
+        chainsPlatformTab = next;
+        chainsListFilter = 'all';
+        chainsListSearch = '';
         renderTgChains();
       });
     });
@@ -2765,6 +2961,11 @@
           .then(function () {
             activeSw.classList.toggle('on', next);
             card.classList.toggle('is-paused', !next);
+            var badge = qs('.chain-status-badge', card);
+            if (badge) {
+              badge.className = 'chain-status-badge chain-status-badge--' + (next ? 'active' : 'paused');
+              badge.textContent = next ? 'Активна' : 'На паузе';
+            }
             showToast(next ? 'Пересылка включена' : 'На паузе', 'success');
           })
           .catch(function (err) {
@@ -2810,36 +3011,57 @@
   function renderTgChainCardHtml(c, tgChats) {
     var tg = tgChainTgDisplayName(c);
     var mx = tgChainMaxDisplayName(c);
+    var shortId = String(c.id || '').slice(0, 8);
     var html =
-      '<article class="tg-chain-card' +
+      '<article class="chain-card tg-chain-card' +
       (c.active ? '' : ' is-paused') +
       '" data-chain-id="' +
       esc(c.id) +
       '">';
-    html += '<div class="tg-chain-card-flow">';
-    html += '<div class="tg-chain-card-end"><div class="tg-chain-card-end-label">Telegram</div>';
-    html += '<div class="tg-chain-card-end-name" title="' + esc(tg.title) + '">' + esc(tg.title) + '</div>';
-    if (tg.sub) html += '<div class="mono text-sm muted">' + esc(tg.sub) + '</div>';
-    html += '</div><span class="tg-chain-arrow">→</span>';
-    html += '<div class="tg-chain-card-end"><div class="tg-chain-card-end-label">MAX</div>';
-    html += '<div class="tg-chain-card-end-name" title="' + esc(mx.title) + '">' + esc(mx.title) + '</div>';
-    if (mx.sub) html += '<div class="mono text-sm muted">' + esc(mx.sub) + '</div>';
-    html += '</div></div>';
+    html += '<header class="chain-card__header">';
     html +=
-      '<div class="tg-chain-card-meta"><span>Сегодня: <strong>' +
-      esc(fmtNum(c.forwarded_today)) +
-      '</strong> постов</span>';
+      '<span class="chain-status-badge chain-status-badge--' +
+      (c.active ? 'active' : 'paused') +
+      '">' +
+      (c.active ? 'Активна' : 'На паузе') +
+      '</span>';
+    if (shortId) html += '<span class="chain-card__id" title="' + esc(c.id) + '">#' + esc(shortId) + '</span>';
+    html += '</header>';
+    html += '<div class="chain-card__flow">';
+    html += '<div class="chain-card__node chain-card__node--tg">';
+    html += '<span class="chain-card__platform-icon">TG</span>';
+    html += '<div class="chain-card__node-info">';
+    html += '<span class="chain-card__node-name" title="' + esc(tg.title) + '">' + esc(tg.title) + '</span>';
+    if (tg.sub) html += '<span class="chain-card__node-id">' + esc(tg.sub) + '</span>';
+    html += '</div></div>';
+    html += '<div class="chain-card__connector"><i data-lucide="arrow-right"></i></div>';
+    html += '<div class="chain-card__node chain-card__node--max">';
+    html += '<span class="chain-card__platform-icon">MAX</span>';
+    html += '<div class="chain-card__node-info">';
+    html += '<span class="chain-card__node-name" title="' + esc(mx.title) + '">' + esc(mx.title) + '</span>';
+    if (mx.sub) html += '<span class="chain-card__node-id">' + esc(mx.sub) + '</span>';
+    html += '</div></div></div>';
+    html += '<div class="chain-card__stats">';
+    html +=
+      '<span><i data-lucide="send"></i> Сегодня: <strong>' + esc(fmtNum(c.forwarded_today)) + '</strong></span>';
+    if (c.forward_comments) {
+      html += '<span><i data-lucide="message-circle"></i> Комментарии</span>';
+    }
+    if (c.add_signature) html += '<span><i data-lucide="pen-line"></i> Подпись TG</span>';
     if (c.errors_today) {
-      html += '<span style="color:var(--danger,#e11)"> · ошибок: ' + esc(fmtNum(c.errors_today)) + '</span>';
+      html +=
+        '<span class="is-error"><i data-lucide="alert-triangle"></i> Ошибок: ' +
+        esc(fmtNum(c.errors_today)) +
+        '</span>';
     }
     html += '</div>';
     html += renderTgChainCommentSettingsHtml(c, tgChats || []);
-    html += '<div class="tg-chain-card-actions">';
+    html += '<footer class="chain-card__footer">';
+    html += '<div class="chain-card__toggles">';
     html +=
       '<label class="tg-chain-mini-toggle"><span>Пересылка</span><span class="switch' +
       (c.active ? ' on' : '') +
       '" data-chain-field="active" role="switch" tabindex="0"></span></label>';
-    html += '<div class="tg-chain-card-toggles">';
     html +=
       '<label class="tg-chain-mini-toggle"><span>Кнопка 💬</span><span class="switch' +
       (c.add_comments_button !== false ? ' on' : '') +
@@ -2849,10 +3071,12 @@
       (c.add_signature ? ' on' : '') +
       '" data-chain-field="add_signature" role="switch" tabindex="0"></span></label>';
     html += '</div>';
+    html += '<div class="chain-card__actions-end">';
     html +=
       '<button type="button" class="btn btn-danger btn-sm" data-del-chain="' +
       esc(c.id) +
-      '">Удалить</button></div></article>';
+      '"><i data-lucide="trash-2"></i></button>';
+    html += '</div></footer></article>';
     return html;
   }
 
@@ -2862,6 +3086,7 @@
     var manual = qs('#tc_tg_manual', main);
     function onPickChange() {
       updateTgChainPairPreview(main);
+      updateChainsWizardSteps(main);
     }
     if (tgSel && tgSel.getAttribute('data-bound-change') !== '1') {
       tgSel.addEventListener('change', onPickChange);
@@ -2960,6 +3185,7 @@
     }
     bindToggleRows(main, null);
     updateTgChainPairPreview(main);
+    updateChainsWizardSteps(main);
   }
 
   function renderTgChains() {
@@ -2978,6 +3204,9 @@
   function renderTgChainsPage(main) {
     Promise.all([
       getJson('/tg-chains'),
+      getJson('/vk-chains').catch(function () {
+        return { chains: [] };
+      }),
       fetchMaxLinkedChannels(false).catch(function () {
         return { channels: maxLinkedChatsCache };
       }),
@@ -2988,46 +3217,43 @@
       .then(function (bundle) {
         if (currentRoute !== 'tgchains' || chainsPlatformTab !== 'tg') return;
         var data = bundle[0];
-        var maxChannels = bundle[1].channels || maxLinkedChatsCache || [];
-        var tgChats = bundle[2].channels || tgLinkedChatsCache || [];
+        var vkData = bundle[1];
+        var maxChannels = bundle[2].channels || maxLinkedChatsCache || [];
+        var tgChats = bundle[3].channels || tgLinkedChatsCache || [];
         var chains = data.chains || [];
         var st = data.stats || {};
         var tgInt = integrationsCache.find(function (i) {
           return i.platform === 'telegram' && i.status === 'connected';
         });
+        var filtered = filterChainsList(chains, 'tg');
+        if (!chains.length) chainsWizardCollapsed = false;
 
-        var html = '<div class="tg-chains-page">';
-        html += renderChainsPlatformTabs('tg');
+        var html = '<div class="chains-hub tg-chains-page">';
+        html += renderChainsPageHead('tg', st);
+        html += renderChainsPlatformTabs('tg', {
+          tg: chains.length,
+          vk: (vkData.chains || []).length,
+        });
         html += renderTelegramConnectBanner();
-        html += '<h2 style="margin:0 0 8px">Пересылка Telegram → MAX</h2>';
+        html += '<div class="chains-layout">';
 
-        html += '<section class="card-like tg-chain-hero">';
-        html += '<div class="tg-chain-flow-diagram">';
-        html += '<div class="tg-chain-node tg-source"><div class="tg-chain-node-badge">TG</div>';
-        html += '<div class="tg-chain-node-title">Telegram</div><div class="tg-chain-node-sub">откуда берём посты</div></div>';
-        html += '<div class="tg-chain-arrow">→</div>';
-        html += '<div class="tg-chain-node max-dest"><div class="tg-chain-node-badge">MAX</div>';
-        html += '<div class="tg-chain-node-title">MAX</div><div class="tg-chain-node-sub">куда публикуем</div></div>';
+        html += renderChainsWizardPanelHead('Новая цепочка', 'plus-circle');
+        html += '<div class="chains-wizard-steps">';
+        html += '<div class="chains-wizard-step" data-wizard-step="1">① Telegram</div>';
+        html += '<div class="chains-wizard-step" data-wizard-step="2">② MAX</div>';
+        html += '<div class="chains-wizard-step" data-wizard-step="3">③ Опции</div>';
         html += '</div>';
+        html += renderChainsRequirementsTg();
         html +=
-          '<p class="muted text-sm" style="margin:12px 0 10px;line-height:1.5">Опубликовали в Telegram — бот перехватывает пост и сразу публикует в MAX (текст, фото, видео, файлы).</p>';
-        html += '<ol class="tg-chain-steps">';
-        html += '<li>Бот Telegram — администратор в <strong>исходном</strong> канале</li>';
-        html += '<li>Бот MAX — администратор в <strong>целевом</strong> канале</li>';
-        html += '<li>У TG-бота нет webhook (иначе перехват не работает)</li>';
-        html += '</ol></section>';
-
-        html += buildMtprotoPanelHtml();
-
-        html += '<section class="card-like forwarding-section">';
-        html += '<h3 class="tg-chain-setup-title">Настроить пересылку</h3>';
-        html += '<p class="muted text-sm" style="margin:0 0 14px">Шаг 1 — канал-источник, шаг 2 — канал в MAX. Списки из «Интеграции».</p>';
+          '<details class="chains-mtproto-fold"><summary>MTProto — синхронизация комментариев</summary>';
+        html += buildMtprotoPanelHtml().replace('class="card-like mb-md mtproto-panel"', 'class="mtproto-panel"');
+        html += '</details>';
         html += '<div class="forwarding-add-form forwarding-add-form--picks">';
         html +=
-          '<div class="form-group" id="tc_tg_wrap"><div class="flex-between" style="align-items:center;gap:8px;margin-bottom:6px"><label style="margin:0">① Telegram — откуда</label><button type="button" class="btn btn-ghost btn-sm" id="tc_refresh_tg"><i data-lucide="refresh-cw"></i> Обновить</button></div>';
+          '<div class="form-group" id="tc_tg_wrap"><div class="flex-between" style="align-items:center;gap:8px;margin-bottom:6px"><label style="margin:0">Канал Telegram — откуда</label><button type="button" class="btn btn-ghost btn-sm" id="tc_refresh_tg"><i data-lucide="refresh-cw"></i></button></div>';
         html += buildTelegramChannelSelect('tc_tg_select', tgChats, 'tc_tg_manual', { adminOnly: true }) + '</div>';
         html +=
-          '<div class="form-group"><div class="flex-between" style="align-items:center;gap:8px;margin-bottom:6px"><label style="margin:0">② MAX — куда</label><button type="button" class="btn btn-ghost btn-sm" id="tc_refresh_max"><i data-lucide="refresh-cw"></i> Обновить</button></div>';
+          '<div class="form-group"><div class="flex-between" style="align-items:center;gap:8px;margin-bottom:6px"><label style="margin:0">Канал MAX — куда</label><button type="button" class="btn btn-ghost btn-sm" id="tc_refresh_max"><i data-lucide="refresh-cw"></i></button></div>';
         html += '<select class="select" id="tc_max">' + buildMaxChannelSelectOptions(maxChannels, { adminOnly: true }) + '</select></div>';
         html += '<div id="tc_pair_preview" class="tg-chain-pair-live is-empty"></div>';
         html += '<div id="tcToggles">';
@@ -3063,28 +3289,28 @@
             '<div class="form-group mt-sm"><label>Токен бота Telegram</label><input class="input mono" id="tc_token" type="password" placeholder="Или подключите в «Интеграции»"/></div>';
         }
         html += '<div class="forwarding-add-form-actions" style="margin-top:14px">';
-        html += '<button type="button" class="btn btn-primary" id="tc_submit"><i data-lucide="zap"></i> Включить пересылку</button>';
-        html += '</div></div></section>';
+        html += '<button type="button" class="btn btn-primary btn-block" id="tc_submit"><i data-lucide="zap"></i> Включить пересылку</button>';
+        html += '</div></div></div></section>';
 
-        html += '<div class="stats-grid" style="margin:16px 0">';
-        html += '<div class="stat-card"><div class="label">Активных</div><div class="value">' + esc(fmtNum(st.active)) + '</div></div>';
-        html += '<div class="stat-card"><div class="label">Сегодня переслано</div><div class="value">' + esc(fmtNum(st.forwarded_today)) + '</div></div>';
-        html += '<div class="stat-card"><div class="label">Ошибки</div><div class="value">' + esc(fmtNum(st.errors_today)) + '</div></div>';
-        html += '</div>';
-
-        html += '<h3 class="tg-chain-list-title">Настроенные пары</h3>';
-        if (chains.length) {
-          chains.forEach(function (c) {
+        html += '<section class="chains-panel chains-panel--list">';
+        html += '<div class="chains-panel-head"><h3><i data-lucide="layers"></i> Настроенные пары</h3></div>';
+        html += '<div class="chains-panel-body">';
+        html += renderChainsToolbar(filtered.length, chains.length);
+        html += '<div class="chains-list-grid">';
+        if (filtered.length) {
+          filtered.forEach(function (c) {
             html += renderTgChainCardHtml(c, tgChats);
           });
         } else {
-          html +=
-            '<div class="tg-chain-empty"><p style="margin:0 0 6px">Пока нет цепочек</p><p class="text-sm muted" style="margin:0">Выберите каналы выше и нажмите «Включить пересылку»</p></div>';
+          html += renderChainsEmptyState('tg', chains.length > 0);
         }
-        html += '</div>';
+        html += '</div></div></section>';
+
+        html += '</div></div>';
         main.innerHTML = html;
         bindChainsPlatformTabs(main);
         bindRouteJumpButtons(main);
+        bindChainsListToolbar(main, 'tg', chains);
         bindMtprotoPanel(main);
         refreshMtprotoPanel(main);
         qsa('.tg-chain-card', main).forEach(function (card) {
@@ -3118,29 +3344,50 @@
 
   function renderVkChainCardHtml(c) {
     var mx = tgChainMaxDisplayName(c);
+    var shortId = String(c.id || '').slice(0, 8);
     var html =
-      '<article class="tg-chain-card' +
+      '<article class="chain-card tg-chain-card' +
       (c.active ? '' : ' is-paused') +
       '" data-vk-chain-id="' +
       esc(c.id) +
       '">';
-    html += '<div class="tg-chain-card-flow">';
-    html += '<div class="tg-chain-card-end"><div class="tg-chain-card-end-label">MAX</div>';
-    html += '<div class="tg-chain-card-end-name">' + esc(mx.title) + '</div>';
-    if (mx.sub) html += '<div class="mono text-sm muted">' + esc(mx.sub) + '</div>';
-    html += '</div><span class="tg-chain-arrow">→</span>';
-    html += '<div class="tg-chain-card-end"><div class="tg-chain-card-end-label">VK</div>';
+    html += '<header class="chain-card__header">';
     html +=
-      '<div class="tg-chain-card-end-name">Сообщество ' +
-      esc(c.vk_group_id || '—') +
-      '</div></div></div>';
+      '<span class="chain-status-badge chain-status-badge--' +
+      (c.active ? 'active' : 'paused') +
+      '">' +
+      (c.active ? 'Активна' : 'На паузе') +
+      '</span>';
+    if (shortId) html += '<span class="chain-card__id" title="' + esc(c.id) + '">#' + esc(shortId) + '</span>';
+    html += '</header>';
+    html += '<div class="chain-card__flow">';
+    html += '<div class="chain-card__node chain-card__node--max">';
+    html += '<span class="chain-card__platform-icon">MAX</span>';
+    html += '<div class="chain-card__node-info">';
+    html += '<span class="chain-card__node-name">' + esc(mx.title) + '</span>';
+    if (mx.sub) html += '<span class="chain-card__node-id">' + esc(mx.sub) + '</span>';
+    html += '</div></div>';
+    html += '<div class="chain-card__connector"><i data-lucide="arrow-right"></i></div>';
+    html += '<div class="chain-card__node chain-card__node--vk">';
+    html += '<span class="chain-card__platform-icon">VK</span>';
+    html += '<div class="chain-card__node-info">';
     html +=
-      '<div class="tg-chain-card-meta"><span>Сегодня: <strong>' +
-      esc(fmtNum(c.forwarded_today)) +
-      '</strong></span><span>Ошибки: <strong>' +
-      esc(fmtNum(c.errors_today)) +
-      '</strong></span></div>';
-    html += '<div class="tg-chain-card-toggles">';
+      '<span class="chain-card__node-name">Сообщество ' + esc(c.vk_group_id || '—') + '</span>';
+    html += '<span class="chain-card__node-id">vk.com/club' + esc(c.vk_group_id || '') + '</span>';
+    html += '</div></div></div>';
+    html += '<div class="chain-card__stats">';
+    html +=
+      '<span><i data-lucide="send"></i> Сегодня: <strong>' + esc(fmtNum(c.forwarded_today)) + '</strong></span>';
+    if (c.sync_comments) html += '<span><i data-lucide="message-circle"></i> Комментарии VK↔MAX</span>';
+    if (c.errors_today) {
+      html +=
+        '<span class="is-error"><i data-lucide="alert-triangle"></i> Ошибок: ' +
+        esc(fmtNum(c.errors_today)) +
+        '</span>';
+    }
+    html += '</div>';
+    html += '<footer class="chain-card__footer">';
+    html += '<div class="chain-card__toggles">';
     html +=
       '<label class="tg-chain-mini-toggle"><span>Посты</span><span class="switch' +
       (c.forward_posts !== false ? ' on' : '') +
@@ -3149,16 +3396,15 @@
       '<label class="tg-chain-mini-toggle"><span>Комментарии</span><span class="switch' +
       (c.sync_comments ? ' on' : '') +
       '" data-vk-chain-field="sync_comments" role="switch" tabindex="0"></span></label>';
-    html += '</div>';
     html +=
-      '<div class="tg-chain-card-actions"><label class="tg-chain-mini-toggle"><span>' +
-      (c.active ? 'Активна' : 'На паузе') +
-      '</span><span class="switch' +
+      '<label class="tg-chain-mini-toggle"><span>Пересылка</span><span class="switch' +
       (c.active ? ' on' : '') +
       '" data-vk-chain-field="active" role="switch" tabindex="0"></span></label>';
+    html += '</div>';
+    html += '<div class="chain-card__actions-end">';
     html +=
-      '<button type="button" class="btn btn-ghost btn-sm btn-danger-text" data-del-vk-chain><i data-lucide="trash-2"></i> Удалить</button></div>';
-    html += '</article>';
+      '<button type="button" class="btn btn-danger btn-sm" data-del-vk-chain><i data-lucide="trash-2"></i></button>';
+    html += '</div></footer></article>';
     return html;
   }
 
@@ -3174,7 +3420,14 @@
         patchJson('/vk-chains/' + encodeURIComponent(chainId), patch)
           .then(function () {
             sw.classList.toggle('on', next);
-            if (field === 'active') card.classList.toggle('is-paused', !next);
+            if (field === 'active') {
+              card.classList.toggle('is-paused', !next);
+              var badge = qs('.chain-status-badge', card);
+              if (badge) {
+                badge.className = 'chain-status-badge chain-status-badge--' + (next ? 'active' : 'paused');
+                badge.textContent = next ? 'Активна' : 'На паузе';
+              }
+            }
             showToast('Сохранено', 'success');
           })
           .catch(function (err) {
@@ -3239,6 +3492,9 @@
   function renderVkChainsPage(main) {
     Promise.all([
       getJson('/vk-chains'),
+      getJson('/tg-chains').catch(function () {
+        return { chains: [] };
+      }),
       fetchMaxLinkedChannels(false).catch(function () {
         return { channels: maxLinkedChatsCache };
       }),
@@ -3246,38 +3502,40 @@
       .then(function (bundle) {
         if (currentRoute !== 'tgchains' || chainsPlatformTab !== 'vk') return;
         var data = bundle[0];
-        var maxChannels = bundle[1].channels || maxLinkedChatsCache || [];
+        var tgData = bundle[1];
+        var maxChannels = bundle[2].channels || maxLinkedChatsCache || [];
         var chains = data.chains || [];
         var st = data.stats || {};
         var vkInt = integrationsCache.find(function (i) {
           return i.platform === 'vk' && i.status === 'connected';
         });
-        var html = '<div class="tg-chains-page">';
-        html += renderChainsPlatformTabs('vk');
+        var filtered = filterChainsList(chains, 'vk');
+        if (!chains.length) chainsWizardCollapsed = false;
+
+        var html = '<div class="chains-hub tg-chains-page">';
+        html += renderChainsPageHead('vk', st);
+        html += renderChainsPlatformTabs('vk', {
+          tg: (tgData.chains || []).length,
+          vk: chains.length,
+        });
         html += renderVkConnectBanner();
-        html += '<h2 style="margin:0 0 8px">Публикация MAX → VK</h2>';
-        html += '<section class="card-like tg-chain-hero">';
-        html += '<div class="tg-chain-flow-diagram">';
-        html += '<div class="tg-chain-node max-dest"><div class="tg-chain-node-badge">MAX</div>';
-        html += '<div class="tg-chain-node-title">MAX</div><div class="tg-chain-node-sub">источник постов</div></div>';
-        html += '<div class="tg-chain-arrow">→</div>';
-        html += '<div class="tg-chain-node vk-dest"><div class="tg-chain-node-badge">VK</div>';
-        html += '<div class="tg-chain-node-title">ВКонтакте</div><div class="tg-chain-node-sub">стена сообщества</div></div>';
-        html += '</div>';
+        html += '<div class="chains-layout">';
+
+        html += renderChainsWizardPanelHead('Новая связка', 'plus-circle');
         html +=
-          '<p class="muted text-sm" style="margin:12px 0 10px;line-height:1.5">После публикации поста в MAX-канале бот дублирует его на стену VK. Комментарии можно синхронизировать в обе стороны.</p>';
-        html += '</section>';
-        html += '<section class="card-like forwarding-section">';
-        html += '<h3 class="tg-chain-setup-title">Настроить связку</h3>';
+          '<div class="chains-requirements"><strong>Требования</strong><ul>' +
+          '<li>Бот MAX — админ в исходном канале</li>' +
+          '<li>Токен VK с правами <code>wall</code>, <code>photos</code>, <code>comments</code></li>' +
+          '</ul></div>';
         html += '<div class="forwarding-add-form forwarding-add-form--picks">';
         html +=
-          '<div class="form-group"><div class="flex-between" style="align-items:center;gap:8px;margin-bottom:6px"><label style="margin:0">① Канал MAX</label><button type="button" class="btn btn-ghost btn-sm" id="vc_refresh_max"><i data-lucide="refresh-cw"></i> Обновить</button></div>';
+          '<div class="form-group"><div class="flex-between" style="align-items:center;gap:8px;margin-bottom:6px"><label style="margin:0">Канал MAX — источник</label><button type="button" class="btn btn-ghost btn-sm" id="vc_refresh_max"><i data-lucide="refresh-cw"></i></button></div>';
         html +=
           '<select class="select" id="vc_max">' +
           buildMaxChannelSelectOptions(maxChannels, { adminOnly: true }) +
           '</select></div>';
         html +=
-          '<div class="form-group"><label>② ID сообщества VK</label><input class="input mono" id="vc_group" placeholder="12345678" value="' +
+          '<div class="form-group"><label>ID сообщества VK</label><input class="input mono" id="vc_group" placeholder="12345678" value="' +
           esc(vkInt && vkInt.groupId ? String(vkInt.groupId).replace(/^-/, '') : '') +
           '"/></div>';
         if (!vkInt) {
@@ -3293,35 +3551,28 @@
         html += '</div>';
         html += '<div class="forwarding-add-form-actions" style="margin-top:14px">';
         html +=
-          '<button type="button" class="btn btn-primary" id="vc_submit"><i data-lucide="zap"></i> Создать связку</button>';
-        html += '</div></div></section>';
-        html += '<div class="stats-grid" style="margin:16px 0">';
-        html +=
-          '<div class="stat-card"><div class="label">Активных</div><div class="value">' +
-          esc(fmtNum(st.active)) +
-          '</div></div>';
-        html +=
-          '<div class="stat-card"><div class="label">Сегодня опубликовано</div><div class="value">' +
-          esc(fmtNum(st.forwarded_today)) +
-          '</div></div>';
-        html +=
-          '<div class="stat-card"><div class="label">Ошибки</div><div class="value">' +
-          esc(fmtNum(st.errors_today)) +
-          '</div></div>';
-        html += '</div>';
-        html += '<h3 class="tg-chain-list-title">Настроенные связки</h3>';
-        if (chains.length) {
-          chains.forEach(function (c) {
+          '<button type="button" class="btn btn-primary btn-block" id="vc_submit"><i data-lucide="zap"></i> Создать связку</button>';
+        html += '</div></div></div></section>';
+
+        html += '<section class="chains-panel chains-panel--list">';
+        html += '<div class="chains-panel-head"><h3><i data-lucide="layers"></i> Настроенные связки</h3></div>';
+        html += '<div class="chains-panel-body">';
+        html += renderChainsToolbar(filtered.length, chains.length);
+        html += '<div class="chains-list-grid">';
+        if (filtered.length) {
+          filtered.forEach(function (c) {
             html += renderVkChainCardHtml(c);
           });
         } else {
-          html +=
-            '<div class="tg-chain-empty"><p style="margin:0 0 6px">Пока нет связок MAX → VK</p><p class="text-sm muted" style="margin:0">Выберите канал MAX и сообщество VK выше</p></div>';
+          html += renderChainsEmptyState('vk', chains.length > 0);
         }
-        html += '</div>';
+        html += '</div></div></section>';
+
+        html += '</div></div>';
         main.innerHTML = html;
         bindChainsPlatformTabs(main);
         bindRouteJumpButtons(main);
+        bindChainsListToolbar(main, 'vk', chains);
         var refreshMax = qs('#vc_refresh_max', main);
         if (refreshMax) {
           refreshMax.addEventListener('click', function () {
