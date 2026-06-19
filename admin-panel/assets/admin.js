@@ -3362,7 +3362,7 @@
       });
   }
 
-  /** Превью одного выбранного сообщества VK (после резолвинга или выбора из списка). */
+  /** Превью одного выбранного сообщества VK (после резолвинга). */
   function renderVkGroupPreview(g, compact) {
     var url = g.url || ('https://vk.com/' + (g.screenName || ('club' + g.id)));
     var html = '<div class="vk-group-preview' + (compact ? ' vk-group-preview--compact' : '') + '">';
@@ -3376,21 +3376,21 @@
     return html;
   }
 
-  /** Один элемент в списке сообществ для выбора. */
+  /** Один элемент списка сообществ — с чекбоксом для мульти-выбора. */
   function renderVkGroupPickerItem(g) {
     var url = g.url || ('https://vk.com/' + (g.screenName || ('club' + g.id)));
     return (
-      '<button type="button" class="vk-group-item" data-pick-vk-group="' +
-      esc(g.id) +
-      '" data-vk-name="' + esc(g.name || '') + '" data-vk-screen="' + esc(g.screenName || '') +
+      '<label class="vk-group-item" data-pick-vk-group="' + esc(g.id) + '"' +
+      ' data-vk-name="' + esc(g.name || '') + '" data-vk-screen="' + esc(g.screenName || '') +
       '" data-vk-url="' + esc(url) + '" data-vk-photo="' + esc(g.photo || '') + '">' +
+      '<input type="checkbox" class="vk-group-item__cb" value="' + esc(g.id) + '"/>' +
       (g.photo ? '<img src="' + esc(g.photo) + '" class="vk-group-avatar" alt=""/>' : '<span class="vk-group-avatar vk-group-avatar--empty">VK</span>') +
       '<span class="vk-group-item__info">' +
       '<span class="vk-group-item__name">' + esc(g.name || g.id) + '</span>' +
       '<span class="vk-group-item__url">' + esc(url.replace('https://', '')) + '</span>' +
       '</span>' +
       '<i data-lucide="check" class="vk-group-item__check"></i>' +
-      '</button>'
+      '</label>'
     );
   }
 
@@ -3401,7 +3401,7 @@
     return token || null;
   }
 
-  /** Привязывает логику пикера сообществ VK к форме. */
+  /** Привязывает логику пикера сообществ VK с поддержкой мульти-выбора. */
   function bindVkCommunityPicker(root, vkInt) {
     var resolveBtn = qs('#vc_resolve_btn', root);
     var loadGroupsBtn = qs('#vc_load_groups_btn', root);
@@ -3409,18 +3409,39 @@
     var resultEl = qs('#vc_community_result', root);
     var listEl = qs('#vc_groups_list', root);
     var groupIdHidden = qs('#vc_group_id', root);
+    var multiBarEl = qs('#vc_multi_bar', root);
 
-    function selectGroup(g) {
-      if (groupIdHidden) groupIdHidden.value = String(g.id || '');
-      if (resultEl) {
-        resultEl.innerHTML = renderVkGroupPreview(g, true);
+    // --- Обновляет плашку "Выбрано N сообществ" ---
+    function refreshMultiBar() {
+      if (!multiBarEl || !listEl) return;
+      var checked = qsa('.vk-group-item__cb:checked', listEl);
+      if (checked.length > 1) {
+        multiBarEl.innerHTML =
+          '<div class="vk-multi-bar">' +
+          '<span>Выбрано сообществ: <strong>' + checked.length + '</strong></span>' +
+          '<button type="button" class="btn btn-primary btn-sm" id="vc_multi_submit">' +
+          '<i data-lucide="zap"></i> Создать ' + checked.length + ' связки</button>' +
+          '</div>';
         refreshIcons();
+        var multiBtn = qs('#vc_multi_submit', multiBarEl);
+        if (multiBtn) {
+          multiBtn.addEventListener('click', function () {
+            submitVkChainsMulti(root, vkInt);
+          });
+        }
+      } else {
+        multiBarEl.innerHTML = '';
       }
-      if (listEl) {
-        qsa('[data-pick-vk-group]', listEl).forEach(function (item) {
-          item.classList.toggle('is-selected', item.getAttribute('data-pick-vk-group') === String(g.id));
-        });
-      }
+    }
+
+    // --- Выбор одиночного сообщества (через "Найти") ---
+    function selectSingleGroup(g) {
+      if (groupIdHidden) groupIdHidden.value = String(g.id || '');
+      if (resultEl) { resultEl.innerHTML = renderVkGroupPreview(g, true); refreshIcons(); }
+      // Снимаем все чекбоксы в списке при ручном резолве
+      qsa('.vk-group-item__cb', listEl || root).forEach(function (cb) { cb.checked = false; });
+      qsa('[data-pick-vk-group]', listEl || root).forEach(function (item) { item.classList.remove('is-selected'); });
+      if (multiBarEl) multiBarEl.innerHTML = '';
     }
 
     if (resolveBtn) {
@@ -3434,7 +3455,7 @@
         postJson('/vk-resolve-group', { input: val, vk_token: token })
           .then(function (res) {
             if (listEl) listEl.innerHTML = '';
-            selectGroup(res.group);
+            selectSingleGroup(res.group);
           })
           .catch(function (e) { showToast(e.message || 'Сообщество не найдено', 'error'); })
           .finally(function () { resolveBtn.disabled = false; resolveBtn.textContent = 'Найти'; });
@@ -3461,21 +3482,45 @@
               if (listEl) listEl.innerHTML = '<p class="muted" style="padding:8px 0">Сообществ не найдено. Убедитесь, что токен имеет права администратора.</p>';
               return;
             }
-            var html = '<div class="vk-groups-picker">';
+            var hint = groups.length > 1
+              ? '<p class="form-hint" style="margin-bottom:6px">Отметьте одно или несколько сообществ.</p>'
+              : '';
+            var html = hint + '<div class="vk-groups-picker">';
             groups.forEach(function (g) { html += renderVkGroupPickerItem(g); });
             html += '</div>';
             if (listEl) listEl.innerHTML = html;
-            qsa('[data-pick-vk-group]', root).forEach(function (item) {
-              item.addEventListener('click', function () {
-                var id = item.getAttribute('data-pick-vk-group');
-                var url = item.getAttribute('data-vk-url') || ('https://vk.com/club' + id);
-                selectGroup({
-                  id: id,
-                  name: item.getAttribute('data-vk-name') || id,
-                  screenName: item.getAttribute('data-vk-screen') || '',
-                  url: url,
-                  photo: item.getAttribute('data-vk-photo') || '',
-                });
+            // Обработка чекбоксов
+            qsa('.vk-group-item', listEl).forEach(function (item) {
+              var cb = qs('.vk-group-item__cb', item);
+              if (!cb) return;
+              item.addEventListener('click', function (e) {
+                // click на label уже переключает cb; обновляем стиль и плашку
+                setTimeout(function () {
+                  item.classList.toggle('is-selected', cb.checked);
+                  // Если выбрано ровно одно — пишем в скрытый input (для совместимости с main submit)
+                  var allChecked = qsa('.vk-group-item__cb:checked', listEl);
+                  if (allChecked.length === 1) {
+                    if (groupIdHidden) groupIdHidden.value = allChecked[0].value;
+                    if (resultEl) {
+                      var parentItem = allChecked[0].closest ? allChecked[0].closest('[data-pick-vk-group]') : null;
+                      if (parentItem) {
+                        var url = parentItem.getAttribute('data-vk-url') || '';
+                        resultEl.innerHTML = renderVkGroupPreview({
+                          id: allChecked[0].value,
+                          name: parentItem.getAttribute('data-vk-name') || '',
+                          screenName: parentItem.getAttribute('data-vk-screen') || '',
+                          url: url,
+                          photo: parentItem.getAttribute('data-vk-photo') || '',
+                        }, true);
+                        refreshIcons();
+                      }
+                    }
+                  } else {
+                    if (groupIdHidden) groupIdHidden.value = '';
+                    if (resultEl) resultEl.innerHTML = '';
+                  }
+                  refreshMultiBar();
+                }, 0);
               });
             });
             refreshIcons();
@@ -3488,6 +3533,39 @@
           });
       });
     }
+  }
+
+  /** Пакетное создание связок для всех отмеченных сообществ. */
+  function submitVkChainsMulti(root, vkInt) {
+    var maxId = Number(qs('#vc_max', root) ? qs('#vc_max', root).value : '');
+    if (!maxId) { showToast('Выберите канал MAX', 'error'); return; }
+    var sw = readSwitches(root);
+    var tokenEl = qs('#vc_token', root);
+    var listEl = qs('#vc_groups_list', root);
+    var checked = listEl ? qsa('.vk-group-item__cb:checked', listEl) : [];
+    if (!checked.length) { showToast('Отметьте хотя бы одно сообщество', 'error'); return; }
+
+    var btn = qs('#vc_multi_submit', root);
+    if (btn) btn.disabled = true;
+
+    var tasks = Array.prototype.slice.call(checked).map(function (cb) {
+      var body = {
+        max_chat_id: maxId,
+        vk_group_id: cb.value,
+        forward_posts: sw.forward_posts !== false,
+        sync_comments: !!sw.sync_comments,
+      };
+      if (tokenEl && tokenEl.value.trim()) body.vk_token = tokenEl.value.trim();
+      return postJson('/vk-chains', body);
+    });
+
+    Promise.allSettled(tasks).then(function (results) {
+      var ok = results.filter(function (r) { return r.status === 'fulfilled'; }).length;
+      var fail = results.length - ok;
+      if (ok) showToast('Создано связок: ' + ok + (fail ? (', ошибок: ' + fail) : ''), ok === results.length ? 'success' : 'info');
+      else showToast('Не удалось создать связки', 'error');
+      renderTgChains();
+    });
   }
 
   function renderVkConnectBanner() {
@@ -3730,6 +3808,7 @@
         html += '<p class="form-hint">Введите ссылку, username или числовой ID сообщества и нажмите «Найти».</p>';
         html += '<div id="vc_community_result" style="margin-top:8px"></div>';
         html += '<div id="vc_groups_list" style="margin-top:8px"></div>';
+        html += '<div id="vc_multi_bar"></div>';
         html += '<input type="hidden" id="vc_group_id"/>';
         html += '</div>';
         html += '<div id="vcToggles">';

@@ -4909,9 +4909,17 @@ tbody tr:hover td {
   cursor: pointer;
   text-align: left;
   transition: border-color 0.15s, background 0.15s;
+  user-select: none;
 }
 .vk-group-item:hover { border-color: var(--accent); background: var(--surface-3); }
 .vk-group-item.is-selected { border-color: var(--accent); background: rgba(var(--accent-rgb,99,102,241),0.1); }
+.vk-group-item__cb {
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
 .vk-group-item__info {
   display: flex;
   flex-direction: column;
@@ -4942,3 +4950,18 @@ tbody tr:hover td {
   transition: opacity 0.15s;
 }
 .vk-group-item.is-selected .vk-group-item__check { opacity: 1; }
+
+/* Плашка мульти-выбора */
+.vk-multi-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  margin-top: 8px;
+  background: rgba(var(--accent-rgb,99,102,241),0.08);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  font-size: 0.88rem;
+}
+.vk-multi-bar strong { color: var(--accent); }
