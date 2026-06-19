@@ -72,7 +72,7 @@ async function tick() {
             return;
         }
         const nowIso = new Date().toISOString();
-        const due = (0, autopostStore_1.listDueAutoposts)(nowIso);
+        const due = (0, autopostStore_1.listDueAutoposts)(nowIso).filter((p) => p.platform === 'telegram');
         for (const post of due) {
             await processDuePost(post, token);
         }

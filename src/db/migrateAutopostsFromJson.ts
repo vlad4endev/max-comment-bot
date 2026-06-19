@@ -3,7 +3,7 @@ import path from 'node:path'
 
 import { logger } from '../utils/logger'
 import { createAutopost, listAutoposts, updateAutopost } from '../services/autopostStore'
-import { getDb } from './database'
+import { getPostsDb } from './postsDatabase'
 
 const ADMIN_STATE_PATH = path.join(process.cwd(), 'data', 'admin-panel-state.json')
 
@@ -23,7 +23,7 @@ interface LegacyAutopost {
  * Старые записи (MAX chat_id) сохраняются как target_channel_id; для TG нужно пересоздать в админке.
  */
 export function migrateAutopostsFromJson(): void {
-  getDb()
+  getPostsDb()
   if (listAutoposts().length > 0) {
     return
   }

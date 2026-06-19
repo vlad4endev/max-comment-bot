@@ -15,6 +15,9 @@ const integrationPlatformClient_1 = require("../services/integrationPlatformClie
 const integrationsStore_1 = require("../services/integrationsStore");
 const autopostSchedule_1 = require("../services/autopostSchedule");
 const autopostStore_1 = require("../services/autopostStore");
+const channelRegistry_1 = require("../services/channelRegistry");
+const postTemplateStore_1 = require("../services/postTemplateStore");
+const postsDatabase_1 = require("../db/postsDatabase");
 const AUTOPOST_MEDIA_DIR = node_path_1.default.join(process.cwd(), 'data', 'autoposts-media');
 const MAX_MEDIA_FILES = 10;
 const MAX_MEDIA_BYTES = 50 * 1024 * 1024;
@@ -107,7 +110,17 @@ async function listTelegramChannelsForAutopost() {
         title: c.title,
         username: c.username,
         botIsAdmin: c.botIsAdmin,
+        platform: 'telegram',
     }));
+}
+function syncPostChannelsRegistry() {
+    for (const ch of channelRegistry_1.channelRegistry.getAllChannels()) {
+        (0, autopostStore_1.upsertPostChannel)({
+            id: String(ch.chat_id),
+            platform: 'max',
+            title: ch.title ?? null,
+        });
+    }
 }
 function validateScheduleInput(body) {
     const scheduleTypeRaw = parseNonEmptyString(body.schedule_type) ?? 'once';
@@ -131,23 +144,97 @@ function createAutopostRouter() {
     const router = express_1.default.Router();
     router.get('/channels', async (_req, res) => {
         try {
-            const channels = await listTelegramChannelsForAutopost();
+            const tgChannels = await listTelegramChannelsForAutopost();
+            for (const c of tgChannels) {
+                (0, autopostStore_1.upsertPostChannel)({
+                    id: c.id,
+                    platform: 'telegram',
+                    title: c.title,
+                    username: c.username,
+                });
+            }
+            syncPostChannelsRegistry();
+            const registered = (0, autopostStore_1.listPostChannels)();
             const integ = integrationsStore_1.integrationsStore.getTelegramIntegration();
             res.json({
                 connected: !!integ,
-                channels,
-                hint: channels.length === 0
+                channels: tgChannels,
+                registered,
+                db_path: postsDatabase_1.POSTS_DB_PATH,
+                hint: tgChannels.length === 0
                     ? 'Подключите Telegram в «Интеграции» и добавьте бота админом в канал.'
                     : null,
             });
         }
         catch (err) {
             logger_1.logger.error('GET /autoposts/channels failed', err);
-            res.status(500).json({ error: 'Не удалось загрузить каналы Telegram' });
+            res.status(500).json({ error: 'Не удалось загрузить каналы' });
         }
     });
-    router.get('/', (_req, res) => {
-        res.json({ posts: (0, autopostStore_1.listAutoposts)() });
+    router.get('/templates', (_req, res) => {
+        res.json({ templates: (0, postTemplateStore_1.listPostTemplates)() });
+    });
+    router.post('/templates', (req, res) => {
+        const body = isRecord(req.body) ? req.body : {};
+        const name = parseNonEmptyString(body.name);
+        const text = parseNonEmptyString(body.text) ?? '';
+        if (!name) {
+            res.status(400).json({ error: 'name required' });
+            return;
+        }
+        const row = (0, postTemplateStore_1.createPostTemplate)({ name, text });
+        res.json({ ok: true, template: row });
+    });
+    router.patch('/templates/:id', (req, res) => {
+        const id = parseNonEmptyString(req.params.id);
+        if (!id) {
+            res.status(400).json({ error: 'invalid id' });
+            return;
+        }
+        const body = isRecord(req.body) ? req.body : {};
+        const row = (0, postTemplateStore_1.updatePostTemplate)(id, {
+            name: body.name !== undefined ? (parseNonEmptyString(body.name) ?? undefined) : undefined,
+            text: body.text !== undefined ? (parseNonEmptyString(body.text) ?? '') : undefined,
+        });
+        if (!row) {
+            res.status(404).json({ error: 'not found' });
+            return;
+        }
+        res.json({ ok: true, template: row });
+    });
+    router.delete('/templates/:id', (req, res) => {
+        const id = parseNonEmptyString(req.params.id);
+        if (!id) {
+            res.status(400).json({ error: 'invalid id' });
+            return;
+        }
+        if (!(0, postTemplateStore_1.deletePostTemplate)(id)) {
+            res.status(404).json({ error: 'not found' });
+            return;
+        }
+        res.json({ ok: true });
+    });
+    router.get('/stats', async (_req, res) => {
+        try {
+            const channels = await listTelegramChannelsForAutopost();
+            const posts = (0, autopostStore_1.listAutoposts)();
+            res.json({ stats: (0, autopostStore_1.computeAutopostStats)(posts, channels.length) });
+        }
+        catch (err) {
+            logger_1.logger.error('GET /autoposts/stats failed', err);
+            res.status(500).json({ error: 'Не удалось загрузить статистику' });
+        }
+    });
+    router.get('/', (req, res) => {
+        const status = parseNonEmptyString(req.query.status) ?? undefined;
+        const channelId = parseNonEmptyString(req.query.channelId) ?? undefined;
+        const scheduleTypeRaw = parseNonEmptyString(req.query.scheduleType);
+        const scheduleType = scheduleTypeRaw === 'recurring' || scheduleTypeRaw === 'once' ? scheduleTypeRaw : undefined;
+        const search = parseNonEmptyString(req.query.search) ?? undefined;
+        const from = parseNonEmptyString(req.query.from) ?? undefined;
+        const to = parseNonEmptyString(req.query.to) ?? undefined;
+        const posts = (0, autopostStore_1.listAutopostsFiltered)({ status, channelId, scheduleType, search, from, to });
+        res.json({ posts });
     });
     router.get('/:id', (req, res) => {
         const id = parseNonEmptyString(req.params.id);
@@ -178,6 +265,8 @@ function createAutopostRouter() {
             const schedule = validateScheduleInput(body);
             const inline_button = parseInlineButton(body);
             const media = mediaFromUploaded(req.files ?? []);
+            const platformRaw = parseNonEmptyString(body.platform);
+            const platform = platformRaw === 'max' ? 'max' : 'telegram';
             if (media.length > 1 && inline_button) {
                 res.status(400).json({
                     error: 'album_inline_button',
@@ -186,6 +275,7 @@ function createAutopostRouter() {
                 return;
             }
             const row = (0, autopostStore_1.createAutopost)({
+                platform,
                 text,
                 media,
                 inline_button,

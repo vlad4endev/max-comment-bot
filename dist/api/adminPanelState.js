@@ -34,6 +34,7 @@ const promises_1 = require("node:fs/promises");
 const node_path_1 = require("node:path");
 const node_crypto_1 = require("node:crypto");
 const logger_1 = require("../utils/logger");
+const antispamStore_1 = require("../services/antispamStore");
 const STATE_PATH = (0, node_path_1.join)(process.cwd(), 'data', 'admin-panel-state.json');
 const DEFAULT_ENGINE_CONFIG = {
     soft_mode: false,
@@ -154,129 +155,118 @@ async function getAdminPanelState() {
     return loadState();
 }
 async function getAntispamWords() {
-    const s = await loadState();
-    const byChannel = {};
-    for (const [k, v] of Object.entries(s.channel_extras)) {
-        byChannel[k] = [...(v.stopwords ?? [])];
-    }
-    return {
-        global: [...s.global_stopwords],
-        byChannel,
-        rules: { ...s.antispam_rules },
-        engine: { ...s.antispam_engine },
-        restricted_users: [...s.antispam_restricted_users],
-    };
+    await loadState();
+    return (0, antispamStore_1.getAntispamWordsSnapshot)();
 }
 function getAntispamEngineSync() {
-    if (!cache) {
-        return { ...DEFAULT_ENGINE_CONFIG };
-    }
-    return { ...cache.antispam_engine };
+    (0, antispamStore_1.ensureAntispamStoreLoaded)();
+    return (0, antispamStore_1.getAntispamEngineSync)();
 }
 function getAntispamRulesSync() {
-    if (!cache) {
-        return { ...DEFAULT_RULES };
-    }
-    return { ...cache.antispam_rules };
+    (0, antispamStore_1.ensureAntispamStoreLoaded)();
+    return (0, antispamStore_1.getAntispamRulesSync)();
 }
 function getGlobalStopwordsSync() {
-    if (!cache) {
-        return [];
-    }
-    return [...cache.global_stopwords];
+    (0, antispamStore_1.ensureAntispamStoreLoaded)();
+    return (0, antispamStore_1.getGlobalStopwordsSync)();
 }
 function getChannelExtrasSync(chatId) {
     if (!cache) {
-        return { ...DEFAULT_CHANNEL_EXTRAS };
+        (0, antispamStore_1.ensureAntispamStoreLoaded)();
+        const antispam = (0, antispamStore_1.getChannelAntispamSettingsSync)(chatId);
+        return {
+            ...DEFAULT_CHANNEL_EXTRAS,
+            stopwords: antispam.stopwords,
+            block_links: antispam.block_links ?? DEFAULT_CHANNEL_EXTRAS.block_links,
+            flood_protection: antispam.flood_protection ?? DEFAULT_CHANNEL_EXTRAS.flood_protection,
+            auto_mute: antispam.auto_mute,
+        };
     }
     const row = cache.channel_extras[String(chatId)];
-    if (!row) {
-        return { ...DEFAULT_CHANNEL_EXTRAS };
-    }
+    const antispam = (0, antispamStore_1.getChannelAntispamSettingsSync)(chatId);
+    const base = row ? { ...DEFAULT_CHANNEL_EXTRAS, ...row } : { ...DEFAULT_CHANNEL_EXTRAS };
     return {
-        ...DEFAULT_CHANNEL_EXTRAS,
-        ...row,
-        stopwords: [...(row.stopwords ?? [])],
+        ...base,
+        stopwords: antispam.stopwords,
+        block_links: antispam.block_links ?? base.block_links,
+        flood_protection: antispam.flood_protection ?? base.flood_protection,
+        auto_mute: antispam.auto_mute,
     };
 }
 function isAntispamRestrictedUserSync(userId) {
-    if (!cache || !Number.isInteger(userId) || userId <= 0) {
-        return false;
-    }
-    return cache.antispam_restricted_users.includes(userId);
+    (0, antispamStore_1.ensureAntispamStoreLoaded)();
+    return (0, antispamStore_1.isAntispamRestrictedUserSync)(userId);
 }
 async function saveAntispamEngine(patch) {
-    const s = await loadState();
-    s.antispam_engine = { ...s.antispam_engine, ...patch };
-    if (patch.whitelist_user_ids) {
-        s.antispam_engine.whitelist_user_ids = patch.whitelist_user_ids.filter((id) => id > 0);
+    await loadState();
+    const saved = (0, antispamStore_1.saveAntispamEngineToStore)(patch);
+    if (cache) {
+        cache.antispam_engine = { ...saved };
     }
-    if (patch.blacklist_user_ids) {
-        s.antispam_engine.blacklist_user_ids = patch.blacklist_user_ids.filter((id) => id > 0);
-    }
-    await persist();
-    return { ...s.antispam_engine };
+    return saved;
 }
 async function restrictAntispamUser(userId) {
-    if (!Number.isInteger(userId) || userId <= 0) {
-        return;
-    }
-    const s = await loadState();
-    if (!s.antispam_restricted_users.includes(userId)) {
-        s.antispam_restricted_users.push(userId);
-        await persist();
+    await loadState();
+    (0, antispamStore_1.restrictAntispamUserInStore)(userId);
+    if (cache && !cache.antispam_restricted_users.includes(userId)) {
+        cache.antispam_restricted_users.push(userId);
     }
 }
 async function saveAntispamWords(input) {
-    const s = await loadState();
-    if (input.global) {
-        s.global_stopwords = input.global.map((w) => w.trim().toLowerCase()).filter(Boolean);
+    await loadState();
+    (0, antispamStore_1.saveAntispamWordsToStore)(input);
+    if (cache) {
+        if (input.global) {
+            cache.global_stopwords = input.global.map((w) => w.trim().toLowerCase()).filter(Boolean);
+        }
+        if (input.rules) {
+            cache.antispam_rules = { ...cache.antispam_rules, ...input.rules };
+        }
     }
-    if (input.rules) {
-        s.antispam_rules = { ...s.antispam_rules, ...input.rules };
-    }
-    await persist();
 }
 async function getAntispamLog(limit) {
-    const s = await loadState();
-    const n = Math.min(Math.max(1, limit), 200);
-    return s.antispam_log.slice(0, n);
+    await loadState();
+    return (0, antispamStore_1.listAntispamLogFromStore)(limit);
 }
 async function pushAntispamLog(entry) {
-    const s = await loadState();
-    s.antispam_log.unshift({
-        ...entry,
-        id: (0, node_crypto_1.randomUUID)(),
-        created_at: new Date().toISOString(),
-    });
-    if (s.antispam_log.length > 500) {
-        s.antispam_log.length = 500;
+    await loadState();
+    const row = (0, antispamStore_1.pushAntispamLogToStore)(entry);
+    if (cache) {
+        cache.antispam_log.unshift(row);
+        if (cache.antispam_log.length > 500) {
+            cache.antispam_log.length = 500;
+        }
     }
-    await persist();
 }
 async function getChannelExtras(chatId) {
-    const s = await loadState();
-    const row = s.channel_extras[String(chatId)];
-    if (!row) {
-        return { ...DEFAULT_CHANNEL_EXTRAS };
-    }
-    return {
-        ...DEFAULT_CHANNEL_EXTRAS,
-        ...row,
-        stopwords: [...(row.stopwords ?? [])],
-    };
+    await loadState();
+    return getChannelExtrasSync(chatId);
 }
 async function saveChannelExtras(chatId, patch) {
     const s = await loadState();
     const key = String(chatId);
-    const current = await getChannelExtras(chatId);
-    const next = { ...current, ...patch };
+    const antispamPatch = {};
     if (patch.stopwords) {
-        next.stopwords = patch.stopwords.map((w) => w.trim().toLowerCase()).filter(Boolean);
+        antispamPatch.stopwords = patch.stopwords;
     }
-    s.channel_extras[key] = next;
+    if (patch.block_links !== undefined) {
+        antispamPatch.block_links = patch.block_links;
+    }
+    if (patch.flood_protection !== undefined) {
+        antispamPatch.flood_protection = patch.flood_protection;
+    }
+    if (patch.auto_mute !== undefined) {
+        antispamPatch.auto_mute = patch.auto_mute;
+    }
+    if (Object.keys(antispamPatch).length > 0) {
+        (0, antispamStore_1.saveChannelAntispamSettings)(chatId, antispamPatch);
+    }
+    const current = s.channel_extras[key] ?? { ...DEFAULT_CHANNEL_EXTRAS };
+    const { stopwords: _sw, block_links: _bl, flood_protection: _fp, auto_mute: _am, ...uiPatch } = patch;
+    const nextUi = { ...DEFAULT_CHANNEL_EXTRAS, ...current, ...uiPatch };
+    s.channel_extras[key] = nextUi;
     await persist();
-    return next;
+    return getChannelExtrasSync(chatId);
 }
 async function listTgChains() {
     const s = await loadState();
@@ -396,9 +386,9 @@ async function deleteAutopost(id) {
     await persist();
     return true;
 }
-function countAntispamBlocksToday(log) {
-    const today = new Date().toISOString().slice(0, 10);
-    return log.filter((e) => e.created_at.slice(0, 10) === today).length;
+function countAntispamBlocksToday(_log) {
+    (0, antispamStore_1.ensureAntispamStoreLoaded)();
+    return (0, antispamStore_1.countAntispamBlocksTodayFromStore)();
 }
 /** Удаляет все настройки админки, привязанные к каналу. */
 async function purgeChannelFromAdminState(chatId) {
@@ -413,7 +403,7 @@ async function purgeChannelFromAdminState(chatId) {
     s.tg_chains = s.tg_chains.filter((c) => Math.abs(c.max_chat_id) !== targetAbs);
     s.vk_chains = s.vk_chains.filter((c) => Math.abs(c.max_chat_id) !== targetAbs);
     s.autoposts = s.autoposts.filter((p) => Math.abs(p.chat_id) !== targetAbs);
-    s.antispam_log = s.antispam_log.filter((e) => Math.abs(e.channel_chat_id) !== targetAbs);
+    (0, antispamStore_1.purgeAntispamChannelData)(chatId);
     await persist();
 }
 //# sourceMappingURL=adminPanelState.js.map

@@ -38,6 +38,8 @@ const bot_1 = require("./bot");
 const config_1 = require("./config");
 const migrate_1 = require("./db/migrate");
 const migrateAutopostsFromJson_1 = require("./db/migrateAutopostsFromJson");
+const migratePostsDb_1 = require("./db/migratePostsDb");
+const migrateAntispamDb_1 = require("./db/migrateAntispamDb");
 const subscriptions_1 = require("./maxPlatform/subscriptions");
 const channelNotifyLinkStore_1 = require("./services/channelNotifyLinkStore");
 const channelRegistry_1 = require("./services/channelRegistry");
@@ -70,7 +72,9 @@ const createWebhookApp_1 = require("./webhook/createWebhookApp");
 const telegramMiniAppUrl_1 = require("./utils/telegramMiniAppUrl");
 async function main() {
     (0, migrate_1.migrateFromJson)();
+    (0, migratePostsDb_1.migrateAutopostsFromBotDb)();
     (0, migrateAutopostsFromJson_1.migrateAutopostsFromJson)();
+    await (0, migrateAntispamDb_1.migrateAntispamFromJson)();
     const redisStatus = await (0, redisClient_1.initRedis)();
     const bot = (0, bot_1.initializeBot)();
     await channelRegistry_1.channelRegistry.loadFromDisk();

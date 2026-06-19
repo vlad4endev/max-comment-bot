@@ -80,7 +80,7 @@ async function tick(): Promise<void> {
       return
     }
     const nowIso = new Date().toISOString()
-    const due = listDueAutoposts(nowIso)
+    const due = listDueAutoposts(nowIso).filter((p) => p.platform === 'telegram')
     for (const post of due) {
       await processDuePost(post, token)
     }

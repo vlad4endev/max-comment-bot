@@ -3,6 +3,23 @@ import { dirname, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 
 import { logger } from '../utils/logger'
+import {
+  ensureAntispamStoreLoaded,
+  getAntispamEngineSync as getEngineFromStore,
+  getAntispamRulesSync as getRulesFromStore,
+  getGlobalStopwordsSync as getGlobalWordsFromStore,
+  getChannelAntispamSettingsSync,
+  isAntispamRestrictedUserSync as isRestrictedFromStore,
+  getAntispamWordsSnapshot,
+  saveAntispamEngineToStore,
+  saveAntispamWordsToStore,
+  saveChannelAntispamSettings,
+  restrictAntispamUserInStore,
+  pushAntispamLogToStore,
+  listAntispamLogFromStore,
+  purgeAntispamChannelData,
+  countAntispamBlocksTodayFromStore,
+} from '../services/antispamStore'
 
 const STATE_PATH = join(process.cwd(), 'data', 'admin-panel-state.json')
 
@@ -270,84 +287,68 @@ export async function getAntispamWords(): Promise<{
   engine: AntispamEngineConfig
   restricted_users: number[]
 }> {
-  const s = await loadState()
-  const byChannel: Record<string, string[]> = {}
-  for (const [k, v] of Object.entries(s.channel_extras)) {
-    byChannel[k] = [...(v.stopwords ?? [])]
-  }
-  return {
-    global: [...s.global_stopwords],
-    byChannel,
-    rules: { ...s.antispam_rules },
-    engine: { ...s.antispam_engine },
-    restricted_users: [...s.antispam_restricted_users],
-  }
+  await loadState()
+  return getAntispamWordsSnapshot()
 }
 
 export function getAntispamEngineSync(): AntispamEngineConfig {
-  if (!cache) {
-    return { ...DEFAULT_ENGINE_CONFIG }
-  }
-  return { ...cache.antispam_engine }
+  ensureAntispamStoreLoaded()
+  return getEngineFromStore()
 }
 
 export function getAntispamRulesSync(): AntispamRules {
-  if (!cache) {
-    return { ...DEFAULT_RULES }
-  }
-  return { ...cache.antispam_rules }
+  ensureAntispamStoreLoaded()
+  return getRulesFromStore()
 }
 
 export function getGlobalStopwordsSync(): string[] {
-  if (!cache) {
-    return []
-  }
-  return [...cache.global_stopwords]
+  ensureAntispamStoreLoaded()
+  return getGlobalWordsFromStore()
 }
 
 export function getChannelExtrasSync(chatId: number): ChannelAdminExtras {
   if (!cache) {
-    return { ...DEFAULT_CHANNEL_EXTRAS }
+    ensureAntispamStoreLoaded()
+    const antispam = getChannelAntispamSettingsSync(chatId)
+    return {
+      ...DEFAULT_CHANNEL_EXTRAS,
+      stopwords: antispam.stopwords,
+      block_links: antispam.block_links ?? DEFAULT_CHANNEL_EXTRAS.block_links,
+      flood_protection: antispam.flood_protection ?? DEFAULT_CHANNEL_EXTRAS.flood_protection,
+      auto_mute: antispam.auto_mute,
+    }
   }
   const row = cache.channel_extras[String(chatId)]
-  if (!row) {
-    return { ...DEFAULT_CHANNEL_EXTRAS }
-  }
+  const antispam = getChannelAntispamSettingsSync(chatId)
+  const base = row ? { ...DEFAULT_CHANNEL_EXTRAS, ...row } : { ...DEFAULT_CHANNEL_EXTRAS }
   return {
-    ...DEFAULT_CHANNEL_EXTRAS,
-    ...row,
-    stopwords: [...(row.stopwords ?? [])],
+    ...base,
+    stopwords: antispam.stopwords,
+    block_links: antispam.block_links ?? base.block_links,
+    flood_protection: antispam.flood_protection ?? base.flood_protection,
+    auto_mute: antispam.auto_mute,
   }
 }
 
 export function isAntispamRestrictedUserSync(userId: number): boolean {
-  if (!cache || !Number.isInteger(userId) || userId <= 0) {
-    return false
-  }
-  return cache.antispam_restricted_users.includes(userId)
+  ensureAntispamStoreLoaded()
+  return isRestrictedFromStore(userId)
 }
 
 export async function saveAntispamEngine(patch: Partial<AntispamEngineConfig>): Promise<AntispamEngineConfig> {
-  const s = await loadState()
-  s.antispam_engine = { ...s.antispam_engine, ...patch }
-  if (patch.whitelist_user_ids) {
-    s.antispam_engine.whitelist_user_ids = patch.whitelist_user_ids.filter((id) => id > 0)
+  await loadState()
+  const saved = saveAntispamEngineToStore(patch)
+  if (cache) {
+    cache.antispam_engine = { ...saved }
   }
-  if (patch.blacklist_user_ids) {
-    s.antispam_engine.blacklist_user_ids = patch.blacklist_user_ids.filter((id) => id > 0)
-  }
-  await persist()
-  return { ...s.antispam_engine }
+  return saved
 }
 
 export async function restrictAntispamUser(userId: number): Promise<void> {
-  if (!Number.isInteger(userId) || userId <= 0) {
-    return
-  }
-  const s = await loadState()
-  if (!s.antispam_restricted_users.includes(userId)) {
-    s.antispam_restricted_users.push(userId)
-    await persist()
+  await loadState()
+  restrictAntispamUserInStore(userId)
+  if (cache && !cache.antispam_restricted_users.includes(userId)) {
+    cache.antispam_restricted_users.push(userId)
   }
 }
 
@@ -355,59 +356,71 @@ export async function saveAntispamWords(input: {
   global?: string[]
   rules?: Partial<AntispamRules>
 }): Promise<void> {
-  const s = await loadState()
-  if (input.global) {
-    s.global_stopwords = input.global.map((w) => w.trim().toLowerCase()).filter(Boolean)
+  await loadState()
+  saveAntispamWordsToStore(input)
+  if (cache) {
+    if (input.global) {
+      cache.global_stopwords = input.global.map((w) => w.trim().toLowerCase()).filter(Boolean)
+    }
+    if (input.rules) {
+      cache.antispam_rules = { ...cache.antispam_rules, ...input.rules }
+    }
   }
-  if (input.rules) {
-    s.antispam_rules = { ...s.antispam_rules, ...input.rules }
-  }
-  await persist()
 }
 
 export async function getAntispamLog(limit: number): Promise<AntispamLogEntry[]> {
-  const s = await loadState()
-  const n = Math.min(Math.max(1, limit), 200)
-  return s.antispam_log.slice(0, n)
+  await loadState()
+  return listAntispamLogFromStore(limit)
 }
 
 export async function pushAntispamLog(entry: Omit<AntispamLogEntry, 'id' | 'created_at'>): Promise<void> {
-  const s = await loadState()
-  s.antispam_log.unshift({
-    ...entry,
-    id: randomUUID(),
-    created_at: new Date().toISOString(),
-  })
-  if (s.antispam_log.length > 500) {
-    s.antispam_log.length = 500
+  await loadState()
+  const row = pushAntispamLogToStore(entry)
+  if (cache) {
+    cache.antispam_log.unshift(row)
+    if (cache.antispam_log.length > 500) {
+      cache.antispam_log.length = 500
+    }
   }
-  await persist()
 }
 
 export async function getChannelExtras(chatId: number): Promise<ChannelAdminExtras> {
-  const s = await loadState()
-  const row = s.channel_extras[String(chatId)]
-  if (!row) {
-    return { ...DEFAULT_CHANNEL_EXTRAS }
-  }
-  return {
-    ...DEFAULT_CHANNEL_EXTRAS,
-    ...row,
-    stopwords: [...(row.stopwords ?? [])],
-  }
+  await loadState()
+  return getChannelExtrasSync(chatId)
 }
 
 export async function saveChannelExtras(chatId: number, patch: Partial<ChannelAdminExtras>): Promise<ChannelAdminExtras> {
   const s = await loadState()
   const key = String(chatId)
-  const current = await getChannelExtras(chatId)
-  const next = { ...current, ...patch }
+  const antispamPatch: Parameters<typeof saveChannelAntispamSettings>[1] = {}
   if (patch.stopwords) {
-    next.stopwords = patch.stopwords.map((w) => w.trim().toLowerCase()).filter(Boolean)
+    antispamPatch.stopwords = patch.stopwords
   }
-  s.channel_extras[key] = next
+  if (patch.block_links !== undefined) {
+    antispamPatch.block_links = patch.block_links
+  }
+  if (patch.flood_protection !== undefined) {
+    antispamPatch.flood_protection = patch.flood_protection
+  }
+  if (patch.auto_mute !== undefined) {
+    antispamPatch.auto_mute = patch.auto_mute
+  }
+  if (Object.keys(antispamPatch).length > 0) {
+    saveChannelAntispamSettings(chatId, antispamPatch)
+  }
+
+  const current = s.channel_extras[key] ?? { ...DEFAULT_CHANNEL_EXTRAS }
+  const {
+    stopwords: _sw,
+    block_links: _bl,
+    flood_protection: _fp,
+    auto_mute: _am,
+    ...uiPatch
+  } = patch
+  const nextUi = { ...DEFAULT_CHANNEL_EXTRAS, ...current, ...uiPatch }
+  s.channel_extras[key] = nextUi
   await persist()
-  return next
+  return getChannelExtrasSync(chatId)
 }
 
 export async function listTgChains(): Promise<TgChainRecord[]> {
@@ -548,9 +561,9 @@ export async function deleteAutopost(id: string): Promise<boolean> {
   return true
 }
 
-export function countAntispamBlocksToday(log: AntispamLogEntry[]): number {
-  const today = new Date().toISOString().slice(0, 10)
-  return log.filter((e) => e.created_at.slice(0, 10) === today).length
+export function countAntispamBlocksToday(_log?: AntispamLogEntry[]): number {
+  ensureAntispamStoreLoaded()
+  return countAntispamBlocksTodayFromStore()
 }
 
 /** Удаляет все настройки админки, привязанные к каналу. */
@@ -566,6 +579,6 @@ export async function purgeChannelFromAdminState(chatId: number): Promise<void> 
   s.tg_chains = s.tg_chains.filter((c) => Math.abs(c.max_chat_id) !== targetAbs)
   s.vk_chains = s.vk_chains.filter((c) => Math.abs(c.max_chat_id) !== targetAbs)
   s.autoposts = s.autoposts.filter((p) => Math.abs(p.chat_id) !== targetAbs)
-  s.antispam_log = s.antispam_log.filter((e) => Math.abs(e.channel_chat_id) !== targetAbs)
+  purgeAntispamChannelData(chatId)
   await persist()
 }

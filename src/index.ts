@@ -9,6 +9,8 @@ import {
 import { config } from './config'
 import { migrateFromJson } from './db/migrate'
 import { migrateAutopostsFromJson } from './db/migrateAutopostsFromJson'
+import { migrateAutopostsFromBotDb } from './db/migratePostsDb'
+import { migrateAntispamFromJson } from './db/migrateAntispamDb'
 import {
   BOT_WEBHOOK_UPDATE_TYPES,
   setWebhookSubscription,
@@ -49,7 +51,9 @@ import { logMiniAppUrlDiagnostics } from './utils/telegramMiniAppUrl'
 
 async function main(): Promise<void> {
   migrateFromJson()
+  migrateAutopostsFromBotDb()
   migrateAutopostsFromJson()
+  await migrateAntispamFromJson()
   const redisStatus = await initRedis()
   const bot = initializeBot()
   await channelRegistry.loadFromDisk()

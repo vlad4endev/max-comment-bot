@@ -8,14 +8,14 @@ const node_fs_1 = __importDefault(require("node:fs"));
 const node_path_1 = __importDefault(require("node:path"));
 const logger_1 = require("../utils/logger");
 const autopostStore_1 = require("../services/autopostStore");
-const database_1 = require("./database");
+const postsDatabase_1 = require("./postsDatabase");
 const ADMIN_STATE_PATH = node_path_1.default.join(process.cwd(), 'data', 'admin-panel-state.json');
 /**
  * Однократный перенос автопостов из admin-panel-state.json в SQLite.
  * Старые записи (MAX chat_id) сохраняются как target_channel_id; для TG нужно пересоздать в админке.
  */
 function migrateAutopostsFromJson() {
-    (0, database_1.getDb)();
+    (0, postsDatabase_1.getPostsDb)();
     if ((0, autopostStore_1.listAutoposts)().length > 0) {
         return;
     }

@@ -14,16 +14,29 @@ import {
   extractRecurringTimeFromIso,
 } from '../services/autopostSchedule'
 import {
+  computeAutopostStats,
   createAutopost,
   deleteAutopost,
   getAutopostById,
   listAutoposts,
+  listAutopostsFiltered,
+  listPostChannels,
   setAutopostStatus,
   updateAutopost,
+  upsertPostChannel,
   type AutopostInlineButton,
   type AutopostMediaItem,
   type AutopostScheduleType,
 } from '../services/autopostStore'
+import { channelRegistry } from '../services/channelRegistry'
+import {
+  createPostTemplate,
+  deletePostTemplate,
+  getPostTemplateById,
+  listPostTemplates,
+  updatePostTemplate,
+} from '../services/postTemplateStore'
+import { POSTS_DB_PATH } from '../db/postsDatabase'
 
 const AUTOPOST_MEDIA_DIR = path.join(process.cwd(), 'data', 'autoposts-media')
 const MAX_MEDIA_FILES = 10
@@ -100,7 +113,7 @@ function parseInlineButton(body: Record<string, unknown>): AutopostInlineButton 
 }
 
 async function listTelegramChannelsForAutopost(): Promise<
-  { id: string; title: string; username?: string; botIsAdmin?: boolean }[]
+  { id: string; title: string; username?: string; botIsAdmin?: boolean; platform: 'telegram' }[]
 > {
   await integrationsStore.load()
   const integ = integrationsStore.getTelegramIntegration()
@@ -125,7 +138,18 @@ async function listTelegramChannelsForAutopost(): Promise<
       title: c.title,
       username: c.username,
       botIsAdmin: c.botIsAdmin,
+      platform: 'telegram' as const,
     }))
+}
+
+function syncPostChannelsRegistry(): void {
+  for (const ch of channelRegistry.getAllChannels()) {
+    upsertPostChannel({
+      id: String(ch.chat_id),
+      platform: 'max',
+      title: ch.title ?? null,
+    })
+  }
 }
 
 function validateScheduleInput(body: Record<string, unknown>): {
@@ -159,24 +183,103 @@ export function createAutopostRouter(): express.Router {
 
   router.get('/channels', async (_req, res) => {
     try {
-      const channels = await listTelegramChannelsForAutopost()
+      const tgChannels = await listTelegramChannelsForAutopost()
+      for (const c of tgChannels) {
+        upsertPostChannel({
+          id: c.id,
+          platform: 'telegram',
+          title: c.title,
+          username: c.username,
+        })
+      }
+      syncPostChannelsRegistry()
+      const registered = listPostChannels()
       const integ = integrationsStore.getTelegramIntegration()
       res.json({
         connected: !!integ,
-        channels,
+        channels: tgChannels,
+        registered,
+        db_path: POSTS_DB_PATH,
         hint:
-          channels.length === 0
+          tgChannels.length === 0
             ? 'Подключите Telegram в «Интеграции» и добавьте бота админом в канал.'
             : null,
       })
     } catch (err: unknown) {
       logger.error('GET /autoposts/channels failed', err)
-      res.status(500).json({ error: 'Не удалось загрузить каналы Telegram' })
+      res.status(500).json({ error: 'Не удалось загрузить каналы' })
     }
   })
 
-  router.get('/', (_req, res) => {
-    res.json({ posts: listAutoposts() })
+  router.get('/templates', (_req, res) => {
+    res.json({ templates: listPostTemplates() })
+  })
+
+  router.post('/templates', (req, res) => {
+    const body = isRecord(req.body) ? req.body : {}
+    const name = parseNonEmptyString(body.name)
+    const text = parseNonEmptyString(body.text) ?? ''
+    if (!name) {
+      res.status(400).json({ error: 'name required' })
+      return
+    }
+    const row = createPostTemplate({ name, text })
+    res.json({ ok: true, template: row })
+  })
+
+  router.patch('/templates/:id', (req, res) => {
+    const id = parseNonEmptyString(req.params.id)
+    if (!id) {
+      res.status(400).json({ error: 'invalid id' })
+      return
+    }
+    const body = isRecord(req.body) ? req.body : {}
+    const row = updatePostTemplate(id, {
+      name: body.name !== undefined ? (parseNonEmptyString(body.name) ?? undefined) : undefined,
+      text: body.text !== undefined ? (parseNonEmptyString(body.text) ?? '') : undefined,
+    })
+    if (!row) {
+      res.status(404).json({ error: 'not found' })
+      return
+    }
+    res.json({ ok: true, template: row })
+  })
+
+  router.delete('/templates/:id', (req, res) => {
+    const id = parseNonEmptyString(req.params.id)
+    if (!id) {
+      res.status(400).json({ error: 'invalid id' })
+      return
+    }
+    if (!deletePostTemplate(id)) {
+      res.status(404).json({ error: 'not found' })
+      return
+    }
+    res.json({ ok: true })
+  })
+
+  router.get('/stats', async (_req, res) => {
+    try {
+      const channels = await listTelegramChannelsForAutopost()
+      const posts = listAutoposts()
+      res.json({ stats: computeAutopostStats(posts, channels.length) })
+    } catch (err: unknown) {
+      logger.error('GET /autoposts/stats failed', err)
+      res.status(500).json({ error: 'Не удалось загрузить статистику' })
+    }
+  })
+
+  router.get('/', (req, res) => {
+    const status = parseNonEmptyString(req.query.status) ?? undefined
+    const channelId = parseNonEmptyString(req.query.channelId) ?? undefined
+    const scheduleTypeRaw = parseNonEmptyString(req.query.scheduleType)
+    const scheduleType: AutopostScheduleType | undefined =
+      scheduleTypeRaw === 'recurring' || scheduleTypeRaw === 'once' ? scheduleTypeRaw : undefined
+    const search = parseNonEmptyString(req.query.search) ?? undefined
+    const from = parseNonEmptyString(req.query.from) ?? undefined
+    const to = parseNonEmptyString(req.query.to) ?? undefined
+    const posts = listAutopostsFiltered({ status, channelId, scheduleType, search, from, to })
+    res.json({ posts })
   })
 
   router.get('/:id', (req, res) => {
@@ -209,6 +312,8 @@ export function createAutopostRouter(): express.Router {
       const schedule = validateScheduleInput(body)
       const inline_button = parseInlineButton(body)
       const media = mediaFromUploaded((req.files as Express.Multer.File[]) ?? [])
+      const platformRaw = parseNonEmptyString(body.platform)
+      const platform = platformRaw === 'max' ? 'max' : 'telegram'
       if (media.length > 1 && inline_button) {
         res.status(400).json({
           error: 'album_inline_button',
@@ -218,6 +323,7 @@ export function createAutopostRouter(): express.Router {
         return
       }
       const row = createAutopost({
+        platform,
         text,
         media,
         inline_button,
