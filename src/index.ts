@@ -47,6 +47,7 @@ import { repairTgChainsForForwarding } from './services/tgChainChannelRef'
 import { setTgChainForwarderBot, startTgChainForwarder } from './services/tgChainForwarder'
 import { setVkChainForwarderBot, startVkChainForwarder, stopVkChainForwarder } from './services/vkChainForwarder'
 import { setTelegramTgChainLifecycleBot } from './services/telegramTgChainLifecycle'
+import { setTelegramSyncAlertBot } from './services/telegramSyncAlertService'
 import { initRedis } from './cache/redisClient'
 import { createHttpApp, createWebhookApp } from './webhook/createWebhookApp'
 import { logMiniAppUrlDiagnostics } from './utils/telegramMiniAppUrl'
@@ -99,6 +100,7 @@ async function main(): Promise<void> {
   setTgChainForwarderBot(bot)
   setVkChainForwarderBot(bot)
   setTelegramTgChainLifecycleBot(bot)
+  setTelegramSyncAlertBot(bot)
   startRuntimeLogRotationScheduler()
   setChannelRegistryChangeHandler(() => notifyChannelRegistryChanged())
   startChannelPostPoller(bot)
@@ -108,9 +110,9 @@ async function main(): Promise<void> {
   // До HTTP: иначе при EADDRINUSE channelPoller уже в логах, а flowProcessor — нет.
   await flowProcessor.start()
 
-  // Синхронизация комментариев TG ↔ Max — добавлено
+  // Синхронизация комментариев TG ↔ Max
   const { startMaxCommentSync } = await import('./services/maxCommentSyncService')
-  const stopCommentSync = startMaxCommentSync(bot, { intervalMs: 15_000 })
+  const stopCommentSync = startMaxCommentSync(bot)
   process.once('SIGINT', () => stopCommentSync())
   process.once('SIGTERM', () => stopCommentSync())
 

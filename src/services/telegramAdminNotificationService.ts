@@ -1,4 +1,3 @@
-import axios from 'axios'
 import type { Bot } from '@maxhub/max-bot-api'
 
 import { ensureAdminPanelStateLoaded } from '../api/adminPanelState'
@@ -15,8 +14,7 @@ import { resolveTelegramBotToken } from './resolveTelegramBotToken'
 import { buildTelegramMiniappUrl } from './telegramMiniappAuth'
 import { telegramBotUserStore } from './telegramBotUserStore'
 import { telegramChannelNotifyLinkStore } from './telegramChannelNotifyLinkStore'
-
-const TG_API = 'https://api.telegram.org'
+import { callTelegramBotApi } from '../utils/telegramRateLimiter'
 
 export const TG_COMMENT_CALLBACK_PREFIX = 'tgc:'
 
@@ -193,18 +191,19 @@ async function tgSendMessage(
   text: string,
   replyMarkup: { inline_keyboard: TgInlineButton[][] },
 ): Promise<number | null> {
-  const { data } = await axios.post<{
+  const data = await callTelegramBotApi<{
     ok: boolean
     description?: string
     result?: { message_id?: number }
   }>(
-    `${TG_API}/bot${token}/sendMessage`,
+    token,
+    'sendMessage',
     {
       chat_id: chatId,
       text,
       reply_markup: replyMarkup,
     },
-    { timeout: 20_000 },
+    { method: 'sendMessage', chatId },
   )
   if (!data.ok) {
     throw new Error(data.description ?? 'Telegram sendMessage failed')
@@ -220,16 +219,20 @@ async function tgEditMessage(
   text: string,
   replyMarkup: { inline_keyboard: TgInlineButton[][] },
 ): Promise<void> {
-  await axios.post(
-    `${TG_API}/bot${token}/editMessageText`,
+  const data = await callTelegramBotApi<{ ok: boolean; description?: string }>(
+    token,
+    'editMessageText',
     {
       chat_id: chatId,
       message_id: messageId,
       text,
       reply_markup: replyMarkup,
     },
-    { timeout: 20_000 },
+    { method: 'editMessageText', chatId },
   )
+  if (!data.ok) {
+    throw new Error(data.description ?? 'Telegram editMessageText failed')
+  }
 }
 
 export async function notifyTelegramAdminsNewMiniappComment(

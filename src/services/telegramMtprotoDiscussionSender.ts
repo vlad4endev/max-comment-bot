@@ -12,6 +12,7 @@ import {
   isSendAsPeerInvalidError,
   suggestActionForTelegramSyncError,
 } from '../utils/telegramSyncErrors'
+import { withTelegramFloodWaitBackoff } from '../utils/telegramRateLimiter'
 import {
   connectTelegramUserClient,
   resolveTelegramChannelEntity,
@@ -78,14 +79,16 @@ export async function sendDiscussionMessageAsPeer(
       sendAsPeer = await client.getInputEntity(channelEntity)
     }
 
-    const updates = await client.invoke(
-      new Api.messages.SendMessage({
-        peer: discussionPeer,
-        message: trimmed,
-        replyTo: new Api.InputReplyToMessage({ replyToMsgId: replyToMessageId }),
-        randomId: generateRandomLong(),
-        sendAs: sendAsPeer,
-      }),
+    const updates = await withTelegramFloodWaitBackoff('messages.SendMessage', () =>
+      client.invoke(
+        new Api.messages.SendMessage({
+          peer: discussionPeer,
+          message: trimmed,
+          replyTo: new Api.InputReplyToMessage({ replyToMsgId: replyToMessageId }),
+          randomId: generateRandomLong(),
+          sendAs: sendAsPeer,
+        }),
+      ),
     )
 
     const messageId = extractMessageIdFromUpdates(updates)

@@ -21,6 +21,9 @@ import {
 import { ensurePostThreadMapping } from './telegramDiscussionThreadResolver'
 import { isMtprotoSessionReady, resolveMtprotoCredentials } from './mtprotoConfigStore'
 import { resolveTelegramBotToken } from './resolveTelegramBotToken'
+import { getTelegramApiMinIntervalMs } from '../utils/telegramRateLimiter'
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
 const TG_API = 'https://api.telegram.org'
 
@@ -61,6 +64,7 @@ export interface CommentSyncDiagnosticsReport {
     invalid_message_id: number
     send_as_peer_invalid: number
     forbidden: number
+    flood_wait: number
     no_thread_mapping: number
   }
   recommendations: string[]
@@ -154,6 +158,7 @@ function analyzeLogSignals(entries: AdminLogEntry[]): CommentSyncDiagnosticsRepo
   let invalid_message_id = 0
   let send_as_peer_invalid = 0
   let forbidden = 0
+  let flood_wait = 0
   let no_thread_mapping = 0
 
   for (const entry of entries) {
@@ -176,9 +181,12 @@ function analyzeLogSignals(entries: AdminLogEntry[]): CommentSyncDiagnosticsRepo
     if (isTelegramForbiddenError(hay)) {
       forbidden += 1
     }
+    if (hay.includes('flood_wait') || hay.includes('retry after')) {
+      flood_wait += 1
+    }
   }
 
-  return { invalid_message_id, send_as_peer_invalid, forbidden, no_thread_mapping }
+  return { invalid_message_id, send_as_peer_invalid, forbidden, flood_wait, no_thread_mapping }
 }
 
 function buildChainIssues(input: {
@@ -272,7 +280,7 @@ function buildChainIssues(input: {
       code: 'pending_max_to_tg',
       title: 'Комментарии MAX ждут отправки в TG',
       description: `${pendingMaxToTg} комментариев из miniapp ещё не синхронизированы в Telegram.`,
-      what_to_do: 'Исправьте thread mapping и права бота, затем дождитесь fallback-polling (15 сек).',
+      what_to_do: 'Исправьте thread mapping и права бота. Синхронизация идёт пакетами (TELEGRAM_COMMENT_SYNC_BATCH_SIZE) с интервалом MAX_COMMENT_SYNC_INTERVAL_MS.',
     })
   }
 
@@ -348,6 +356,11 @@ export async function diagnoseCommentSync(chainIdFilter?: string): Promise<Comme
   if (logSignals.forbidden > 0) {
     recommendations.push('Обнаружены ошибки 403/forbidden: проверьте токен бота и права в канале/группе.')
   }
+  if (logSignals.flood_wait > 0) {
+    recommendations.push(
+      'Обнаружен FLOOD_WAIT: увеличьте TELEGRAM_API_MIN_INTERVAL_MS (рекомендуется 2000–3000) и уменьшите TELEGRAM_COMMENT_SYNC_BATCH_SIZE.',
+    )
+  }
   if (!mtprotoReady) {
     recommendations.push(`MTProto не настроен (source: ${mtprotoSource}) — thread recovery ограничен.`)
   }
@@ -380,7 +393,8 @@ export async function repairMissingThreadMappings(
   let failed = 0
   const samples: RepairThreadMappingsResult['samples'] = []
 
-  for (const mapping of mappings) {
+  for (let i = 0; i < mappings.length; i += 1) {
+    const mapping = mappings[i]!
     const maxMid = mapping.max_mid?.trim()
     if (!maxMid) {
       failed += 1
@@ -409,6 +423,9 @@ export async function repairMissingThreadMappings(
         tgMsgId: mapping.tg_msg_id,
         err,
       })
+    }
+    if (i < mappings.length - 1) {
+      await sleep(getTelegramApiMinIntervalMs())
     }
   }
 

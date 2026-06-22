@@ -18,6 +18,8 @@ const postCommentMappingStore_1 = require("./postCommentMappingStore");
 const telegramDiscussionThreadResolver_1 = require("./telegramDiscussionThreadResolver");
 const mtprotoConfigStore_1 = require("./mtprotoConfigStore");
 const resolveTelegramBotToken_1 = require("./resolveTelegramBotToken");
+const telegramRateLimiter_1 = require("../utils/telegramRateLimiter");
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const TG_API = 'https://api.telegram.org';
 function resolveBotTokenForChain(chain) {
     const fromChain = chain.bot_token?.trim();
@@ -93,6 +95,7 @@ function analyzeLogSignals(entries) {
     let invalid_message_id = 0;
     let send_as_peer_invalid = 0;
     let forbidden = 0;
+    let flood_wait = 0;
     let no_thread_mapping = 0;
     for (const entry of entries) {
         if (entry.ts) {
@@ -114,8 +117,11 @@ function analyzeLogSignals(entries) {
         if ((0, telegramSyncErrors_1.isTelegramForbiddenError)(hay)) {
             forbidden += 1;
         }
+        if (hay.includes('flood_wait') || hay.includes('retry after')) {
+            flood_wait += 1;
+        }
     }
-    return { invalid_message_id, send_as_peer_invalid, forbidden, no_thread_mapping };
+    return { invalid_message_id, send_as_peer_invalid, forbidden, flood_wait, no_thread_mapping };
 }
 function buildChainIssues(input) {
     const issues = [];
@@ -190,7 +196,7 @@ function buildChainIssues(input) {
             code: 'pending_max_to_tg',
             title: 'Комментарии MAX ждут отправки в TG',
             description: `${pendingMaxToTg} комментариев из miniapp ещё не синхронизированы в Telegram.`,
-            what_to_do: 'Исправьте thread mapping и права бота, затем дождитесь fallback-polling (15 сек).',
+            what_to_do: 'Исправьте thread mapping и права бота. Синхронизация идёт пакетами (TELEGRAM_COMMENT_SYNC_BATCH_SIZE) с интервалом MAX_COMMENT_SYNC_INTERVAL_MS.',
         });
     }
     return issues;
@@ -253,6 +259,9 @@ async function diagnoseCommentSync(chainIdFilter) {
     if (logSignals.forbidden > 0) {
         recommendations.push('Обнаружены ошибки 403/forbidden: проверьте токен бота и права в канале/группе.');
     }
+    if (logSignals.flood_wait > 0) {
+        recommendations.push('Обнаружен FLOOD_WAIT: увеличьте TELEGRAM_API_MIN_INTERVAL_MS (рекомендуется 2000–3000) и уменьшите TELEGRAM_COMMENT_SYNC_BATCH_SIZE.');
+    }
     if (!mtprotoReady) {
         recommendations.push(`MTProto не настроен (source: ${mtprotoSource}) — thread recovery ограничен.`);
     }
@@ -271,7 +280,8 @@ async function repairMissingThreadMappings(chainId, limit = 30) {
     let repaired = 0;
     let failed = 0;
     const samples = [];
-    for (const mapping of mappings) {
+    for (let i = 0; i < mappings.length; i += 1) {
+        const mapping = mappings[i];
         const maxMid = mapping.max_mid?.trim();
         if (!maxMid) {
             failed += 1;
@@ -302,6 +312,9 @@ async function repairMissingThreadMappings(chainId, limit = 30) {
                 tgMsgId: mapping.tg_msg_id,
                 err,
             });
+        }
+        if (i < mappings.length - 1) {
+            await sleep((0, telegramRateLimiter_1.getTelegramApiMinIntervalMs)());
         }
     }
     logger_1.logger.info('[commentSyncDiagnostics] repair thread mappings finished', {

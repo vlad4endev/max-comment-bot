@@ -4,14 +4,10 @@
  *
  * MAX miniapp → TG discussion group: пользовательские комментарии и ответы админа.
  */
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.markTelegramCommentAnsweredInMax = markTelegramCommentAnsweredInMax;
 exports.syncMaxCommentToTelegramThread = syncMaxCommentToTelegramThread;
 exports.syncAdminReplyToTelegramThread = syncAdminReplyToTelegramThread;
-const axios_1 = __importDefault(require("axios"));
 const adminPanelState_1 = require("../api/adminPanelState");
 const commentStore_1 = require("./commentStore");
 const postCommentMappingStore_1 = require("./postCommentMappingStore");
@@ -24,7 +20,7 @@ const commentsBookingService_1 = require("./commentsBookingService");
 const logger_1 = require("../utils/logger");
 const telegramSyncErrors_1 = require("../utils/telegramSyncErrors");
 const telegramMtprotoDiscussionSender_1 = require("./telegramMtprotoDiscussionSender");
-const TG_API = 'https://api.telegram.org';
+const telegramRateLimiter_1 = require("../utils/telegramRateLimiter");
 function resolveDiscussionSendAs(chainId) {
     const chain = (0, adminPanelState_1.listTgChainsSync)().find((c) => c.id === chainId);
     return chain?.tg_discussion_send_as === 'chat' ? 'chat' : 'channel';
@@ -112,8 +108,11 @@ function tgPayload(target, extra) {
     return payload;
 }
 async function callTelegramBot(token, method, payload, logContext) {
-    const { data } = await axios_1.default.post(`${TG_API}/bot${token}/${method}`, payload, {
-        timeout: 20_000,
+    const data = await (0, telegramRateLimiter_1.callTelegramBotApi)(token, method, payload, {
+        method,
+        chatId: typeof payload.chat_id === 'number' || typeof payload.chat_id === 'string'
+            ? payload.chat_id
+            : undefined,
     });
     if (!data.ok) {
         const description = data.description ?? '';

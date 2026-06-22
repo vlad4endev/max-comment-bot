@@ -7,6 +7,7 @@
 import type { Bot } from '@maxhub/max-bot-api';
 interface SyncOptions {
     intervalMs?: number;
+    batchSize?: number;
 }
 export declare function startMaxCommentSync(bot: Bot, options?: SyncOptions): () => void;
 export {};

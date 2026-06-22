@@ -69,6 +69,7 @@ const tgChainChannelRef_1 = require("./services/tgChainChannelRef");
 const tgChainForwarder_1 = require("./services/tgChainForwarder");
 const vkChainForwarder_1 = require("./services/vkChainForwarder");
 const telegramTgChainLifecycle_1 = require("./services/telegramTgChainLifecycle");
+const telegramSyncAlertService_1 = require("./services/telegramSyncAlertService");
 const redisClient_1 = require("./cache/redisClient");
 const createWebhookApp_1 = require("./webhook/createWebhookApp");
 const telegramMiniAppUrl_1 = require("./utils/telegramMiniAppUrl");
@@ -119,6 +120,7 @@ async function main() {
     (0, tgChainForwarder_1.setTgChainForwarderBot)(bot);
     (0, vkChainForwarder_1.setVkChainForwarderBot)(bot);
     (0, telegramTgChainLifecycle_1.setTelegramTgChainLifecycleBot)(bot);
+    (0, telegramSyncAlertService_1.setTelegramSyncAlertBot)(bot);
     (0, logger_1.startRuntimeLogRotationScheduler)();
     (0, channelRegistry_1.setChannelRegistryChangeHandler)(() => (0, channelPoller_1.notifyChannelRegistryChanged)());
     (0, channelPoller_1.startChannelPostPoller)(bot);
@@ -127,9 +129,9 @@ async function main() {
     (0, autopostScheduler_1.startAutopostScheduler)();
     // До HTTP: иначе при EADDRINUSE channelPoller уже в логах, а flowProcessor — нет.
     await flowProcessor_1.flowProcessor.start();
-    // Синхронизация комментариев TG ↔ Max — добавлено
+    // Синхронизация комментариев TG ↔ Max
     const { startMaxCommentSync } = await Promise.resolve().then(() => __importStar(require('./services/maxCommentSyncService')));
-    const stopCommentSync = startMaxCommentSync(bot, { intervalMs: 15_000 });
+    const stopCommentSync = startMaxCommentSync(bot);
     process.once('SIGINT', () => stopCommentSync());
     process.once('SIGTERM', () => stopCommentSync());
     (0, vkChainForwarder_1.startVkChainForwarder)();

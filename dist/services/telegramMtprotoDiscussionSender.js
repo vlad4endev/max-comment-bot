@@ -11,6 +11,7 @@ const telegram_1 = require("telegram");
 const Helpers_1 = require("telegram/Helpers");
 const logger_1 = require("../utils/logger");
 const telegramSyncErrors_1 = require("../utils/telegramSyncErrors");
+const telegramRateLimiter_1 = require("../utils/telegramRateLimiter");
 const telegramUserArchive_1 = require("./telegramUserArchive");
 function mtprotoDiscussionSenderConfigured() {
     return (0, telegramUserArchive_1.telegramUserArchiveConfigured)();
@@ -57,13 +58,13 @@ async function sendDiscussionMessageAsPeer(mode, discussionChatId, channelKey, t
             const channelEntity = await (0, telegramUserArchive_1.resolveTelegramChannelEntity)(client, channelKey);
             sendAsPeer = await client.getInputEntity(channelEntity);
         }
-        const updates = await client.invoke(new telegram_1.Api.messages.SendMessage({
+        const updates = await (0, telegramRateLimiter_1.withTelegramFloodWaitBackoff)('messages.SendMessage', () => client.invoke(new telegram_1.Api.messages.SendMessage({
             peer: discussionPeer,
             message: trimmed,
             replyTo: new telegram_1.Api.InputReplyToMessage({ replyToMsgId: replyToMessageId }),
             randomId: (0, Helpers_1.generateRandomLong)(),
             sendAs: sendAsPeer,
-        }));
+        })));
         const messageId = extractMessageIdFromUpdates(updates);
         if (messageId != null) {
             logger_1.logger.info('[telegramMtprotoDiscussionSender] sent with sendAs', {

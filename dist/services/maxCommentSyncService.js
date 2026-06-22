@@ -10,21 +10,73 @@ exports.startMaxCommentSync = startMaxCommentSync;
 const commentStore_1 = require("./commentStore");
 const postStore_1 = require("./postStore");
 const telegramThreadReplySync_1 = require("./telegramThreadReplySync");
+const telegramDiscussionThreadResolver_1 = require("./telegramDiscussionThreadResolver");
+const postCommentMappingStore_1 = require("./postCommentMappingStore");
 const logger_1 = require("../utils/logger");
+const telegramRateLimiter_1 = require("../utils/telegramRateLimiter");
+const THREAD_REPAIR_PER_CYCLE = 3;
 function startMaxCommentSync(bot, options = {}) {
-    const { intervalMs = 15_000 } = options;
+    const intervalMs = options.intervalMs ?? (0, telegramRateLimiter_1.getMaxCommentSyncIntervalMs)();
+    const batchSize = options.batchSize ?? (0, telegramRateLimiter_1.getTelegramCommentSyncBatchSize)();
+    async function repairThreadMappingsForPending(postMessageMids) {
+        const unique = [...new Set(postMessageMids.filter((m) => m.trim() !== ''))];
+        let repaired = 0;
+        for (const messageMid of unique) {
+            if (repaired >= THREAD_REPAIR_PER_CYCLE) {
+                break;
+            }
+            const mapping = (0, postCommentMappingStore_1.findMappingByMaxMid)(messageMid);
+            if (mapping?.tg_thread_chat_id && mapping.tg_thread_msg_id) {
+                continue;
+            }
+            try {
+                const result = await (0, telegramDiscussionThreadResolver_1.ensurePostThreadMapping)(messageMid);
+                if (result?.tg_thread_chat_id && result.tg_thread_msg_id) {
+                    repaired += 1;
+                    logger_1.logger.info('[maxCommentSync] auto-repaired thread mapping', {
+                        messageMid,
+                        threadChatId: result.tg_thread_chat_id,
+                        threadMsgId: result.tg_thread_msg_id,
+                    });
+                }
+            }
+            catch (err) {
+                logger_1.logger.warn('[maxCommentSync] auto-repair thread mapping failed', { messageMid, err });
+            }
+        }
+    }
     async function syncOnce() {
+        if ((0, telegramRateLimiter_1.isTelegramApiPaused)()) {
+            logger_1.logger.debug('[maxCommentSync] skipped: Telegram API pause active');
+            return;
+        }
         try {
-            const pendingComments = commentStore_1.commentStore.listCommentsPendingMaxToTelegram(25);
+            const pendingComments = commentStore_1.commentStore.listCommentsPendingMaxToTelegram(batchSize);
+            const pendingReplies = commentStore_1.commentStore.listCommentsPendingTelegramThreadReply(batchSize);
+            const messageMids = [];
+            for (const comment of [...pendingComments, ...pendingReplies]) {
+                const post = postStore_1.postStore.getPost(comment.post_id);
+                if (post?.message_mid) {
+                    messageMids.push(post.message_mid);
+                }
+            }
+            if (messageMids.length > 0) {
+                await repairThreadMappingsForPending(messageMids);
+            }
             for (const comment of pendingComments) {
+                if ((0, telegramRateLimiter_1.isTelegramApiPaused)()) {
+                    break;
+                }
                 const post = postStore_1.postStore.getPost(comment.post_id);
                 if (!post) {
                     continue;
                 }
                 await (0, telegramThreadReplySync_1.syncMaxCommentToTelegramThread)(bot, comment, post);
             }
-            const pendingReplies = commentStore_1.commentStore.listCommentsPendingTelegramThreadReply(25);
             for (const comment of pendingReplies) {
+                if ((0, telegramRateLimiter_1.isTelegramApiPaused)()) {
+                    break;
+                }
                 const post = postStore_1.postStore.getPost(comment.post_id);
                 if (!post) {
                     continue;
@@ -40,6 +92,7 @@ function startMaxCommentSync(bot, options = {}) {
         void syncOnce();
     }, intervalMs);
     void syncOnce();
+    logger_1.logger.info('[maxCommentSync] started', { intervalMs, batchSize });
     return () => clearInterval(timer);
 }
 //# sourceMappingURL=maxCommentSyncService.js.map

@@ -1,7 +1,4 @@
 "use strict";
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.TG_COMMENT_CALLBACK_PREFIX = void 0;
 exports.resolveTelegramSourceChannelsForMaxChat = resolveTelegramSourceChannelsForMaxChat;
@@ -10,7 +7,6 @@ exports.buildNewCommentNotificationMessage = buildNewCommentNotificationMessage;
 exports.buildTelegramCommentNotificationKeyboard = buildTelegramCommentNotificationKeyboard;
 exports.notifyTelegramAdminsNewMiniappComment = notifyTelegramAdminsNewMiniappComment;
 exports.syncTelegramAdminCommentNotification = syncTelegramAdminCommentNotification;
-const axios_1 = __importDefault(require("axios"));
 const adminPanelState_1 = require("../api/adminPanelState");
 const logger_1 = require("../utils/logger");
 const telegramMiniAppUrl_1 = require("../utils/telegramMiniAppUrl");
@@ -25,7 +21,7 @@ const resolveTelegramBotToken_1 = require("./resolveTelegramBotToken");
 const telegramMiniappAuth_1 = require("./telegramMiniappAuth");
 const telegramBotUserStore_1 = require("./telegramBotUserStore");
 const telegramChannelNotifyLinkStore_1 = require("./telegramChannelNotifyLinkStore");
-const TG_API = 'https://api.telegram.org';
+const telegramRateLimiter_1 = require("../utils/telegramRateLimiter");
 exports.TG_COMMENT_CALLBACK_PREFIX = 'tgc:';
 function preview80(text) {
     const t = text.trim().replace(/\s+/g, ' ');
@@ -157,11 +153,11 @@ function buildTelegramCommentNotificationKeyboard(input) {
     return { inline_keyboard: rows };
 }
 async function tgSendMessage(token, chatId, text, replyMarkup) {
-    const { data } = await axios_1.default.post(`${TG_API}/bot${token}/sendMessage`, {
+    const data = await (0, telegramRateLimiter_1.callTelegramBotApi)(token, 'sendMessage', {
         chat_id: chatId,
         text,
         reply_markup: replyMarkup,
-    }, { timeout: 20_000 });
+    }, { method: 'sendMessage', chatId });
     if (!data.ok) {
         throw new Error(data.description ?? 'Telegram sendMessage failed');
     }
@@ -169,12 +165,15 @@ async function tgSendMessage(token, chatId, text, replyMarkup) {
     return typeof messageId === 'number' ? messageId : null;
 }
 async function tgEditMessage(token, chatId, messageId, text, replyMarkup) {
-    await axios_1.default.post(`${TG_API}/bot${token}/editMessageText`, {
+    const data = await (0, telegramRateLimiter_1.callTelegramBotApi)(token, 'editMessageText', {
         chat_id: chatId,
         message_id: messageId,
         text,
         reply_markup: replyMarkup,
-    }, { timeout: 20_000 });
+    }, { method: 'editMessageText', chatId });
+    if (!data.ok) {
+        throw new Error(data.description ?? 'Telegram editMessageText failed');
+    }
 }
 async function notifyTelegramAdminsNewMiniappComment(bot, input) {
     await integrationsStore_1.integrationsStore.load();

@@ -5,7 +5,6 @@
  */
 
 import type { Bot } from '@maxhub/max-bot-api'
-import axios from 'axios'
 
 import { listTgChainsSync } from '../api/adminPanelState'
 import type { Comment } from './commentStore'
@@ -39,8 +38,7 @@ import {
   type DiscussionSendAsMode,
 } from './telegramMtprotoDiscussionSender'
 import type { PostCommentMappingRow } from './postCommentMappingStore'
-
-const TG_API = 'https://api.telegram.org'
+import { callTelegramBotApi } from '../utils/telegramRateLimiter'
 
 type TgMessageTarget = {
   token: string
@@ -161,8 +159,11 @@ async function callTelegramBot<T extends { ok: boolean; description?: string }>(
   payload: Record<string, unknown>,
   logContext: Record<string, unknown>,
 ): Promise<T> {
-  const { data } = await axios.post<T>(`${TG_API}/bot${token}/${method}`, payload, {
-    timeout: 20_000,
+  const data = await callTelegramBotApi<T>(token, method, payload, {
+    method,
+    chatId: typeof payload.chat_id === 'number' || typeof payload.chat_id === 'string'
+      ? payload.chat_id
+      : undefined,
   })
   if (!data.ok) {
     const description = data.description ?? ''
