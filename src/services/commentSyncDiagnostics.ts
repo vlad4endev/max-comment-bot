@@ -482,19 +482,26 @@ export interface BootstrapCommentSyncResult {
 }
 
 /** На старте: backfill post_comment_mapping и починка тредов для активных цепочек. */
-export async function bootstrapCommentSyncOnStartup(): Promise<BootstrapCommentSyncResult> {
+export async function bootstrapCommentSyncOnStartup(options?: {
+  threadRepairLimit?: number
+  repairThreads?: boolean
+}): Promise<BootstrapCommentSyncResult> {
+  const threadRepairLimit = options?.threadRepairLimit ?? 5
+  const repairThreads = options?.repairThreads !== false
   const mappingsBackfilled = backfillPostCommentMappingsFromForwarded()
   let chainsRepaired = 0
   let threadsRepaired = 0
   let threadsFailed = 0
 
-  const chains = listTgChainsSync().filter((c) => c.active !== false && c.forward_comments === true)
-  for (const chain of chains) {
-    const repair = await repairMissingThreadMappings(chain.id, 15)
-    if (repair.attempted > 0) {
-      chainsRepaired += 1
-      threadsRepaired += repair.repaired
-      threadsFailed += repair.failed
+  if (repairThreads) {
+    const chains = listTgChainsSync().filter((c) => c.active !== false && c.forward_comments === true)
+    for (const chain of chains) {
+      const repair = await repairMissingThreadMappings(chain.id, threadRepairLimit)
+      if (repair.attempted > 0) {
+        chainsRepaired += 1
+        threadsRepaired += repair.repaired
+        threadsFailed += repair.failed
+      }
     }
   }
 

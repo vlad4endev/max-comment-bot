@@ -9,6 +9,7 @@ exports.getTelegramUserApiHash = getTelegramUserApiHash;
 exports.getTelegramUserSession = getTelegramUserSession;
 exports.connectTelegramUserClient = connectTelegramUserClient;
 exports.resolveTelegramChannelEntity = resolveTelegramChannelEntity;
+exports.disconnectTelegramUserClient = disconnectTelegramUserClient;
 exports.fetchChannelArchiveForImport = fetchChannelArchiveForImport;
 const promises_1 = __importDefault(require("node:fs/promises"));
 const node_os_1 = __importDefault(require("node:os"));
@@ -125,10 +126,22 @@ async function createUserClient() {
     });
     await client.connect();
     if (!(await client.checkAuthorization())) {
-        await client.disconnect();
+        await client.destroy().catch(() => { });
         throw new Error('Сессия MTProto недействительна — войдите заново в админке');
     }
     return client;
+}
+async function disconnectTelegramUserClient(client) {
+    try {
+        if (typeof client.destroy === 'function') {
+            await client.destroy();
+            return;
+        }
+        await client.disconnect();
+    }
+    catch (err) {
+        logger_1.logger.debug('[telegramUserArchive] MTProto client teardown', { err });
+    }
 }
 function messageCaption(msg) {
     const text = typeof msg.message === 'string' ? msg.message.trim() : '';
@@ -360,7 +373,7 @@ async function fetchChannelArchiveForImport(channelKey, limit, jobId, onPost) {
             return staged;
         }
         finally {
-            await client.disconnect();
+            await disconnectTelegramUserClient(client);
         }
     };
     return withTimeout(run(), ARCHIVE_FETCH_TIMEOUT_MS, 'загрузка архива');

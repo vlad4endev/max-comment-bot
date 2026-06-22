@@ -60,6 +60,49 @@ export function clearPostThreadMapping(chainId: string, tgMsgId: number): void {
     .run(chainId, tgMsgId)
 }
 
+/** Удаляет битый маппинг (MSG_ID_INVALID / удалённый пост в TG). */
+export function deletePostCommentMapping(chainId: string, tgMsgId: number): boolean {
+  const result = getDb()
+    .prepare(`DELETE FROM post_comment_mapping WHERE chain_id = ? AND tg_msg_id = ?`)
+    .run(chainId, tgMsgId)
+  return Number(result.changes) > 0
+}
+
+/** Пересоздаёт маппинг для max_mid из tg_chain_forwarded (последняя пересылка). */
+export function backfillPostCommentMappingForMaxMid(maxMid: string): boolean {
+  const normalized = maxMid.trim()
+  if (!normalized) {
+    return false
+  }
+  const row = getDb()
+    .prepare(
+      `SELECT chain_id, tg_message_id, tg_payload
+       FROM tg_chain_forwarded
+       WHERE max_message_mid = ?
+       ORDER BY forwarded_at DESC
+       LIMIT 1`,
+    )
+    .get(normalized) as
+    | { chain_id: string; tg_message_id: number; tg_payload: string | null }
+    | undefined
+  if (!row) {
+    return false
+  }
+  let tgChatId: number | null = null
+  if (row.tg_payload) {
+    try {
+      const parsed = JSON.parse(row.tg_payload) as { chat?: { id?: number } }
+      if (typeof parsed.chat?.id === 'number') {
+        tgChatId = parsed.chat.id
+      }
+    } catch {
+      // ignore
+    }
+  }
+  upsertPostCommentMapping(row.chain_id, row.tg_message_id, normalized, tgChatId)
+  return true
+}
+
 export interface PostMappingThreadStats {
   total: number
   with_thread: number

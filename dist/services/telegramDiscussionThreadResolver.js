@@ -9,6 +9,7 @@ exports.refreshPostThreadMapping = refreshPostThreadMapping;
 const telegram_1 = require("telegram");
 const adminPanelState_1 = require("../api/adminPanelState");
 const logger_1 = require("../utils/logger");
+const telegramSyncErrors_1 = require("../utils/telegramSyncErrors");
 const postCommentMappingStore_1 = require("./postCommentMappingStore");
 const resolveTelegramBotToken_1 = require("./resolveTelegramBotToken");
 const mtprotoConfigStore_1 = require("./mtprotoConfigStore");
@@ -99,6 +100,22 @@ async function resolveThreadViaMtproto(chain, mapping) {
         return extracted;
     }
     catch (err) {
+        const errText = err instanceof Error
+            ? err.message
+            : typeof err === 'object' && err !== null && 'errorMessage' in err
+                ? String(err.errorMessage ?? err)
+                : String(err);
+        if ((0, telegramSyncErrors_1.isInvalidTelegramMessageIdError)(errText)) {
+            logger_1.logger.warn('[discussionThreadResolver] stale channel message id, dropping mapping', {
+                chainId: chain.id,
+                channelMsgId: mapping.tg_msg_id,
+                maxMid: mapping.max_mid,
+                errText,
+            });
+            (0, postCommentMappingStore_1.deletePostCommentMapping)(mapping.chain_id, mapping.tg_msg_id);
+            (0, postCommentMappingStore_1.backfillPostCommentMappingForMaxMid)(mapping.max_mid);
+            return null;
+        }
         logger_1.logger.warn('[discussionThreadResolver] GetDiscussionMessage failed', {
             chainId: chain.id,
             channelMsgId: mapping.tg_msg_id,
@@ -108,7 +125,7 @@ async function resolveThreadViaMtproto(chain, mapping) {
         return null;
     }
     finally {
-        await client.disconnect();
+        await (0, telegramUserArchive_1.disconnectTelegramUserClient)(client);
     }
 }
 /**

@@ -6,6 +6,8 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.upsertPostCommentMapping = upsertPostCommentMapping;
 exports.linkThreadMessageToChannelPost = linkThreadMessageToChannelPost;
 exports.clearPostThreadMapping = clearPostThreadMapping;
+exports.deletePostCommentMapping = deletePostCommentMapping;
+exports.backfillPostCommentMappingForMaxMid = backfillPostCommentMappingForMaxMid;
 exports.countPostMappingThreadStats = countPostMappingThreadStats;
 exports.listMappingsMissingThread = listMappingsMissingThread;
 exports.findMappingByThreadMsgId = findMappingByThreadMsgId;
@@ -42,6 +44,44 @@ function clearPostThreadMapping(chainId, tgMsgId) {
        SET tg_thread_chat_id = NULL, tg_thread_msg_id = NULL
        WHERE chain_id = ? AND tg_msg_id = ?`)
         .run(chainId, tgMsgId);
+}
+/** Удаляет битый маппинг (MSG_ID_INVALID / удалённый пост в TG). */
+function deletePostCommentMapping(chainId, tgMsgId) {
+    const result = (0, database_1.getDb)()
+        .prepare(`DELETE FROM post_comment_mapping WHERE chain_id = ? AND tg_msg_id = ?`)
+        .run(chainId, tgMsgId);
+    return Number(result.changes) > 0;
+}
+/** Пересоздаёт маппинг для max_mid из tg_chain_forwarded (последняя пересылка). */
+function backfillPostCommentMappingForMaxMid(maxMid) {
+    const normalized = maxMid.trim();
+    if (!normalized) {
+        return false;
+    }
+    const row = (0, database_1.getDb)()
+        .prepare(`SELECT chain_id, tg_message_id, tg_payload
+       FROM tg_chain_forwarded
+       WHERE max_message_mid = ?
+       ORDER BY forwarded_at DESC
+       LIMIT 1`)
+        .get(normalized);
+    if (!row) {
+        return false;
+    }
+    let tgChatId = null;
+    if (row.tg_payload) {
+        try {
+            const parsed = JSON.parse(row.tg_payload);
+            if (typeof parsed.chat?.id === 'number') {
+                tgChatId = parsed.chat.id;
+            }
+        }
+        catch {
+            // ignore
+        }
+    }
+    upsertPostCommentMapping(row.chain_id, row.tg_message_id, normalized, tgChatId);
+    return true;
 }
 function countPostMappingThreadStats(chainId) {
     const where = chainId ? 'WHERE chain_id = ?' : '';

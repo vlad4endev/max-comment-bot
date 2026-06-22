@@ -352,18 +352,22 @@ async function repairMissingThreadMappings(chainId, limit = 30) {
     };
 }
 /** На старте: backfill post_comment_mapping и починка тредов для активных цепочек. */
-async function bootstrapCommentSyncOnStartup() {
+async function bootstrapCommentSyncOnStartup(options) {
+    const threadRepairLimit = options?.threadRepairLimit ?? 5;
+    const repairThreads = options?.repairThreads !== false;
     const mappingsBackfilled = (0, postCommentMappingStore_1.backfillPostCommentMappingsFromForwarded)();
     let chainsRepaired = 0;
     let threadsRepaired = 0;
     let threadsFailed = 0;
-    const chains = (0, adminPanelState_1.listTgChainsSync)().filter((c) => c.active !== false && c.forward_comments === true);
-    for (const chain of chains) {
-        const repair = await repairMissingThreadMappings(chain.id, 15);
-        if (repair.attempted > 0) {
-            chainsRepaired += 1;
-            threadsRepaired += repair.repaired;
-            threadsFailed += repair.failed;
+    if (repairThreads) {
+        const chains = (0, adminPanelState_1.listTgChainsSync)().filter((c) => c.active !== false && c.forward_comments === true);
+        for (const chain of chains) {
+            const repair = await repairMissingThreadMappings(chain.id, threadRepairLimit);
+            if (repair.attempted > 0) {
+                chainsRepaired += 1;
+                threadsRepaired += repair.repaired;
+                threadsFailed += repair.failed;
+            }
         }
     }
     const pendingRow = (0, database_1.getDb)()

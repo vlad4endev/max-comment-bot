@@ -139,10 +139,22 @@ async function createUserClient(): Promise<TelegramClient> {
   })
   await client.connect()
   if (!(await client.checkAuthorization())) {
-    await client.disconnect()
+    await client.destroy().catch(() => {})
     throw new Error('Сессия MTProto недействительна — войдите заново в админке')
   }
   return client
+}
+
+export async function disconnectTelegramUserClient(client: TelegramClient): Promise<void> {
+  try {
+    if (typeof client.destroy === 'function') {
+      await client.destroy()
+      return
+    }
+    await client.disconnect()
+  } catch (err: unknown) {
+    logger.debug('[telegramUserArchive] MTProto client teardown', { err })
+  }
 }
 
 function messageCaption(msg: { message?: string }): string {
@@ -432,7 +444,7 @@ export async function fetchChannelArchiveForImport(
       }
       return staged
     } finally {
-      await client.disconnect()
+      await disconnectTelegramUserClient(client)
     }
   }
 

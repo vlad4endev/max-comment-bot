@@ -43,6 +43,7 @@ import { startAutopostScheduler } from './services/autopostScheduler'
 import { startChannelImportWorker } from './services/channelImportService'
 import { ensureAdminPanelStateLoaded } from './api/adminPanelState'
 import { repairLegacyMiniappTgChains } from './services/channelLinkService'
+import { backfillPostCommentMappingsFromForwarded } from './services/postCommentMappingStore'
 import { bootstrapCommentSyncOnStartup } from './services/commentSyncDiagnostics'
 import { repairTgChainsForForwarding, repairStaleTgChainBotTokens, repairMiniappChainsForwardComments } from './services/tgChainChannelRef'
 import { setTgChainForwarderBot, startTgChainForwarder } from './services/tgChainForwarder'
@@ -57,6 +58,12 @@ import {
 import { initRedis } from './cache/redisClient'
 import { createHttpApp, createWebhookApp } from './webhook/createWebhookApp'
 import { logMiniAppUrlDiagnostics } from './utils/telegramMiniAppUrl'
+
+function scheduleDeferredCommentSyncBootstrap(): void {
+  void bootstrapCommentSyncOnStartup({ threadRepairLimit: 8 }).catch((err: unknown) => {
+    logger.error('[commentSync] deferred bootstrap failed', err)
+  })
+}
 
 async function main(): Promise<void> {
   migrateFromJson()
@@ -90,7 +97,10 @@ async function main(): Promise<void> {
   if (staleChainTokens.repaired > 0) {
     logger.warn('Заменены устаревшие bot_token в TG-цепочках', staleChainTokens)
   }
-  await bootstrapCommentSyncOnStartup()
+  const mappingsBackfilled = backfillPostCommentMappingsFromForwarded()
+  if (mappingsBackfilled > 0) {
+    logger.info('[commentSync] backfilled post_comment_mapping on startup', { mappingsBackfilled })
+  }
   try {
     await ensureBotProfile(bot)
   } catch (err: unknown) {
@@ -209,6 +219,7 @@ async function main(): Promise<void> {
     })
     startChannelImportWorker()
     startTgChainForwarder()
+    scheduleDeferredCommentSyncBootstrap()
   } else {
     const app = createHttpApp({ bot })
     const server = createServer(app)
@@ -229,6 +240,7 @@ async function main(): Promise<void> {
 
     startChannelImportWorker()
     startTgChainForwarder()
+    scheduleDeferredCommentSyncBootstrap()
     await startBotLongPolling(bot)
   }
 }

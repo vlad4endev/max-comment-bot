@@ -4,14 +4,15 @@
  */
 
 import { Api } from 'telegram'
-
-import type { TgChainRecord } from '../api/adminPanelState'
-import { listTgChainsSync } from '../api/adminPanelState'
+import { listTgChainsSync, type TgChainRecord } from '../api/adminPanelState'
 import { logger } from '../utils/logger'
+import { isInvalidTelegramMessageIdError } from '../utils/telegramSyncErrors'
 import {
   findMappingByMaxMid,
   linkThreadMessageToChannelPost,
   clearPostThreadMapping,
+  deletePostCommentMapping,
+  backfillPostCommentMappingForMaxMid,
   resolveDiscussionChatId,
   type PostCommentMappingRow,
 } from './postCommentMappingStore'
@@ -19,6 +20,7 @@ import { resolveTelegramBotToken } from './resolveTelegramBotToken'
 import { isMtprotoSessionReady, resolveMtprotoCredentials } from './mtprotoConfigStore'
 import {
   connectTelegramUserClient,
+  disconnectTelegramUserClient,
   resolveTelegramChannelEntity,
 } from './telegramUserArchive'
 
@@ -120,6 +122,23 @@ async function resolveThreadViaMtproto(
     }
     return extracted
   } catch (err: unknown) {
+    const errText =
+      err instanceof Error
+        ? err.message
+        : typeof err === 'object' && err !== null && 'errorMessage' in err
+          ? String((err as { errorMessage?: string }).errorMessage ?? err)
+          : String(err)
+    if (isInvalidTelegramMessageIdError(errText)) {
+      logger.warn('[discussionThreadResolver] stale channel message id, dropping mapping', {
+        chainId: chain.id,
+        channelMsgId: mapping.tg_msg_id,
+        maxMid: mapping.max_mid,
+        errText,
+      })
+      deletePostCommentMapping(mapping.chain_id, mapping.tg_msg_id)
+      backfillPostCommentMappingForMaxMid(mapping.max_mid)
+      return null
+    }
     logger.warn('[discussionThreadResolver] GetDiscussionMessage failed', {
       chainId: chain.id,
       channelMsgId: mapping.tg_msg_id,
@@ -128,7 +147,7 @@ async function resolveThreadViaMtproto(
     })
     return null
   } finally {
-    await client.disconnect()
+    await disconnectTelegramUserClient(client)
   }
 }
 

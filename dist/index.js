@@ -65,6 +65,7 @@ const autopostScheduler_1 = require("./services/autopostScheduler");
 const channelImportService_1 = require("./services/channelImportService");
 const adminPanelState_1 = require("./api/adminPanelState");
 const channelLinkService_1 = require("./services/channelLinkService");
+const postCommentMappingStore_1 = require("./services/postCommentMappingStore");
 const commentSyncDiagnostics_1 = require("./services/commentSyncDiagnostics");
 const tgChainChannelRef_1 = require("./services/tgChainChannelRef");
 const tgChainForwarder_1 = require("./services/tgChainForwarder");
@@ -75,6 +76,11 @@ const telegramHealthService_1 = require("./services/telegramHealthService");
 const redisClient_1 = require("./cache/redisClient");
 const createWebhookApp_1 = require("./webhook/createWebhookApp");
 const telegramMiniAppUrl_1 = require("./utils/telegramMiniAppUrl");
+function scheduleDeferredCommentSyncBootstrap() {
+    void (0, commentSyncDiagnostics_1.bootstrapCommentSyncOnStartup)({ threadRepairLimit: 8 }).catch((err) => {
+        logger_1.logger.error('[commentSync] deferred bootstrap failed', err);
+    });
+}
 async function main() {
     (0, migrate_1.migrateFromJson)();
     (0, migratePostsDb_1.migrateAutopostsFromBotDb)();
@@ -107,7 +113,10 @@ async function main() {
     if (staleChainTokens.repaired > 0) {
         logger_1.logger.warn('Заменены устаревшие bot_token в TG-цепочках', staleChainTokens);
     }
-    await (0, commentSyncDiagnostics_1.bootstrapCommentSyncOnStartup)();
+    const mappingsBackfilled = (0, postCommentMappingStore_1.backfillPostCommentMappingsFromForwarded)();
+    if (mappingsBackfilled > 0) {
+        logger_1.logger.info('[commentSync] backfilled post_comment_mapping on startup', { mappingsBackfilled });
+    }
     try {
         await (0, bot_1.ensureBotProfile)(bot);
     }
@@ -209,6 +218,7 @@ async function main() {
         });
         (0, channelImportService_1.startChannelImportWorker)();
         (0, tgChainForwarder_1.startTgChainForwarder)();
+        scheduleDeferredCommentSyncBootstrap();
     }
     else {
         const app = (0, createWebhookApp_1.createHttpApp)({ bot });
@@ -224,6 +234,7 @@ async function main() {
         });
         (0, channelImportService_1.startChannelImportWorker)();
         (0, tgChainForwarder_1.startTgChainForwarder)();
+        scheduleDeferredCommentSyncBootstrap();
         await (0, bot_1.startBotLongPolling)(bot);
     }
 }
