@@ -100,6 +100,8 @@ export interface TgChainRecord {
   tg_channel_id?: string
   bot_token: string
   forward_posts: boolean
+  /** ISO: пересылать только посты, опубликованные в TG после этого момента. */
+  forward_posts_since?: string | null
   forward_comments: boolean
   /** Явный ID чата обсуждений TG (-100…); если пусто — linked_chat_id канала. */
   tg_discussion_chat_id?: string | null
@@ -462,10 +464,15 @@ export async function ensureAdminPanelStateLoaded(): Promise<void> {
 
 export async function createTgChain(input: Omit<TgChainRecord, 'id' | 'created_at' | 'forwarded_today' | 'errors_today'>): Promise<TgChainRecord> {
   const s = await loadState()
+  const nowIso = new Date().toISOString()
   const row: TgChainRecord = {
     ...input,
     id: randomUUID(),
-    created_at: new Date().toISOString(),
+    created_at: nowIso,
+    forward_posts_since:
+      input.forward_posts !== false
+        ? (input.forward_posts_since?.trim() || nowIso)
+        : (input.forward_posts_since ?? null),
     forwarded_today: 0,
     errors_today: 0,
   }
@@ -480,7 +487,12 @@ export async function updateTgChain(id: string, patch: Partial<TgChainRecord>): 
   if (idx < 0) {
     return null
   }
-  s.tg_chains[idx] = { ...s.tg_chains[idx], ...patch, id }
+  const prev = s.tg_chains[idx]!
+  const nextPatch = { ...patch }
+  if (patch.forward_posts === true && !prev.forward_posts) {
+    nextPatch.forward_posts_since = new Date().toISOString()
+  }
+  s.tg_chains[idx] = { ...prev, ...nextPatch, id }
   await persist()
   return s.tg_chains[idx]
 }

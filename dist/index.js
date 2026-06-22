@@ -109,6 +109,10 @@ async function main() {
         });
     }
     await (0, tgChainChannelRef_1.repairTgChainsForForwarding)();
+    const forwardSinceRepaired = await (0, tgChainChannelRef_1.repairTgChainForwardPostsSince)();
+    if (forwardSinceRepaired > 0) {
+        logger_1.logger.info('Задана дата forward_posts_since для TG-связок', { chains: forwardSinceRepaired });
+    }
     const staleChainTokens = await (0, tgChainChannelRef_1.repairStaleTgChainBotTokens)();
     if (staleChainTokens.repaired > 0) {
         logger_1.logger.warn('Заменены устаревшие bot_token в TG-цепочках', staleChainTokens);

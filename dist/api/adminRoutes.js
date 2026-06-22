@@ -73,6 +73,7 @@ const integrationPlatformClient_1 = require("../services/integrationPlatformClie
 const mtprotoConfigStore_1 = require("../services/mtprotoConfigStore");
 const telegramHealthService_1 = require("../services/telegramHealthService");
 const tgChainPair_1 = require("../utils/tgChainPair");
+const tgChainPostPurge_1 = require("../services/tgChainPostPurge");
 const logAnalysisService_1 = require("../services/logAnalysisService");
 const logger_1 = require("../utils/logger");
 const memberAvatar_1 = require("../utils/memberAvatar");
@@ -1368,6 +1369,40 @@ function createAdminRouter(deps) {
             return;
         }
         res.json({ ok: true });
+    });
+    secured.post('/tg-chains/:id/purge-max-posts', async (req, res) => {
+        const id = parseNonEmptyString(req.params.id);
+        if (!id) {
+            res.status(400).json({ error: 'invalid id' });
+            return;
+        }
+        const body = isRecord(req.body) ? req.body : {};
+        const sinceIso = parseNonEmptyString(body.since);
+        const untilIso = parseNonEmptyString(body.until);
+        const dryRun = body.dry_run === true;
+        const limitRaw = body.limit;
+        const limit = typeof limitRaw === 'number' && Number.isFinite(limitRaw)
+            ? Math.floor(limitRaw)
+            : typeof limitRaw === 'string' && limitRaw.trim() !== ''
+                ? Math.floor(Number(limitRaw))
+                : undefined;
+        try {
+            const result = await (0, tgChainPostPurge_1.purgeTgChainForwardedMaxPosts)(deps.bot, id, {
+                sinceIso: sinceIso ?? undefined,
+                untilIso: untilIso ?? undefined,
+                dryRun,
+                limit,
+            });
+            res.json({ ok: true, purge: result });
+        }
+        catch (err) {
+            if (err instanceof Error && err.message === 'chain_not_found') {
+                res.status(404).json({ error: 'not found' });
+                return;
+            }
+            logger_1.logger.error('admin tg-chains purge-max-posts', err);
+            res.status(500).json({ error: 'failed' });
+        }
     });
     // ── VK-chains ──────────────────────────────────────────────────────────────
     secured.get('/vk-chains', async (_req, res) => {

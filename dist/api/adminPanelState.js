@@ -294,10 +294,14 @@ async function ensureAdminPanelStateLoaded() {
 }
 async function createTgChain(input) {
     const s = await loadState();
+    const nowIso = new Date().toISOString();
     const row = {
         ...input,
         id: (0, node_crypto_1.randomUUID)(),
-        created_at: new Date().toISOString(),
+        created_at: nowIso,
+        forward_posts_since: input.forward_posts !== false
+            ? (input.forward_posts_since?.trim() || nowIso)
+            : (input.forward_posts_since ?? null),
         forwarded_today: 0,
         errors_today: 0,
     };
@@ -311,7 +315,12 @@ async function updateTgChain(id, patch) {
     if (idx < 0) {
         return null;
     }
-    s.tg_chains[idx] = { ...s.tg_chains[idx], ...patch, id };
+    const prev = s.tg_chains[idx];
+    const nextPatch = { ...patch };
+    if (patch.forward_posts === true && !prev.forward_posts) {
+        nextPatch.forward_posts_since = new Date().toISOString();
+    }
+    s.tg_chains[idx] = { ...prev, ...nextPatch, id };
     await persist();
     return s.tg_chains[idx];
 }

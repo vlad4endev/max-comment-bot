@@ -101,6 +101,29 @@ export async function repairTgChainsForForwarding(): Promise<{
   return { tokenRepaired, channelIdRepaired }
 }
 
+/** Заполняет forward_posts_since для старых связок (защита от пересылки архива getUpdates). */
+export async function repairTgChainForwardPostsSince(): Promise<number> {
+  await ensureAdminPanelStateLoaded()
+  const chains = await listTgChains()
+  let repaired = 0
+  for (const chain of chains) {
+    if (chain.forward_posts !== true || chain.forward_posts_since?.trim()) {
+      continue
+    }
+    const since = chain.created_at?.trim() || new Date().toISOString()
+    await updateTgChain(chain.id, { forward_posts_since: since })
+    repaired += 1
+    logger.info('repairTgChainForwardPostsSince: set forward_posts_since from created_at', {
+      chainId: chain.id,
+      forwardPostsSince: since,
+    })
+  }
+  if (repaired > 0) {
+    logger.info('repairTgChainForwardPostsSince: done', { repaired })
+  }
+  return repaired
+}
+
 /** После смены токена в интеграциях — обновить цепочки со старым или пустым bot_token. */
 export async function syncTgChainBotTokensOnTelegramReconnect(
   previousToken: string,

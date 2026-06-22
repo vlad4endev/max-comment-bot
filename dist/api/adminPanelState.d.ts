@@ -58,6 +58,8 @@ export interface TgChainRecord {
     tg_channel_id?: string;
     bot_token: string;
     forward_posts: boolean;
+    /** ISO: пересылать только посты, опубликованные в TG после этого момента. */
+    forward_posts_since?: string | null;
     forward_comments: boolean;
     /** Явный ID чата обсуждений TG (-100…); если пусто — linked_chat_id канала. */
     tg_discussion_chat_id?: string | null;

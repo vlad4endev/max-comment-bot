@@ -45,7 +45,7 @@ import { ensureAdminPanelStateLoaded } from './api/adminPanelState'
 import { repairLegacyMiniappTgChains } from './services/channelLinkService'
 import { backfillPostCommentMappingsFromForwarded } from './services/postCommentMappingStore'
 import { bootstrapCommentSyncOnStartup } from './services/commentSyncDiagnostics'
-import { repairTgChainsForForwarding, repairStaleTgChainBotTokens, repairMiniappChainsForwardComments } from './services/tgChainChannelRef'
+import { repairTgChainsForForwarding, repairStaleTgChainBotTokens, repairMiniappChainsForwardComments, repairTgChainForwardPostsSince } from './services/tgChainChannelRef'
 import { setTgChainForwarderBot, startTgChainForwarder } from './services/tgChainForwarder'
 import { setVkChainForwarderBot, startVkChainForwarder, stopVkChainForwarder } from './services/vkChainForwarder'
 import { setTelegramTgChainLifecycleBot } from './services/telegramTgChainLifecycle'
@@ -93,6 +93,10 @@ async function main(): Promise<void> {
     })
   }
   await repairTgChainsForForwarding()
+  const forwardSinceRepaired = await repairTgChainForwardPostsSince()
+  if (forwardSinceRepaired > 0) {
+    logger.info('Задана дата forward_posts_since для TG-связок', { chains: forwardSinceRepaired })
+  }
   const staleChainTokens = await repairStaleTgChainBotTokens()
   if (staleChainTokens.repaired > 0) {
     logger.warn('Заменены устаревшие bot_token в TG-цепочках', staleChainTokens)

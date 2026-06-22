@@ -25,6 +25,8 @@ export interface TgReplyToMessage {
 
 export interface TgMessage {
   message_id: number
+  /** Unix time (seconds) when the message was sent in Telegram. */
+  date?: number
   text?: string
   caption?: string
   /** Альбом из нескольких фото/видео — отдельные channel_post с одним media_group_id */

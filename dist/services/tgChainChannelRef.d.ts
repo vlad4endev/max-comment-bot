@@ -9,6 +9,8 @@ export declare function repairTgChainsForForwarding(): Promise<{
     tokenRepaired: number;
     channelIdRepaired: number;
 }>;
+/** Заполняет forward_posts_since для старых связок (защита от пересылки архива getUpdates). */
+export declare function repairTgChainForwardPostsSince(): Promise<number>;
 /** После смены токена в интеграциях — обновить цепочки со старым или пустым bot_token. */
 export declare function syncTgChainBotTokensOnTelegramReconnect(previousToken: string, newToken: string): Promise<number>;
 /** Заменить в цепочках устаревшие bot_token, если основной токен валиден. */

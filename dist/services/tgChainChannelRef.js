@@ -2,6 +2,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.resolveTgChainChannelFields = resolveTgChainChannelFields;
 exports.repairTgChainsForForwarding = repairTgChainsForForwarding;
+exports.repairTgChainForwardPostsSince = repairTgChainForwardPostsSince;
 exports.syncTgChainBotTokensOnTelegramReconnect = syncTgChainBotTokensOnTelegramReconnect;
 exports.repairStaleTgChainBotTokens = repairStaleTgChainBotTokens;
 exports.repairMiniappChainsForwardComments = repairMiniappChainsForwardComments;
@@ -75,6 +76,28 @@ async function repairTgChainsForForwarding() {
         logger_1.logger.info('repairTgChainsForForwarding: done', { tokenRepaired, channelIdRepaired });
     }
     return { tokenRepaired, channelIdRepaired };
+}
+/** Заполняет forward_posts_since для старых связок (защита от пересылки архива getUpdates). */
+async function repairTgChainForwardPostsSince() {
+    await (0, adminPanelState_1.ensureAdminPanelStateLoaded)();
+    const chains = await (0, adminPanelState_1.listTgChains)();
+    let repaired = 0;
+    for (const chain of chains) {
+        if (chain.forward_posts !== true || chain.forward_posts_since?.trim()) {
+            continue;
+        }
+        const since = chain.created_at?.trim() || new Date().toISOString();
+        await (0, adminPanelState_1.updateTgChain)(chain.id, { forward_posts_since: since });
+        repaired += 1;
+        logger_1.logger.info('repairTgChainForwardPostsSince: set forward_posts_since from created_at', {
+            chainId: chain.id,
+            forwardPostsSince: since,
+        });
+    }
+    if (repaired > 0) {
+        logger_1.logger.info('repairTgChainForwardPostsSince: done', { repaired });
+    }
+    return repaired;
 }
 /** После смены токена в интеграциях — обновить цепочки со старым или пустым bot_token. */
 async function syncTgChainBotTokensOnTelegramReconnect(previousToken, newToken) {

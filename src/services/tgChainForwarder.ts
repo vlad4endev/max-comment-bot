@@ -156,6 +156,35 @@ function chainSourceKey(chain: TgChainRecord): string {
   return u ? `@${u}` : ''
 }
 
+/** Минимальная метка времени TG-поста (мс) для пересылки; null = без ограничения. */
+function resolveForwardPostsSinceMs(chain: TgChainRecord): number | null {
+  if (!chain.forward_posts) {
+    return null
+  }
+  const iso = chain.forward_posts_since?.trim() || chain.created_at?.trim() || ''
+  if (!iso) {
+    return null
+  }
+  const ms = Date.parse(iso)
+  if (!Number.isFinite(ms)) {
+    return null
+  }
+  // Небольшой запас на рассинхрон часов TG и сервера.
+  return ms - 120_000
+}
+
+function isTgPostTooOldForForward(chain: TgChainRecord, message: TgMessage): boolean {
+  const sinceMs = resolveForwardPostsSinceMs(chain)
+  if (sinceMs === null) {
+    return false
+  }
+  const msgDateSec = message.date
+  if (typeof msgDateSec !== 'number' || !Number.isFinite(msgDateSec)) {
+    return false
+  }
+  return msgDateSec * 1000 < sinceMs
+}
+
 function isAlreadyForwarded(chainId: string, messageId: number): boolean {
   const row = getDb()
     .prepare('SELECT 1 FROM tg_chain_forwarded WHERE chain_id = ? AND tg_message_id = ?')
@@ -737,10 +766,25 @@ async function processChainMessageGroup(
   tgToken: string,
 ): Promise<void> {
   const sourceKey = chainSourceKey(chain)
-  const pending = messages.filter(
-    (m) =>
-      telegramChannelMatchesTarget(m.chat, sourceKey) && !isAlreadyForwarded(chain.id, m.message_id),
-  )
+  const pending = messages.filter((m) => {
+    if (!telegramChannelMatchesTarget(m.chat, sourceKey)) {
+      return false
+    }
+    if (isAlreadyForwarded(chain.id, m.message_id)) {
+      return false
+    }
+    if (isTgPostTooOldForForward(chain, m)) {
+      markForwarded(chain.id, m, null, null)
+      logger.info('[tgChain] skip old TG post (before forward_posts_since)', {
+        chainId: chain.id,
+        tgMessageId: m.message_id,
+        tgDate: m.date ?? null,
+        forwardPostsSince: chain.forward_posts_since ?? chain.created_at,
+      })
+      return false
+    }
+    return true
+  })
   if (pending.length === 0) {
     return
   }
