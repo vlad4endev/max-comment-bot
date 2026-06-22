@@ -156,14 +156,30 @@ async function callTelegramBotApi(token, method, payload, context = { method }, 
     const rawChatId = payload.chat_id ?? context.chatId;
     const chatId = typeof rawChatId === 'number' || typeof rawChatId === 'string' ? rawChatId : undefined;
     for (let attempt = 0; attempt <= maxFloodRetries; attempt += 1) {
-        const data = await enqueueTelegramApiCall(async () => {
-            const { data: response } = await axios_1.default.post(url, payload, { timeout: 20_000 });
-            return response;
-        });
+        let data;
+        try {
+            data = await enqueueTelegramApiCall(async () => {
+                const { data: response } = await axios_1.default.post(url, payload, { timeout: 20_000 });
+                return response;
+            });
+        }
+        catch (err) {
+            const errText = (0, telegramSyncErrors_1.extractTelegramErrorText)(err);
+            if ((0, telegramSyncErrors_1.isTelegramUnauthorizedError)(errText)) {
+                const { reportTelegramUnauthorized } = await Promise.resolve().then(() => __importStar(require('../services/telegramSyncAlertService')));
+                void reportTelegramUnauthorized({ method, description: errText });
+            }
+            throw err;
+        }
         if (data.ok) {
             return data;
         }
         const description = data.description ?? '';
+        if ((0, telegramSyncErrors_1.isTelegramUnauthorizedError)(description) || data.error_code === 401) {
+            const { reportTelegramUnauthorized } = await Promise.resolve().then(() => __importStar(require('../services/telegramSyncAlertService')));
+            void reportTelegramUnauthorized({ method, description });
+            return data;
+        }
         const floodSeconds = parseFloodWaitSeconds(description, data.parameters);
         if (floodSeconds != null && attempt < maxFloodRetries) {
             extendGlobalPause(floodSeconds);

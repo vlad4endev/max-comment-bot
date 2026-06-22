@@ -7,7 +7,7 @@ import type { Bot } from '@maxhub/max-bot-api'
 import { config } from '../config'
 import { logger } from '../utils/logger'
 
-type AlertKind = 'flood_wait' | 'forbidden'
+type AlertKind = 'flood_wait' | 'forbidden' | 'unauthorized'
 
 const ALERT_COOLDOWN_MS = 15 * 60 * 1_000
 const lastAlertAt = new Map<string, number>()
@@ -83,5 +83,22 @@ export async function reportTelegramForbidden(input: {
     `Метод: ${input.method}${chatPart}\n` +
     `${input.description}\n\n` +
     `Проверьте: бот в канале и группе обсуждений, права администратора, токен.`
+  await deliverOperatorAlert(text)
+}
+
+export async function reportTelegramUnauthorized(input: {
+  method: string
+  description: string
+}): Promise<void> {
+  logger.error('[telegramSyncAlert] unauthorized', input)
+  if (!shouldNotify('unauthorized')) {
+    return
+  }
+  const text =
+    `🔴 Telegram 401 Unauthorized\n` +
+    `Метод: ${input.method}\n` +
+    `${input.description}\n\n` +
+    `Проверьте токен в интеграциях (TG_TOKEN) и статус бота в @BotFather. ` +
+    `После обновления токена перезапустите сервис.`
   await deliverOperatorAlert(text)
 }

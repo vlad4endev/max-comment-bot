@@ -72,6 +72,7 @@ import { parseAdminLogLine, type AdminLogEntry, type AdminLogLevel } from '../ut
 import { resolveTgChainChannelFields } from '../services/tgChainChannelRef'
 import { resolveVkGroup, listVkManagedGroups } from '../services/integrationPlatformClient'
 import { isMtprotoSessionReady, resolveMtprotoCredentials } from '../services/mtprotoConfigStore'
+import { getTelegramHealthSnapshot, probeTelegramBotApi } from '../services/telegramHealthService'
 import { findActiveTgChainForPair } from '../utils/tgChainPair'
 import {
   analyzeLogs,
@@ -455,6 +456,7 @@ export function createAdminRouter(deps: AdminRouterDeps): express.Router {
       .getIntegrations()
       .find((i) => i.platform === 'vk' && i.status === 'connected')
     const tgToken = (tgInteg?.token?.trim() || getTelegramToken()).trim()
+    const tgHealth = tgToken ? await probeTelegramBotApi(tgToken) : getTelegramHealthSnapshot()
     const tgChains = await listTgChains()
     const vkChains = await listVkChains()
     const tgLinked = tgInteg?.linkedChats ?? []
@@ -466,7 +468,15 @@ export function createAdminRouter(deps: AdminRouterDeps): express.Router {
         telegram: {
           connected: Boolean(tgInteg && tgToken),
           has_token: Boolean(tgToken),
-          label: tgInteg && tgToken ? 'Telegram подключён' : 'Telegram не подключён',
+          api_ok: tgHealth.api_ok,
+          bot_username: tgHealth.bot_username,
+          api_error: tgHealth.error,
+          label:
+            tgHealth.api_ok && tgToken
+              ? 'Telegram подключён'
+              : tgToken
+                ? 'Telegram: ошибка авторизации'
+                : 'Telegram не подключён',
           chains_active: tgChains.filter((c) => c.active).length,
           channels_total: tgLinked.length,
           channels_admin: tgLinked.filter((c) => c.botIsAdmin === true).length,
@@ -478,6 +488,7 @@ export function createAdminRouter(deps: AdminRouterDeps): express.Router {
         },
       },
       mtproto_ready: isMtprotoSessionReady(),
+      telegram_health_checked_at: tgHealth.checked_at,
     })
   })
 

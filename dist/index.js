@@ -70,6 +70,7 @@ const tgChainForwarder_1 = require("./services/tgChainForwarder");
 const vkChainForwarder_1 = require("./services/vkChainForwarder");
 const telegramTgChainLifecycle_1 = require("./services/telegramTgChainLifecycle");
 const telegramSyncAlertService_1 = require("./services/telegramSyncAlertService");
+const telegramHealthService_1 = require("./services/telegramHealthService");
 const redisClient_1 = require("./cache/redisClient");
 const createWebhookApp_1 = require("./webhook/createWebhookApp");
 const telegramMiniAppUrl_1 = require("./utils/telegramMiniAppUrl");
@@ -121,6 +122,10 @@ async function main() {
     (0, vkChainForwarder_1.setVkChainForwarderBot)(bot);
     (0, telegramTgChainLifecycle_1.setTelegramTgChainLifecycleBot)(bot);
     (0, telegramSyncAlertService_1.setTelegramSyncAlertBot)(bot);
+    await (0, telegramHealthService_1.assertTelegramBotApiOnStartup)();
+    (0, telegramHealthService_1.startTelegramHealthMonitor)();
+    process.once('SIGINT', () => (0, telegramHealthService_1.stopTelegramHealthMonitor)());
+    process.once('SIGTERM', () => (0, telegramHealthService_1.stopTelegramHealthMonitor)());
     (0, logger_1.startRuntimeLogRotationScheduler)();
     (0, channelRegistry_1.setChannelRegistryChangeHandler)(() => (0, channelPoller_1.notifyChannelRegistryChanged)());
     (0, channelPoller_1.startChannelPostPoller)(bot);

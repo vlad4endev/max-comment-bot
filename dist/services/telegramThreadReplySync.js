@@ -144,6 +144,23 @@ async function deliverTelegramThreadMessage(target, text, replyToId, useMtprotoS
         }
         catch (err) {
             const errText = (0, telegramSyncErrors_1.extractTelegramErrorText)(err);
+            if ((0, telegramSyncErrors_1.isSendAsPeerInvalidError)(errText) && target.sendAsMode === 'channel') {
+                try {
+                    const tgMsgId = await (0, telegramMtprotoDiscussionSender_1.sendDiscussionMessageAsPeer)('chat', target.threadChatId, target.channelKey, text, replyToId);
+                    if (tgMsgId != null) {
+                        logger_1.logger.info('[telegramThreadReplySync] sendAs channel failed, chat mode succeeded', {
+                            chainId: target.chainId,
+                        });
+                        return tgMsgId;
+                    }
+                }
+                catch (chatErr) {
+                    logger_1.logger.warn('[telegramThreadReplySync] sendAs chat fallback failed', {
+                        chainId: target.chainId,
+                        err: chatErr,
+                    });
+                }
+            }
             logger_1.logger.warn('[telegramThreadReplySync] sendAs peer failed, fallback to bot', {
                 chainId: target.chainId,
                 sendAsMode: target.sendAsMode,

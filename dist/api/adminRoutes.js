@@ -71,6 +71,7 @@ const adminLogFormat_1 = require("../utils/adminLogFormat");
 const tgChainChannelRef_1 = require("../services/tgChainChannelRef");
 const integrationPlatformClient_1 = require("../services/integrationPlatformClient");
 const mtprotoConfigStore_1 = require("../services/mtprotoConfigStore");
+const telegramHealthService_1 = require("../services/telegramHealthService");
 const tgChainPair_1 = require("../utils/tgChainPair");
 const logAnalysisService_1 = require("../services/logAnalysisService");
 const logger_1 = require("../utils/logger");
@@ -393,6 +394,7 @@ function createAdminRouter(deps) {
             .getIntegrations()
             .find((i) => i.platform === 'vk' && i.status === 'connected');
         const tgToken = (tgInteg?.token?.trim() || (0, config_1.getTelegramToken)()).trim();
+        const tgHealth = tgToken ? await (0, telegramHealthService_1.probeTelegramBotApi)(tgToken) : (0, telegramHealthService_1.getTelegramHealthSnapshot)();
         const tgChains = await (0, adminPanelState_1.listTgChains)();
         const vkChains = await (0, adminPanelState_1.listVkChains)();
         const tgLinked = tgInteg?.linkedChats ?? [];
@@ -404,7 +406,14 @@ function createAdminRouter(deps) {
                 telegram: {
                     connected: Boolean(tgInteg && tgToken),
                     has_token: Boolean(tgToken),
-                    label: tgInteg && tgToken ? 'Telegram подключён' : 'Telegram не подключён',
+                    api_ok: tgHealth.api_ok,
+                    bot_username: tgHealth.bot_username,
+                    api_error: tgHealth.error,
+                    label: tgHealth.api_ok && tgToken
+                        ? 'Telegram подключён'
+                        : tgToken
+                            ? 'Telegram: ошибка авторизации'
+                            : 'Telegram не подключён',
                     chains_active: tgChains.filter((c) => c.active).length,
                     channels_total: tgLinked.length,
                     channels_admin: tgLinked.filter((c) => c.botIsAdmin === true).length,
@@ -416,6 +425,7 @@ function createAdminRouter(deps) {
                 },
             },
             mtproto_ready: (0, mtprotoConfigStore_1.isMtprotoSessionReady)(),
+            telegram_health_checked_at: tgHealth.checked_at,
         });
     });
     secured.get('/activity', (req, res) => {

@@ -207,6 +207,28 @@ async function deliverTelegramThreadMessage(
       })
     } catch (err: unknown) {
       const errText = extractTelegramErrorText(err)
+      if (isSendAsPeerInvalidError(errText) && target.sendAsMode === 'channel') {
+        try {
+          const tgMsgId = await sendDiscussionMessageAsPeer(
+            'chat',
+            target.threadChatId,
+            target.channelKey,
+            text,
+            replyToId,
+          )
+          if (tgMsgId != null) {
+            logger.info('[telegramThreadReplySync] sendAs channel failed, chat mode succeeded', {
+              chainId: target.chainId,
+            })
+            return tgMsgId
+          }
+        } catch (chatErr: unknown) {
+          logger.warn('[telegramThreadReplySync] sendAs chat fallback failed', {
+            chainId: target.chainId,
+            err: chatErr,
+          })
+        }
+      }
       logger.warn('[telegramThreadReplySync] sendAs peer failed, fallback to bot', {
         chainId: target.chainId,
         sendAsMode: target.sendAsMode,

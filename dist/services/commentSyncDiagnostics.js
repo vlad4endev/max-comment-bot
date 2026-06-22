@@ -95,6 +95,7 @@ function analyzeLogSignals(entries) {
     let invalid_message_id = 0;
     let send_as_peer_invalid = 0;
     let forbidden = 0;
+    let unauthorized = 0;
     let flood_wait = 0;
     let no_thread_mapping = 0;
     for (const entry of entries) {
@@ -117,15 +118,28 @@ function analyzeLogSignals(entries) {
         if ((0, telegramSyncErrors_1.isTelegramForbiddenError)(hay)) {
             forbidden += 1;
         }
+        if ((0, telegramSyncErrors_1.isTelegramUnauthorizedError)(hay)) {
+            unauthorized += 1;
+        }
         if (hay.includes('flood_wait') || hay.includes('retry after')) {
             flood_wait += 1;
         }
     }
-    return { invalid_message_id, send_as_peer_invalid, forbidden, flood_wait, no_thread_mapping };
+    return { invalid_message_id, send_as_peer_invalid, forbidden, unauthorized, flood_wait, no_thread_mapping };
 }
 function buildChainIssues(input) {
     const issues = [];
-    const { chain, discussionChatId, botChannelAdmin, botDiscussionMember, mappingStats, pendingMaxToTg } = input;
+    const { chain, tokenPresent, botId, discussionChatId, botChannelAdmin, botDiscussionMember, mappingStats, pendingMaxToTg } = input;
+    if (tokenPresent && botId == null) {
+        issues.push({
+            severity: 'critical',
+            code: 'telegram_token_invalid',
+            title: 'Токен Telegram недействителен (401)',
+            description: 'getMe не проходит — бот не авторизован в Telegram API.',
+            what_to_do: 'Обновите токен в Админка → Интеграции или TG_TOKEN в .env, проверьте бота в @BotFather и перезапустите сервис.',
+        });
+        return issues;
+    }
     if (chain.forward_comments !== true) {
         issues.push({
             severity: 'info',
@@ -223,6 +237,8 @@ async function diagnoseCommentSync(chainIdFilter) {
         const pendingMaxToTg = countPendingMaxToTelegram(chain.max_chat_id);
         const issues = buildChainIssues({
             chain,
+            tokenPresent: Boolean(token),
+            botId,
             discussionChatId,
             botChannelAdmin,
             botDiscussionMember,
@@ -255,6 +271,9 @@ async function diagnoseCommentSync(chainIdFilter) {
     }
     if (logSignals.send_as_peer_invalid > 0) {
         recommendations.push('Обнаружены SEND_AS_PEER_INVALID: проверьте права send-as или переключите tg_discussion_send_as на chat.');
+    }
+    if (logSignals.unauthorized > 0) {
+        recommendations.push('Обнаружены ошибки 401/unauthorized: обновите токен Telegram в интеграциях и перезапустите сервис.');
     }
     if (logSignals.forbidden > 0) {
         recommendations.push('Обнаружены ошибки 403/forbidden: проверьте токен бота и права в канале/группе.');

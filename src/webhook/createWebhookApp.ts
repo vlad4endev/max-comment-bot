@@ -17,6 +17,7 @@ import { isAdminPanelSessionValid } from '../middleware/adminAuth'
 import { logger } from '../utils/logger'
 import { enqueueUpdate } from '../utils/updateQueue'
 import { dispatchBotUpdate } from './dispatchUpdate'
+import { getTelegramHealthSnapshot, probeTelegramBotApi } from '../services/telegramHealthService'
 
 const MAX_SECRET_HEADER = 'x-max-bot-api-secret'
 
@@ -71,6 +72,21 @@ export function createHttpApp(options: HttpAppOptions): express.Express {
 
   app.get('/health', (_req, res) => {
     res.status(200).type('text/plain').send('ok')
+  })
+
+  app.get('/health/telegram', async (_req, res) => {
+    try {
+      const snapshot = await probeTelegramBotApi()
+      res.status(snapshot.api_ok || !snapshot.has_token ? 200 : 503).json(snapshot)
+    } catch (err: unknown) {
+      logger.error('/health/telegram probe failed', err)
+      res.status(503).json({
+        checked_at: new Date().toISOString(),
+        has_token: Boolean(getTelegramHealthSnapshot().has_token),
+        api_ok: false,
+        error: 'probe failed',
+      })
+    }
   })
 
   app.get('/favicon.ico', (_req, res) => {

@@ -6,6 +6,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.extractTelegramErrorText = extractTelegramErrorText;
 exports.isInvalidTelegramMessageIdError = isInvalidTelegramMessageIdError;
 exports.isSendAsPeerInvalidError = isSendAsPeerInvalidError;
+exports.isTelegramUnauthorizedError = isTelegramUnauthorizedError;
 exports.isTelegramForbiddenError = isTelegramForbiddenError;
 exports.suggestActionForTelegramSyncError = suggestActionForTelegramSyncError;
 function extractTelegramErrorText(err) {
@@ -43,8 +44,19 @@ function isSendAsPeerInvalidError(text) {
         normalized.includes('PEER_ID_INVALID') ||
         normalized.includes('USER_BANNED_IN_CHANNEL'));
 }
+function isTelegramUnauthorizedError(text) {
+    const normalized = text.toUpperCase();
+    return (normalized.includes('UNAUTHORIZED') ||
+        normalized.includes('401') ||
+        normalized.includes('WRONG REMOTE ID') ||
+        normalized.includes('TOKEN IS INVALID') ||
+        normalized.includes('BOT TOKEN'));
+}
 function isTelegramForbiddenError(text) {
     const normalized = text.toUpperCase();
+    if (isTelegramUnauthorizedError(normalized)) {
+        return false;
+    }
     return (normalized.includes('FORBIDDEN') ||
         normalized.includes('BOT WAS BLOCKED') ||
         normalized.includes('BOT IS NOT A MEMBER') ||
@@ -53,6 +65,9 @@ function isTelegramForbiddenError(text) {
         normalized.includes('403'));
 }
 function suggestActionForTelegramSyncError(text) {
+    if (isTelegramUnauthorizedError(text)) {
+        return 'Токен Telegram бота недействителен. Обновите TG_TOKEN в интеграциях или @BotFather и перезапустите сервис.';
+    }
     if (isInvalidTelegramMessageIdError(text)) {
         return 'Проверьте, что у поста в канале есть связанный тред в группе обсуждений. Запустите repair-threads в админке.';
     }

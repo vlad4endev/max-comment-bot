@@ -44,8 +44,22 @@ export function isSendAsPeerInvalidError(text: string): boolean {
   )
 }
 
+export function isTelegramUnauthorizedError(text: string): boolean {
+  const normalized = text.toUpperCase()
+  return (
+    normalized.includes('UNAUTHORIZED') ||
+    normalized.includes('401') ||
+    normalized.includes('WRONG REMOTE ID') ||
+    normalized.includes('TOKEN IS INVALID') ||
+    normalized.includes('BOT TOKEN')
+  )
+}
+
 export function isTelegramForbiddenError(text: string): boolean {
   const normalized = text.toUpperCase()
+  if (isTelegramUnauthorizedError(normalized)) {
+    return false
+  }
   return (
     normalized.includes('FORBIDDEN') ||
     normalized.includes('BOT WAS BLOCKED') ||
@@ -57,6 +71,9 @@ export function isTelegramForbiddenError(text: string): boolean {
 }
 
 export function suggestActionForTelegramSyncError(text: string): string {
+  if (isTelegramUnauthorizedError(text)) {
+    return 'Токен Telegram бота недействителен. Обновите TG_TOKEN в интеграциях или @BotFather и перезапустите сервис.'
+  }
   if (isInvalidTelegramMessageIdError(text)) {
     return 'Проверьте, что у поста в канале есть связанный тред в группе обсуждений. Запустите repair-threads в админке.'
   }

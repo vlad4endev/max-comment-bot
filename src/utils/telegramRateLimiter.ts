@@ -9,6 +9,7 @@ import { logger } from './logger'
 import {
   extractTelegramErrorText,
   isTelegramForbiddenError,
+  isTelegramUnauthorizedError,
 } from './telegramSyncErrors'
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
@@ -151,16 +152,31 @@ export async function callTelegramBotApi<T extends TelegramBotApiResponse>(
     typeof rawChatId === 'number' || typeof rawChatId === 'string' ? rawChatId : undefined
 
   for (let attempt = 0; attempt <= maxFloodRetries; attempt += 1) {
-    const data = await enqueueTelegramApiCall(async () => {
-      const { data: response } = await axios.post<T>(url, payload, { timeout: 20_000 })
-      return response
-    })
+    let data: T
+    try {
+      data = await enqueueTelegramApiCall(async () => {
+        const { data: response } = await axios.post<T>(url, payload, { timeout: 20_000 })
+        return response
+      })
+    } catch (err: unknown) {
+      const errText = extractTelegramErrorText(err)
+      if (isTelegramUnauthorizedError(errText)) {
+        const { reportTelegramUnauthorized } = await import('../services/telegramSyncAlertService')
+        void reportTelegramUnauthorized({ method, description: errText })
+      }
+      throw err
+    }
 
     if (data.ok) {
       return data
     }
 
     const description = data.description ?? ''
+    if (isTelegramUnauthorizedError(description) || data.error_code === 401) {
+      const { reportTelegramUnauthorized } = await import('../services/telegramSyncAlertService')
+      void reportTelegramUnauthorized({ method, description })
+      return data
+    }
     const floodSeconds = parseFloodWaitSeconds(description, data.parameters)
     if (floodSeconds != null && attempt < maxFloodRetries) {
       extendGlobalPause(floodSeconds)

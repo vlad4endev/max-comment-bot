@@ -6,6 +6,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.setTelegramSyncAlertBot = setTelegramSyncAlertBot;
 exports.reportTelegramFloodWait = reportTelegramFloodWait;
 exports.reportTelegramForbidden = reportTelegramForbidden;
+exports.reportTelegramUnauthorized = reportTelegramUnauthorized;
 const config_1 = require("../config");
 const logger_1 = require("../utils/logger");
 const ALERT_COOLDOWN_MS = 15 * 60 * 1_000;
@@ -63,6 +64,18 @@ async function reportTelegramForbidden(input) {
         `Метод: ${input.method}${chatPart}\n` +
         `${input.description}\n\n` +
         `Проверьте: бот в канале и группе обсуждений, права администратора, токен.`;
+    await deliverOperatorAlert(text);
+}
+async function reportTelegramUnauthorized(input) {
+    logger_1.logger.error('[telegramSyncAlert] unauthorized', input);
+    if (!shouldNotify('unauthorized')) {
+        return;
+    }
+    const text = `🔴 Telegram 401 Unauthorized\n` +
+        `Метод: ${input.method}\n` +
+        `${input.description}\n\n` +
+        `Проверьте токен в интеграциях (TG_TOKEN) и статус бота в @BotFather. ` +
+        `После обновления токена перезапустите сервис.`;
     await deliverOperatorAlert(text);
 }
 //# sourceMappingURL=telegramSyncAlertService.js.map

@@ -64,6 +64,7 @@ exports.publishVkWallComment = publishVkWallComment;
 const axios_1 = __importDefault(require("axios"));
 const adminPanelState_1 = require("../api/adminPanelState");
 const logger_1 = require("../utils/logger");
+const telegramSyncErrors_1 = require("../utils/telegramSyncErrors");
 const telegramBotUserStore_1 = require("./telegramBotUserStore");
 const telegramMainBotUpdates_1 = require("./telegramMainBotUpdates");
 const resolveTelegramBotToken_1 = require("./resolveTelegramBotToken");
@@ -379,6 +380,10 @@ async function validateTelegramToken(token) {
     try {
         const { data } = await axios_1.default.get(`${TG_API}/bot${token}/getMe`, { timeout: 15_000 });
         if (!data.ok || !data.result) {
+            const description = data.description ?? '';
+            if ((0, telegramSyncErrors_1.isTelegramUnauthorizedError)(description)) {
+                return { ok: false, error: 'Токен Telegram недействителен (401 Unauthorized)' };
+            }
             return { ok: false, error: 'Telegram API вернул ошибку' };
         }
         const name = data.result.username ? `@${data.result.username}` : data.result.first_name ?? 'bot';

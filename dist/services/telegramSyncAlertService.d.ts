@@ -14,3 +14,7 @@ export declare function reportTelegramForbidden(input: {
     chatId?: number | string;
     description: string;
 }): Promise<void>;
+export declare function reportTelegramUnauthorized(input: {
+    method: string;
+    description: string;
+}): Promise<void>;

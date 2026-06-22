@@ -35,6 +35,7 @@ export interface CommentSyncDiagnosticsReport {
         invalid_message_id: number;
         send_as_peer_invalid: number;
         forbidden: number;
+        unauthorized: number;
         flood_wait: number;
         no_thread_mapping: number;
     };

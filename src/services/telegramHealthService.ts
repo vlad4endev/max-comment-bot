@@ -1,0 +1,179 @@
+/**
+ * Периодическая проверка авторизации Telegram Bot API (getMe).
+ */
+
+import axios from 'axios'
+
+import { logger } from '../utils/logger'
+import { isTelegramUnauthorizedError } from '../utils/telegramSyncErrors'
+import { resolveTelegramBotToken } from './resolveTelegramBotToken'
+import { reportTelegramUnauthorized } from './telegramSyncAlertService'
+
+const TG_API = 'https://api.telegram.org'
+
+export interface TelegramHealthSnapshot {
+  checked_at: string
+  has_token: boolean
+  api_ok: boolean
+  bot_id: number | null
+  bot_username: string | null
+  error: string | null
+}
+
+let lastSnapshot: TelegramHealthSnapshot = {
+  checked_at: new Date(0).toISOString(),
+  has_token: false,
+  api_ok: false,
+  bot_id: null,
+  bot_username: null,
+  error: null,
+}
+
+let monitorTimer: ReturnType<typeof setInterval> | null = null
+
+function getMonitorIntervalMs(): number {
+  const raw = (process.env.TELEGRAM_HEALTH_CHECK_INTERVAL_MS ?? '').trim()
+  if (raw === '') {
+    return 5 * 60_000
+  }
+  const parsed = Number.parseInt(raw, 10)
+  if (!Number.isFinite(parsed) || parsed < 30_000) {
+    return 5 * 60_000
+  }
+  return Math.min(parsed, 60 * 60_000)
+}
+
+function extractAxiosErrorText(err: unknown): string {
+  if (axios.isAxiosError(err)) {
+    const status = err.response?.status
+    const data = err.response?.data
+    if (typeof data === 'object' && data !== null && 'description' in data) {
+      const description = String((data as { description?: string }).description ?? '').trim()
+      if (description) {
+        return status != null ? `${status}: ${description}` : description
+      }
+    }
+    if (status != null) {
+      return `HTTP ${status}`
+    }
+  }
+  return err instanceof Error ? err.message : String(err ?? '')
+}
+
+export async function probeTelegramBotApi(token?: string): Promise<TelegramHealthSnapshot> {
+  const trimmed = (token ?? resolveTelegramBotToken()).trim()
+  const checkedAt = new Date().toISOString()
+
+  if (!trimmed) {
+    const snapshot: TelegramHealthSnapshot = {
+      checked_at: checkedAt,
+      has_token: false,
+      api_ok: false,
+      bot_id: null,
+      bot_username: null,
+      error: 'Токен Telegram не задан',
+    }
+    lastSnapshot = snapshot
+    return snapshot
+  }
+
+  try {
+    const { data, status } = await axios.get<{
+      ok: boolean
+      description?: string
+      error_code?: number
+      result?: { id?: number; username?: string }
+    }>(`${TG_API}/bot${trimmed}/getMe`, { timeout: 15_000 })
+
+    if (!data.ok || !data.result) {
+      const description = data.description ?? `HTTP ${status}`
+      const snapshot: TelegramHealthSnapshot = {
+        checked_at: checkedAt,
+        has_token: true,
+        api_ok: false,
+        bot_id: null,
+        bot_username: null,
+        error: description,
+      }
+      lastSnapshot = snapshot
+      if (isTelegramUnauthorizedError(description) || data.error_code === 401) {
+        void reportTelegramUnauthorized({ method: 'getMe', description })
+      }
+      return snapshot
+    }
+
+    const snapshot: TelegramHealthSnapshot = {
+      checked_at: checkedAt,
+      has_token: true,
+      api_ok: true,
+      bot_id: typeof data.result.id === 'number' ? data.result.id : null,
+      bot_username: data.result.username?.trim() || null,
+      error: null,
+    }
+    lastSnapshot = snapshot
+    return snapshot
+  } catch (err: unknown) {
+    const errorText = extractAxiosErrorText(err)
+    const snapshot: TelegramHealthSnapshot = {
+      checked_at: checkedAt,
+      has_token: true,
+      api_ok: false,
+      bot_id: null,
+      bot_username: null,
+      error: errorText,
+    }
+    lastSnapshot = snapshot
+    if (isTelegramUnauthorizedError(errorText)) {
+      void reportTelegramUnauthorized({ method: 'getMe', description: errorText })
+    }
+    return snapshot
+  }
+}
+
+export function getTelegramHealthSnapshot(): TelegramHealthSnapshot {
+  return { ...lastSnapshot }
+}
+
+export async function assertTelegramBotApiOnStartup(): Promise<void> {
+  const token = resolveTelegramBotToken()
+  if (!token) {
+    logger.warn(
+      '[telegramHealth] TG_TOKEN не задан — синхронизация с Telegram отключена до подключения интеграции',
+    )
+    return
+  }
+
+  const snapshot = await probeTelegramBotApi(token)
+  if (snapshot.api_ok) {
+    logger.info('[telegramHealth] Telegram Bot API авторизован', {
+      bot_id: snapshot.bot_id,
+      bot_username: snapshot.bot_username,
+    })
+    return
+  }
+
+  logger.error('[telegramHealth] Telegram Bot API недоступен — проверьте токен в интеграциях', {
+    error: snapshot.error,
+  })
+}
+
+export function startTelegramHealthMonitor(): void {
+  if (monitorTimer) {
+    return
+  }
+  const intervalMs = getMonitorIntervalMs()
+  monitorTimer = setInterval(() => {
+    void probeTelegramBotApi().catch((err: unknown) => {
+      logger.warn('[telegramHealth] periodic probe failed', err)
+    })
+  }, intervalMs)
+  monitorTimer.unref?.()
+  logger.info('[telegramHealth] мониторинг Telegram API запущен', { intervalMs })
+}
+
+export function stopTelegramHealthMonitor(): void {
+  if (monitorTimer) {
+    clearInterval(monitorTimer)
+    monitorTimer = null
+  }
+}

@@ -48,6 +48,11 @@ import { setTgChainForwarderBot, startTgChainForwarder } from './services/tgChai
 import { setVkChainForwarderBot, startVkChainForwarder, stopVkChainForwarder } from './services/vkChainForwarder'
 import { setTelegramTgChainLifecycleBot } from './services/telegramTgChainLifecycle'
 import { setTelegramSyncAlertBot } from './services/telegramSyncAlertService'
+import {
+  assertTelegramBotApiOnStartup,
+  startTelegramHealthMonitor,
+  stopTelegramHealthMonitor,
+} from './services/telegramHealthService'
 import { initRedis } from './cache/redisClient'
 import { createHttpApp, createWebhookApp } from './webhook/createWebhookApp'
 import { logMiniAppUrlDiagnostics } from './utils/telegramMiniAppUrl'
@@ -101,6 +106,10 @@ async function main(): Promise<void> {
   setVkChainForwarderBot(bot)
   setTelegramTgChainLifecycleBot(bot)
   setTelegramSyncAlertBot(bot)
+  await assertTelegramBotApiOnStartup()
+  startTelegramHealthMonitor()
+  process.once('SIGINT', () => stopTelegramHealthMonitor())
+  process.once('SIGTERM', () => stopTelegramHealthMonitor())
   startRuntimeLogRotationScheduler()
   setChannelRegistryChangeHandler(() => notifyChannelRegistryChanged())
   startChannelPostPoller(bot)

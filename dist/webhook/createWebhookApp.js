@@ -16,6 +16,7 @@ const adminAuth_1 = require("../middleware/adminAuth");
 const logger_1 = require("../utils/logger");
 const updateQueue_1 = require("../utils/updateQueue");
 const dispatchUpdate_1 = require("./dispatchUpdate");
+const telegramHealthService_1 = require("../services/telegramHealthService");
 const MAX_SECRET_HEADER = 'x-max-bot-api-secret';
 /** Корень `admin-panel/` рядом с `dist/` (в Docker: `/app/admin-panel`). */
 const adminPanelRoot = (0, node_path_1.join)(__dirname, '..', '..', 'admin-panel');
@@ -46,6 +47,21 @@ function createHttpApp(options) {
     }));
     app.get('/health', (_req, res) => {
         res.status(200).type('text/plain').send('ok');
+    });
+    app.get('/health/telegram', async (_req, res) => {
+        try {
+            const snapshot = await (0, telegramHealthService_1.probeTelegramBotApi)();
+            res.status(snapshot.api_ok || !snapshot.has_token ? 200 : 503).json(snapshot);
+        }
+        catch (err) {
+            logger_1.logger.error('/health/telegram probe failed', err);
+            res.status(503).json({
+                checked_at: new Date().toISOString(),
+                has_token: Boolean((0, telegramHealthService_1.getTelegramHealthSnapshot)().has_token),
+                api_ok: false,
+                error: 'probe failed',
+            });
+        }
     });
     app.get('/favicon.ico', (_req, res) => {
         res.redirect(302, '/admin/assets/favicon.svg');

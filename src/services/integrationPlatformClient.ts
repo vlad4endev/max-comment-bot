@@ -2,6 +2,7 @@ import axios from 'axios'
 
 import { ensureAdminPanelStateLoaded, listTgChainsSync } from '../api/adminPanelState'
 import { logger } from '../utils/logger'
+import { isTelegramUnauthorizedError } from '../utils/telegramSyncErrors'
 import { telegramBotUserStore } from './telegramBotUserStore'
 import { processMainTelegramBotMyChatMemberUpdate } from './telegramMainBotUpdates'
 import type { IntegrationPlatform } from './integrationsStore'
@@ -417,11 +418,19 @@ export async function enrichTelegramChatsWithBotAdmin(
 
 export async function validateTelegramToken(token: string): Promise<PlatformTestResult> {
   try {
-    const { data } = await axios.get<{ ok: boolean; result?: { username?: string; first_name?: string } }>(
+    const { data } = await axios.get<{
+      ok: boolean
+      description?: string
+      result?: { username?: string; first_name?: string }
+    }>(
       `${TG_API}/bot${token}/getMe`,
       { timeout: 15_000 },
     )
     if (!data.ok || !data.result) {
+      const description = data.description ?? ''
+      if (isTelegramUnauthorizedError(description)) {
+        return { ok: false, error: 'Токен Telegram недействителен (401 Unauthorized)' }
+      }
       return { ok: false, error: 'Telegram API вернул ошибку' }
     }
     const name = data.result.username ? `@${data.result.username}` : data.result.first_name ?? 'bot'
