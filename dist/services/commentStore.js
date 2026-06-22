@@ -879,10 +879,14 @@ class CommentStore {
            AND (tg_thread_reply_id IS NULL OR tg_thread_reply_id = 0)
          ORDER BY timestamp DESC
          LIMIT ?`),
-            listPendingMaxToTelegram: db.prepare(`SELECT ${storageFields} FROM comments
-         WHERE (source IS NULL OR source = 'max')
-           AND (tg_comment_id IS NULL OR tg_comment_id = 0)
-         ORDER BY timestamp ASC
+            listPendingMaxToTelegram: db.prepare(`SELECT ${storageFieldsAliased} FROM comments c
+         INNER JOIN posts p ON p.post_id = c.post_id
+         LEFT JOIN post_comment_mapping m ON m.max_mid = p.message_mid
+         WHERE (c.source IS NULL OR c.source = 'max')
+           AND (c.tg_comment_id IS NULL OR c.tg_comment_id = 0)
+         ORDER BY
+           CASE WHEN m.tg_thread_msg_id IS NOT NULL AND m.tg_thread_msg_id > 0 THEN 0 ELSE 1 END,
+           c.timestamp ASC
          LIMIT ?`),
             deleteById: db.prepare('DELETE FROM comments WHERE comment_id = ?'),
             deleteAll: db.prepare('DELETE FROM comments'),
