@@ -1386,12 +1386,20 @@ function createAdminRouter(deps) {
             : typeof limitRaw === 'string' && limitRaw.trim() !== ''
                 ? Math.floor(Number(limitRaw))
                 : undefined;
+        const sourceRaw = parseNonEmptyString(body.source);
+        const source = sourceRaw === 'forwarded' ||
+            sourceRaw === 'posts_db' ||
+            sourceRaw === 'feed' ||
+            sourceRaw === 'auto'
+            ? sourceRaw
+            : undefined;
         try {
             const result = await (0, tgChainPostPurge_1.purgeTgChainForwardedMaxPosts)(deps.bot, id, {
                 sinceIso: sinceIso ?? undefined,
                 untilIso: untilIso ?? undefined,
                 dryRun,
                 limit,
+                source,
             });
             res.json({ ok: true, purge: result });
         }
