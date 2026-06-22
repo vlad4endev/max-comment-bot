@@ -394,8 +394,24 @@ function createAdminRouter(deps) {
             .getIntegrations()
             .find((i) => i.platform === 'vk' && i.status === 'connected');
         const tgToken = (tgInteg?.token?.trim() || (0, config_1.getTelegramToken)()).trim();
+        const tokenSources = (0, telegramHealthService_1.describeTelegramTokenSources)();
         const tgHealth = tgToken ? await (0, telegramHealthService_1.probeTelegramBotApi)(tgToken) : (0, telegramHealthService_1.getTelegramHealthSnapshot)();
         const tgChains = await (0, adminPanelState_1.listTgChains)();
+        const chainTokenChecks = await Promise.all(tgChains.map(async (chain) => {
+            const chainToken = chain.bot_token?.trim() || tgToken;
+            const preview = chainToken.length > 4 ? `••••${chainToken.slice(-4)}` : chainToken ? '••••' : '';
+            const usesOwnToken = Boolean(chain.bot_token?.trim()) && chain.bot_token?.trim() !== tgToken;
+            const apiOk = chainToken ? await (0, telegramHealthService_1.isTelegramTokenAuthorized)(chainToken) : false;
+            return {
+                chain_id: chain.id,
+                name: chain.tg_username?.trim() || chain.tg_channel_id?.trim() || chain.id,
+                token_preview: preview,
+                uses_own_token: usesOwnToken,
+                api_ok: apiOk,
+            };
+        }));
+        const readerToken = (process.env.TG_READER_BOT_TOKEN || '').trim();
+        const readerHealth = readerToken ? await (0, telegramHealthService_1.probeTelegramBotApi)(readerToken) : null;
         const vkChains = await (0, adminPanelState_1.listVkChains)();
         const tgLinked = tgInteg?.linkedChats ?? [];
         res.json({
@@ -417,6 +433,10 @@ function createAdminRouter(deps) {
                     chains_active: tgChains.filter((c) => c.active).length,
                     channels_total: tgLinked.length,
                     channels_admin: tgLinked.filter((c) => c.botIsAdmin === true).length,
+                    token_sources: tokenSources,
+                    chain_tokens: chainTokenChecks,
+                    reader_api_ok: readerHealth?.api_ok ?? null,
+                    reader_token_preview: tokenSources.reader_token_preview,
                 },
                 vk: {
                     connected: Boolean(vkInteg),
@@ -1566,6 +1586,19 @@ function createAdminRouter(deps) {
         }
         catch (err) {
             logger_1.logger.error('admin comment-sync/repair-threads', err);
+            res.status(500).json({ error: 'failed' });
+        }
+    });
+    secured.post('/comment-sync/repair-tokens', async (_req, res) => {
+        try {
+            await integrationsStore_1.integrationsStore.load();
+            const repair = await (0, tgChainChannelRef_1.repairStaleTgChainBotTokens)();
+            const tokenSources = (0, telegramHealthService_1.describeTelegramTokenSources)();
+            const telegramHealth = await (0, telegramHealthService_1.probeTelegramBotApi)();
+            res.json({ ok: true, repair, token_sources: tokenSources, telegram_health: telegramHealth });
+        }
+        catch (err) {
+            logger_1.logger.error('admin comment-sync/repair-tokens', err);
             res.status(500).json({ error: 'failed' });
         }
     });

@@ -6,14 +6,18 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.describeTelegramTokenSources = describeTelegramTokenSources;
+exports.isTelegramTokenAuthorized = isTelegramTokenAuthorized;
 exports.probeTelegramBotApi = probeTelegramBotApi;
 exports.getTelegramHealthSnapshot = getTelegramHealthSnapshot;
 exports.assertTelegramBotApiOnStartup = assertTelegramBotApiOnStartup;
 exports.startTelegramHealthMonitor = startTelegramHealthMonitor;
 exports.stopTelegramHealthMonitor = stopTelegramHealthMonitor;
 const axios_1 = __importDefault(require("axios"));
+const config_1 = require("../config");
 const logger_1 = require("../utils/logger");
 const telegramSyncErrors_1 = require("../utils/telegramSyncErrors");
+const integrationsStore_1 = require("./integrationsStore");
 const resolveTelegramBotToken_1 = require("./resolveTelegramBotToken");
 const telegramSyncAlertService_1 = require("./telegramSyncAlertService");
 const TG_API = 'https://api.telegram.org';
@@ -26,6 +30,16 @@ let lastSnapshot = {
     error: null,
 };
 let monitorTimer = null;
+function tokenPreview(token) {
+    const trimmed = token.trim();
+    if (!trimmed) {
+        return '';
+    }
+    if (trimmed.length <= 4) {
+        return '••••';
+    }
+    return `••••${trimmed.slice(-4)}`;
+}
 function getMonitorIntervalMs() {
     const raw = (process.env.TELEGRAM_HEALTH_CHECK_INTERVAL_MS ?? '').trim();
     if (raw === '') {
@@ -52,6 +66,46 @@ function extractAxiosErrorText(err) {
         }
     }
     return err instanceof Error ? err.message : String(err ?? '');
+}
+/** Откуда реально берётся основной TG-токен (без раскрытия полного значения). */
+function describeTelegramTokenSources() {
+    const integToken = integrationsStore_1.integrationsStore.getTelegramIntegration()?.token?.trim() ?? '';
+    const envToken = (0, config_1.getTelegramToken)().trim();
+    const readerToken = (process.env.TG_READER_BOT_TOKEN || '').trim();
+    const activeToken = (0, resolveTelegramBotToken_1.resolveTelegramBotToken)();
+    const activeSource = integToken
+        ? 'integrations'
+        : envToken
+            ? 'env'
+            : 'none';
+    let mismatchWarning = null;
+    if (integToken && envToken && integToken !== envToken) {
+        mismatchWarning =
+            'В data/integrations.json и .env разные токены — используется integrations.json. Обновите токен в Админка → Интеграции.';
+    }
+    return {
+        active_source: activeSource,
+        active_token_preview: tokenPreview(activeToken),
+        env_token_preview: tokenPreview(envToken),
+        integrations_token_preview: tokenPreview(integToken),
+        reader_token_preview: tokenPreview(readerToken),
+        reader_uses_main: !readerToken,
+        env_differs_from_integrations: Boolean(integToken && envToken && integToken !== envToken),
+        mismatch_warning: mismatchWarning,
+    };
+}
+async function isTelegramTokenAuthorized(token) {
+    const trimmed = token.trim();
+    if (!trimmed) {
+        return false;
+    }
+    try {
+        const { data } = await axios_1.default.get(`${TG_API}/bot${trimmed}/getMe`, { timeout: 10_000 });
+        return data.ok === true && typeof data.result?.id === 'number';
+    }
+    catch {
+        return false;
+    }
 }
 async function probeTelegramBotApi(token) {
     const trimmed = (token ?? (0, resolveTelegramBotToken_1.resolveTelegramBotToken)()).trim();
@@ -118,6 +172,15 @@ function getTelegramHealthSnapshot() {
     return { ...lastSnapshot };
 }
 async function assertTelegramBotApiOnStartup() {
+    const sources = describeTelegramTokenSources();
+    if (sources.mismatch_warning) {
+        logger_1.logger.warn(`[telegramHealth] ${sources.mismatch_warning}`, {
+            active_source: sources.active_source,
+            active_token_preview: sources.active_token_preview,
+            env_token_preview: sources.env_token_preview,
+            integrations_token_preview: sources.integrations_token_preview,
+        });
+    }
     const token = (0, resolveTelegramBotToken_1.resolveTelegramBotToken)();
     if (!token) {
         logger_1.logger.warn('[telegramHealth] TG_TOKEN не задан — синхронизация с Telegram отключена до подключения интеграции');
@@ -128,11 +191,18 @@ async function assertTelegramBotApiOnStartup() {
         logger_1.logger.info('[telegramHealth] Telegram Bot API авторизован', {
             bot_id: snapshot.bot_id,
             bot_username: snapshot.bot_username,
+            active_source: sources.active_source,
+            active_token_preview: sources.active_token_preview,
         });
         return;
     }
     logger_1.logger.error('[telegramHealth] Telegram Bot API недоступен — проверьте токен в интеграциях', {
         error: snapshot.error,
+        active_source: sources.active_source,
+        active_token_preview: sources.active_token_preview,
+        env_token_preview: sources.env_token_preview,
+        integrations_token_preview: sources.integrations_token_preview,
+        reader_token_preview: sources.reader_token_preview,
     });
 }
 function startTelegramHealthMonitor() {

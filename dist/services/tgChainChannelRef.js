@@ -2,9 +2,12 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.resolveTgChainChannelFields = resolveTgChainChannelFields;
 exports.repairTgChainsForForwarding = repairTgChainsForForwarding;
+exports.syncTgChainBotTokensOnTelegramReconnect = syncTgChainBotTokensOnTelegramReconnect;
+exports.repairStaleTgChainBotTokens = repairStaleTgChainBotTokens;
 const adminPanelState_1 = require("../api/adminPanelState");
 const integrationPlatformClient_1 = require("./integrationPlatformClient");
 const resolveTelegramBotToken_1 = require("./resolveTelegramBotToken");
+const telegramHealthService_1 = require("./telegramHealthService");
 const logger_1 = require("../utils/logger");
 /** Нормализует @username / -100… / t.me/… в канонический chat_id для пересылки постов. */
 async function resolveTgChainChannelFields(token, tgRaw) {
@@ -71,5 +74,65 @@ async function repairTgChainsForForwarding() {
         logger_1.logger.info('repairTgChainsForForwarding: done', { tokenRepaired, channelIdRepaired });
     }
     return { tokenRepaired, channelIdRepaired };
+}
+/** После смены токена в интеграциях — обновить цепочки со старым или пустым bot_token. */
+async function syncTgChainBotTokensOnTelegramReconnect(previousToken, newToken) {
+    const next = newToken.trim();
+    if (!next) {
+        return 0;
+    }
+    await (0, adminPanelState_1.ensureAdminPanelStateLoaded)();
+    const prev = previousToken.trim();
+    const chains = await (0, adminPanelState_1.listTgChains)();
+    let updated = 0;
+    for (const chain of chains) {
+        const chainToken = chain.bot_token?.trim() ?? '';
+        if (chainToken && chainToken !== prev) {
+            continue;
+        }
+        if (chainToken === next) {
+            continue;
+        }
+        await (0, adminPanelState_1.updateTgChain)(chain.id, { bot_token: next });
+        updated += 1;
+    }
+    if (updated > 0) {
+        logger_1.logger.info('syncTgChainBotTokensOnTelegramReconnect: updated chain bot_token', { updated });
+    }
+    return updated;
+}
+/** Заменить в цепочках устаревшие bot_token, если основной токен валиден. */
+async function repairStaleTgChainBotTokens() {
+    await (0, adminPanelState_1.ensureAdminPanelStateLoaded)();
+    const mainToken = (0, resolveTelegramBotToken_1.resolveTelegramBotToken)().trim();
+    if (!mainToken) {
+        return { repaired: 0, checked: 0 };
+    }
+    if (!(await (0, telegramHealthService_1.isTelegramTokenAuthorized)(mainToken))) {
+        return { repaired: 0, checked: 0 };
+    }
+    const chains = await (0, adminPanelState_1.listTgChains)();
+    let repaired = 0;
+    let checked = 0;
+    for (const chain of chains) {
+        const chainToken = chain.bot_token?.trim() ?? '';
+        if (!chainToken || chainToken === mainToken) {
+            continue;
+        }
+        checked += 1;
+        if (await (0, telegramHealthService_1.isTelegramTokenAuthorized)(chainToken)) {
+            continue;
+        }
+        await (0, adminPanelState_1.updateTgChain)(chain.id, { bot_token: mainToken });
+        repaired += 1;
+        logger_1.logger.warn('repairStaleTgChainBotTokens: replaced invalid chain bot_token', {
+            chainId: chain.id,
+            chainName: chain.tg_username || chain.tg_channel_id || chain.id,
+        });
+    }
+    if (repaired > 0) {
+        logger_1.logger.info('repairStaleTgChainBotTokens: done', { repaired, checked });
+    }
+    return { repaired, checked };
 }
 //# sourceMappingURL=tgChainChannelRef.js.map

@@ -18,6 +18,7 @@ const flowStateStore_1 = require("../services/flowStateStore");
 const flowProcessor_1 = require("../services/flowProcessor");
 const integrationPlatformClient_1 = require("../services/integrationPlatformClient");
 const integrationsStore_1 = require("../services/integrationsStore");
+const tgChainChannelRef_1 = require("../services/tgChainChannelRef");
 function isRecord(value) {
     return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
@@ -274,6 +275,15 @@ function createIntegrationsRouter(deps) {
             catch (err) {
                 // Токен уже в integrations.json; в Docker .env часто не на volume.
                 logger_1.logger.warn('integrations: TG_TOKEN не записан в .env (токен сохранён в integrations.json)', err);
+            }
+            const previousToken = existingForPlatform?.token?.trim() ?? '';
+            const chainsUpdated = await (0, tgChainChannelRef_1.syncTgChainBotTokensOnTelegramReconnect)(previousToken, token);
+            const staleRepaired = await (0, tgChainChannelRef_1.repairStaleTgChainBotTokens)();
+            if (chainsUpdated > 0 || staleRepaired.repaired > 0) {
+                logger_1.logger.info('integrations: tg chain bot_token synced after reconnect', {
+                    chainsUpdated,
+                    staleRepaired: staleRepaired.repaired,
+                });
             }
         }
         let channels = [];

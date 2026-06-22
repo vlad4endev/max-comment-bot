@@ -20,7 +20,7 @@ const axios_1 = __importDefault(require("axios"));
 const promises_1 = __importDefault(require("node:fs/promises"));
 const node_os_1 = __importDefault(require("node:os"));
 const node_path_1 = __importDefault(require("node:path"));
-const config_1 = require("../config");
+const resolveTelegramBotToken_1 = require("./resolveTelegramBotToken");
 const database_1 = require("../db/database");
 const telegramReader_1 = require("../forwarder/telegramReader");
 const maxPublisher_1 = require("../forwarder/maxPublisher");
@@ -34,11 +34,11 @@ function resolveImportTgToken() {
     const reader = (process.env.TG_READER_BOT_TOKEN || '').trim();
     if (reader)
         return reader;
-    return (0, config_1.getTelegramToken)();
+    return (0, resolveTelegramBotToken_1.resolveTelegramBotToken)();
 }
 function readerTokenMeta() {
     const reader = (process.env.TG_READER_BOT_TOKEN || '').trim();
-    const fallback = (0, config_1.getTelegramToken)();
+    const fallback = (0, resolveTelegramBotToken_1.resolveTelegramBotToken)();
     if (reader)
         return { ok: true, usesMainToken: false };
     return { ok: fallback.length > 0, usesMainToken: fallback.length > 0 };

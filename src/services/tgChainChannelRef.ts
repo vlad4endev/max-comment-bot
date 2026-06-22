@@ -6,6 +6,7 @@ import {
 } from '../api/adminPanelState'
 import { resolveTelegramChannelChatIdFromKey } from './integrationPlatformClient'
 import { resolveTelegramBotToken } from './resolveTelegramBotToken'
+import { isTelegramTokenAuthorized } from './telegramHealthService'
 import { logger } from '../utils/logger'
 
 export interface ResolvedTgChainChannelFields {
@@ -98,4 +99,74 @@ export async function repairTgChainsForForwarding(): Promise<{
   }
 
   return { tokenRepaired, channelIdRepaired }
+}
+
+/** После смены токена в интеграциях — обновить цепочки со старым или пустым bot_token. */
+export async function syncTgChainBotTokensOnTelegramReconnect(
+  previousToken: string,
+  newToken: string,
+): Promise<number> {
+  const next = newToken.trim()
+  if (!next) {
+    return 0
+  }
+  await ensureAdminPanelStateLoaded()
+  const prev = previousToken.trim()
+  const chains = await listTgChains()
+  let updated = 0
+
+  for (const chain of chains) {
+    const chainToken = chain.bot_token?.trim() ?? ''
+    if (chainToken && chainToken !== prev) {
+      continue
+    }
+    if (chainToken === next) {
+      continue
+    }
+    await updateTgChain(chain.id, { bot_token: next })
+    updated += 1
+  }
+
+  if (updated > 0) {
+    logger.info('syncTgChainBotTokensOnTelegramReconnect: updated chain bot_token', { updated })
+  }
+  return updated
+}
+
+/** Заменить в цепочках устаревшие bot_token, если основной токен валиден. */
+export async function repairStaleTgChainBotTokens(): Promise<{ repaired: number; checked: number }> {
+  await ensureAdminPanelStateLoaded()
+  const mainToken = resolveTelegramBotToken().trim()
+  if (!mainToken) {
+    return { repaired: 0, checked: 0 }
+  }
+  if (!(await isTelegramTokenAuthorized(mainToken))) {
+    return { repaired: 0, checked: 0 }
+  }
+
+  const chains = await listTgChains()
+  let repaired = 0
+  let checked = 0
+
+  for (const chain of chains) {
+    const chainToken = chain.bot_token?.trim() ?? ''
+    if (!chainToken || chainToken === mainToken) {
+      continue
+    }
+    checked += 1
+    if (await isTelegramTokenAuthorized(chainToken)) {
+      continue
+    }
+    await updateTgChain(chain.id, { bot_token: mainToken })
+    repaired += 1
+    logger.warn('repairStaleTgChainBotTokens: replaced invalid chain bot_token', {
+      chainId: chain.id,
+      chainName: chain.tg_username || chain.tg_channel_id || chain.id,
+    })
+  }
+
+  if (repaired > 0) {
+    logger.info('repairStaleTgChainBotTokens: done', { repaired, checked })
+  }
+  return { repaired, checked }
 }

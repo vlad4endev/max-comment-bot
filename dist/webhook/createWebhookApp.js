@@ -51,7 +51,11 @@ function createHttpApp(options) {
     app.get('/health/telegram', async (_req, res) => {
         try {
             const snapshot = await (0, telegramHealthService_1.probeTelegramBotApi)();
-            res.status(snapshot.api_ok || !snapshot.has_token ? 200 : 503).json(snapshot);
+            const sources = (0, telegramHealthService_1.describeTelegramTokenSources)();
+            res.status(snapshot.api_ok || !snapshot.has_token ? 200 : 503).json({
+                ...snapshot,
+                token_sources: sources,
+            });
         }
         catch (err) {
             logger_1.logger.error('/health/telegram probe failed', err);

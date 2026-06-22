@@ -69,10 +69,15 @@ import { createAutopostRouter } from './autopostRoutes'
 import { buildDashboardAnalytics, parseDashboardPeriodDays } from '../services/analyticsService'
 import { integrationsStore } from '../services/integrationsStore'
 import { parseAdminLogLine, type AdminLogEntry, type AdminLogLevel } from '../utils/adminLogFormat'
-import { resolveTgChainChannelFields } from '../services/tgChainChannelRef'
+import { resolveTgChainChannelFields, repairStaleTgChainBotTokens } from '../services/tgChainChannelRef'
 import { resolveVkGroup, listVkManagedGroups } from '../services/integrationPlatformClient'
 import { isMtprotoSessionReady, resolveMtprotoCredentials } from '../services/mtprotoConfigStore'
-import { getTelegramHealthSnapshot, probeTelegramBotApi } from '../services/telegramHealthService'
+import {
+  describeTelegramTokenSources,
+  getTelegramHealthSnapshot,
+  isTelegramTokenAuthorized,
+  probeTelegramBotApi,
+} from '../services/telegramHealthService'
 import { findActiveTgChainForPair } from '../utils/tgChainPair'
 import {
   analyzeLogs,
@@ -456,8 +461,27 @@ export function createAdminRouter(deps: AdminRouterDeps): express.Router {
       .getIntegrations()
       .find((i) => i.platform === 'vk' && i.status === 'connected')
     const tgToken = (tgInteg?.token?.trim() || getTelegramToken()).trim()
+    const tokenSources = describeTelegramTokenSources()
     const tgHealth = tgToken ? await probeTelegramBotApi(tgToken) : getTelegramHealthSnapshot()
     const tgChains = await listTgChains()
+    const chainTokenChecks = await Promise.all(
+      tgChains.map(async (chain) => {
+        const chainToken = chain.bot_token?.trim() || tgToken
+        const preview =
+          chainToken.length > 4 ? `••••${chainToken.slice(-4)}` : chainToken ? '••••' : ''
+        const usesOwnToken = Boolean(chain.bot_token?.trim()) && chain.bot_token?.trim() !== tgToken
+        const apiOk = chainToken ? await isTelegramTokenAuthorized(chainToken) : false
+        return {
+          chain_id: chain.id,
+          name: chain.tg_username?.trim() || chain.tg_channel_id?.trim() || chain.id,
+          token_preview: preview,
+          uses_own_token: usesOwnToken,
+          api_ok: apiOk,
+        }
+      }),
+    )
+    const readerToken = (process.env.TG_READER_BOT_TOKEN || '').trim()
+    const readerHealth = readerToken ? await probeTelegramBotApi(readerToken) : null
     const vkChains = await listVkChains()
     const tgLinked = tgInteg?.linkedChats ?? []
     res.json({
@@ -480,6 +504,10 @@ export function createAdminRouter(deps: AdminRouterDeps): express.Router {
           chains_active: tgChains.filter((c) => c.active).length,
           channels_total: tgLinked.length,
           channels_admin: tgLinked.filter((c) => c.botIsAdmin === true).length,
+          token_sources: tokenSources,
+          chain_tokens: chainTokenChecks,
+          reader_api_ok: readerHealth?.api_ok ?? null,
+          reader_token_preview: tokenSources.reader_token_preview,
         },
         vk: {
           connected: Boolean(vkInteg),
@@ -1714,6 +1742,19 @@ export function createAdminRouter(deps: AdminRouterDeps): express.Router {
       res.json({ ok: true, repair: result, diagnostics })
     } catch (err: unknown) {
       logger.error('admin comment-sync/repair-threads', err)
+      res.status(500).json({ error: 'failed' })
+    }
+  })
+
+  secured.post('/comment-sync/repair-tokens', async (_req, res) => {
+    try {
+      await integrationsStore.load()
+      const repair = await repairStaleTgChainBotTokens()
+      const tokenSources = describeTelegramTokenSources()
+      const telegramHealth = await probeTelegramBotApi()
+      res.json({ ok: true, repair, token_sources: tokenSources, telegram_health: telegramHealth })
+    } catch (err: unknown) {
+      logger.error('admin comment-sync/repair-tokens', err)
       res.status(500).json({ error: 'failed' })
     }
   })

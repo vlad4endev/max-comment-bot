@@ -3,7 +3,7 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 
-import { getTelegramToken } from '../config'
+import { resolveTelegramBotToken } from './resolveTelegramBotToken'
 import { getDb } from '../db/database'
 import {
   getTelegramUpdatesWithIds,
@@ -84,12 +84,12 @@ export type StagedPayload =
 export function resolveImportTgToken(): string {
   const reader = (process.env.TG_READER_BOT_TOKEN || '').trim()
   if (reader) return reader
-  return getTelegramToken()
+  return resolveTelegramBotToken()
 }
 
 export function readerTokenMeta(): { ok: boolean; usesMainToken: boolean } {
   const reader = (process.env.TG_READER_BOT_TOKEN || '').trim()
-  const fallback = getTelegramToken()
+  const fallback = resolveTelegramBotToken()
   if (reader) return { ok: true, usesMainToken: false }
   return { ok: fallback.length > 0, usesMainToken: fallback.length > 0 }
 }

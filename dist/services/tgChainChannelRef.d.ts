@@ -9,3 +9,10 @@ export declare function repairTgChainsForForwarding(): Promise<{
     tokenRepaired: number;
     channelIdRepaired: number;
 }>;
+/** После смены токена в интеграциях — обновить цепочки со старым или пустым bot_token. */
+export declare function syncTgChainBotTokensOnTelegramReconnect(previousToken: string, newToken: string): Promise<number>;
+/** Заменить в цепочках устаревшие bot_token, если основной токен валиден. */
+export declare function repairStaleTgChainBotTokens(): Promise<{
+    repaired: number;
+    checked: number;
+}>;

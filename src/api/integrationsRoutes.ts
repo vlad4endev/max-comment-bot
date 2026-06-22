@@ -29,6 +29,7 @@ import {
   type IntegrationPlatform,
   type IntegrationRecord,
 } from '../services/integrationsStore'
+import { syncTgChainBotTokensOnTelegramReconnect, repairStaleTgChainBotTokens } from '../services/tgChainChannelRef'
 export interface IntegrationsRouterDeps {
   bot: Bot
 }
@@ -343,6 +344,15 @@ export function createIntegrationsRouter(deps: IntegrationsRouterDeps): express.
       } catch (err: unknown) {
         // Токен уже в integrations.json; в Docker .env часто не на volume.
         logger.warn('integrations: TG_TOKEN не записан в .env (токен сохранён в integrations.json)', err)
+      }
+      const previousToken = existingForPlatform?.token?.trim() ?? ''
+      const chainsUpdated = await syncTgChainBotTokensOnTelegramReconnect(previousToken, token)
+      const staleRepaired = await repairStaleTgChainBotTokens()
+      if (chainsUpdated > 0 || staleRepaired.repaired > 0) {
+        logger.info('integrations: tg chain bot_token synced after reconnect', {
+          chainsUpdated,
+          staleRepaired: staleRepaired.repaired,
+        })
       }
     }
 

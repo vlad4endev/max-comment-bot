@@ -4,8 +4,10 @@
 
 import axios from 'axios'
 
+import { getTelegramToken } from '../config'
 import { logger } from '../utils/logger'
 import { isTelegramUnauthorizedError } from '../utils/telegramSyncErrors'
+import { integrationsStore } from './integrationsStore'
 import { resolveTelegramBotToken } from './resolveTelegramBotToken'
 import { reportTelegramUnauthorized } from './telegramSyncAlertService'
 
@@ -20,6 +22,17 @@ export interface TelegramHealthSnapshot {
   error: string | null
 }
 
+export interface TelegramTokenSourceReport {
+  active_source: 'integrations' | 'env' | 'none'
+  active_token_preview: string
+  env_token_preview: string
+  integrations_token_preview: string
+  reader_token_preview: string
+  reader_uses_main: boolean
+  env_differs_from_integrations: boolean
+  mismatch_warning: string | null
+}
+
 let lastSnapshot: TelegramHealthSnapshot = {
   checked_at: new Date(0).toISOString(),
   has_token: false,
@@ -30,6 +43,17 @@ let lastSnapshot: TelegramHealthSnapshot = {
 }
 
 let monitorTimer: ReturnType<typeof setInterval> | null = null
+
+function tokenPreview(token: string): string {
+  const trimmed = token.trim()
+  if (!trimmed) {
+    return ''
+  }
+  if (trimmed.length <= 4) {
+    return '••••'
+  }
+  return `••••${trimmed.slice(-4)}`
+}
 
 function getMonitorIntervalMs(): number {
   const raw = (process.env.TELEGRAM_HEALTH_CHECK_INTERVAL_MS ?? '').trim()
@@ -58,6 +82,52 @@ function extractAxiosErrorText(err: unknown): string {
     }
   }
   return err instanceof Error ? err.message : String(err ?? '')
+}
+
+/** Откуда реально берётся основной TG-токен (без раскрытия полного значения). */
+export function describeTelegramTokenSources(): TelegramTokenSourceReport {
+  const integToken = integrationsStore.getTelegramIntegration()?.token?.trim() ?? ''
+  const envToken = getTelegramToken().trim()
+  const readerToken = (process.env.TG_READER_BOT_TOKEN || '').trim()
+  const activeToken = resolveTelegramBotToken()
+  const activeSource: TelegramTokenSourceReport['active_source'] = integToken
+    ? 'integrations'
+    : envToken
+      ? 'env'
+      : 'none'
+
+  let mismatchWarning: string | null = null
+  if (integToken && envToken && integToken !== envToken) {
+    mismatchWarning =
+      'В data/integrations.json и .env разные токены — используется integrations.json. Обновите токен в Админка → Интеграции.'
+  }
+
+  return {
+    active_source: activeSource,
+    active_token_preview: tokenPreview(activeToken),
+    env_token_preview: tokenPreview(envToken),
+    integrations_token_preview: tokenPreview(integToken),
+    reader_token_preview: tokenPreview(readerToken),
+    reader_uses_main: !readerToken,
+    env_differs_from_integrations: Boolean(integToken && envToken && integToken !== envToken),
+    mismatch_warning: mismatchWarning,
+  }
+}
+
+export async function isTelegramTokenAuthorized(token: string): Promise<boolean> {
+  const trimmed = token.trim()
+  if (!trimmed) {
+    return false
+  }
+  try {
+    const { data } = await axios.get<{ ok: boolean; result?: { id?: number } }>(
+      `${TG_API}/bot${trimmed}/getMe`,
+      { timeout: 10_000 },
+    )
+    return data.ok === true && typeof data.result?.id === 'number'
+  } catch {
+    return false
+  }
 }
 
 export async function probeTelegramBotApi(token?: string): Promise<TelegramHealthSnapshot> {
@@ -135,6 +205,16 @@ export function getTelegramHealthSnapshot(): TelegramHealthSnapshot {
 }
 
 export async function assertTelegramBotApiOnStartup(): Promise<void> {
+  const sources = describeTelegramTokenSources()
+  if (sources.mismatch_warning) {
+    logger.warn(`[telegramHealth] ${sources.mismatch_warning}`, {
+      active_source: sources.active_source,
+      active_token_preview: sources.active_token_preview,
+      env_token_preview: sources.env_token_preview,
+      integrations_token_preview: sources.integrations_token_preview,
+    })
+  }
+
   const token = resolveTelegramBotToken()
   if (!token) {
     logger.warn(
@@ -148,12 +228,19 @@ export async function assertTelegramBotApiOnStartup(): Promise<void> {
     logger.info('[telegramHealth] Telegram Bot API авторизован', {
       bot_id: snapshot.bot_id,
       bot_username: snapshot.bot_username,
+      active_source: sources.active_source,
+      active_token_preview: sources.active_token_preview,
     })
     return
   }
 
   logger.error('[telegramHealth] Telegram Bot API недоступен — проверьте токен в интеграциях', {
     error: snapshot.error,
+    active_source: sources.active_source,
+    active_token_preview: sources.active_token_preview,
+    env_token_preview: sources.env_token_preview,
+    integrations_token_preview: sources.integrations_token_preview,
+    reader_token_preview: sources.reader_token_preview,
   })
 }
 

@@ -96,6 +96,10 @@ async function main() {
     await (0, adminPanelState_1.ensureAdminPanelStateLoaded)();
     await (0, channelLinkService_1.repairLegacyMiniappTgChains)();
     await (0, tgChainChannelRef_1.repairTgChainsForForwarding)();
+    const staleChainTokens = await (0, tgChainChannelRef_1.repairStaleTgChainBotTokens)();
+    if (staleChainTokens.repaired > 0) {
+        logger_1.logger.warn('Заменены устаревшие bot_token в TG-цепочках', staleChainTokens);
+    }
     try {
         await (0, bot_1.ensureBotProfile)(bot);
     }
