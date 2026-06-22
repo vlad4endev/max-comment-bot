@@ -7,18 +7,23 @@
  * 2. Опрашивает комментарии VK и синхронизирует их в MAX miniapp.
  * 3. Отправляет новые комментарии из MAX miniapp в VK.
  */
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.setVkChainForwarderBot = setVkChainForwarderBot;
 exports.onMaxPostPublished = onMaxPostPublished;
 exports.startVkChainForwarder = startVkChainForwarder;
 exports.stopVkChainForwarder = stopVkChainForwarder;
+const axios_1 = __importDefault(require("axios"));
 const adminPanelState_1 = require("../api/adminPanelState");
+const telegramReader_1 = require("../forwarder/telegramReader");
 const antispamService_1 = require("./antispamService");
 const commentStore_1 = require("./commentStore");
 const commentsBookingService_1 = require("./commentsBookingService");
+const integrationPlatformClient_1 = require("./integrationPlatformClient");
 const postStore_1 = require("./postStore");
 const resolveChannelChatId_1 = require("./resolveChannelChatId");
-const integrationPlatformClient_1 = require("./integrationPlatformClient");
 const vkPostMappingStore_1 = require("./vkPostMappingStore");
 const commentSyncGuard_1 = require("../utils/commentSyncGuard");
 const logger_1 = require("../utils/logger");
@@ -28,6 +33,141 @@ const VK_MAX_TO_VK_SYNC_INTERVAL_MS = 20_000;
 const VK_POST_MAX_AGE_DAYS = 30;
 /** Формат имени VK-пользователя в miniapp */
 const VK_USER_PREFIX = 'vk:';
+/** VK wall.post — не более 10 вложений. */
+const VK_WALL_ATTACHMENTS_LIMIT = 10;
+const TG_DOWNLOAD_TIMEOUT_MS = 120_000;
+async function downloadBinary(url) {
+    try {
+        const res = await axios_1.default.get(url, {
+            responseType: 'arraybuffer',
+            timeout: TG_DOWNLOAD_TIMEOUT_MS,
+        });
+        return Buffer.from(res.data);
+    }
+    catch (err) {
+        logger_1.logger.warn('[vkChain] media download failed', { url: url.slice(0, 120), err });
+        return null;
+    }
+}
+async function uploadTgPhotoToVk(vkToken, groupId, tgToken, fileId) {
+    const url = await (0, telegramReader_1.getTgFileUrl)(tgToken, fileId);
+    if (!url)
+        return null;
+    const buffer = await downloadBinary(url);
+    if (!buffer)
+        return null;
+    return (0, integrationPlatformClient_1.uploadVkWallPhotoFromBuffer)(vkToken, groupId, buffer);
+}
+async function uploadTgVideoToVk(vkToken, groupId, tgToken, fileId, title) {
+    const url = await (0, telegramReader_1.getTgFileUrl)(tgToken, fileId);
+    if (!url)
+        return null;
+    const buffer = await downloadBinary(url);
+    if (!buffer)
+        return null;
+    return (0, integrationPlatformClient_1.uploadVkWallVideoFromBuffer)(vkToken, groupId, buffer, 'video.mp4', title);
+}
+async function buildVkAttachmentsFromTgMessages(vkToken, groupId, tgToken, messages) {
+    const out = [];
+    const ordered = [...messages].sort((a, b) => a.message_id - b.message_id);
+    for (const msg of ordered) {
+        if (out.length >= VK_WALL_ATTACHMENTS_LIMIT)
+            break;
+        if (msg.photo && msg.photo.length > 0) {
+            const largest = msg.photo[msg.photo.length - 1];
+            const att = await uploadTgPhotoToVk(vkToken, groupId, tgToken, largest.file_id);
+            if (att)
+                out.push(att);
+            continue;
+        }
+        if (msg.video?.file_id) {
+            const title = (msg.caption || msg.text || 'video').trim().slice(0, 128) || 'video';
+            const att = await uploadTgVideoToVk(vkToken, groupId, tgToken, msg.video.file_id, title);
+            if (att)
+                out.push(att);
+        }
+    }
+    return out;
+}
+async function buildVkAttachmentsFromMaxMid(bot, vkToken, groupId, maxMid) {
+    const out = [];
+    try {
+        const message = await bot.api.getMessage(maxMid);
+        const media = (0, postStore_1.mediaAttachmentRequestsFromMessageBody)(message.body.attachments);
+        for (const att of media) {
+            if (out.length >= VK_WALL_ATTACHMENTS_LIMIT)
+                break;
+            const payload = att.payload;
+            const url = payload?.url?.trim();
+            if (!url)
+                continue;
+            const buffer = await downloadBinary(url);
+            if (!buffer)
+                continue;
+            if (att.type === 'video') {
+                const vkAtt = await (0, integrationPlatformClient_1.uploadVkWallVideoFromBuffer)(vkToken, groupId, buffer, 'video.mp4', 'video');
+                if (vkAtt)
+                    out.push(vkAtt);
+            }
+            else if (att.type === 'image') {
+                const vkAtt = await (0, integrationPlatformClient_1.uploadVkWallPhotoFromBuffer)(vkToken, groupId, buffer);
+                if (vkAtt)
+                    out.push(vkAtt);
+            }
+        }
+    }
+    catch (err) {
+        logger_1.logger.warn('[vkChain] buildVkAttachmentsFromMaxMid failed', { maxMid, err });
+    }
+    return out;
+}
+async function buildVkAttachmentsFromPostRecord(vkToken, groupId, maxChatId, maxMid) {
+    const chatId = (0, resolveChannelChatId_1.resolveCanonicalChannelChatId)(maxChatId) ?? maxChatId;
+    const post = postStore_1.postStore.findPostByChannelMessage(chatId, maxMid);
+    if (!post?.media_attachments?.length) {
+        return [];
+    }
+    const out = [];
+    for (const att of post.media_attachments) {
+        if (out.length >= VK_WALL_ATTACHMENTS_LIMIT)
+            break;
+        const payload = att.payload;
+        const url = payload?.url?.trim();
+        if (!url)
+            continue;
+        const buffer = await downloadBinary(url);
+        if (!buffer)
+            continue;
+        if (att.type === 'video') {
+            const vkAtt = await (0, integrationPlatformClient_1.uploadVkWallVideoFromBuffer)(vkToken, groupId, buffer, 'video.mp4', 'video');
+            if (vkAtt)
+                out.push(vkAtt);
+        }
+        else if (att.type === 'image') {
+            const vkAtt = await (0, integrationPlatformClient_1.uploadVkWallPhotoFromBuffer)(vkToken, groupId, buffer);
+            if (vkAtt)
+                out.push(vkAtt);
+        }
+    }
+    return out;
+}
+async function resolveVkWallAttachments(vkToken, groupId, maxChatId, maxMid, mediaContext) {
+    if (mediaContext?.tgToken && mediaContext.tgMessages && mediaContext.tgMessages.length > 0) {
+        const fromTg = await buildVkAttachmentsFromTgMessages(vkToken, groupId, mediaContext.tgToken, mediaContext.tgMessages);
+        if (fromTg.length > 0) {
+            return fromTg;
+        }
+    }
+    const fromPost = await buildVkAttachmentsFromPostRecord(vkToken, groupId, maxChatId, maxMid);
+    if (fromPost.length > 0) {
+        return fromPost;
+    }
+    const bot = botRef;
+    if (bot) {
+        return buildVkAttachmentsFromMaxMid(bot, vkToken, groupId, maxMid);
+    }
+    return [];
+}
 function formatVkCommentUsername(fromId) {
     if (fromId > 0)
         return 'Пользователь ВК';
@@ -45,7 +185,7 @@ function setVkChainForwarderBot(bot) {
  * Хук, вызываемый из tgChainForwarder после того, как пост опубликован в MAX-канале.
  * Для всех активных VK-связок этого канала публикует тот же текст в VK.
  */
-async function onMaxPostPublished(maxChatId, maxMid, postText) {
+async function onMaxPostPublished(maxChatId, maxMid, postText, mediaContext) {
     const canonicalChatId = (0, resolveChannelChatId_1.resolveCanonicalChannelChatId)(maxChatId) ?? maxChatId;
     const chains = (0, adminPanelState_1.listVkChainsSync)().filter((c) => c.active &&
         c.forward_posts &&
@@ -54,13 +194,14 @@ async function onMaxPostPublished(maxChatId, maxMid, postText) {
     if (chains.length === 0)
         return;
     for (const chain of chains) {
-        await publishPostToVkChain(chain, maxMid, postText);
+        await publishPostToVkChain(chain, maxMid, postText, maxChatId, mediaContext);
     }
 }
-async function publishPostToVkChain(chain, maxMid, postText) {
+async function publishPostToVkChain(chain, maxMid, postText, maxChatId, mediaContext) {
     try {
         const message = postText.trim() || '\u00a0';
-        const vkPostId = await (0, integrationPlatformClient_1.publishVkWallPost)(chain.vk_token, chain.vk_group_id, message);
+        const attachments = await resolveVkWallAttachments(chain.vk_token, chain.vk_group_id, maxChatId, maxMid, mediaContext);
+        const vkPostId = await (0, integrationPlatformClient_1.publishVkWallPost)(chain.vk_token, chain.vk_group_id, message, attachments.length > 0 ? attachments : undefined);
         if (vkPostId == null) {
             logger_1.logger.warn('[vkChain] publishVkWallPost returned null', {
                 chainId: chain.id,
@@ -84,6 +225,7 @@ async function publishPostToVkChain(chain, maxMid, postText) {
             maxMid,
             vkPostId,
             groupId: chain.vk_group_id,
+            attachmentCount: attachments.length,
         });
     }
     catch (err) {

@@ -55,6 +55,8 @@ exports.resolveVkGroup = resolveVkGroup;
 exports.listVkManagedGroups = listVkManagedGroups;
 exports.fetchTelegramChannelPosts = fetchTelegramChannelPosts;
 exports.fetchVkWallPosts = fetchVkWallPosts;
+exports.uploadVkWallPhotoFromBuffer = uploadVkWallPhotoFromBuffer;
+exports.uploadVkWallVideoFromBuffer = uploadVkWallVideoFromBuffer;
 exports.publishVkWallPost = publishVkWallPost;
 exports.fetchVkWallPostText = fetchVkWallPostText;
 exports.editVkWallPostMessage = editVkWallPostMessage;
@@ -62,6 +64,7 @@ exports.appendMarkerToVkWallPost = appendMarkerToVkWallPost;
 exports.fetchVkWallComments = fetchVkWallComments;
 exports.publishVkWallComment = publishVkWallComment;
 const axios_1 = __importDefault(require("axios"));
+const form_data_1 = __importDefault(require("form-data"));
 const adminPanelState_1 = require("../api/adminPanelState");
 const logger_1 = require("../utils/logger");
 const telegramSyncErrors_1 = require("../utils/telegramSyncErrors");
@@ -1070,17 +1073,91 @@ async function fetchVkWallPosts(token, groupId, afterPostId) {
         return { posts: [], lastPostId: afterPostId };
     }
 }
-async function publishVkWallPost(token, groupId, message) {
+function vkPositiveGroupId(groupId) {
+    return groupId.replace(/^public/i, '').replace(/^-/, '');
+}
+async function vkApiCall(method, token, params) {
+    const { data } = await axios_1.default.get(`https://api.vk.com/method/${method}`, {
+        params: { ...params, access_token: token, v: '5.199' },
+        timeout: 60_000,
+    });
+    if (data.error) {
+        throw new Error(data.error.error_msg ?? `VK ${method} failed`);
+    }
+    if (data.response === undefined) {
+        throw new Error(`VK ${method}: empty response`);
+    }
+    return data.response;
+}
+/** Загружает фото на стену VK; возвращает attachment вида photo{owner_id}_{id}. */
+async function uploadVkWallPhotoFromBuffer(token, groupId, buffer, filename = 'photo.jpg') {
+    const groupIdNum = vkPositiveGroupId(groupId);
+    try {
+        const uploadServer = await vkApiCall('photos.getWallUploadServer', token, {
+            group_id: groupIdNum,
+        });
+        const form = new form_data_1.default();
+        form.append('photo', buffer, { filename, contentType: 'image/jpeg' });
+        const uploadRes = await axios_1.default.post(uploadServer.upload_url, form, { headers: form.getHeaders(), timeout: 120_000 });
+        const server = uploadRes.data.server;
+        const photo = uploadRes.data.photo;
+        const hash = uploadRes.data.hash;
+        if (server == null || !photo || !hash) {
+            logger_1.logger.warn('uploadVkWallPhotoFromBuffer: invalid upload response', { groupId });
+            return null;
+        }
+        const saved = await vkApiCall('photos.saveWallPhoto', token, {
+            group_id: groupIdNum,
+            photo,
+            server,
+            hash,
+        });
+        const item = saved[0];
+        if (!item)
+            return null;
+        return `photo${item.owner_id}_${item.id}`;
+    }
+    catch (err) {
+        logger_1.logger.warn('uploadVkWallPhotoFromBuffer failed', { groupId, err });
+        return null;
+    }
+}
+/** Загружает видео в VK; возвращает attachment вида video{owner_id}_{id}. */
+async function uploadVkWallVideoFromBuffer(token, groupId, buffer, filename = 'video.mp4', title = 'video') {
+    const groupIdNum = vkPositiveGroupId(groupId);
+    try {
+        const saveResp = await vkApiCall('video.save', token, {
+            group_id: groupIdNum,
+            name: title.slice(0, 128) || 'video',
+        });
+        const form = new form_data_1.default();
+        form.append('video_file', buffer, { filename, contentType: 'video/mp4' });
+        await axios_1.default.post(saveResp.upload_url, form, {
+            headers: form.getHeaders(),
+            timeout: 300_000,
+        });
+        return `video${saveResp.owner_id}_${saveResp.video_id}`;
+    }
+    catch (err) {
+        logger_1.logger.warn('uploadVkWallVideoFromBuffer failed', { groupId, err });
+        return null;
+    }
+}
+async function publishVkWallPost(token, groupId, message, attachments) {
     const ownerId = groupId.startsWith('-') ? groupId : `-${groupId.replace(/^public/, '')}`;
+    const params = {
+        access_token: token,
+        owner_id: ownerId,
+        from_group: 1,
+        message,
+        v: '5.199',
+    };
+    if (attachments && attachments.length > 0) {
+        params.attachments = attachments.slice(0, 10).join(',');
+    }
     const { data } = await axios_1.default.get('https://api.vk.com/method/wall.post', {
-        params: {
-            access_token: token,
-            owner_id: ownerId,
-            from_group: 1,
-            message,
-            v: '5.199',
-        },
-        timeout: 15_000,
+        params,
+        timeout: 60_000,
     });
     if (data.error) {
         throw new Error(data.error.error_msg ?? 'VK wall.post failed');

@@ -312,17 +312,30 @@ function groupChannelPostsForForward(posts) {
 async function forwardOneTgMessageToMax(bot, msg, tgToken, maxChatId, caption) {
     const chatId = (0, resolveChannelChatId_1.resolveCanonicalChannelChatId)(maxChatId) ?? maxChatId;
     const messageText = caption.trim() || '\u00a0';
+    const hasMedia = Boolean(msg.photo?.length || msg.video?.file_id || msg.document?.file_id);
     if (msg.photo && msg.photo.length > 0) {
         const largest = msg.photo[msg.photo.length - 1];
         const url = await (0, telegramReader_1.getTgFileUrl)(tgToken, largest.file_id);
         if (url) {
-            const image = await maxApi(() => bot.api.uploadImage({ url }));
+            let image;
+            try {
+                const res = await axios_1.default.get(url, { responseType: 'arraybuffer', timeout: 120_000 });
+                image = await maxApi(() => bot.api.uploadImage({ source: Buffer.from(res.data) }));
+            }
+            catch (err) {
+                logger_1.logger.warn('[tgChain] binary photo upload failed, fallback to url', {
+                    messageId: msg.message_id,
+                    err,
+                });
+                image = await maxApi(() => bot.api.uploadImage({ url }));
+            }
             await throttleMaxChatSend(chatId);
             const sent = await maxApi(() => bot.api.sendMessageToChat(chatId, messageText, {
                 attachments: [image.toJson()],
             }));
             return sent.body?.mid ?? null;
         }
+        logger_1.logger.warn('[tgChain] photo forward skipped: no TG file url', { messageId: msg.message_id });
     }
     if (msg.video?.file_id) {
         const url = await (0, telegramReader_1.getTgFileUrl)(tgToken, msg.video.file_id);
@@ -348,7 +361,7 @@ async function forwardOneTgMessageToMax(bot, msg, tgToken, maxChatId, caption) {
             return sent.body?.mid ?? null;
         }
     }
-    if (caption.trim()) {
+    if (!hasMedia && caption.trim()) {
         await throttleMaxChatSend(chatId);
         const sent = await maxApi(() => bot.api.sendMessageToChat(chatId, caption.trim()));
         return sent.body?.mid ?? null;
@@ -696,7 +709,7 @@ async function processChainMessageGroup(chain, messages, tgToken) {
                         for (const msg of chunk) {
                             markForwarded(chain.id, msg, maxMid, i);
                         }
-                        void (0, vkChainForwarder_1.onMaxPostPublished)(chain.max_chat_id, maxMid, i === 0 ? firstCaption : '').catch((err) => {
+                        void (0, vkChainForwarder_1.onMaxPostPublished)(chain.max_chat_id, maxMid, i === 0 ? firstCaption : '', { tgToken, tgMessages: chunk }).catch((err) => {
                             logger_1.logger.warn('[tgChain] VK hook (album) failed', { chainId: chain.id, maxMid, err });
                         });
                     }
@@ -728,7 +741,10 @@ async function processChainMessageGroup(chain, messages, tgToken) {
                 if (keepPublished) {
                     published = 1;
                     markForwarded(chain.id, msg, maxMid, null);
-                    void (0, vkChainForwarder_1.onMaxPostPublished)(chain.max_chat_id, maxMid, caption).catch((err) => {
+                    void (0, vkChainForwarder_1.onMaxPostPublished)(chain.max_chat_id, maxMid, caption, {
+                        tgToken,
+                        tgMessages: [msg],
+                    }).catch((err) => {
                         logger_1.logger.warn('[tgChain] VK hook (single) failed', { chainId: chain.id, maxMid, err });
                     });
                 }

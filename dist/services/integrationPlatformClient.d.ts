@@ -104,7 +104,11 @@ export declare function fetchVkWallPosts(token: string, groupId: string, afterPo
     posts: ExternalPost[];
     lastPostId: number;
 }>;
-export declare function publishVkWallPost(token: string, groupId: string, message: string): Promise<number | null>;
+/** Загружает фото на стену VK; возвращает attachment вида photo{owner_id}_{id}. */
+export declare function uploadVkWallPhotoFromBuffer(token: string, groupId: string, buffer: Buffer, filename?: string): Promise<string | null>;
+/** Загружает видео в VK; возвращает attachment вида video{owner_id}_{id}. */
+export declare function uploadVkWallVideoFromBuffer(token: string, groupId: string, buffer: Buffer, filename?: string, title?: string): Promise<string | null>;
+export declare function publishVkWallPost(token: string, groupId: string, message: string, attachments?: string[]): Promise<number | null>;
 /** Текущий текст VK-поста на стене. */
 export declare function fetchVkWallPostText(token: string, groupId: string, postId: number): Promise<string | null>;
 export declare function editVkWallPostMessage(token: string, groupId: string, postId: number, message: string): Promise<boolean>;

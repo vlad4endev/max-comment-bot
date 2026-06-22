@@ -1,4 +1,5 @@
 import axios from 'axios'
+import FormData from 'form-data'
 
 import { ensureAdminPanelStateLoaded, listTgChainsSync } from '../api/adminPanelState'
 import { logger } from '../utils/logger'
@@ -1301,24 +1302,126 @@ export async function fetchVkWallPosts(
   }
 }
 
+function vkPositiveGroupId(groupId: string): string {
+  return groupId.replace(/^public/i, '').replace(/^-/, '')
+}
+
+async function vkApiCall<T>(
+  method: string,
+  token: string,
+  params: Record<string, string | number>,
+): Promise<T> {
+  const { data } = await axios.get<{ response?: T; error?: { error_msg?: string } }>(
+    `https://api.vk.com/method/${method}`,
+    {
+      params: { ...params, access_token: token, v: '5.199' },
+      timeout: 60_000,
+    },
+  )
+  if (data.error) {
+    throw new Error(data.error.error_msg ?? `VK ${method} failed`)
+  }
+  if (data.response === undefined) {
+    throw new Error(`VK ${method}: empty response`)
+  }
+  return data.response
+}
+
+/** Загружает фото на стену VK; возвращает attachment вида photo{owner_id}_{id}. */
+export async function uploadVkWallPhotoFromBuffer(
+  token: string,
+  groupId: string,
+  buffer: Buffer,
+  filename = 'photo.jpg',
+): Promise<string | null> {
+  const groupIdNum = vkPositiveGroupId(groupId)
+  try {
+    const uploadServer = await vkApiCall<{ upload_url: string }>('photos.getWallUploadServer', token, {
+      group_id: groupIdNum,
+    })
+    const form = new FormData()
+    form.append('photo', buffer, { filename, contentType: 'image/jpeg' })
+    const uploadRes = await axios.post<{ server?: number | string; photo?: string; hash?: string }>(
+      uploadServer.upload_url,
+      form,
+      { headers: form.getHeaders(), timeout: 120_000 },
+    )
+    const server = uploadRes.data.server
+    const photo = uploadRes.data.photo
+    const hash = uploadRes.data.hash
+    if (server == null || !photo || !hash) {
+      logger.warn('uploadVkWallPhotoFromBuffer: invalid upload response', { groupId })
+      return null
+    }
+    const saved = await vkApiCall<Array<{ owner_id: number; id: number }>>('photos.saveWallPhoto', token, {
+      group_id: groupIdNum,
+      photo,
+      server,
+      hash,
+    })
+    const item = saved[0]
+    if (!item) return null
+    return `photo${item.owner_id}_${item.id}`
+  } catch (err: unknown) {
+    logger.warn('uploadVkWallPhotoFromBuffer failed', { groupId, err })
+    return null
+  }
+}
+
+/** Загружает видео в VK; возвращает attachment вида video{owner_id}_{id}. */
+export async function uploadVkWallVideoFromBuffer(
+  token: string,
+  groupId: string,
+  buffer: Buffer,
+  filename = 'video.mp4',
+  title = 'video',
+): Promise<string | null> {
+  const groupIdNum = vkPositiveGroupId(groupId)
+  try {
+    const saveResp = await vkApiCall<{
+      upload_url: string
+      video_id: number
+      owner_id: number
+    }>('video.save', token, {
+      group_id: groupIdNum,
+      name: title.slice(0, 128) || 'video',
+    })
+    const form = new FormData()
+    form.append('video_file', buffer, { filename, contentType: 'video/mp4' })
+    await axios.post(saveResp.upload_url, form, {
+      headers: form.getHeaders(),
+      timeout: 300_000,
+    })
+    return `video${saveResp.owner_id}_${saveResp.video_id}`
+  } catch (err: unknown) {
+    logger.warn('uploadVkWallVideoFromBuffer failed', { groupId, err })
+    return null
+  }
+}
+
 export async function publishVkWallPost(
   token: string,
   groupId: string,
   message: string,
+  attachments?: string[],
 ): Promise<number | null> {
   const ownerId = groupId.startsWith('-') ? groupId : `-${groupId.replace(/^public/, '')}`
+  const params: Record<string, string | number> = {
+    access_token: token,
+    owner_id: ownerId,
+    from_group: 1,
+    message,
+    v: '5.199',
+  }
+  if (attachments && attachments.length > 0) {
+    params.attachments = attachments.slice(0, 10).join(',')
+  }
   const { data } = await axios.get<{
     response?: { post_id?: number }
     error?: { error_msg?: string }
   }>('https://api.vk.com/method/wall.post', {
-    params: {
-      access_token: token,
-      owner_id: ownerId,
-      from_group: 1,
-      message,
-      v: '5.199',
-    },
-    timeout: 15_000,
+    params,
+    timeout: 60_000,
   })
   if (data.error) {
     throw new Error(data.error.error_msg ?? 'VK wall.post failed')

@@ -7,11 +7,16 @@
  * 3. Отправляет новые комментарии из MAX miniapp в VK.
  */
 import type { Bot } from '@maxhub/max-bot-api';
+import type { TgMessage } from '../forwarder/telegramReader';
+export interface MaxPostPublishedMediaContext {
+    tgToken?: string;
+    tgMessages?: TgMessage[];
+}
 export declare function setVkChainForwarderBot(bot: Bot): void;
 /**
  * Хук, вызываемый из tgChainForwarder после того, как пост опубликован в MAX-канале.
  * Для всех активных VK-связок этого канала публикует тот же текст в VK.
  */
-export declare function onMaxPostPublished(maxChatId: number, maxMid: string, postText: string): Promise<void>;
+export declare function onMaxPostPublished(maxChatId: number, maxMid: string, postText: string, mediaContext?: MaxPostPublishedMediaContext): Promise<void>;
 export declare function startVkChainForwarder(): void;
 export declare function stopVkChainForwarder(): void;

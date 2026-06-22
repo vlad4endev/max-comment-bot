@@ -74,11 +74,11 @@ else
   echo "  Пересоберите образ: GIT_COMMIT=\$(git rev-parse HEAD) docker compose build --no-cache bot && docker compose up -d --force-recreate" >&2
   exit 1
 fi
-ADMIN_HTML="$(curl -sS --max-time 8 "http://127.0.0.1:${HOST_PORT}/admin/login" 2>/dev/null || true)"
+ADMIN_HTML="$(docker compose exec -T bot sh -c 'cat admin-panel/admin.html' 2>/dev/null || true)"
 if [[ -n "$ADMIN_HTML" ]] && echo "$ADMIN_HTML" | grep -q 'autoposts.js'; then
-  echo "  admin HTML -> подключает autoposts.js"
+  echo "  admin-panel/admin.html -> подключает autoposts.js"
 else
-  echo "  admin HTML -> не найден autoposts.js (проверьте admin-panel/admin.html в образе)" >&2
+  echo "  admin-panel/admin.html -> не найден autoposts.js (проверьте admin-panel/admin.html в образе)" >&2
 fi
 
 echo ""

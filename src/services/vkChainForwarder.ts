@@ -7,22 +7,27 @@
  * 3. Отправляет новые комментарии из MAX miniapp в VK.
  */
 
+import axios from 'axios'
 import type { Bot } from '@maxhub/max-bot-api'
 
 import { listVkChainsSync, updateVkChain, type VkChainRecord } from '../api/adminPanelState'
+import type { TgMessage } from '../forwarder/telegramReader'
+import { getTgFileUrl } from '../forwarder/telegramReader'
 import { evaluateComment } from './antispamService'
 import { commentStore } from './commentStore'
 import {
   claimAndPropagateCommentsBooking,
   isCommentSyncBlockedByBooking,
 } from './commentsBookingService'
-import { postStore } from './postStore'
-import { resolveCanonicalChannelChatId } from './resolveChannelChatId'
 import {
   fetchVkWallComments,
   publishVkWallComment,
   publishVkWallPost,
+  uploadVkWallPhotoFromBuffer,
+  uploadVkWallVideoFromBuffer,
 } from './integrationPlatformClient'
+import { mediaAttachmentRequestsFromMessageBody, postStore } from './postStore'
+import { resolveCanonicalChannelChatId } from './resolveChannelChatId'
 import { vkPostMappingStore } from './vkPostMappingStore'
 import { isCommentSynced, markCommentSynced } from '../utils/commentSyncGuard'
 import { logger } from '../utils/logger'
@@ -33,6 +38,171 @@ const VK_MAX_TO_VK_SYNC_INTERVAL_MS = 20_000
 const VK_POST_MAX_AGE_DAYS = 30
 /** Формат имени VK-пользователя в miniapp */
 const VK_USER_PREFIX = 'vk:'
+/** VK wall.post — не более 10 вложений. */
+const VK_WALL_ATTACHMENTS_LIMIT = 10
+const TG_DOWNLOAD_TIMEOUT_MS = 120_000
+
+export interface MaxPostPublishedMediaContext {
+  tgToken?: string
+  tgMessages?: TgMessage[]
+}
+
+async function downloadBinary(url: string): Promise<Buffer | null> {
+  try {
+    const res = await axios.get<ArrayBuffer>(url, {
+      responseType: 'arraybuffer',
+      timeout: TG_DOWNLOAD_TIMEOUT_MS,
+    })
+    return Buffer.from(res.data)
+  } catch (err: unknown) {
+    logger.warn('[vkChain] media download failed', { url: url.slice(0, 120), err })
+    return null
+  }
+}
+
+async function uploadTgPhotoToVk(
+  vkToken: string,
+  groupId: string,
+  tgToken: string,
+  fileId: string,
+): Promise<string | null> {
+  const url = await getTgFileUrl(tgToken, fileId)
+  if (!url) return null
+  const buffer = await downloadBinary(url)
+  if (!buffer) return null
+  return uploadVkWallPhotoFromBuffer(vkToken, groupId, buffer)
+}
+
+async function uploadTgVideoToVk(
+  vkToken: string,
+  groupId: string,
+  tgToken: string,
+  fileId: string,
+  title: string,
+): Promise<string | null> {
+  const url = await getTgFileUrl(tgToken, fileId)
+  if (!url) return null
+  const buffer = await downloadBinary(url)
+  if (!buffer) return null
+  return uploadVkWallVideoFromBuffer(vkToken, groupId, buffer, 'video.mp4', title)
+}
+
+async function buildVkAttachmentsFromTgMessages(
+  vkToken: string,
+  groupId: string,
+  tgToken: string,
+  messages: TgMessage[],
+): Promise<string[]> {
+  const out: string[] = []
+  const ordered = [...messages].sort((a, b) => a.message_id - b.message_id)
+  for (const msg of ordered) {
+    if (out.length >= VK_WALL_ATTACHMENTS_LIMIT) break
+    if (msg.photo && msg.photo.length > 0) {
+      const largest = msg.photo[msg.photo.length - 1]!
+      const att = await uploadTgPhotoToVk(vkToken, groupId, tgToken, largest.file_id)
+      if (att) out.push(att)
+      continue
+    }
+    if (msg.video?.file_id) {
+      const title = (msg.caption || msg.text || 'video').trim().slice(0, 128) || 'video'
+      const att = await uploadTgVideoToVk(vkToken, groupId, tgToken, msg.video.file_id, title)
+      if (att) out.push(att)
+    }
+  }
+  return out
+}
+
+async function buildVkAttachmentsFromMaxMid(
+  bot: Bot,
+  vkToken: string,
+  groupId: string,
+  maxMid: string,
+): Promise<string[]> {
+  const out: string[] = []
+  try {
+    const message = await bot.api.getMessage(maxMid)
+    const media = mediaAttachmentRequestsFromMessageBody(message.body.attachments)
+    for (const att of media) {
+      if (out.length >= VK_WALL_ATTACHMENTS_LIMIT) break
+      const payload = (att as { payload?: { url?: string } }).payload
+      const url = payload?.url?.trim()
+      if (!url) continue
+      const buffer = await downloadBinary(url)
+      if (!buffer) continue
+      if (att.type === 'video') {
+        const vkAtt = await uploadVkWallVideoFromBuffer(vkToken, groupId, buffer, 'video.mp4', 'video')
+        if (vkAtt) out.push(vkAtt)
+      } else if (att.type === 'image') {
+        const vkAtt = await uploadVkWallPhotoFromBuffer(vkToken, groupId, buffer)
+        if (vkAtt) out.push(vkAtt)
+      }
+    }
+  } catch (err: unknown) {
+    logger.warn('[vkChain] buildVkAttachmentsFromMaxMid failed', { maxMid, err })
+  }
+  return out
+}
+
+async function buildVkAttachmentsFromPostRecord(
+  vkToken: string,
+  groupId: string,
+  maxChatId: number,
+  maxMid: string,
+): Promise<string[]> {
+  const chatId = resolveCanonicalChannelChatId(maxChatId) ?? maxChatId
+  const post = postStore.findPostByChannelMessage(chatId, maxMid)
+  if (!post?.media_attachments?.length) {
+    return []
+  }
+  const out: string[] = []
+  for (const att of post.media_attachments) {
+    if (out.length >= VK_WALL_ATTACHMENTS_LIMIT) break
+    const payload = (att as { payload?: { url?: string } }).payload
+    const url = payload?.url?.trim()
+    if (!url) continue
+    const buffer = await downloadBinary(url)
+    if (!buffer) continue
+    if (att.type === 'video') {
+      const vkAtt = await uploadVkWallVideoFromBuffer(vkToken, groupId, buffer, 'video.mp4', 'video')
+      if (vkAtt) out.push(vkAtt)
+    } else if (att.type === 'image') {
+      const vkAtt = await uploadVkWallPhotoFromBuffer(vkToken, groupId, buffer)
+      if (vkAtt) out.push(vkAtt)
+    }
+  }
+  return out
+}
+
+async function resolveVkWallAttachments(
+  vkToken: string,
+  groupId: string,
+  maxChatId: number,
+  maxMid: string,
+  mediaContext?: MaxPostPublishedMediaContext,
+): Promise<string[]> {
+  if (mediaContext?.tgToken && mediaContext.tgMessages && mediaContext.tgMessages.length > 0) {
+    const fromTg = await buildVkAttachmentsFromTgMessages(
+      vkToken,
+      groupId,
+      mediaContext.tgToken,
+      mediaContext.tgMessages,
+    )
+    if (fromTg.length > 0) {
+      return fromTg
+    }
+  }
+
+  const fromPost = await buildVkAttachmentsFromPostRecord(vkToken, groupId, maxChatId, maxMid)
+  if (fromPost.length > 0) {
+    return fromPost
+  }
+
+  const bot = botRef
+  if (bot) {
+    return buildVkAttachmentsFromMaxMid(bot, vkToken, groupId, maxMid)
+  }
+  return []
+}
 
 function formatVkCommentUsername(fromId: number): string {
   if (fromId > 0) return 'Пользователь ВК'
@@ -58,6 +228,7 @@ export async function onMaxPostPublished(
   maxChatId: number,
   maxMid: string,
   postText: string,
+  mediaContext?: MaxPostPublishedMediaContext,
 ): Promise<void> {
   const canonicalChatId = resolveCanonicalChannelChatId(maxChatId) ?? maxChatId
   const chains = listVkChainsSync().filter(
@@ -70,7 +241,7 @@ export async function onMaxPostPublished(
   if (chains.length === 0) return
 
   for (const chain of chains) {
-    await publishPostToVkChain(chain, maxMid, postText)
+    await publishPostToVkChain(chain, maxMid, postText, maxChatId, mediaContext)
   }
 }
 
@@ -78,10 +249,24 @@ async function publishPostToVkChain(
   chain: VkChainRecord,
   maxMid: string,
   postText: string,
+  maxChatId: number,
+  mediaContext?: MaxPostPublishedMediaContext,
 ): Promise<void> {
   try {
     const message = postText.trim() || '\u00a0'
-    const vkPostId = await publishVkWallPost(chain.vk_token, chain.vk_group_id, message)
+    const attachments = await resolveVkWallAttachments(
+      chain.vk_token,
+      chain.vk_group_id,
+      maxChatId,
+      maxMid,
+      mediaContext,
+    )
+    const vkPostId = await publishVkWallPost(
+      chain.vk_token,
+      chain.vk_group_id,
+      message,
+      attachments.length > 0 ? attachments : undefined,
+    )
     if (vkPostId == null) {
       logger.warn('[vkChain] publishVkWallPost returned null', {
         chainId: chain.id,
@@ -105,6 +290,7 @@ async function publishPostToVkChain(
       maxMid,
       vkPostId,
       groupId: chain.vk_group_id,
+      attachmentCount: attachments.length,
     })
   } catch (err: unknown) {
     await updateVkChain(chain.id, {
