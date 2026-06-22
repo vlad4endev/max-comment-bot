@@ -6,6 +6,7 @@ import compression from 'compression'
 import express from 'express'
 
 import { createAdminRouter } from '../api/adminRoutes'
+import { listTgChainsSync } from '../api/adminPanelState'
 import { createChannelImportRouter } from '../api/channelImportRoutes'
 import {
   createFlowsRouter,
@@ -14,6 +15,7 @@ import {
 } from '../api/integrationsRoutes'
 import { createCommentApiRouter } from '../api/routes'
 import { isAdminPanelSessionValid } from '../middleware/adminAuth'
+import { getDb } from '../db/database'
 import { logger } from '../utils/logger'
 import { enqueueUpdate } from '../utils/updateQueue'
 import { dispatchBotUpdate } from './dispatchUpdate'
@@ -71,7 +73,35 @@ export function createHttpApp(options: HttpAppOptions): express.Express {
   )
 
   app.get('/health', (_req, res) => {
-    res.status(200).type('text/plain').send('ok')
+    const db = getDb()
+    const chains = listTgChainsSync()
+
+    const pendingComments = db
+      .prepare(
+        `SELECT COUNT(*) AS n FROM comments
+         WHERE (tg_comment_id IS NULL OR tg_comment_id = 0)
+           AND (source IS NULL OR source = 'max')`,
+      )
+      .get() as { n: number }
+
+    res.status(200).json({
+      ok: true,
+      uptime: Math.round(process.uptime()),
+      chains: {
+        total: chains.length,
+        active: chains.filter((c) => c.active).length,
+        forwarding: chains.filter((c) => c.forward_posts).length,
+        missing_discussion: chains.filter((c) => c.forward_comments && !c.tg_discussion_chat_id)
+          .length,
+      },
+      comments: {
+        pending_sync: Number(pendingComments.n) || 0,
+      },
+      memory: {
+        heapUsedMb: Math.round(process.memoryUsage().heapUsed / 1024 / 1024),
+      },
+      timestamp: new Date().toISOString(),
+    })
   })
 
   app.get('/health/telegram', async (_req, res) => {

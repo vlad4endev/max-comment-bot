@@ -20,6 +20,7 @@ const postStore_1 = require("./postStore");
 const resolveChannelChatId_1 = require("./resolveChannelChatId");
 const tgChannelMatch_1 = require("../utils/tgChannelMatch");
 const logger_1 = require("../utils/logger");
+const alertService_1 = require("../utils/alertService");
 const maxApiRetry_1 = require("../utils/maxApiRetry");
 const telegramMainBotOffsetStore_1 = require("./telegramMainBotOffsetStore");
 const telegramMiniappService_1 = require("./telegramMiniappService");
@@ -43,6 +44,9 @@ const lastMaxSendAt = new Map();
 const albumBuffer = new Map();
 /** Время последней активности long-poll / пересылки по chain_id. */
 const chainLastActivity = new Map();
+const chainRestartCount = new Map();
+const activeForwarders = new Map();
+let globalForwarderHandle = null;
 function touchChainActivity(chainId) {
     chainLastActivity.set(chainId, Date.now());
 }
@@ -955,38 +959,24 @@ async function runTgChainsOnce() {
 }
 let loopStarted = false;
 let watchdogStarted = false;
-function startTgChainWatchdog() {
-    if (watchdogStarted)
-        return;
-    watchdogStarted = true;
-    setInterval(() => {
-        const now = Date.now();
-        const silentThresholdMs = 15 * 60 * 1000;
-        for (const chain of (0, adminPanelState_1.listTgChainsSync)()) {
-            if (!chain.forward_posts || !chain.active)
-                continue;
-            const lastSeen = chainLastActivity.get(chain.id);
-            if (!lastSeen)
-                continue;
-            const silentMs = now - lastSeen;
-            if (silentMs > silentThresholdMs) {
-                logger_1.logger.warn('[tgChain] watchdog: chain silent', {
-                    chainId: chain.id,
-                    title: chain.max_title,
-                    silentMinutes: Math.round(silentMs / 60000),
-                });
-            }
-        }
-    }, 10 * 60 * 1000);
+async function restartChainForwarder(chainId) {
+    const existing = activeForwarders.get('__global__');
+    if (existing) {
+        existing.stop();
+        activeForwarders.delete('__global__');
+        globalForwarderHandle = null;
+    }
+    await sleep(3000);
+    startForwarderLoop();
+    logger_1.logger.info('[tgChain] watchdog: forwarder restarted', { chainId });
 }
-function startTgChainForwarder() {
-    if (loopStarted)
+function startForwarderLoop() {
+    if (globalForwarderHandle) {
         return;
-    loopStarted = true;
-    startTgChainWatchdog();
-    logger_1.logger.info('[tgChain] forwarder started (long-poll channel_post)');
+    }
+    let stopped = false;
     const loop = async () => {
-        while (true) {
+        while (!stopped) {
             try {
                 const hadUpdates = await runTgChainsOnce();
                 if (!hadUpdates) {
@@ -995,7 +985,6 @@ function startTgChainForwarder() {
                         await sleep(TG_CHAIN_IDLE_MS);
                     }
                     else {
-                        // Не спим дольше, чем осталось до ближайшего flush альбома.
                         await sleep(Math.min(TG_CHAIN_IDLE_MS, Math.max(50, albumDelayMs)));
                     }
                 }
@@ -1011,11 +1000,65 @@ function startTgChainForwarder() {
                     await sleep(10_000);
                     continue;
                 }
-                logger_1.logger.error('[tgChain] loop error', err);
+                logger_1.logger.error('[tgChain] loop error', { err });
+                await (0, alertService_1.sendAdminAlert)('forwarder_crash', 'Форвардер упал с ошибкой', {
+                    error: String(err),
+                });
                 await sleep(TG_CHAIN_IDLE_MS);
             }
         }
     };
     void loop();
+    globalForwarderHandle = {
+        stop: () => {
+            stopped = true;
+        },
+    };
+    activeForwarders.set('__global__', globalForwarderHandle);
+}
+function startTgChainWatchdog() {
+    if (watchdogStarted)
+        return;
+    watchdogStarted = true;
+    setInterval(() => {
+        void (async () => {
+            const now = Date.now();
+            const silentThresholdMs = 20 * 60 * 1000;
+            for (const chain of (0, adminPanelState_1.listTgChainsSync)()) {
+                if (!chain.forward_posts || !chain.active)
+                    continue;
+                const lastSeen = chainLastActivity.get(chain.id);
+                if (!lastSeen)
+                    continue;
+                const silentMs = now - lastSeen;
+                if (silentMs > silentThresholdMs) {
+                    const restarts = chainRestartCount.get(chain.id) ?? 0;
+                    logger_1.logger.warn('[tgChain] watchdog: chain silent, restarting forwarder', {
+                        chainId: chain.id,
+                        title: chain.max_title,
+                        silentMinutes: Math.round(silentMs / 60000),
+                        restartCount: restarts + 1,
+                    });
+                    await (0, alertService_1.sendAdminAlert)('chain_silent', `Цепочка молчит ${Math.round(silentMs / 60000)} мин`, {
+                        chainId: chain.id,
+                        title: chain.max_title,
+                    });
+                    chainRestartCount.set(chain.id, restarts + 1);
+                    chainLastActivity.set(chain.id, now);
+                    await restartChainForwarder(chain.id);
+                }
+            }
+        })().catch((err) => {
+            logger_1.logger.warn('[tgChain] watchdog error', { err });
+        });
+    }, 5 * 60 * 1000);
+}
+function startTgChainForwarder() {
+    if (loopStarted)
+        return;
+    loopStarted = true;
+    startTgChainWatchdog();
+    logger_1.logger.info('[tgChain] forwarder started (long-poll channel_post)');
+    startForwarderLoop();
 }
 //# sourceMappingURL=tgChainForwarder.js.map

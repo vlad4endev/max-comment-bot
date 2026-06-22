@@ -67,6 +67,32 @@ const DEFAULT_CHANNEL_EXTRAS = {
     flood_protection: true,
     auto_mute: false,
 };
+function normalizeChatId(value) {
+    if (value === null || value === undefined || value === '') {
+        return null;
+    }
+    const str = String(value).trim();
+    return str === '' ? null : str;
+}
+function normalizeTgChainDiscussionIds(chains) {
+    let needsPersist = false;
+    for (const chain of chains) {
+        const raw = chain.tg_discussion_chat_id;
+        if (typeof raw === 'number') {
+            chain.tg_discussion_chat_id = String(raw);
+            needsPersist = true;
+            continue;
+        }
+        if (raw !== undefined && raw !== null && raw !== chain.tg_discussion_chat_id) {
+            const normalized = normalizeChatId(raw);
+            if (normalized !== chain.tg_discussion_chat_id) {
+                chain.tg_discussion_chat_id = normalized;
+                needsPersist = true;
+            }
+        }
+    }
+    return needsPersist;
+}
 function defaultState() {
     return {
         global_stopwords: [],
@@ -136,6 +162,10 @@ async function loadState() {
                 vk_chains: Array.isArray(parsed.vk_chains) ? parsed.vk_chains : [],
                 autoposts: Array.isArray(parsed.autoposts) ? parsed.autoposts : [],
             };
+            const needsPersist = normalizeTgChainDiscussionIds(cache.tg_chains);
+            if (needsPersist) {
+                await persist();
+            }
         }
         catch (e) {
             const err = e;
@@ -310,20 +340,26 @@ async function ensureAdminPanelStateLoaded() {
 async function createTgChain(input) {
     const s = await loadState();
     const nowIso = new Date().toISOString();
+    const normalizedInput = {
+        ...input,
+        tg_discussion_chat_id: input.tg_discussion_chat_id !== undefined
+            ? normalizeChatId(input.tg_discussion_chat_id)
+            : input.tg_discussion_chat_id,
+    };
     const previousChains = s.tg_chains.filter((c) => {
-        if (c.max_chat_id !== input.max_chat_id) {
+        if (c.max_chat_id !== normalizedInput.max_chat_id) {
             return false;
         }
-        const nextTgId = input.tg_channel_id?.trim();
+        const nextTgId = normalizedInput.tg_channel_id?.trim();
         const prevTgId = c.tg_channel_id?.trim();
         if (nextTgId && prevTgId) {
             return nextTgId === prevTgId;
         }
-        const nextUname = input.tg_username.trim().replace(/^@/, '').toLowerCase();
+        const nextUname = normalizedInput.tg_username.trim().replace(/^@/, '').toLowerCase();
         const prevUname = c.tg_username.trim().replace(/^@/, '').toLowerCase();
         return nextUname !== '' && nextUname === prevUname;
     });
-    let inheritedForwardSince = input.forward_posts_since?.trim() || null;
+    let inheritedForwardSince = normalizedInput.forward_posts_since?.trim() || null;
     for (const prev of previousChains) {
         const since = prev.forward_posts_since?.trim();
         if (since && (!inheritedForwardSince || since < inheritedForwardSince)) {
@@ -331,24 +367,48 @@ async function createTgChain(input) {
         }
     }
     const row = {
-        ...input,
+        ...normalizedInput,
         id: (0, node_crypto_1.randomUUID)(),
         created_at: nowIso,
-        forward_posts_since: input.forward_posts !== false
+        forward_posts_since: normalizedInput.forward_posts !== false
             ? inheritedForwardSince || nowIso
-            : (input.forward_posts_since ?? null),
+            : (normalizedInput.forward_posts_since ?? null),
         forwarded_today: 0,
         errors_today: 0,
     };
     s.tg_chains.push(row);
-    for (const prev of previousChains) {
-        const transferred = (0, postCommentMappingStore_1.transferPostCommentMappingsChainId)(prev.id, row.id);
-        if (transferred > 0) {
-            logger_1.logger.info('[tgChains] transferred mappings from old chain', {
-                oldChainId: prev.id,
-                newChainId: row.id,
-                transferred,
-            });
+    const oldChains = s.tg_chains.filter((c) => c.tg_channel_id === row.tg_channel_id &&
+        String(c.max_chat_id) === String(row.max_chat_id) &&
+        c.id !== row.id);
+    if (oldChains.length > 0) {
+        let totalTransferred = 0;
+        for (const old of oldChains) {
+            totalTransferred += (0, postCommentMappingStore_1.transferPostCommentMappingsChainId)(old.id, row.id);
+        }
+        const earliestSince = oldChains
+            .map((c) => c.forward_posts_since)
+            .filter(Boolean)
+            .sort()[0];
+        if (earliestSince && !row.forward_posts_since) {
+            row.forward_posts_since = earliestSince;
+        }
+        logger_1.logger.info('[createTgChain] inherited from old chains', {
+            newId: row.id,
+            oldIds: oldChains.map((c) => c.id),
+            transferred: totalTransferred,
+            inheritedSince: row.forward_posts_since,
+        });
+    }
+    else {
+        for (const prev of previousChains) {
+            const transferred = (0, postCommentMappingStore_1.transferPostCommentMappingsChainId)(prev.id, row.id);
+            if (transferred > 0) {
+                logger_1.logger.info('[tgChains] transferred mappings from old chain', {
+                    oldChainId: prev.id,
+                    newChainId: row.id,
+                    transferred,
+                });
+            }
         }
     }
     await persist();
@@ -362,9 +422,12 @@ async function updateTgChain(id, patch) {
     }
     const prev = s.tg_chains[idx];
     const nextPatch = { ...patch };
+    if (patch.tg_discussion_chat_id !== undefined) {
+        nextPatch.tg_discussion_chat_id = normalizeChatId(patch.tg_discussion_chat_id);
+    }
     if (patch.forward_posts === true && !prev.forward_posts) {
-        // Сбрасываем since только если не передан явно и у предыдущей цепочки его не было
-        if (patch.forward_posts_since === undefined && !prev.forward_posts_since?.trim()) {
+        // Сбрасываем since ТОЛЬКО если его не было совсем
+        if (!prev.forward_posts_since?.trim() && patch.forward_posts_since === undefined) {
             nextPatch.forward_posts_since = new Date().toISOString();
         }
     }

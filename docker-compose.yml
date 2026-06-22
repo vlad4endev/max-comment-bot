@@ -46,10 +46,11 @@ services:
       retries: 12
       start_period: 90s
     logging:
-      driver: json-file
+      driver: "json-file"
       options:
         max-size: "50m"
-        max-file: "3"
+        max-file: "10"
+        compress: "true"
 
 volumes:
   redis-data:

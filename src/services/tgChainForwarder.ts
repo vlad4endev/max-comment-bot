@@ -19,6 +19,7 @@ import { postStore } from './postStore'
 import { resolveCanonicalChannelChatId } from './resolveChannelChatId'
 import { telegramChannelMatchesTarget, telegramMessageMatchesTgChain } from '../utils/tgChannelMatch'
 import { logger } from '../utils/logger'
+import { sendAdminAlert } from '../utils/alertService'
 import { apiCallWithRetry } from '../utils/maxApiRetry'
 import {
   getTelegramBotUpdatesOffset,
@@ -59,6 +60,10 @@ const albumBuffer = new Map<string, BufferedAlbum>()
 
 /** Время последней активности long-poll / пересылки по chain_id. */
 const chainLastActivity = new Map<string, number>()
+const chainRestartCount = new Map<string, number>()
+const activeForwarders = new Map<string, { stop: () => void }>()
+
+let globalForwarderHandle: { stop: () => void } | null = null
 
 function touchChainActivity(chainId: string): void {
   chainLastActivity.set(chainId, Date.now())
@@ -1128,38 +1133,25 @@ export async function runTgChainsOnce(): Promise<boolean> {
 let loopStarted = false
 let watchdogStarted = false
 
-function startTgChainWatchdog(): void {
-  if (watchdogStarted) return
-  watchdogStarted = true
-  setInterval(() => {
-    const now = Date.now()
-    const silentThresholdMs = 15 * 60 * 1000
-
-    for (const chain of listTgChainsSync()) {
-      if (!chain.forward_posts || !chain.active) continue
-
-      const lastSeen = chainLastActivity.get(chain.id)
-      if (!lastSeen) continue
-
-      const silentMs = now - lastSeen
-      if (silentMs > silentThresholdMs) {
-        logger.warn('[tgChain] watchdog: chain silent', {
-          chainId: chain.id,
-          title: chain.max_title,
-          silentMinutes: Math.round(silentMs / 60000),
-        })
-      }
-    }
-  }, 10 * 60 * 1000)
+async function restartChainForwarder(chainId: string): Promise<void> {
+  const existing = activeForwarders.get('__global__')
+  if (existing) {
+    existing.stop()
+    activeForwarders.delete('__global__')
+    globalForwarderHandle = null
+  }
+  await sleep(3000)
+  startForwarderLoop()
+  logger.info('[tgChain] watchdog: forwarder restarted', { chainId })
 }
 
-export function startTgChainForwarder(): void {
-  if (loopStarted) return
-  loopStarted = true
-  startTgChainWatchdog()
-  logger.info('[tgChain] forwarder started (long-poll channel_post)')
+function startForwarderLoop(): void {
+  if (globalForwarderHandle) {
+    return
+  }
+  let stopped = false
   const loop = async () => {
-    while (true) {
+    while (!stopped) {
       try {
         const hadUpdates = await runTgChainsOnce()
         if (!hadUpdates) {
@@ -1167,7 +1159,6 @@ export function startTgChainForwarder(): void {
           if (albumDelayMs === null) {
             await sleep(TG_CHAIN_IDLE_MS)
           } else {
-            // Не спим дольше, чем осталось до ближайшего flush альбома.
             await sleep(Math.min(TG_CHAIN_IDLE_MS, Math.max(50, albumDelayMs)))
           }
         }
@@ -1182,10 +1173,69 @@ export function startTgChainForwarder(): void {
           await sleep(10_000)
           continue
         }
-        logger.error('[tgChain] loop error', err)
+        logger.error('[tgChain] loop error', { err })
+        await sendAdminAlert('forwarder_crash', 'Форвардер упал с ошибкой', {
+          error: String(err),
+        })
         await sleep(TG_CHAIN_IDLE_MS)
       }
     }
   }
   void loop()
+  globalForwarderHandle = {
+    stop: () => {
+      stopped = true
+    },
+  }
+  activeForwarders.set('__global__', globalForwarderHandle)
+}
+
+function startTgChainWatchdog(): void {
+  if (watchdogStarted) return
+  watchdogStarted = true
+  setInterval(() => {
+    void (async () => {
+      const now = Date.now()
+      const silentThresholdMs = 20 * 60 * 1000
+
+      for (const chain of listTgChainsSync()) {
+        if (!chain.forward_posts || !chain.active) continue
+
+        const lastSeen = chainLastActivity.get(chain.id)
+        if (!lastSeen) continue
+
+        const silentMs = now - lastSeen
+        if (silentMs > silentThresholdMs) {
+          const restarts = chainRestartCount.get(chain.id) ?? 0
+          logger.warn('[tgChain] watchdog: chain silent, restarting forwarder', {
+            chainId: chain.id,
+            title: chain.max_title,
+            silentMinutes: Math.round(silentMs / 60000),
+            restartCount: restarts + 1,
+          })
+          await sendAdminAlert(
+            'chain_silent',
+            `Цепочка молчит ${Math.round(silentMs / 60000)} мин`,
+            {
+              chainId: chain.id,
+              title: chain.max_title,
+            },
+          )
+          chainRestartCount.set(chain.id, restarts + 1)
+          chainLastActivity.set(chain.id, now)
+          await restartChainForwarder(chain.id)
+        }
+      }
+    })().catch((err: unknown) => {
+      logger.warn('[tgChain] watchdog error', { err })
+    })
+  }, 5 * 60 * 1000)
+}
+
+export function startTgChainForwarder(): void {
+  if (loopStarted) return
+  loopStarted = true
+  startTgChainWatchdog()
+  logger.info('[tgChain] forwarder started (long-poll channel_post)')
+  startForwarderLoop()
 }

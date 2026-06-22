@@ -41,7 +41,7 @@ import { flowProcessor } from './services/flowProcessor'
 import { integrationsStore } from './services/integrationsStore'
 import { startAutopostScheduler } from './services/autopostScheduler'
 import { startChannelImportWorker } from './services/channelImportService'
-import { ensureAdminPanelStateLoaded } from './api/adminPanelState'
+import { ensureAdminPanelStateLoaded, listTgChainsSync } from './api/adminPanelState'
 import { repairLegacyMiniappTgChains } from './services/channelLinkService'
 import { backfillPostCommentMappingsFromForwarded } from './services/postCommentMappingStore'
 import { bootstrapCommentSyncOnStartup } from './services/commentSyncDiagnostics'
@@ -58,11 +58,50 @@ import {
 import { initRedis } from './cache/redisClient'
 import { createHttpApp, createWebhookApp } from './webhook/createWebhookApp'
 import { logMiniAppUrlDiagnostics } from './utils/telegramMiniAppUrl'
+import { sendAdminAlert } from './utils/alertService'
 
 function scheduleDeferredCommentSyncBootstrap(): void {
   void bootstrapCommentSyncOnStartup({ threadRepairLimit: 8 }).catch((err: unknown) => {
     logger.error('[commentSync] deferred bootstrap failed', err)
   })
+}
+
+async function logStartupChainsSummary(): Promise<void> {
+  const chains = listTgChainsSync()
+  const issues: string[] = []
+
+  for (const c of chains) {
+    if (c.active && c.forward_comments && !c.tg_discussion_chat_id) {
+      issues.push(`${c.max_title ?? c.id}: нет tg_discussion_chat_id`)
+    }
+    if (c.active && c.forward_posts) {
+      const since = c.forward_posts_since ? new Date(c.forward_posts_since) : null
+      const sinceHoursAgo = since ? (Date.now() - since.getTime()) / 3_600_000 : null
+      if (sinceHoursAgo !== null && sinceHoursAgo < 2) {
+        issues.push(
+          `${c.max_title ?? c.id}: forward_posts_since свежий (${Math.round(sinceHoursAgo * 60)} мин назад)`,
+        )
+      }
+    }
+  }
+
+  logger.info('[startup] chains summary', {
+    chains: chains.map((c) => ({
+      title: c.max_title,
+      active: c.active,
+      forward_posts: c.forward_posts,
+      forward_comments: c.forward_comments,
+      discussion: c.tg_discussion_chat_id ? 'ok' : 'MISSING',
+      since: c.forward_posts_since?.slice(0, 16),
+    })),
+    issues,
+  })
+
+  if (issues.length > 0) {
+    await sendAdminAlert('startup_issues', `Обнаружены проблемы при старте (${issues.length})`, {
+      issues,
+    })
+  }
 }
 
 async function main(): Promise<void> {
@@ -160,6 +199,7 @@ async function main(): Promise<void> {
     .filter((c) => c.type === 'channel').length
   const enabledFlows = integrationsStore.getFlows().filter((f) => f.enabled)
   logMiniAppUrlDiagnostics(config.miniAppUrl, config.botNickname)
+  await logStartupChainsSummary()
 
   logger.info('🚀 Бот запущен', {
     channelCount,

@@ -76,10 +76,43 @@ const telegramHealthService_1 = require("./services/telegramHealthService");
 const redisClient_1 = require("./cache/redisClient");
 const createWebhookApp_1 = require("./webhook/createWebhookApp");
 const telegramMiniAppUrl_1 = require("./utils/telegramMiniAppUrl");
+const alertService_1 = require("./utils/alertService");
 function scheduleDeferredCommentSyncBootstrap() {
     void (0, commentSyncDiagnostics_1.bootstrapCommentSyncOnStartup)({ threadRepairLimit: 8 }).catch((err) => {
         logger_1.logger.error('[commentSync] deferred bootstrap failed', err);
     });
+}
+async function logStartupChainsSummary() {
+    const chains = (0, adminPanelState_1.listTgChainsSync)();
+    const issues = [];
+    for (const c of chains) {
+        if (c.active && c.forward_comments && !c.tg_discussion_chat_id) {
+            issues.push(`${c.max_title ?? c.id}: нет tg_discussion_chat_id`);
+        }
+        if (c.active && c.forward_posts) {
+            const since = c.forward_posts_since ? new Date(c.forward_posts_since) : null;
+            const sinceHoursAgo = since ? (Date.now() - since.getTime()) / 3_600_000 : null;
+            if (sinceHoursAgo !== null && sinceHoursAgo < 2) {
+                issues.push(`${c.max_title ?? c.id}: forward_posts_since свежий (${Math.round(sinceHoursAgo * 60)} мин назад)`);
+            }
+        }
+    }
+    logger_1.logger.info('[startup] chains summary', {
+        chains: chains.map((c) => ({
+            title: c.max_title,
+            active: c.active,
+            forward_posts: c.forward_posts,
+            forward_comments: c.forward_comments,
+            discussion: c.tg_discussion_chat_id ? 'ok' : 'MISSING',
+            since: c.forward_posts_since?.slice(0, 16),
+        })),
+        issues,
+    });
+    if (issues.length > 0) {
+        await (0, alertService_1.sendAdminAlert)('startup_issues', `Обнаружены проблемы при старте (${issues.length})`, {
+            issues,
+        });
+    }
 }
 async function main() {
     (0, migrate_1.migrateFromJson)();
@@ -172,6 +205,7 @@ async function main() {
         .filter((c) => c.type === 'channel').length;
     const enabledFlows = integrationsStore_1.integrationsStore.getFlows().filter((f) => f.enabled);
     (0, telegramMiniAppUrl_1.logMiniAppUrlDiagnostics)(config_1.config.miniAppUrl, config_1.config.botNickname);
+    await logStartupChainsSummary();
     logger_1.logger.info('🚀 Бот запущен', {
         channelCount,
         pollerConcurrency: channelPoller_1.POLL_CONCURRENCY,

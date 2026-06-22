@@ -9,10 +9,12 @@ const node_path_1 = require("node:path");
 const compression_1 = __importDefault(require("compression"));
 const express_1 = __importDefault(require("express"));
 const adminRoutes_1 = require("../api/adminRoutes");
+const adminPanelState_1 = require("../api/adminPanelState");
 const channelImportRoutes_1 = require("../api/channelImportRoutes");
 const integrationsRoutes_1 = require("../api/integrationsRoutes");
 const routes_1 = require("../api/routes");
 const adminAuth_1 = require("../middleware/adminAuth");
+const database_1 = require("../db/database");
 const logger_1 = require("../utils/logger");
 const updateQueue_1 = require("../utils/updateQueue");
 const dispatchUpdate_1 = require("./dispatchUpdate");
@@ -46,7 +48,31 @@ function createHttpApp(options) {
         },
     }));
     app.get('/health', (_req, res) => {
-        res.status(200).type('text/plain').send('ok');
+        const db = (0, database_1.getDb)();
+        const chains = (0, adminPanelState_1.listTgChainsSync)();
+        const pendingComments = db
+            .prepare(`SELECT COUNT(*) AS n FROM comments
+         WHERE (tg_comment_id IS NULL OR tg_comment_id = 0)
+           AND (source IS NULL OR source = 'max')`)
+            .get();
+        res.status(200).json({
+            ok: true,
+            uptime: Math.round(process.uptime()),
+            chains: {
+                total: chains.length,
+                active: chains.filter((c) => c.active).length,
+                forwarding: chains.filter((c) => c.forward_posts).length,
+                missing_discussion: chains.filter((c) => c.forward_comments && !c.tg_discussion_chat_id)
+                    .length,
+            },
+            comments: {
+                pending_sync: Number(pendingComments.n) || 0,
+            },
+            memory: {
+                heapUsedMb: Math.round(process.memoryUsage().heapUsed / 1024 / 1024),
+            },
+            timestamp: new Date().toISOString(),
+        });
     });
     app.get('/health/telegram', async (_req, res) => {
         try {
