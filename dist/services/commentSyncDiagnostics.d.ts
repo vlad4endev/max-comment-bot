@@ -1,6 +1,11 @@
 /**
  * Диагностика и восстановление синхронизации комментариев MAX ↔ Telegram.
  */
+export declare const STALE_UNDELIVERABLE_DAYS = 30;
+export declare function staleUndeliverableCutoffIso(): string;
+export declare function countStaleUndeliverableComments(chainId: string, staleCutoff?: string): number;
+/** Списывает комментарии к постам старше STALE_UNDELIVERABLE_DAYS без треда (tg_comment_id = -1). */
+export declare function purgeStaleUndeliverableComments(chainId: string): number;
 export type CommentSyncIssueSeverity = 'critical' | 'warning' | 'info';
 export interface CommentSyncIssue {
     severity: CommentSyncIssueSeverity;

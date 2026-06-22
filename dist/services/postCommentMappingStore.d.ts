@@ -9,8 +9,8 @@ export interface PostCommentMappingRow {
 }
 /** Ключ TG-канала для API: предпочитаем tg_chat_id из маппинга (фактический источник поста). */
 export declare function resolveTelegramChannelKeyForMapping(mapping: PostCommentMappingRow, chain?: TgChainRecord | null): string | null;
-/** Уникальные ключи канала для GetDiscussionMessage (сначала tg_chat_id из маппинга). */
-export declare function listTelegramChannelKeyCandidatesForMapping(mapping: PostCommentMappingRow, chain?: TgChainRecord | null): string[];
+/** Уникальные ключи канала для GetDiscussionMessage (peer = канал, не discussion group). */
+export declare function listTelegramChannelKeyCandidatesForMapping(mapping: PostCommentMappingRow, chain?: TgChainRecord | null, discussionChatId?: number | null): string[];
 export declare function countMappingChannelIdMismatch(chainId: string): number;
 export declare function upsertPostCommentMapping(chainId: string, tgMsgId: number, maxMid: string, tgChatId: number | null): void;
 export declare function linkThreadMessageToChannelPost(chainId: string, channelMsgId: number, threadChatId: number, threadMsgId: number): void;

@@ -62,19 +62,27 @@ async function resolveThreadViaMtproto(chain, mapping) {
     if (typeof mapping.tg_msg_id !== 'number' || mapping.tg_msg_id <= 0) {
         return null;
     }
-    const channelKeys = (0, postCommentMappingStore_1.listTelegramChannelKeyCandidatesForMapping)(mapping, chain);
+    const token = resolveBotTokenForChain(chain);
+    const discussionChatId = token ? await (0, postCommentMappingStore_1.resolveDiscussionChatId)(token, chain) : null;
+    const channelKeys = (0, postCommentMappingStore_1.listTelegramChannelKeyCandidatesForMapping)(mapping, chain, discussionChatId);
     if (channelKeys.length === 0) {
         return null;
     }
+    const tgChannelMsgId = mapping.tg_msg_id;
     const client = await (0, telegramUserArchive_1.connectTelegramUserClient)();
     try {
         let lastInvalidMsgId = false;
         for (const channelKey of channelKeys) {
             try {
                 const channelPeer = await (0, telegramUserArchive_1.resolveTelegramChannelEntity)(client, channelKey);
+                logger_1.logger.debug('[discussionThreadResolver] resolving thread', {
+                    channelPeer: channelKey,
+                    tgMsgId: tgChannelMsgId,
+                    maxMid: mapping.max_mid,
+                });
                 const result = await client.invoke(new telegram_1.Api.messages.GetDiscussionMessage({
                     peer: channelPeer,
-                    msgId: mapping.tg_msg_id,
+                    msgId: tgChannelMsgId,
                 }));
                 const extracted = extractThreadFromDiscussionMessage(result);
                 if (extracted) {

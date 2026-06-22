@@ -82,10 +82,14 @@ async function resolveThreadViaMtproto(
     return null
   }
 
-  const channelKeys = listTelegramChannelKeyCandidatesForMapping(mapping, chain)
+  const token = resolveBotTokenForChain(chain)
+  const discussionChatId = token ? await resolveDiscussionChatId(token, chain) : null
+  const channelKeys = listTelegramChannelKeyCandidatesForMapping(mapping, chain, discussionChatId)
   if (channelKeys.length === 0) {
     return null
   }
+
+  const tgChannelMsgId = mapping.tg_msg_id
 
   const client = await connectTelegramUserClient()
   try {
@@ -93,10 +97,15 @@ async function resolveThreadViaMtproto(
     for (const channelKey of channelKeys) {
       try {
         const channelPeer = await resolveTelegramChannelEntity(client, channelKey)
+        logger.debug('[discussionThreadResolver] resolving thread', {
+          channelPeer: channelKey,
+          tgMsgId: tgChannelMsgId,
+          maxMid: mapping.max_mid,
+        })
         const result = await client.invoke(
           new Api.messages.GetDiscussionMessage({
             peer: channelPeer,
-            msgId: mapping.tg_msg_id,
+            msgId: tgChannelMsgId,
           }),
         )
         const extracted = extractThreadFromDiscussionMessage(result)

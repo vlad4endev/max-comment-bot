@@ -30,6 +30,49 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
 const TG_API = 'https://api.telegram.org'
 
+export const STALE_UNDELIVERABLE_DAYS = 30
+
+export function staleUndeliverableCutoffIso(): string {
+  return new Date(Date.now() - STALE_UNDELIVERABLE_DAYS * 24 * 60 * 60 * 1000).toISOString()
+}
+
+export function countStaleUndeliverableComments(chainId: string, staleCutoff?: string): number {
+  const cutoff = staleCutoff ?? staleUndeliverableCutoffIso()
+  const row = getDb()
+    .prepare(
+      `SELECT COUNT(*) AS n FROM comments c
+       JOIN posts p ON p.post_id = c.post_id
+       LEFT JOIN post_comment_mapping m ON m.max_mid = p.message_mid AND m.chain_id = ?
+       WHERE (c.tg_comment_id IS NULL OR c.tg_comment_id = 0)
+         AND (c.source IS NULL OR c.source = 'max')
+         AND (m.tg_thread_msg_id IS NULL OR m.tg_thread_msg_id <= 0)
+         AND p.timestamp < ?`,
+    )
+    .get(chainId, cutoff) as { n: number }
+  return Number(row.n) || 0
+}
+
+/** Списывает комментарии к постам старше STALE_UNDELIVERABLE_DAYS без треда (tg_comment_id = -1). */
+export function purgeStaleUndeliverableComments(chainId: string): number {
+  const staleCutoff = staleUndeliverableCutoffIso()
+  const result = getDb()
+    .prepare(
+      `UPDATE comments
+       SET tg_comment_id = -1
+       WHERE (tg_comment_id IS NULL OR tg_comment_id = 0)
+         AND (source IS NULL OR source = 'max')
+         AND post_id IN (
+           SELECT p.post_id FROM posts p
+           LEFT JOIN post_comment_mapping m
+             ON m.max_mid = p.message_mid AND m.chain_id = ?
+           WHERE (m.tg_thread_msg_id IS NULL OR m.tg_thread_msg_id <= 0)
+             AND p.timestamp < ?
+         )`,
+    )
+    .run(chainId, staleCutoff)
+  return Number(result.changes) || 0
+}
+
 export type CommentSyncIssueSeverity = 'critical' | 'warning' | 'info'
 
 export interface CommentSyncIssue {
@@ -207,6 +250,7 @@ function buildChainIssues(input: {
   mappingStats: ReturnType<typeof countPostMappingThreadStats>
   mappingChannelMismatch: number
   pendingMaxToTg: number
+  staleBlocked: number
 }): CommentSyncIssue[] {
   const issues: CommentSyncIssue[] = []
   const {
@@ -219,6 +263,7 @@ function buildChainIssues(input: {
     mappingStats,
     mappingChannelMismatch,
     pendingMaxToTg,
+    staleBlocked,
   } = input
 
   if (tokenPresent && botId == null) {
@@ -327,6 +372,16 @@ function buildChainIssues(input: {
     })
   }
 
+  if (staleBlocked > 0) {
+    issues.push({
+      severity: 'info',
+      code: 'stale_undeliverable_comments',
+      title: `Комментарии к старым постам (> ${STALE_UNDELIVERABLE_DAYS} дней) без треда`,
+      description: `${staleBlocked} комментариев не могут быть доставлены — Telegram не возвращает тред для постов старше ${STALE_UNDELIVERABLE_DAYS} дней. Будут автоматически списаны при следующем старте синка.`,
+      what_to_do: 'Ничего делать не нужно — списываются автоматически.',
+    })
+  }
+
   return issues
 }
 
@@ -355,6 +410,7 @@ export async function diagnoseCommentSync(chainIdFilter?: string): Promise<Comme
     const mappingStats = countPostMappingThreadStats(chain.id)
     const mappingChannelMismatch = countMappingChannelIdMismatch(chain.id)
     const pendingMaxToTg = countPendingMaxToTelegram(chain.max_chat_id)
+    const staleBlocked = countStaleUndeliverableComments(chain.id)
     const issues = buildChainIssues({
       chain,
       tokenPresent: Boolean(token),
@@ -365,6 +421,7 @@ export async function diagnoseCommentSync(chainIdFilter?: string): Promise<Comme
       mappingStats,
       mappingChannelMismatch,
       pendingMaxToTg,
+      staleBlocked,
     })
 
     resultChains.push({

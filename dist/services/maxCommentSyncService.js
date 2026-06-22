@@ -7,17 +7,35 @@
  */
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.startMaxCommentSync = startMaxCommentSync;
+const adminPanelState_1 = require("../api/adminPanelState");
 const commentStore_1 = require("./commentStore");
 const postStore_1 = require("./postStore");
+const commentSyncDiagnostics_1 = require("./commentSyncDiagnostics");
 const telegramThreadReplySync_1 = require("./telegramThreadReplySync");
 const telegramDiscussionThreadResolver_1 = require("./telegramDiscussionThreadResolver");
 const postCommentMappingStore_1 = require("./postCommentMappingStore");
 const logger_1 = require("../utils/logger");
 const telegramRateLimiter_1 = require("../utils/telegramRateLimiter");
 const THREAD_REPAIR_PER_CYCLE = 3;
+function purgeStaleUndeliverableOnStartup() {
+    for (const chain of (0, adminPanelState_1.listTgChainsSync)()) {
+        if (chain.forward_comments !== true) {
+            continue;
+        }
+        const staleCount = (0, commentSyncDiagnostics_1.purgeStaleUndeliverableComments)(chain.id);
+        if (staleCount > 0) {
+            logger_1.logger.info('[maxCommentSync] списано безвозвратных комментариев', {
+                chainId: chain.id,
+                count: staleCount,
+                older_than_days: commentSyncDiagnostics_1.STALE_UNDELIVERABLE_DAYS,
+            });
+        }
+    }
+}
 function startMaxCommentSync(bot, options = {}) {
     const intervalMs = options.intervalMs ?? (0, telegramRateLimiter_1.getMaxCommentSyncIntervalMs)();
     const batchSize = options.batchSize ?? (0, telegramRateLimiter_1.getTelegramCommentSyncBatchSize)();
+    purgeStaleUndeliverableOnStartup();
     async function repairThreadMappingsForPending(postMessageMids) {
         const unique = [...new Set(postMessageMids.filter((m) => m.trim() !== ''))];
         let repaired = 0;

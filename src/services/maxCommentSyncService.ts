@@ -7,8 +7,13 @@
 
 import type { Bot } from '@maxhub/max-bot-api'
 
+import { listTgChainsSync } from '../api/adminPanelState'
 import { commentStore } from './commentStore'
 import { postStore } from './postStore'
+import {
+  purgeStaleUndeliverableComments,
+  STALE_UNDELIVERABLE_DAYS,
+} from './commentSyncDiagnostics'
 import {
   syncAdminReplyToTelegramThread,
   syncMaxCommentToTelegramThread,
@@ -29,9 +34,27 @@ interface SyncOptions {
 
 const THREAD_REPAIR_PER_CYCLE = 3
 
+function purgeStaleUndeliverableOnStartup(): void {
+  for (const chain of listTgChainsSync()) {
+    if (chain.forward_comments !== true) {
+      continue
+    }
+    const staleCount = purgeStaleUndeliverableComments(chain.id)
+    if (staleCount > 0) {
+      logger.info('[maxCommentSync] списано безвозвратных комментариев', {
+        chainId: chain.id,
+        count: staleCount,
+        older_than_days: STALE_UNDELIVERABLE_DAYS,
+      })
+    }
+  }
+}
+
 export function startMaxCommentSync(bot: Bot, options: SyncOptions = {}): () => void {
   const intervalMs = options.intervalMs ?? getMaxCommentSyncIntervalMs()
   const batchSize = options.batchSize ?? getTelegramCommentSyncBatchSize()
+
+  purgeStaleUndeliverableOnStartup()
 
   async function repairThreadMappingsForPending(postMessageMids: string[]): Promise<void> {
     const unique = [...new Set(postMessageMids.filter((m) => m.trim() !== ''))]

@@ -42,8 +42,8 @@ function resolveTelegramChannelKeyForMapping(mapping, chain) {
     }
     return null;
 }
-/** Уникальные ключи канала для GetDiscussionMessage (сначала tg_chat_id из маппинга). */
-function listTelegramChannelKeyCandidatesForMapping(mapping, chain) {
+/** Уникальные ключи канала для GetDiscussionMessage (peer = канал, не discussion group). */
+function listTelegramChannelKeyCandidatesForMapping(mapping, chain, discussionChatId) {
     const resolvedChain = chain ?? (0, adminPanelState_1.listTgChainsSync)().find((c) => c.id === mapping.chain_id);
     const keys = [];
     const seen = new Set();
@@ -52,16 +52,22 @@ function listTelegramChannelKeyCandidatesForMapping(mapping, chain) {
         if (!trimmed || seen.has(trimmed)) {
             return;
         }
+        if (discussionChatId != null && trimmed === String(discussionChatId)) {
+            return;
+        }
+        if (typeof mapping.tg_thread_chat_id === 'number' && trimmed === String(mapping.tg_thread_chat_id)) {
+            return;
+        }
         seen.add(trimmed);
         keys.push(trimmed);
     };
-    if (typeof mapping.tg_chat_id === 'number') {
-        push(String(mapping.tg_chat_id));
-    }
     push(resolvedChain?.tg_channel_id);
     const username = resolvedChain?.tg_username?.trim();
     if (username) {
         push(username.startsWith('@') ? username : `@${username}`);
+    }
+    if (typeof mapping.tg_chat_id === 'number') {
+        push(String(mapping.tg_chat_id));
     }
     return keys;
 }
@@ -174,12 +180,19 @@ function countPostMappingThreadStats(chainId) {
 function listMappingsMissingThread(chainId, limit = 50) {
     const safeLimit = Math.min(Math.max(limit, 1), 200);
     return (0, database_1.getDb)()
-        .prepare(`SELECT chain_id, tg_msg_id, max_mid, tg_chat_id, tg_thread_chat_id, tg_thread_msg_id
-       FROM post_comment_mapping
-       WHERE chain_id = ?
-         AND (tg_thread_msg_id IS NULL OR tg_thread_msg_id <= 0)
-         AND tg_msg_id IS NOT NULL AND tg_msg_id > 0
-       ORDER BY id DESC
+        .prepare(`SELECT m.chain_id, m.tg_msg_id, m.max_mid, m.tg_chat_id, m.tg_thread_chat_id, m.tg_thread_msg_id
+       FROM post_comment_mapping m
+       LEFT JOIN posts p ON p.message_mid = m.max_mid
+       WHERE m.chain_id = ?
+         AND (m.tg_thread_msg_id IS NULL OR m.tg_thread_msg_id <= 0)
+         AND m.tg_msg_id IS NOT NULL AND m.tg_msg_id > 0
+       ORDER BY
+         (SELECT COUNT(*) FROM comments c
+          WHERE c.post_id = p.post_id
+            AND (c.tg_comment_id IS NULL OR c.tg_comment_id = 0)
+            AND (c.source IS NULL OR c.source = 'max')
+         ) DESC,
+         p.timestamp DESC
        LIMIT ?`)
         .all(chainId, safeLimit);
 }
