@@ -7,6 +7,12 @@ export interface PostCommentMappingRow {
     tg_thread_chat_id: number | null;
     tg_thread_msg_id: number | null;
 }
+/** Маркер в tg_thread_msg_id: GetDiscussionMessage безнадёжен, repair пропускает. */
+export declare const STALE_THREAD_MSG_ID = -1;
+export declare function isMappingThreadResolveStale(mapping: PostCommentMappingRow): boolean;
+export declare function markMappingThreadResolveStale(chainId: string, tgMsgId: number): void;
+export declare function transferPostCommentMappingsChainId(oldChainId: string, newChainId: string): number;
+export declare function countPendingMaxCommentsForMaxMid(maxMid: string): number;
 /** Ключ TG-канала для API: предпочитаем tg_chat_id из маппинга (фактический источник поста). */
 export declare function resolveTelegramChannelKeyForMapping(mapping: PostCommentMappingRow, chain?: TgChainRecord | null): string | null;
 /** Уникальные ключи канала для GetDiscussionMessage (peer = канал, не discussion group). */
@@ -26,7 +32,9 @@ export interface PostMappingThreadStats {
     missing_thread: number;
 }
 export declare function countPostMappingThreadStats(chainId?: string): PostMappingThreadStats;
-export declare function listMappingsMissingThread(chainId: string, limit?: number): PostCommentMappingRow[];
+export declare function listMappingsMissingThread(chainId: string, limit?: number, options?: {
+    onlyWithPending?: boolean;
+}): PostCommentMappingRow[];
 export declare function findMappingByThreadMsgId(chainId: string, threadMsgId: number): PostCommentMappingRow | null;
 export declare function findMappingByTgMsgId(chainId: string, tgMsgId: number): PostCommentMappingRow | null;
 export declare function findMappingByMaxMid(maxMid: string): PostCommentMappingRow | null;

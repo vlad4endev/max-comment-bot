@@ -7,6 +7,7 @@ const promises_1 = require("node:fs/promises");
 const node_crypto_1 = require("node:crypto");
 const node_path_1 = require("node:path");
 const logger_1 = require("../utils/logger");
+const telegramLinkedChats_1 = require("../utils/telegramLinkedChats");
 const DATA_PATH = (0, node_path_1.join)(process.cwd(), 'data', 'integrations.json');
 function parseTelegramChatType(raw) {
     if (raw === 'channel')
@@ -382,6 +383,7 @@ function maskToken(token) {
 function integrationPublicView(i) {
     const connected = i.status === 'connected';
     const hasToken = i.token.trim().length > 0;
+    const linkedChats = i.platform === 'telegram' ? (0, telegramLinkedChats_1.normalizeTelegramLinkedChatsForApi)(i.linkedChats) : (i.linkedChats ?? []);
     return {
         id: i.id,
         platform: i.platform,
@@ -393,7 +395,7 @@ function integrationPublicView(i) {
         hasToken,
         token: connected && hasToken ? i.token : '',
         tokenPreview: hasToken ? maskToken(i.token) : '',
-        linkedChats: i.linkedChats ?? [],
+        linkedChats,
         linkedChatsUpdatedAt: i.linkedChatsUpdatedAt ?? null,
     };
 }

@@ -9,6 +9,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.STALE_UNDELIVERABLE_DAYS = void 0;
 exports.staleUndeliverableCutoffIso = staleUndeliverableCutoffIso;
 exports.countStaleUndeliverableComments = countStaleUndeliverableComments;
+exports.countFreshBlockedComments = countFreshBlockedComments;
 exports.purgeStaleUndeliverableComments = purgeStaleUndeliverableComments;
 exports.diagnoseCommentSync = diagnoseCommentSync;
 exports.repairMissingThreadMappings = repairMissingThreadMappings;
@@ -38,8 +39,21 @@ function countStaleUndeliverableComments(chainId, staleCutoff) {
        LEFT JOIN post_comment_mapping m ON m.max_mid = p.message_mid AND m.chain_id = ?
        WHERE (c.tg_comment_id IS NULL OR c.tg_comment_id = 0)
          AND (c.source IS NULL OR c.source = 'max')
-         AND (m.tg_thread_msg_id IS NULL OR m.tg_thread_msg_id <= 0)
+         AND (m.tg_thread_msg_id IS NULL OR m.tg_thread_msg_id = 0)
          AND p.timestamp < ?`)
+        .get(chainId, cutoff);
+    return Number(row.n) || 0;
+}
+function countFreshBlockedComments(chainId, staleCutoff) {
+    const cutoff = staleCutoff ?? staleUndeliverableCutoffIso();
+    const row = (0, database_1.getDb)()
+        .prepare(`SELECT COUNT(*) AS n FROM comments c
+       JOIN posts p ON p.post_id = c.post_id
+       LEFT JOIN post_comment_mapping m ON m.max_mid = p.message_mid AND m.chain_id = ?
+       WHERE (c.tg_comment_id IS NULL OR c.tg_comment_id = 0)
+         AND (c.source IS NULL OR c.source = 'max')
+         AND (m.tg_thread_msg_id IS NULL OR m.tg_thread_msg_id = 0)
+         AND p.timestamp >= ?`)
         .get(chainId, cutoff);
     return Number(row.n) || 0;
 }
@@ -55,7 +69,7 @@ function purgeStaleUndeliverableComments(chainId) {
            SELECT p.post_id FROM posts p
            LEFT JOIN post_comment_mapping m
              ON m.max_mid = p.message_mid AND m.chain_id = ?
-           WHERE (m.tg_thread_msg_id IS NULL OR m.tg_thread_msg_id <= 0)
+           WHERE (m.tg_thread_msg_id IS NULL OR m.tg_thread_msg_id = 0)
              AND p.timestamp < ?
          )`)
         .run(chainId, staleCutoff);
@@ -169,7 +183,7 @@ function analyzeLogSignals(entries) {
 }
 function buildChainIssues(input) {
     const issues = [];
-    const { chain, tokenPresent, botId, discussionChatId, botChannelAdmin, botDiscussionMember, mappingStats, mappingChannelMismatch, pendingMaxToTg, staleBlocked, } = input;
+    const { chain, tokenPresent, botId, discussionChatId, botChannelAdmin, botDiscussionMember, mappingStats, mappingChannelMismatch, pendingMaxToTg, staleUndeliverable, freshBlocked, } = input;
     if (tokenPresent && botId == null) {
         issues.push({
             severity: 'critical',
@@ -262,13 +276,22 @@ function buildChainIssues(input) {
             what_to_do: 'Исправьте thread mapping и права бота. Синхронизация идёт пакетами (TELEGRAM_COMMENT_SYNC_BATCH_SIZE) с интервалом MAX_COMMENT_SYNC_INTERVAL_MS.',
         });
     }
-    if (staleBlocked > 0) {
+    if (staleUndeliverable > 0) {
         issues.push({
             severity: 'info',
             code: 'stale_undeliverable_comments',
-            title: `Комментарии к старым постам (> ${exports.STALE_UNDELIVERABLE_DAYS} дней) без треда`,
-            description: `${staleBlocked} комментариев не могут быть доставлены — Telegram не возвращает тред для постов старше ${exports.STALE_UNDELIVERABLE_DAYS} дней. Будут автоматически списаны при следующем старте синка.`,
-            what_to_do: 'Ничего делать не нужно — списываются автоматически.',
+            title: `Комментарии к постам старше ${exports.STALE_UNDELIVERABLE_DAYS} дней без треда`,
+            description: `${staleUndeliverable} комментариев не могут быть доставлены — Telegram не возвращает тред для старых постов. Будут списаны автоматически.`,
+            what_to_do: 'Ничего не требуется — списываются автоматически при старте синка.',
+        });
+    }
+    if (freshBlocked > 0) {
+        issues.push({
+            severity: 'warning',
+            code: 'fresh_blocked_comments',
+            title: 'Свежие комментарии ждут repair',
+            description: `${freshBlocked} комментариев к постам младше ${exports.STALE_UNDELIVERABLE_DAYS} дней не могут быть доставлены — нет tg_thread_msg_id. Repair должен помочь.`,
+            what_to_do: 'Запустите repair-threads с параметром only_with_pending=true',
         });
     }
     return issues;
@@ -294,7 +317,8 @@ async function diagnoseCommentSync(chainIdFilter) {
         const mappingStats = (0, postCommentMappingStore_1.countPostMappingThreadStats)(chain.id);
         const mappingChannelMismatch = (0, postCommentMappingStore_1.countMappingChannelIdMismatch)(chain.id);
         const pendingMaxToTg = countPendingMaxToTelegram(chain.max_chat_id);
-        const staleBlocked = countStaleUndeliverableComments(chain.id);
+        const staleUndeliverable = countStaleUndeliverableComments(chain.id);
+        const freshBlocked = countFreshBlockedComments(chain.id);
         const issues = buildChainIssues({
             chain,
             tokenPresent: Boolean(token),
@@ -305,7 +329,8 @@ async function diagnoseCommentSync(chainIdFilter) {
             mappingStats,
             mappingChannelMismatch,
             pendingMaxToTg,
-            staleBlocked,
+            staleUndeliverable,
+            freshBlocked,
         });
         resultChains.push({
             chain_id: chain.id,
@@ -356,10 +381,13 @@ async function diagnoseCommentSync(chainIdFilter) {
         recommendations,
     };
 }
-async function repairMissingThreadMappings(chainId, limit = 30) {
-    const mappings = (0, postCommentMappingStore_1.listMappingsMissingThread)(chainId, limit);
+async function repairMissingThreadMappings(chainId, limit = 30, options) {
+    const mappings = (0, postCommentMappingStore_1.listMappingsMissingThread)(chainId, limit, {
+        onlyWithPending: options?.onlyWithPending,
+    });
     let repaired = 0;
     let failed = 0;
+    let pendingCommentsRepaired = 0;
     const samples = [];
     for (let i = 0; i < mappings.length; i += 1) {
         const mapping = mappings[i];
@@ -368,11 +396,15 @@ async function repairMissingThreadMappings(chainId, limit = 30) {
             failed += 1;
             continue;
         }
+        const hadPending = (0, postCommentMappingStore_1.countPendingMaxCommentsForMaxMid)(maxMid) > 0;
         try {
             const result = await (0, telegramDiscussionThreadResolver_1.ensurePostThreadMapping)(maxMid);
             const ok = Boolean(result?.tg_thread_chat_id && result?.tg_thread_msg_id);
             if (ok) {
                 repaired += 1;
+                if (hadPending) {
+                    pendingCommentsRepaired += 1;
+                }
             }
             else {
                 failed += 1;
@@ -409,6 +441,7 @@ async function repairMissingThreadMappings(chainId, limit = 30) {
         attempted: mappings.length,
         repaired,
         failed,
+        pending_comments_repaired: pendingCommentsRepaired,
         samples,
     };
 }

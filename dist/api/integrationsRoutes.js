@@ -11,6 +11,7 @@ const express_1 = __importDefault(require("express"));
 const adminAuth_1 = require("../middleware/adminAuth");
 const config_1 = require("../config");
 const logger_1 = require("../utils/logger");
+const telegramLinkedChats_1 = require("../utils/telegramLinkedChats");
 const envFile_1 = require("../utils/envFile");
 const channelRegistry_1 = require("../services/channelRegistry");
 const maxPlatformClient_1 = require("../services/maxPlatformClient");
@@ -136,12 +137,16 @@ function createIntegrationsRouter(deps) {
             const token = integ ? telegramIntegrationToken(integ) : '';
             const channelsWithAdmins = integ && token
                 ? await attachTelegramChatAdmins(token, channels)
-                : channels.map((ch) => ({ ...ch, admins: [], startedAdminCount: 0 }));
+                : (0, telegramLinkedChats_1.normalizeTelegramLinkedChatsForApi)(channels).map((ch) => ({
+                    ...ch,
+                    admins: [],
+                    startedAdminCount: 0,
+                }));
             const adminCount = channelsWithAdmins.filter((c) => c.botIsAdmin === true).length;
             res.json({
                 connected: integrationId !== null,
                 integrationId,
-                channels: channelsWithAdmins,
+                channels: (0, telegramLinkedChats_1.normalizeTelegramLinkedChatsForApi)(channelsWithAdmins),
                 linkedChatsUpdatedAt,
                 adminCount,
                 hint: channels.length === 0

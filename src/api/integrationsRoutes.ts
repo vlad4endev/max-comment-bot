@@ -6,6 +6,7 @@ import express from 'express'
 import { checkAdminAuth } from '../middleware/adminAuth'
 import { config, getTelegramToken } from '../config'
 import { logger } from '../utils/logger'
+import { normalizeTelegramLinkedChatsForApi } from '../utils/telegramLinkedChats'
 import { removeRootEnvVar, upsertRootEnvVar } from '../utils/envFile'
 import { channelRegistry } from '../services/channelRegistry'
 import {
@@ -199,12 +200,16 @@ export function createIntegrationsRouter(deps: IntegrationsRouterDeps): express.
       const channelsWithAdmins =
         integ && token
           ? await attachTelegramChatAdmins(token, channels)
-          : channels.map((ch) => ({ ...ch, admins: [], startedAdminCount: 0 }))
+          : normalizeTelegramLinkedChatsForApi(channels).map((ch) => ({
+              ...ch,
+              admins: [],
+              startedAdminCount: 0,
+            }))
       const adminCount = channelsWithAdmins.filter((c) => c.botIsAdmin === true).length
       res.json({
         connected: integrationId !== null,
         integrationId,
-        channels: channelsWithAdmins,
+        channels: normalizeTelegramLinkedChatsForApi(channelsWithAdmins),
         linkedChatsUpdatedAt,
         adminCount,
         hint:

@@ -18,6 +18,48 @@ export interface PostCommentMappingRow {
 
 const discussionChatCache = new Map<string, number | null>()
 
+/** Маркер в tg_thread_msg_id: GetDiscussionMessage безнадёжен, repair пропускает. */
+export const STALE_THREAD_MSG_ID = -1
+
+export function isMappingThreadResolveStale(mapping: PostCommentMappingRow): boolean {
+  return mapping.tg_thread_msg_id === STALE_THREAD_MSG_ID
+}
+
+export function markMappingThreadResolveStale(chainId: string, tgMsgId: number): void {
+  getDb()
+    .prepare(
+      `UPDATE post_comment_mapping
+       SET tg_thread_msg_id = ?
+       WHERE chain_id = ? AND tg_msg_id = ?`,
+    )
+    .run(STALE_THREAD_MSG_ID, chainId, tgMsgId)
+}
+
+export function transferPostCommentMappingsChainId(oldChainId: string, newChainId: string): number {
+  const result = getDb()
+    .prepare(`UPDATE post_comment_mapping SET chain_id = ? WHERE chain_id = ?`)
+    .run(newChainId, oldChainId)
+  return Number(result.changes) || 0
+}
+
+export function countPendingMaxCommentsForMaxMid(maxMid: string): number {
+  const normalized = maxMid.trim()
+  if (!normalized) {
+    return 0
+  }
+  const row = getDb()
+    .prepare(
+      `SELECT COUNT(*) AS n
+       FROM comments c
+       INNER JOIN posts p ON p.post_id = c.post_id
+       WHERE p.message_mid = ?
+         AND (c.source IS NULL OR c.source = 'max')
+         AND (c.tg_comment_id IS NULL OR c.tg_comment_id = 0)`,
+    )
+    .get(normalized) as { n: number }
+  return Number(row.n) || 0
+}
+
 /** Ключ TG-канала для API: предпочитаем tg_chat_id из маппинга (фактический источник поста). */
 export function resolveTelegramChannelKeyForMapping(
   mapping: PostCommentMappingRow,
@@ -207,7 +249,7 @@ export function countPostMappingThreadStats(chainId?: string): PostMappingThread
       `SELECT
          COUNT(*) AS total,
          SUM(CASE WHEN tg_thread_msg_id IS NOT NULL AND tg_thread_msg_id > 0 THEN 1 ELSE 0 END) AS with_thread,
-         SUM(CASE WHEN tg_thread_msg_id IS NULL OR tg_thread_msg_id <= 0 THEN 1 ELSE 0 END) AS missing_thread
+         SUM(CASE WHEN tg_thread_msg_id IS NULL OR tg_thread_msg_id = 0 THEN 1 ELSE 0 END) AS missing_thread
        FROM post_comment_mapping
        ${where}`,
     )
@@ -219,16 +261,29 @@ export function countPostMappingThreadStats(chainId?: string): PostMappingThread
   }
 }
 
-export function listMappingsMissingThread(chainId: string, limit = 50): PostCommentMappingRow[] {
+export function listMappingsMissingThread(
+  chainId: string,
+  limit = 50,
+  options?: { onlyWithPending?: boolean },
+): PostCommentMappingRow[] {
   const safeLimit = Math.min(Math.max(limit, 1), 200)
+  const pendingFilter = options?.onlyWithPending
+    ? `AND (
+         SELECT COUNT(*) FROM comments c
+         WHERE c.post_id = p.post_id
+           AND (c.tg_comment_id IS NULL OR c.tg_comment_id = 0)
+           AND (c.source IS NULL OR c.source = 'max')
+       ) > 0`
+    : ''
   return getDb()
     .prepare(
       `SELECT m.chain_id, m.tg_msg_id, m.max_mid, m.tg_chat_id, m.tg_thread_chat_id, m.tg_thread_msg_id
        FROM post_comment_mapping m
        LEFT JOIN posts p ON p.message_mid = m.max_mid
        WHERE m.chain_id = ?
-         AND (m.tg_thread_msg_id IS NULL OR m.tg_thread_msg_id <= 0)
+         AND (m.tg_thread_msg_id IS NULL OR m.tg_thread_msg_id = 0)
          AND m.tg_msg_id IS NOT NULL AND m.tg_msg_id > 0
+         ${pendingFilter}
        ORDER BY
          (SELECT COUNT(*) FROM comments c
           WHERE c.post_id = p.post_id

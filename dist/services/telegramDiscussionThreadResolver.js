@@ -62,6 +62,14 @@ async function resolveThreadViaMtproto(chain, mapping) {
     if (typeof mapping.tg_msg_id !== 'number' || mapping.tg_msg_id <= 0) {
         return null;
     }
+    if ((0, postCommentMappingStore_1.isMappingThreadResolveStale)(mapping)) {
+        logger_1.logger.debug('[discussionThreadResolver] skip stale mapping', {
+            chainId: chain.id,
+            maxMid: mapping.max_mid,
+            channelMsgId: mapping.tg_msg_id,
+        });
+        return null;
+    }
     const token = resolveBotTokenForChain(chain);
     const discussionChatId = token ? await (0, postCommentMappingStore_1.resolveDiscussionChatId)(token, chain) : null;
     const channelKeys = (0, postCommentMappingStore_1.listTelegramChannelKeyCandidatesForMapping)(mapping, chain, discussionChatId);
@@ -75,9 +83,10 @@ async function resolveThreadViaMtproto(chain, mapping) {
         for (const channelKey of channelKeys) {
             try {
                 const channelPeer = await (0, telegramUserArchive_1.resolveTelegramChannelEntity)(client, channelKey);
-                logger_1.logger.debug('[discussionThreadResolver] resolving thread', {
-                    channelPeer: channelKey,
-                    tgMsgId: tgChannelMsgId,
+                logger_1.logger.debug('[discussionThreadResolver] calling GetDiscussionMessage', {
+                    channelId: channelKey,
+                    msgId: tgChannelMsgId,
+                    chainId: chain.id,
                     maxMid: mapping.max_mid,
                 });
                 const result = await client.invoke(new telegram_1.Api.messages.GetDiscussionMessage({
@@ -86,6 +95,10 @@ async function resolveThreadViaMtproto(chain, mapping) {
                 }));
                 const extracted = extractThreadFromDiscussionMessage(result);
                 if (extracted) {
+                    logger_1.logger.debug('[discussionThreadResolver] got thread', {
+                        threadMsgId: extracted.threadMsgId,
+                        maxMid: mapping.max_mid,
+                    });
                     logger_1.logger.info('[discussionThreadResolver] resolved thread via GetDiscussionMessage', {
                         chainId: chain.id,
                         channelMsgId: mapping.tg_msg_id,
@@ -125,14 +138,13 @@ async function resolveThreadViaMtproto(chain, mapping) {
             }
         }
         if (lastInvalidMsgId) {
-            logger_1.logger.warn('[discussionThreadResolver] stale channel message id, dropping mapping', {
+            (0, postCommentMappingStore_1.markMappingThreadResolveStale)(mapping.chain_id, mapping.tg_msg_id);
+            logger_1.logger.warn('[discussionThreadResolver] marked as stale, skipping future repair', {
                 chainId: chain.id,
                 channelMsgId: mapping.tg_msg_id,
                 maxMid: mapping.max_mid,
                 channelKeysTried: channelKeys,
             });
-            (0, postCommentMappingStore_1.deletePostCommentMapping)(mapping.chain_id, mapping.tg_msg_id);
-            (0, postCommentMappingStore_1.backfillPostCommentMappingForMaxMid)(mapping.max_mid);
         }
         return null;
     }
@@ -160,6 +172,9 @@ async function ensurePostThreadMappingInternal(maxMid, forceRefresh) {
     }
     let mapping = (0, postCommentMappingStore_1.findMappingByMaxMid)(normalized);
     if (!mapping) {
+        return null;
+    }
+    if ((0, postCommentMappingStore_1.isMappingThreadResolveStale)(mapping) && !forceRefresh) {
         return null;
     }
     if (forceRefresh && typeof mapping.tg_msg_id === 'number' && mapping.tg_msg_id > 0) {

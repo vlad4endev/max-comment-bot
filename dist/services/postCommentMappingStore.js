@@ -3,6 +3,11 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.STALE_THREAD_MSG_ID = void 0;
+exports.isMappingThreadResolveStale = isMappingThreadResolveStale;
+exports.markMappingThreadResolveStale = markMappingThreadResolveStale;
+exports.transferPostCommentMappingsChainId = transferPostCommentMappingsChainId;
+exports.countPendingMaxCommentsForMaxMid = countPendingMaxCommentsForMaxMid;
 exports.resolveTelegramChannelKeyForMapping = resolveTelegramChannelKeyForMapping;
 exports.listTelegramChannelKeyCandidatesForMapping = listTelegramChannelKeyCandidatesForMapping;
 exports.countMappingChannelIdMismatch = countMappingChannelIdMismatch;
@@ -26,6 +31,39 @@ const logger_1 = require("../utils/logger");
 const tgChannelMatch_1 = require("../utils/tgChannelMatch");
 const TG_API = 'https://api.telegram.org';
 const discussionChatCache = new Map();
+/** Маркер в tg_thread_msg_id: GetDiscussionMessage безнадёжен, repair пропускает. */
+exports.STALE_THREAD_MSG_ID = -1;
+function isMappingThreadResolveStale(mapping) {
+    return mapping.tg_thread_msg_id === exports.STALE_THREAD_MSG_ID;
+}
+function markMappingThreadResolveStale(chainId, tgMsgId) {
+    (0, database_1.getDb)()
+        .prepare(`UPDATE post_comment_mapping
+       SET tg_thread_msg_id = ?
+       WHERE chain_id = ? AND tg_msg_id = ?`)
+        .run(exports.STALE_THREAD_MSG_ID, chainId, tgMsgId);
+}
+function transferPostCommentMappingsChainId(oldChainId, newChainId) {
+    const result = (0, database_1.getDb)()
+        .prepare(`UPDATE post_comment_mapping SET chain_id = ? WHERE chain_id = ?`)
+        .run(newChainId, oldChainId);
+    return Number(result.changes) || 0;
+}
+function countPendingMaxCommentsForMaxMid(maxMid) {
+    const normalized = maxMid.trim();
+    if (!normalized) {
+        return 0;
+    }
+    const row = (0, database_1.getDb)()
+        .prepare(`SELECT COUNT(*) AS n
+       FROM comments c
+       INNER JOIN posts p ON p.post_id = c.post_id
+       WHERE p.message_mid = ?
+         AND (c.source IS NULL OR c.source = 'max')
+         AND (c.tg_comment_id IS NULL OR c.tg_comment_id = 0)`)
+        .get(normalized);
+    return Number(row.n) || 0;
+}
 /** Ключ TG-канала для API: предпочитаем tg_chat_id из маппинга (фактический источник поста). */
 function resolveTelegramChannelKeyForMapping(mapping, chain) {
     if (typeof mapping.tg_chat_id === 'number') {
@@ -167,7 +205,7 @@ function countPostMappingThreadStats(chainId) {
         .prepare(`SELECT
          COUNT(*) AS total,
          SUM(CASE WHEN tg_thread_msg_id IS NOT NULL AND tg_thread_msg_id > 0 THEN 1 ELSE 0 END) AS with_thread,
-         SUM(CASE WHEN tg_thread_msg_id IS NULL OR tg_thread_msg_id <= 0 THEN 1 ELSE 0 END) AS missing_thread
+         SUM(CASE WHEN tg_thread_msg_id IS NULL OR tg_thread_msg_id = 0 THEN 1 ELSE 0 END) AS missing_thread
        FROM post_comment_mapping
        ${where}`)
         .get(...params);
@@ -177,15 +215,24 @@ function countPostMappingThreadStats(chainId) {
         missing_thread: Number(row.missing_thread) || 0,
     };
 }
-function listMappingsMissingThread(chainId, limit = 50) {
+function listMappingsMissingThread(chainId, limit = 50, options) {
     const safeLimit = Math.min(Math.max(limit, 1), 200);
+    const pendingFilter = options?.onlyWithPending
+        ? `AND (
+         SELECT COUNT(*) FROM comments c
+         WHERE c.post_id = p.post_id
+           AND (c.tg_comment_id IS NULL OR c.tg_comment_id = 0)
+           AND (c.source IS NULL OR c.source = 'max')
+       ) > 0`
+        : '';
     return (0, database_1.getDb)()
         .prepare(`SELECT m.chain_id, m.tg_msg_id, m.max_mid, m.tg_chat_id, m.tg_thread_chat_id, m.tg_thread_msg_id
        FROM post_comment_mapping m
        LEFT JOIN posts p ON p.message_mid = m.max_mid
        WHERE m.chain_id = ?
-         AND (m.tg_thread_msg_id IS NULL OR m.tg_thread_msg_id <= 0)
+         AND (m.tg_thread_msg_id IS NULL OR m.tg_thread_msg_id = 0)
          AND m.tg_msg_id IS NOT NULL AND m.tg_msg_id > 0
+         ${pendingFilter}
        ORDER BY
          (SELECT COUNT(*) FROM comments c
           WHERE c.post_id = p.post_id

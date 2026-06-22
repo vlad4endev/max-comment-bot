@@ -11,8 +11,8 @@ import {
   findMappingByMaxMid,
   linkThreadMessageToChannelPost,
   clearPostThreadMapping,
-  deletePostCommentMapping,
-  backfillPostCommentMappingForMaxMid,
+  isMappingThreadResolveStale,
+  markMappingThreadResolveStale,
   resolveDiscussionChatId,
   listTelegramChannelKeyCandidatesForMapping,
   type PostCommentMappingRow,
@@ -81,6 +81,14 @@ async function resolveThreadViaMtproto(
   if (typeof mapping.tg_msg_id !== 'number' || mapping.tg_msg_id <= 0) {
     return null
   }
+  if (isMappingThreadResolveStale(mapping)) {
+    logger.debug('[discussionThreadResolver] skip stale mapping', {
+      chainId: chain.id,
+      maxMid: mapping.max_mid,
+      channelMsgId: mapping.tg_msg_id,
+    })
+    return null
+  }
 
   const token = resolveBotTokenForChain(chain)
   const discussionChatId = token ? await resolveDiscussionChatId(token, chain) : null
@@ -97,9 +105,10 @@ async function resolveThreadViaMtproto(
     for (const channelKey of channelKeys) {
       try {
         const channelPeer = await resolveTelegramChannelEntity(client, channelKey)
-        logger.debug('[discussionThreadResolver] resolving thread', {
-          channelPeer: channelKey,
-          tgMsgId: tgChannelMsgId,
+        logger.debug('[discussionThreadResolver] calling GetDiscussionMessage', {
+          channelId: channelKey,
+          msgId: tgChannelMsgId,
+          chainId: chain.id,
           maxMid: mapping.max_mid,
         })
         const result = await client.invoke(
@@ -110,6 +119,10 @@ async function resolveThreadViaMtproto(
         )
         const extracted = extractThreadFromDiscussionMessage(result)
         if (extracted) {
+          logger.debug('[discussionThreadResolver] got thread', {
+            threadMsgId: extracted.threadMsgId,
+            maxMid: mapping.max_mid,
+          })
           logger.info('[discussionThreadResolver] resolved thread via GetDiscussionMessage', {
             chainId: chain.id,
             channelMsgId: mapping.tg_msg_id,
@@ -150,14 +163,13 @@ async function resolveThreadViaMtproto(
     }
 
     if (lastInvalidMsgId) {
-      logger.warn('[discussionThreadResolver] stale channel message id, dropping mapping', {
+      markMappingThreadResolveStale(mapping.chain_id, mapping.tg_msg_id)
+      logger.warn('[discussionThreadResolver] marked as stale, skipping future repair', {
         chainId: chain.id,
         channelMsgId: mapping.tg_msg_id,
         maxMid: mapping.max_mid,
         channelKeysTried: channelKeys,
       })
-      deletePostCommentMapping(mapping.chain_id, mapping.tg_msg_id)
-      backfillPostCommentMappingForMaxMid(mapping.max_mid)
     }
     return null
   } finally {
@@ -191,6 +203,10 @@ async function ensurePostThreadMappingInternal(
 
   let mapping = findMappingByMaxMid(normalized)
   if (!mapping) {
+    return null
+  }
+
+  if (isMappingThreadResolveStale(mapping) && !forceRefresh) {
     return null
   }
 

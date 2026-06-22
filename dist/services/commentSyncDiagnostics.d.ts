@@ -4,6 +4,7 @@
 export declare const STALE_UNDELIVERABLE_DAYS = 30;
 export declare function staleUndeliverableCutoffIso(): string;
 export declare function countStaleUndeliverableComments(chainId: string, staleCutoff?: string): number;
+export declare function countFreshBlockedComments(chainId: string, staleCutoff?: string): number;
 /** Списывает комментарии к постам старше STALE_UNDELIVERABLE_DAYS без треда (tg_comment_id = -1). */
 export declare function purgeStaleUndeliverableComments(chainId: string): number;
 export type CommentSyncIssueSeverity = 'critical' | 'warning' | 'info';
@@ -52,13 +53,16 @@ export interface RepairThreadMappingsResult {
     attempted: number;
     repaired: number;
     failed: number;
+    pending_comments_repaired: number;
     samples: Array<{
         max_mid: string;
         tg_msg_id: number;
         ok: boolean;
     }>;
 }
-export declare function repairMissingThreadMappings(chainId: string, limit?: number): Promise<RepairThreadMappingsResult>;
+export declare function repairMissingThreadMappings(chainId: string, limit?: number, options?: {
+    onlyWithPending?: boolean;
+}): Promise<RepairThreadMappingsResult>;
 export interface BootstrapCommentSyncResult {
     mappings_backfilled: number;
     chains_repaired: number;

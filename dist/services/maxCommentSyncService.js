@@ -24,7 +24,7 @@ function purgeStaleUndeliverableOnStartup() {
         }
         const staleCount = (0, commentSyncDiagnostics_1.purgeStaleUndeliverableComments)(chain.id);
         if (staleCount > 0) {
-            logger_1.logger.info('[maxCommentSync] списано безвозвратных комментариев', {
+            logger_1.logger.info('[maxCommentSync] purged stale undeliverable comments', {
                 chainId: chain.id,
                 count: staleCount,
                 older_than_days: commentSyncDiagnostics_1.STALE_UNDELIVERABLE_DAYS,

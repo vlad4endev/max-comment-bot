@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { dirname, join } from 'node:path'
 
 import { logger } from '../utils/logger'
+import { normalizeTelegramLinkedChatsForApi } from '../utils/telegramLinkedChats'
 import type { PlatformChannelInfo, TelegramChatType } from './integrationPlatformClient'
 
 const DATA_PATH = join(process.cwd(), 'data', 'integrations.json')
@@ -495,6 +496,8 @@ export function maskToken(token: string): string {
 export function integrationPublicView(i: IntegrationRecord): Record<string, unknown> {
   const connected = i.status === 'connected'
   const hasToken = i.token.trim().length > 0
+  const linkedChats =
+    i.platform === 'telegram' ? normalizeTelegramLinkedChatsForApi(i.linkedChats) : (i.linkedChats ?? [])
   return {
     id: i.id,
     platform: i.platform,
@@ -506,7 +509,7 @@ export function integrationPublicView(i: IntegrationRecord): Record<string, unkn
     hasToken,
     token: connected && hasToken ? i.token : '',
     tokenPreview: hasToken ? maskToken(i.token) : '',
-    linkedChats: i.linkedChats ?? [],
+    linkedChats,
     linkedChatsUpdatedAt: i.linkedChatsUpdatedAt ?? null,
   }
 }

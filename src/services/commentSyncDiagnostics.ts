@@ -17,6 +17,7 @@ import {
 import {
   countPostMappingThreadStats,
   countMappingChannelIdMismatch,
+  countPendingMaxCommentsForMaxMid,
   listMappingsMissingThread,
   resolveDiscussionChatId,
   backfillPostCommentMappingsFromForwarded,
@@ -45,13 +46,28 @@ export function countStaleUndeliverableComments(chainId: string, staleCutoff?: s
        LEFT JOIN post_comment_mapping m ON m.max_mid = p.message_mid AND m.chain_id = ?
        WHERE (c.tg_comment_id IS NULL OR c.tg_comment_id = 0)
          AND (c.source IS NULL OR c.source = 'max')
-         AND (m.tg_thread_msg_id IS NULL OR m.tg_thread_msg_id <= 0)
+         AND (m.tg_thread_msg_id IS NULL OR m.tg_thread_msg_id = 0)
          AND p.timestamp < ?`,
     )
     .get(chainId, cutoff) as { n: number }
   return Number(row.n) || 0
 }
 
+export function countFreshBlockedComments(chainId: string, staleCutoff?: string): number {
+  const cutoff = staleCutoff ?? staleUndeliverableCutoffIso()
+  const row = getDb()
+    .prepare(
+      `SELECT COUNT(*) AS n FROM comments c
+       JOIN posts p ON p.post_id = c.post_id
+       LEFT JOIN post_comment_mapping m ON m.max_mid = p.message_mid AND m.chain_id = ?
+       WHERE (c.tg_comment_id IS NULL OR c.tg_comment_id = 0)
+         AND (c.source IS NULL OR c.source = 'max')
+         AND (m.tg_thread_msg_id IS NULL OR m.tg_thread_msg_id = 0)
+         AND p.timestamp >= ?`,
+    )
+    .get(chainId, cutoff) as { n: number }
+  return Number(row.n) || 0
+}
 /** Списывает комментарии к постам старше STALE_UNDELIVERABLE_DAYS без треда (tg_comment_id = -1). */
 export function purgeStaleUndeliverableComments(chainId: string): number {
   const staleCutoff = staleUndeliverableCutoffIso()
@@ -65,7 +81,7 @@ export function purgeStaleUndeliverableComments(chainId: string): number {
            SELECT p.post_id FROM posts p
            LEFT JOIN post_comment_mapping m
              ON m.max_mid = p.message_mid AND m.chain_id = ?
-           WHERE (m.tg_thread_msg_id IS NULL OR m.tg_thread_msg_id <= 0)
+           WHERE (m.tg_thread_msg_id IS NULL OR m.tg_thread_msg_id = 0)
              AND p.timestamp < ?
          )`,
     )
@@ -250,7 +266,8 @@ function buildChainIssues(input: {
   mappingStats: ReturnType<typeof countPostMappingThreadStats>
   mappingChannelMismatch: number
   pendingMaxToTg: number
-  staleBlocked: number
+  staleUndeliverable: number
+  freshBlocked: number
 }): CommentSyncIssue[] {
   const issues: CommentSyncIssue[] = []
   const {
@@ -263,7 +280,8 @@ function buildChainIssues(input: {
     mappingStats,
     mappingChannelMismatch,
     pendingMaxToTg,
-    staleBlocked,
+    staleUndeliverable,
+    freshBlocked,
   } = input
 
   if (tokenPresent && botId == null) {
@@ -372,13 +390,23 @@ function buildChainIssues(input: {
     })
   }
 
-  if (staleBlocked > 0) {
+  if (staleUndeliverable > 0) {
     issues.push({
       severity: 'info',
       code: 'stale_undeliverable_comments',
-      title: `Комментарии к старым постам (> ${STALE_UNDELIVERABLE_DAYS} дней) без треда`,
-      description: `${staleBlocked} комментариев не могут быть доставлены — Telegram не возвращает тред для постов старше ${STALE_UNDELIVERABLE_DAYS} дней. Будут автоматически списаны при следующем старте синка.`,
-      what_to_do: 'Ничего делать не нужно — списываются автоматически.',
+      title: `Комментарии к постам старше ${STALE_UNDELIVERABLE_DAYS} дней без треда`,
+      description: `${staleUndeliverable} комментариев не могут быть доставлены — Telegram не возвращает тред для старых постов. Будут списаны автоматически.`,
+      what_to_do: 'Ничего не требуется — списываются автоматически при старте синка.',
+    })
+  }
+
+  if (freshBlocked > 0) {
+    issues.push({
+      severity: 'warning',
+      code: 'fresh_blocked_comments',
+      title: 'Свежие комментарии ждут repair',
+      description: `${freshBlocked} комментариев к постам младше ${STALE_UNDELIVERABLE_DAYS} дней не могут быть доставлены — нет tg_thread_msg_id. Repair должен помочь.`,
+      what_to_do: 'Запустите repair-threads с параметром only_with_pending=true',
     })
   }
 
@@ -410,7 +438,8 @@ export async function diagnoseCommentSync(chainIdFilter?: string): Promise<Comme
     const mappingStats = countPostMappingThreadStats(chain.id)
     const mappingChannelMismatch = countMappingChannelIdMismatch(chain.id)
     const pendingMaxToTg = countPendingMaxToTelegram(chain.max_chat_id)
-    const staleBlocked = countStaleUndeliverableComments(chain.id)
+    const staleUndeliverable = countStaleUndeliverableComments(chain.id)
+    const freshBlocked = countFreshBlockedComments(chain.id)
     const issues = buildChainIssues({
       chain,
       tokenPresent: Boolean(token),
@@ -421,7 +450,8 @@ export async function diagnoseCommentSync(chainIdFilter?: string): Promise<Comme
       mappingStats,
       mappingChannelMismatch,
       pendingMaxToTg,
-      staleBlocked,
+      staleUndeliverable,
+      freshBlocked,
     })
 
     resultChains.push({
@@ -490,16 +520,21 @@ export interface RepairThreadMappingsResult {
   attempted: number
   repaired: number
   failed: number
+  pending_comments_repaired: number
   samples: Array<{ max_mid: string; tg_msg_id: number; ok: boolean }>
 }
 
 export async function repairMissingThreadMappings(
   chainId: string,
   limit = 30,
+  options?: { onlyWithPending?: boolean },
 ): Promise<RepairThreadMappingsResult> {
-  const mappings = listMappingsMissingThread(chainId, limit)
+  const mappings = listMappingsMissingThread(chainId, limit, {
+    onlyWithPending: options?.onlyWithPending,
+  })
   let repaired = 0
   let failed = 0
+  let pendingCommentsRepaired = 0
   const samples: RepairThreadMappingsResult['samples'] = []
 
   for (let i = 0; i < mappings.length; i += 1) {
@@ -509,11 +544,15 @@ export async function repairMissingThreadMappings(
       failed += 1
       continue
     }
+    const hadPending = countPendingMaxCommentsForMaxMid(maxMid) > 0
     try {
       const result = await ensurePostThreadMapping(maxMid)
       const ok = Boolean(result?.tg_thread_chat_id && result?.tg_thread_msg_id)
       if (ok) {
         repaired += 1
+        if (hadPending) {
+          pendingCommentsRepaired += 1
+        }
       } else {
         failed += 1
       }
@@ -550,6 +589,7 @@ export async function repairMissingThreadMappings(
     attempted: mappings.length,
     repaired,
     failed,
+    pending_comments_repaired: pendingCommentsRepaired,
     samples,
   }
 }
