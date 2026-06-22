@@ -132,12 +132,13 @@ async function createUserClient() {
     return client;
 }
 async function disconnectTelegramUserClient(client) {
+    const gram = client;
+    gram._errorHandler = async () => {
+        // GramJS update loop может кинуть TIMEOUT при destroy — не шумим в stderr.
+    };
+    gram._destroyed = true;
     try {
-        if (typeof client.destroy === 'function') {
-            await client.destroy();
-            return;
-        }
-        await client.disconnect();
+        await client.destroy();
     }
     catch (err) {
         logger_1.logger.debug('[telegramUserArchive] MTProto client teardown', { err });

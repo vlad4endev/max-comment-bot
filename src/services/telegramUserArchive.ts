@@ -146,12 +146,16 @@ async function createUserClient(): Promise<TelegramClient> {
 }
 
 export async function disconnectTelegramUserClient(client: TelegramClient): Promise<void> {
+  const gram = client as TelegramClient & {
+    _errorHandler?: (err: Error) => Promise<void>
+    _destroyed?: boolean
+  }
+  gram._errorHandler = async () => {
+    // GramJS update loop может кинуть TIMEOUT при destroy — не шумим в stderr.
+  }
+  gram._destroyed = true
   try {
-    if (typeof client.destroy === 'function') {
-      await client.destroy()
-      return
-    }
-    await client.disconnect()
+    await client.destroy()
   } catch (err: unknown) {
     logger.debug('[telegramUserArchive] MTProto client teardown', { err })
   }
