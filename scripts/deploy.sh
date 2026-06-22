@@ -64,10 +64,10 @@ docker compose logs --tail=40 bot
 echo ""
 echo "==> проверка admin autoposts (патч модалки):"
 AUTOPOST_JS="$(curl -sS --max-time 8 "http://127.0.0.1:${HOST_PORT}/admin/assets/autoposts.js" 2>/dev/null || true)"
-if [[ -n "$AUTOPOST_JS" ]] && echo "$AUTOPOST_JS" | grep -q 'single-form-v3'; then
-  echo "  /admin/assets/autoposts.js -> OK (single-form-v3)"
+if [[ -n "$AUTOPOST_JS" ]] && echo "$AUTOPOST_JS" | grep -qE 'single-form-v3|AP_UI_BUILD'; then
+  echo "  /admin/assets/autoposts.js -> OK"
 elif [[ -n "$AUTOPOST_JS" ]] && echo "$AUTOPOST_JS" | grep -q 'updateModalPreview'; then
-  echo "  /admin/assets/autoposts.js -> частично (старая сборка, нужен single-form-v3)" >&2
+  echo "  /admin/assets/autoposts.js -> частично (старая сборка)" >&2
   exit 1
 else
   echo "  /admin/assets/autoposts.js -> СТАРАЯ ВЕРСИЯ или недоступен" >&2

@@ -43,6 +43,7 @@ import { startAutopostScheduler } from './services/autopostScheduler'
 import { startChannelImportWorker } from './services/channelImportService'
 import { ensureAdminPanelStateLoaded } from './api/adminPanelState'
 import { repairLegacyMiniappTgChains } from './services/channelLinkService'
+import { bootstrapCommentSyncOnStartup } from './services/commentSyncDiagnostics'
 import { repairTgChainsForForwarding, repairStaleTgChainBotTokens, repairMiniappChainsForwardComments } from './services/tgChainChannelRef'
 import { setTgChainForwarderBot, startTgChainForwarder } from './services/tgChainForwarder'
 import { setVkChainForwarderBot, startVkChainForwarder, stopVkChainForwarder } from './services/vkChainForwarder'
@@ -89,6 +90,7 @@ async function main(): Promise<void> {
   if (staleChainTokens.repaired > 0) {
     logger.warn('Заменены устаревшие bot_token в TG-цепочках', staleChainTokens)
   }
+  await bootstrapCommentSyncOnStartup()
   try {
     await ensureBotProfile(bot)
   } catch (err: unknown) {

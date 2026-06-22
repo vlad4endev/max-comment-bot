@@ -65,6 +65,7 @@ const autopostScheduler_1 = require("./services/autopostScheduler");
 const channelImportService_1 = require("./services/channelImportService");
 const adminPanelState_1 = require("./api/adminPanelState");
 const channelLinkService_1 = require("./services/channelLinkService");
+const commentSyncDiagnostics_1 = require("./services/commentSyncDiagnostics");
 const tgChainChannelRef_1 = require("./services/tgChainChannelRef");
 const tgChainForwarder_1 = require("./services/tgChainForwarder");
 const vkChainForwarder_1 = require("./services/vkChainForwarder");
@@ -106,6 +107,7 @@ async function main() {
     if (staleChainTokens.repaired > 0) {
         logger_1.logger.warn('Заменены устаревшие bot_token в TG-цепочках', staleChainTokens);
     }
+    await (0, commentSyncDiagnostics_1.bootstrapCommentSyncOnStartup)();
     try {
         await (0, bot_1.ensureBotProfile)(bot);
     }

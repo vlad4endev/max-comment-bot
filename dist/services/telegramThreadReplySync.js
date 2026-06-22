@@ -359,10 +359,20 @@ async function syncMaxCommentToTelegramThread(_bot, comment, post) {
     }
     const target = await resolvePostThreadTarget(post.message_mid);
     if (!target) {
-        logger_1.logger.warn('[telegramThreadReplySync] no thread mapping for MAX comment', {
+        const mapping = (0, postCommentMappingStore_1.findMappingByMaxMid)(post.message_mid);
+        const logPayload = {
             commentId: freshComment.comment_id,
             messageMid: post.message_mid,
-        });
+            chainId: mapping?.chain_id ?? null,
+            tgThreadChatId: mapping?.tg_thread_chat_id ?? null,
+            tgThreadMsgId: mapping?.tg_thread_msg_id ?? null,
+        };
+        if (!mapping) {
+            logger_1.logger.debug('[telegramThreadReplySync] skip MAX→TG: post not linked to Telegram', logPayload);
+        }
+        else {
+            logger_1.logger.warn('[telegramThreadReplySync] no thread mapping for MAX comment', logPayload);
+        }
         return;
     }
     const body = buildMaxCommentTelegramText(freshComment);
@@ -435,13 +445,19 @@ async function syncAdminReplyToTelegramThread(_bot, comment, post) {
     const target = await resolvePostThreadTarget(post.message_mid);
     if (!target) {
         const mapping = (0, postCommentMappingStore_1.findMappingByMaxMid)(post.message_mid);
-        logger_1.logger.warn('[telegramThreadReplySync] no thread mapping for post', {
+        const logPayload = {
             commentId: freshComment.comment_id,
             messageMid: post.message_mid,
             chainId: mapping?.chain_id ?? null,
             tgThreadChatId: mapping?.tg_thread_chat_id ?? null,
             tgThreadMsgId: mapping?.tg_thread_msg_id ?? null,
-        });
+        };
+        if (!mapping) {
+            logger_1.logger.debug('[telegramThreadReplySync] skip admin MAX→TG: post not linked to Telegram', logPayload);
+        }
+        else {
+            logger_1.logger.warn('[telegramThreadReplySync] no thread mapping for post', logPayload);
+        }
         return;
     }
     const { token, threadChatId } = target;

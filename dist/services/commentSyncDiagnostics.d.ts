@@ -54,3 +54,12 @@ export interface RepairThreadMappingsResult {
     }>;
 }
 export declare function repairMissingThreadMappings(chainId: string, limit?: number): Promise<RepairThreadMappingsResult>;
+export interface BootstrapCommentSyncResult {
+    mappings_backfilled: number;
+    chains_repaired: number;
+    threads_repaired: number;
+    threads_failed: number;
+    pending_without_mapping: number;
+}
+/** На старте: backfill post_comment_mapping и починка тредов для активных цепочек. */
+export declare function bootstrapCommentSyncOnStartup(): Promise<BootstrapCommentSyncResult>;

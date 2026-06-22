@@ -537,10 +537,19 @@ export async function syncMaxCommentToTelegramThread(
 
   const target = await resolvePostThreadTarget(post.message_mid)
   if (!target) {
-    logger.warn('[telegramThreadReplySync] no thread mapping for MAX comment', {
+    const mapping = findMappingByMaxMid(post.message_mid)
+    const logPayload = {
       commentId: freshComment.comment_id,
       messageMid: post.message_mid,
-    })
+      chainId: mapping?.chain_id ?? null,
+      tgThreadChatId: mapping?.tg_thread_chat_id ?? null,
+      tgThreadMsgId: mapping?.tg_thread_msg_id ?? null,
+    }
+    if (!mapping) {
+      logger.debug('[telegramThreadReplySync] skip MAX→TG: post not linked to Telegram', logPayload)
+    } else {
+      logger.warn('[telegramThreadReplySync] no thread mapping for MAX comment', logPayload)
+    }
     return
   }
 
@@ -635,13 +644,18 @@ export async function syncAdminReplyToTelegramThread(
   const target = await resolvePostThreadTarget(post.message_mid)
   if (!target) {
     const mapping = findMappingByMaxMid(post.message_mid)
-    logger.warn('[telegramThreadReplySync] no thread mapping for post', {
+    const logPayload = {
       commentId: freshComment.comment_id,
       messageMid: post.message_mid,
       chainId: mapping?.chain_id ?? null,
       tgThreadChatId: mapping?.tg_thread_chat_id ?? null,
       tgThreadMsgId: mapping?.tg_thread_msg_id ?? null,
-    })
+    }
+    if (!mapping) {
+      logger.debug('[telegramThreadReplySync] skip admin MAX→TG: post not linked to Telegram', logPayload)
+    } else {
+      logger.warn('[telegramThreadReplySync] no thread mapping for post', logPayload)
+    }
     return
   }
 

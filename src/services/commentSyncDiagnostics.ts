@@ -18,6 +18,7 @@ import {
   countPostMappingThreadStats,
   listMappingsMissingThread,
   resolveDiscussionChatId,
+  backfillPostCommentMappingsFromForwarded,
 } from './postCommentMappingStore'
 import { ensurePostThreadMapping } from './telegramDiscussionThreadResolver'
 import { isMtprotoSessionReady, resolveMtprotoCredentials } from './mtprotoConfigStore'
@@ -470,4 +471,61 @@ export async function repairMissingThreadMappings(
     failed,
     samples,
   }
+}
+
+export interface BootstrapCommentSyncResult {
+  mappings_backfilled: number
+  chains_repaired: number
+  threads_repaired: number
+  threads_failed: number
+  pending_without_mapping: number
+}
+
+/** На старте: backfill post_comment_mapping и починка тредов для активных цепочек. */
+export async function bootstrapCommentSyncOnStartup(): Promise<BootstrapCommentSyncResult> {
+  const mappingsBackfilled = backfillPostCommentMappingsFromForwarded()
+  let chainsRepaired = 0
+  let threadsRepaired = 0
+  let threadsFailed = 0
+
+  const chains = listTgChainsSync().filter((c) => c.active !== false && c.forward_comments === true)
+  for (const chain of chains) {
+    const repair = await repairMissingThreadMappings(chain.id, 15)
+    if (repair.attempted > 0) {
+      chainsRepaired += 1
+      threadsRepaired += repair.repaired
+      threadsFailed += repair.failed
+    }
+  }
+
+  const pendingRow = getDb()
+    .prepare(
+      `SELECT COUNT(*) AS n
+       FROM comments c
+       JOIN posts p ON p.post_id = c.post_id
+       LEFT JOIN post_comment_mapping m ON m.max_mid = p.message_mid
+       WHERE (c.source IS NULL OR c.source = 'max')
+         AND (c.tg_comment_id IS NULL OR c.tg_comment_id = 0)
+         AND m.id IS NULL`,
+    )
+    .get() as { n: number }
+  const pendingWithoutMapping = Number(pendingRow.n) || 0
+
+  const result: BootstrapCommentSyncResult = {
+    mappings_backfilled: mappingsBackfilled,
+    chains_repaired: chainsRepaired,
+    threads_repaired: threadsRepaired,
+    threads_failed: threadsFailed,
+    pending_without_mapping: pendingWithoutMapping,
+  }
+
+  logger.info('[commentSync] bootstrap on startup', result)
+  if (pendingWithoutMapping > 0) {
+    logger.warn(
+      '[commentSync] комментарии без TG-маппинга не переносятся в Telegram — нужны посты из TG (forward_posts) или repair-threads',
+      { pending_without_mapping: pendingWithoutMapping },
+    )
+  }
+
+  return result
 }
