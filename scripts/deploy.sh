@@ -37,6 +37,11 @@ echo "==> git sync (origin/main)"
 git fetch origin main
 git checkout main
 
+LOCAL_HEAD="$(git rev-parse HEAD)"
+REMOTE_HEAD="$(git rev-parse origin/main)"
+echo "==> было локально:  ${LOCAL_HEAD:0:7} $(git log -1 --oneline "${LOCAL_HEAD}" 2>/dev/null | cut -d' ' -f2- || true)"
+echo "==> на origin/main: ${REMOTE_HEAD:0:7} $(git log -1 --oneline "${REMOTE_HEAD}" 2>/dev/null | cut -d' ' -f2- || true)"
+
 if ! git diff --quiet || ! git diff --cached --quiet; then
   echo "==> локальные изменения в репозитории (сброс до origin/main):"
   git status -sb || true
@@ -46,14 +51,23 @@ fi
 git reset --hard origin/main
 git clean -fd dist/ 2>/dev/null || true
 
-echo "==> текущий коммит:"
-git log -1 --oneline
 export GIT_COMMIT="$(git rev-parse HEAD)"
+echo "==> деплой коммита:"
+git log -1 --oneline
 echo "==> GIT_COMMIT=${GIT_COMMIT}"
 
-echo "==> docker compose build & recreate (сброс кэша admin-panel по коммиту)"
+if [[ "${LOCAL_HEAD}" == "${GIT_COMMIT}" && "${DEPLOY_FORCE_REBUILD:-}" != "1" ]]; then
+  echo "==> git HEAD не изменился — для пересборки образа всё равно пробуем build (GIT_COMMIT в Dockerfile)"
+fi
+
+echo "==> docker compose build & recreate"
 docker compose down
-docker compose build --build-arg "GIT_COMMIT=${GIT_COMMIT}" bot
+BUILD_FLAGS=(--build-arg "GIT_COMMIT=${GIT_COMMIT}")
+if [[ "${DEPLOY_NO_CACHE:-}" == "1" ]]; then
+  BUILD_FLAGS+=(--no-cache)
+  echo "==> DEPLOY_NO_CACHE=1 — полная пересборка образа"
+fi
+docker compose build "${BUILD_FLAGS[@]}" bot
 docker compose up -d --force-recreate
 
 echo "==> статус контейнера:"
@@ -94,5 +108,18 @@ for path in /miniapp /miniapp/app.js /miniapp/styles.css; do
   echo "  ${path} -> HTTP ${code}"
 done
 curl -sS --max-time 5 "http://127.0.0.1:${HOST_PORT}/health" && echo ""
+
+echo ""
+echo "==> проверка версии кода в контейнере:"
+docker compose exec -T bot sh -c '
+  if test -f dist/services/tgPostDeletionWatcher.js; then
+    echo "  tgPostDeletionWatcher.js -> OK"
+  else
+    echo "  tgPostDeletionWatcher.js -> MISSING (старый образ? DEPLOY_NO_CACHE=1 bash scripts/deploy.sh)" >&2
+    exit 1
+  fi
+'
+
 echo ""
 echo "Готово. Если не 200 — смотрите: docker compose logs -f bot (BOT_TOKEN, WEBHOOK_URL, ADMIN_CHAT_ID)."
+echo "Принудительная пересборка: DEPLOY_NO_CACHE=1 bash scripts/deploy.sh"

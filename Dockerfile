@@ -1,6 +1,8 @@
 # Сборка TypeScript
 FROM node:22-alpine AS builder
 
+ARG GIT_COMMIT=unknown
+
 # better-sqlite3: на Alpine нет готовых prebuild — нужен node-gyp (python + toolchain)
 RUN apk add --no-cache python3 make g++
 
@@ -12,7 +14,8 @@ RUN npm ci
 COPY tsconfig.json ./
 COPY src ./src
 
-RUN npm run build && npm prune --omit=dev
+# GIT_COMMIT сбрасывает кэш builder при каждом новом деплое (см. scripts/deploy.sh)
+RUN echo "build commit: ${GIT_COMMIT}" && npm run build && npm prune --omit=dev
 
 # Продакшен-рантайм
 FROM node:22-alpine AS production
