@@ -33,12 +33,18 @@ wait_for_health() {
   return 1
 }
 
-echo "==> git pull"
+echo "==> git sync (origin/main)"
 git fetch origin main
 git checkout main
-git checkout -- dist/ 2>/dev/null || true
+
+if ! git diff --quiet || ! git diff --cached --quiet; then
+  echo "==> локальные изменения в репозитории (сброс до origin/main):"
+  git status -sb || true
+fi
+
+# Production-сервер: код только из git, локальные правки в src/dist не сохраняем.
+git reset --hard origin/main
 git clean -fd dist/ 2>/dev/null || true
-git pull --ff-only origin main
 
 echo "==> текущий коммит:"
 git log -1 --oneline
