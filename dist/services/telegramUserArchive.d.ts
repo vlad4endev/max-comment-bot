@@ -12,4 +12,7 @@ export declare function getTelegramUserSession(): string;
 /** Подключение MTProto user-сессии (импорт TG→MAX, отправка в обсуждения от канала). */
 export declare function connectTelegramUserClient(): Promise<TelegramClient>;
 export declare function resolveTelegramChannelEntity(client: TelegramClient, channelKey: string): Promise<EntityLike>;
+export declare function getPersistentMtprotoClient(): Promise<TelegramClient | null>;
+export declare function invalidatePersistentMtprotoClient(): void;
+export declare function disconnectTelegramUserClient(client: TelegramClient): Promise<void>;
 export declare function fetchChannelArchiveForImport(channelKey: string, limit: number, jobId: number, onPost?: (post: ArchivePost) => Promise<void>): Promise<number>;

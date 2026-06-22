@@ -237,6 +237,24 @@ function listForwardedAlbumChunk(
     .all(chainId, mediaGroupId, chunkIndex) as Array<{ tg_message_id: number; tg_payload: string | null }>
 }
 
+function syncTgMetadataOnForwardedPost(
+  maxChatId: number,
+  maxMid: string,
+  chain: TgChainRecord,
+  tgMessage: TgMessage,
+): void {
+  const chatId = resolveCanonicalChannelChatId(maxChatId) ?? maxChatId
+  const post = postStore.findPostByChannelMessage(chatId, maxMid.trim())
+  if (!post) {
+    return
+  }
+  postStore.savePost({
+    ...post,
+    tg_msg_id: tgMessage.message_id,
+    tg_channel_id: chain.tg_channel_id?.trim() || String(tgMessage.chat.id),
+  })
+}
+
 function markForwarded(
   chainId: string,
   message: TgMessage,
@@ -851,6 +869,7 @@ async function processChainMessageGroup(
             published += 1
             for (const msg of chunk) {
               markForwarded(chain.id, msg, maxMid, i)
+              syncTgMetadataOnForwardedPost(chain.max_chat_id, maxMid, chain, msg)
             }
             void onMaxPostPublished(
               chain.max_chat_id,
@@ -893,6 +912,7 @@ async function processChainMessageGroup(
         if (keepPublished) {
           published = 1
           markForwarded(chain.id, msg, maxMid, null)
+          syncTgMetadataOnForwardedPost(chain.max_chat_id, maxMid, chain, msg)
           void onMaxPostPublished(chain.max_chat_id, maxMid, caption, {
             tgToken,
             tgMessages: [msg],

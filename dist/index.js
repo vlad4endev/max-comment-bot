@@ -69,6 +69,7 @@ const postCommentMappingStore_1 = require("./services/postCommentMappingStore");
 const commentSyncDiagnostics_1 = require("./services/commentSyncDiagnostics");
 const tgChainChannelRef_1 = require("./services/tgChainChannelRef");
 const tgChainForwarder_1 = require("./services/tgChainForwarder");
+const tgPostDeletionWatcher_1 = require("./services/tgPostDeletionWatcher");
 const vkChainForwarder_1 = require("./services/vkChainForwarder");
 const telegramTgChainLifecycle_1 = require("./services/telegramTgChainLifecycle");
 const telegramSyncAlertService_1 = require("./services/telegramSyncAlertService");
@@ -177,6 +178,7 @@ async function main() {
     }
     flowProcessor_1.flowProcessor.setBot(bot);
     (0, tgChainForwarder_1.setTgChainForwarderBot)(bot);
+    (0, tgPostDeletionWatcher_1.startTgPostDeletionWatcher)(bot);
     (0, vkChainForwarder_1.setVkChainForwarderBot)(bot);
     (0, telegramTgChainLifecycle_1.setTelegramTgChainLifecycleBot)(bot);
     (0, telegramSyncAlertService_1.setTelegramSyncAlertBot)(bot);

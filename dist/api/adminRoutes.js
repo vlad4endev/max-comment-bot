@@ -72,6 +72,7 @@ const adminLogFormat_1 = require("../utils/adminLogFormat");
 const tgChainChannelRef_1 = require("../services/tgChainChannelRef");
 const integrationPlatformClient_1 = require("../services/integrationPlatformClient");
 const mtprotoConfigStore_1 = require("../services/mtprotoConfigStore");
+const tgPostDeletionWatcher_1 = require("../services/tgPostDeletionWatcher");
 const telegramHealthService_1 = require("../services/telegramHealthService");
 const tgChainPair_1 = require("../utils/tgChainPair");
 const telegramLinkedChats_1 = require("../utils/telegramLinkedChats");
@@ -1528,6 +1529,32 @@ function createAdminRouter(deps) {
             }
             logger_1.logger.error('admin tg-chains purge-max-posts', err);
             res.status(500).json({ error: 'failed' });
+        }
+    });
+    secured.post('/tg-chains/:chainId/delete-post', async (req, res) => {
+        const chainId = parseNonEmptyString(req.params.chainId);
+        if (!chainId) {
+            res.status(400).json({ ok: false, error: 'invalid chainId' });
+            return;
+        }
+        const body = isRecord(req.body) ? req.body : {};
+        const tgMsgIdRaw = body.tg_msg_id;
+        const tgMsgId = typeof tgMsgIdRaw === 'number' && Number.isFinite(tgMsgIdRaw)
+            ? Math.floor(tgMsgIdRaw)
+            : typeof tgMsgIdRaw === 'string' && tgMsgIdRaw.trim() !== ''
+                ? Math.floor(Number(tgMsgIdRaw))
+                : null;
+        if (tgMsgId === null || !Number.isFinite(tgMsgId) || tgMsgId <= 0) {
+            res.status(400).json({ ok: false, error: 'tg_msg_id required' });
+            return;
+        }
+        try {
+            const db = (0, database_1.getDb)();
+            await (0, tgPostDeletionWatcher_1.handleDeletedPost)(db, chainId, '', tgMsgId);
+            res.json({ ok: true, deleted: true });
+        }
+        catch (err) {
+            res.status(500).json({ ok: false, error: String(err) });
         }
     });
     // ── VK-chains ──────────────────────────────────────────────────────────────

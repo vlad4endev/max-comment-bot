@@ -24,6 +24,7 @@ import {
 } from './postCommentMappingStore'
 import { ensurePostThreadMapping } from './telegramDiscussionThreadResolver'
 import { isMtprotoSessionReady, resolveMtprotoCredentials } from './mtprotoConfigStore'
+import { getDeletionWatcherStatus } from './tgPostDeletionWatcher'
 import { resolveTelegramBotToken } from './resolveTelegramBotToken'
 import { getTelegramApiMinIntervalMs } from '../utils/telegramRateLimiter'
 
@@ -122,6 +123,10 @@ export interface CommentSyncChainDiagnostics {
 export interface CommentSyncDiagnosticsReport {
   checked_at: string
   chains: CommentSyncChainDiagnostics[]
+  deletion_watcher: {
+    active: boolean
+    mtproto_ready: boolean
+  }
   log_signals_24h: {
     invalid_message_id: number
     send_as_peer_invalid: number
@@ -510,6 +515,7 @@ export async function diagnoseCommentSync(chainIdFilter?: string): Promise<Comme
   return {
     checked_at: new Date().toISOString(),
     chains: resultChains,
+    deletion_watcher: getDeletionWatcherStatus(),
     log_signals_24h: logSignals,
     recommendations,
   }

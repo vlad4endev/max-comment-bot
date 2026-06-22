@@ -47,6 +47,7 @@ import { backfillPostCommentMappingsFromForwarded } from './services/postComment
 import { bootstrapCommentSyncOnStartup } from './services/commentSyncDiagnostics'
 import { repairTgChainsForForwarding, repairStaleTgChainBotTokens, repairMiniappChainsForwardComments, repairTgChainForwardPostsSince } from './services/tgChainChannelRef'
 import { setTgChainForwarderBot, startTgChainForwarder } from './services/tgChainForwarder'
+import { startTgPostDeletionWatcher } from './services/tgPostDeletionWatcher'
 import { setVkChainForwarderBot, startVkChainForwarder, stopVkChainForwarder } from './services/vkChainForwarder'
 import { setTelegramTgChainLifecycleBot } from './services/telegramTgChainLifecycle'
 import { setTelegramSyncAlertBot } from './services/telegramSyncAlertService'
@@ -168,6 +169,7 @@ async function main(): Promise<void> {
   }
   flowProcessor.setBot(bot)
   setTgChainForwarderBot(bot)
+  startTgPostDeletionWatcher(bot)
   setVkChainForwarderBot(bot)
   setTelegramTgChainLifecycleBot(bot)
   setTelegramSyncAlertBot(bot)

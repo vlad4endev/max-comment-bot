@@ -37,6 +37,10 @@ export interface CommentSyncChainDiagnostics {
 export interface CommentSyncDiagnosticsReport {
     checked_at: string;
     chains: CommentSyncChainDiagnostics[];
+    deletion_watcher: {
+        active: boolean;
+        mtproto_ready: boolean;
+    };
     log_signals_24h: {
         invalid_message_id: number;
         send_as_peer_invalid: number;

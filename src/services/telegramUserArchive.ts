@@ -125,6 +125,36 @@ export async function resolveTelegramChannelEntity(
   return resolveChannelEntity(client, channelKey)
 }
 
+// Постоянный MTProto клиент для event-подписок (удаление постов и др.)
+let persistentClient: TelegramClient | null = null
+let persistentClientReady = false
+
+export async function getPersistentMtprotoClient(): Promise<TelegramClient | null> {
+  if (persistentClient && persistentClientReady) {
+    return persistentClient
+  }
+
+  try {
+    const client = await createUserClient()
+    persistentClient = client
+    persistentClientReady = true
+    logger.info('[mtproto] persistent client connected')
+    return client
+  } catch (err: unknown) {
+    logger.warn('[mtproto] persistent client unavailable', { err })
+    return null
+  }
+}
+
+export function invalidatePersistentMtprotoClient(): void {
+  if (persistentClient) {
+    persistentClient.destroy().catch(() => {})
+    persistentClient = null
+    persistentClientReady = false
+    logger.info('[mtproto] persistent client invalidated')
+  }
+}
+
 async function createUserClient(): Promise<TelegramClient> {
   const apiId = getTelegramUserApiId()
   const apiHash = getTelegramUserApiHash()

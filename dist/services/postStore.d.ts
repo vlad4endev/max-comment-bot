@@ -34,6 +34,10 @@ export interface Post {
     tg_booked_marker_msg_id?: number;
     /** Маркер «Забронировано в МАКСе» дописан в текст TG-поста. */
     tg_booked_in_max_applied?: boolean;
+    /** ID поста в TG-канале (пересылка TG→MAX). */
+    tg_msg_id?: number;
+    /** ID TG-канала (-100…), источник пересылки. */
+    tg_channel_id?: string;
 }
 export declare class PostStore {
     private statements;

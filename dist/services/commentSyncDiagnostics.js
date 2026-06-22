@@ -23,6 +23,7 @@ const telegramSyncErrors_1 = require("../utils/telegramSyncErrors");
 const postCommentMappingStore_1 = require("./postCommentMappingStore");
 const telegramDiscussionThreadResolver_1 = require("./telegramDiscussionThreadResolver");
 const mtprotoConfigStore_1 = require("./mtprotoConfigStore");
+const tgPostDeletionWatcher_1 = require("./tgPostDeletionWatcher");
 const resolveTelegramBotToken_1 = require("./resolveTelegramBotToken");
 const telegramRateLimiter_1 = require("../utils/telegramRateLimiter");
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -377,6 +378,7 @@ async function diagnoseCommentSync(chainIdFilter) {
     return {
         checked_at: new Date().toISOString(),
         chains: resultChains,
+        deletion_watcher: (0, tgPostDeletionWatcher_1.getDeletionWatcherStatus)(),
         log_signals_24h: logSignals,
         recommendations,
     };

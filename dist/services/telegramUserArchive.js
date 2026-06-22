@@ -9,6 +9,8 @@ exports.getTelegramUserApiHash = getTelegramUserApiHash;
 exports.getTelegramUserSession = getTelegramUserSession;
 exports.connectTelegramUserClient = connectTelegramUserClient;
 exports.resolveTelegramChannelEntity = resolveTelegramChannelEntity;
+exports.getPersistentMtprotoClient = getPersistentMtprotoClient;
+exports.invalidatePersistentMtprotoClient = invalidatePersistentMtprotoClient;
 exports.disconnectTelegramUserClient = disconnectTelegramUserClient;
 exports.fetchChannelArchiveForImport = fetchChannelArchiveForImport;
 const promises_1 = __importDefault(require("node:fs/promises"));
@@ -113,6 +115,33 @@ async function connectTelegramUserClient() {
 }
 async function resolveTelegramChannelEntity(client, channelKey) {
     return resolveChannelEntity(client, channelKey);
+}
+// Постоянный MTProto клиент для event-подписок (удаление постов и др.)
+let persistentClient = null;
+let persistentClientReady = false;
+async function getPersistentMtprotoClient() {
+    if (persistentClient && persistentClientReady) {
+        return persistentClient;
+    }
+    try {
+        const client = await createUserClient();
+        persistentClient = client;
+        persistentClientReady = true;
+        logger_1.logger.info('[mtproto] persistent client connected');
+        return client;
+    }
+    catch (err) {
+        logger_1.logger.warn('[mtproto] persistent client unavailable', { err });
+        return null;
+    }
+}
+function invalidatePersistentMtprotoClient() {
+    if (persistentClient) {
+        persistentClient.destroy().catch(() => { });
+        persistentClient = null;
+        persistentClientReady = false;
+        logger_1.logger.info('[mtproto] persistent client invalidated');
+    }
 }
 async function createUserClient() {
     const apiId = getTelegramUserApiId();

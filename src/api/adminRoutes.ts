@@ -75,6 +75,7 @@ import { parseAdminLogLine, type AdminLogEntry, type AdminLogLevel } from '../ut
 import { resolveTgChainChannelFields, repairStaleTgChainBotTokens } from '../services/tgChainChannelRef'
 import { resolveVkGroup, listVkManagedGroups } from '../services/integrationPlatformClient'
 import { isMtprotoSessionReady, resolveMtprotoCredentials } from '../services/mtprotoConfigStore'
+import { handleDeletedPost } from '../services/tgPostDeletionWatcher'
 import {
   describeTelegramTokenSources,
   getTelegramHealthSnapshot,
@@ -1683,6 +1684,35 @@ export function createAdminRouter(deps: AdminRouterDeps): express.Router {
       }
       logger.error('admin tg-chains purge-max-posts', err)
       res.status(500).json({ error: 'failed' })
+    }
+  })
+
+  secured.post('/tg-chains/:chainId/delete-post', async (req, res) => {
+    const chainId = parseNonEmptyString(req.params.chainId)
+    if (!chainId) {
+      res.status(400).json({ ok: false, error: 'invalid chainId' })
+      return
+    }
+    const body = isRecord(req.body) ? req.body : {}
+    const tgMsgIdRaw = body.tg_msg_id
+    const tgMsgId =
+      typeof tgMsgIdRaw === 'number' && Number.isFinite(tgMsgIdRaw)
+        ? Math.floor(tgMsgIdRaw)
+        : typeof tgMsgIdRaw === 'string' && tgMsgIdRaw.trim() !== ''
+          ? Math.floor(Number(tgMsgIdRaw))
+          : null
+
+    if (tgMsgId === null || !Number.isFinite(tgMsgId) || tgMsgId <= 0) {
+      res.status(400).json({ ok: false, error: 'tg_msg_id required' })
+      return
+    }
+
+    try {
+      const db = getDb()
+      await handleDeletedPost(db, chainId, '', tgMsgId)
+      res.json({ ok: true, deleted: true })
+    } catch (err: unknown) {
+      res.status(500).json({ ok: false, error: String(err) })
     }
   })
 

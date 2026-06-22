@@ -182,6 +182,18 @@ function listForwardedAlbumChunk(chainId, mediaGroupId, chunkIndex) {
        ORDER BY tg_message_id ASC`)
         .all(chainId, mediaGroupId, chunkIndex);
 }
+function syncTgMetadataOnForwardedPost(maxChatId, maxMid, chain, tgMessage) {
+    const chatId = (0, resolveChannelChatId_1.resolveCanonicalChannelChatId)(maxChatId) ?? maxChatId;
+    const post = postStore_1.postStore.findPostByChannelMessage(chatId, maxMid.trim());
+    if (!post) {
+        return;
+    }
+    postStore_1.postStore.savePost({
+        ...post,
+        tg_msg_id: tgMessage.message_id,
+        tg_channel_id: chain.tg_channel_id?.trim() || String(tgMessage.chat.id),
+    });
+}
 function markForwarded(chainId, message, maxMid, chunkIndex) {
     const mediaGroupId = message.media_group_id?.trim() || null;
     const payload = JSON.stringify(message);
@@ -708,6 +720,7 @@ async function processChainMessageGroup(chain, messages, tgToken) {
                         published += 1;
                         for (const msg of chunk) {
                             markForwarded(chain.id, msg, maxMid, i);
+                            syncTgMetadataOnForwardedPost(chain.max_chat_id, maxMid, chain, msg);
                         }
                         void (0, vkChainForwarder_1.onMaxPostPublished)(chain.max_chat_id, maxMid, i === 0 ? firstCaption : '', { tgToken, tgMessages: chunk }).catch((err) => {
                             logger_1.logger.warn('[tgChain] VK hook (album) failed', { chainId: chain.id, maxMid, err });
@@ -741,6 +754,7 @@ async function processChainMessageGroup(chain, messages, tgToken) {
                 if (keepPublished) {
                     published = 1;
                     markForwarded(chain.id, msg, maxMid, null);
+                    syncTgMetadataOnForwardedPost(chain.max_chat_id, maxMid, chain, msg);
                     void (0, vkChainForwarder_1.onMaxPostPublished)(chain.max_chat_id, maxMid, caption, {
                         tgToken,
                         tgMessages: [msg],
