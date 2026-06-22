@@ -16,6 +16,7 @@ exports.getAntispamLog = getAntispamLog;
 exports.pushAntispamLog = pushAntispamLog;
 exports.getChannelExtras = getChannelExtras;
 exports.saveChannelExtras = saveChannelExtras;
+exports.buildTgChainHealth = buildTgChainHealth;
 exports.listTgChains = listTgChains;
 exports.listTgChainsSync = listTgChainsSync;
 exports.ensureAdminPanelStateLoaded = ensureAdminPanelStateLoaded;
@@ -36,6 +37,7 @@ const promises_1 = require("node:fs/promises");
 const node_path_1 = require("node:path");
 const node_crypto_1 = require("node:crypto");
 const logger_1 = require("../utils/logger");
+const postCommentMappingStore_1 = require("../services/postCommentMappingStore");
 const antispamStore_1 = require("../services/antispamStore");
 const STATE_PATH = (0, node_path_1.join)(process.cwd(), 'data', 'admin-panel-state.json');
 const DEFAULT_ENGINE_CONFIG = {
@@ -278,6 +280,19 @@ async function saveChannelExtras(chatId, patch) {
     await persist();
     return getChannelExtrasSync(chatId);
 }
+function buildTgChainHealth(chain, lastForwardedAt) {
+    const sinceTooFresh = chain.forward_posts &&
+        chain.forwarded_today === 0 &&
+        chain.forward_posts_since?.trim() &&
+        Date.now() - new Date(chain.forward_posts_since).getTime() < 3600_000
+        ? 'forward_posts_since выставлен менее часа назад — посты до этого времени пропускаются'
+        : null;
+    return {
+        last_forwarded_at: lastForwardedAt,
+        errors_today: chain.errors_today ?? 0,
+        since_too_fresh: sinceTooFresh,
+    };
+}
 async function listTgChains() {
     const s = await loadState();
     return [...s.tg_chains];
@@ -295,17 +310,47 @@ async function ensureAdminPanelStateLoaded() {
 async function createTgChain(input) {
     const s = await loadState();
     const nowIso = new Date().toISOString();
+    const previousChains = s.tg_chains.filter((c) => {
+        if (c.max_chat_id !== input.max_chat_id) {
+            return false;
+        }
+        const nextTgId = input.tg_channel_id?.trim();
+        const prevTgId = c.tg_channel_id?.trim();
+        if (nextTgId && prevTgId) {
+            return nextTgId === prevTgId;
+        }
+        const nextUname = input.tg_username.trim().replace(/^@/, '').toLowerCase();
+        const prevUname = c.tg_username.trim().replace(/^@/, '').toLowerCase();
+        return nextUname !== '' && nextUname === prevUname;
+    });
+    let inheritedForwardSince = input.forward_posts_since?.trim() || null;
+    for (const prev of previousChains) {
+        const since = prev.forward_posts_since?.trim();
+        if (since && (!inheritedForwardSince || since < inheritedForwardSince)) {
+            inheritedForwardSince = since;
+        }
+    }
     const row = {
         ...input,
         id: (0, node_crypto_1.randomUUID)(),
         created_at: nowIso,
         forward_posts_since: input.forward_posts !== false
-            ? (input.forward_posts_since?.trim() || nowIso)
+            ? inheritedForwardSince || nowIso
             : (input.forward_posts_since ?? null),
         forwarded_today: 0,
         errors_today: 0,
     };
     s.tg_chains.push(row);
+    for (const prev of previousChains) {
+        const transferred = (0, postCommentMappingStore_1.transferPostCommentMappingsChainId)(prev.id, row.id);
+        if (transferred > 0) {
+            logger_1.logger.info('[tgChains] transferred mappings from old chain', {
+                oldChainId: prev.id,
+                newChainId: row.id,
+                transferred,
+            });
+        }
+    }
     await persist();
     return row;
 }
@@ -318,7 +363,10 @@ async function updateTgChain(id, patch) {
     const prev = s.tg_chains[idx];
     const nextPatch = { ...patch };
     if (patch.forward_posts === true && !prev.forward_posts) {
-        nextPatch.forward_posts_since = new Date().toISOString();
+        // Сбрасываем since только если не передан явно и у предыдущей цепочки его не было
+        if (patch.forward_posts_since === undefined && !prev.forward_posts_since?.trim()) {
+            nextPatch.forward_posts_since = new Date().toISOString();
+        }
     }
     s.tg_chains[idx] = { ...prev, ...nextPatch, id };
     await persist();

@@ -3,6 +3,7 @@ import { dirname, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 
 import { logger } from '../utils/logger'
+import { transferPostCommentMappingsChainId } from '../services/postCommentMappingStore'
 import {
   ensureAntispamStoreLoaded,
   getAntispamEngineSync as getEngineFromStore,
@@ -445,6 +446,31 @@ export async function saveChannelExtras(chatId: number, patch: Partial<ChannelAd
   return getChannelExtrasSync(chatId)
 }
 
+export interface TgChainHealth {
+  last_forwarded_at: string | null
+  errors_today: number
+  since_too_fresh: string | null
+}
+
+export function buildTgChainHealth(
+  chain: TgChainRecord,
+  lastForwardedAt: string | null,
+): TgChainHealth {
+  const sinceTooFresh =
+    chain.forward_posts &&
+    chain.forwarded_today === 0 &&
+    chain.forward_posts_since?.trim() &&
+    Date.now() - new Date(chain.forward_posts_since).getTime() < 3600_000
+      ? 'forward_posts_since выставлен менее часа назад — посты до этого времени пропускаются'
+      : null
+
+  return {
+    last_forwarded_at: lastForwardedAt,
+    errors_today: chain.errors_today ?? 0,
+    since_too_fresh: sinceTooFresh,
+  }
+}
+
 export async function listTgChains(): Promise<TgChainRecord[]> {
   const s = await loadState()
   return [...s.tg_chains]
@@ -465,18 +491,48 @@ export async function ensureAdminPanelStateLoaded(): Promise<void> {
 export async function createTgChain(input: Omit<TgChainRecord, 'id' | 'created_at' | 'forwarded_today' | 'errors_today'>): Promise<TgChainRecord> {
   const s = await loadState()
   const nowIso = new Date().toISOString()
+  const previousChains = s.tg_chains.filter((c) => {
+    if (c.max_chat_id !== input.max_chat_id) {
+      return false
+    }
+    const nextTgId = input.tg_channel_id?.trim()
+    const prevTgId = c.tg_channel_id?.trim()
+    if (nextTgId && prevTgId) {
+      return nextTgId === prevTgId
+    }
+    const nextUname = input.tg_username.trim().replace(/^@/, '').toLowerCase()
+    const prevUname = c.tg_username.trim().replace(/^@/, '').toLowerCase()
+    return nextUname !== '' && nextUname === prevUname
+  })
+  let inheritedForwardSince = input.forward_posts_since?.trim() || null
+  for (const prev of previousChains) {
+    const since = prev.forward_posts_since?.trim()
+    if (since && (!inheritedForwardSince || since < inheritedForwardSince)) {
+      inheritedForwardSince = since
+    }
+  }
   const row: TgChainRecord = {
     ...input,
     id: randomUUID(),
     created_at: nowIso,
     forward_posts_since:
       input.forward_posts !== false
-        ? (input.forward_posts_since?.trim() || nowIso)
+        ? inheritedForwardSince || nowIso
         : (input.forward_posts_since ?? null),
     forwarded_today: 0,
     errors_today: 0,
   }
   s.tg_chains.push(row)
+  for (const prev of previousChains) {
+    const transferred = transferPostCommentMappingsChainId(prev.id, row.id)
+    if (transferred > 0) {
+      logger.info('[tgChains] transferred mappings from old chain', {
+        oldChainId: prev.id,
+        newChainId: row.id,
+        transferred,
+      })
+    }
+  }
   await persist()
   return row
 }
@@ -490,7 +546,10 @@ export async function updateTgChain(id: string, patch: Partial<TgChainRecord>): 
   const prev = s.tg_chains[idx]!
   const nextPatch = { ...patch }
   if (patch.forward_posts === true && !prev.forward_posts) {
-    nextPatch.forward_posts_since = new Date().toISOString()
+    // Сбрасываем since только если не передан явно и у предыдущей цепочки его не было
+    if (patch.forward_posts_since === undefined && !prev.forward_posts_since?.trim()) {
+      nextPatch.forward_posts_since = new Date().toISOString()
+    }
   }
   s.tg_chains[idx] = { ...prev, ...nextPatch, id }
   await persist()

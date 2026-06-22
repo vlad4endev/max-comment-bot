@@ -147,6 +147,12 @@ export declare function getAntispamLog(limit: number): Promise<AntispamLogEntry[
 export declare function pushAntispamLog(entry: Omit<AntispamLogEntry, 'id' | 'created_at'>): Promise<void>;
 export declare function getChannelExtras(chatId: number): Promise<ChannelAdminExtras>;
 export declare function saveChannelExtras(chatId: number, patch: Partial<ChannelAdminExtras>): Promise<ChannelAdminExtras>;
+export interface TgChainHealth {
+    last_forwarded_at: string | null;
+    errors_today: number;
+    since_too_fresh: string | null;
+}
+export declare function buildTgChainHealth(chain: TgChainRecord, lastForwardedAt: string | null): TgChainHealth;
 export declare function listTgChains(): Promise<TgChainRecord[]>;
 /** In-memory snapshot for hot paths (poller, webhook); call {@link ensureAdminPanelStateLoaded} at startup. */
 export declare function listTgChainsSync(): TgChainRecord[];

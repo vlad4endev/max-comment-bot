@@ -57,6 +57,13 @@ type BufferedAlbum = {
 }
 const albumBuffer = new Map<string, BufferedAlbum>()
 
+/** Время последней активности long-poll / пересылки по chain_id. */
+const chainLastActivity = new Map<string, number>()
+
+function touchChainActivity(chainId: string): void {
+  chainLastActivity.set(chainId, Date.now())
+}
+
 async function throttleMaxChatSend(chatId: number): Promise<void> {
   const now = Date.now()
   const last = lastMaxSendAt.get(chatId) ?? 0
@@ -891,6 +898,7 @@ async function processChainMessageGroup(
     if (published > 0) {
       const forwardedToday = chain.forwarded_today + published
       chain.forwarded_today = forwardedToday
+      touchChainActivity(chain.id)
       await updateTgChain(chain.id, { forwarded_today: forwardedToday })
       // thread chat/msg id — через handleDiscussionAutoForward / ensurePostThreadMapping
       logger.info('[tgChain] forwarded', {
@@ -1104,6 +1112,10 @@ export async function runTgChainsOnce(): Promise<boolean> {
     if (nextOffset > offset) {
       setReaderOffset(tgToken, nextOffset)
     }
+
+    for (const chain of group) {
+      touchChainActivity(chain.id)
+    }
   }
 
   if (await flushReadyAlbums()) {
@@ -1114,10 +1126,37 @@ export async function runTgChainsOnce(): Promise<boolean> {
 }
 
 let loopStarted = false
+let watchdogStarted = false
+
+function startTgChainWatchdog(): void {
+  if (watchdogStarted) return
+  watchdogStarted = true
+  setInterval(() => {
+    const now = Date.now()
+    const silentThresholdMs = 15 * 60 * 1000
+
+    for (const chain of listTgChainsSync()) {
+      if (!chain.forward_posts || !chain.active) continue
+
+      const lastSeen = chainLastActivity.get(chain.id)
+      if (!lastSeen) continue
+
+      const silentMs = now - lastSeen
+      if (silentMs > silentThresholdMs) {
+        logger.warn('[tgChain] watchdog: chain silent', {
+          chainId: chain.id,
+          title: chain.max_title,
+          silentMinutes: Math.round(silentMs / 60000),
+        })
+      }
+    }
+  }, 10 * 60 * 1000)
+}
 
 export function startTgChainForwarder(): void {
   if (loopStarted) return
   loopStarted = true
+  startTgChainWatchdog()
   logger.info('[tgChain] forwarder started (long-poll channel_post)')
   const loop = async () => {
     while (true) {

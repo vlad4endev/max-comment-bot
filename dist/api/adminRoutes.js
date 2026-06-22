@@ -42,6 +42,7 @@ const node_path_1 = require("node:path");
 const express_1 = __importDefault(require("express"));
 const p_limit_1 = __importDefault(require("p-limit"));
 const config_1 = require("../config");
+const database_1 = require("../db/database");
 const adminAuth_1 = require("../middleware/adminAuth");
 const commentSyncFilter_1 = require("../utils/commentSyncFilter");
 const channelFullDisconnect_1 = require("../services/channelFullDisconnect");
@@ -73,6 +74,7 @@ const integrationPlatformClient_1 = require("../services/integrationPlatformClie
 const mtprotoConfigStore_1 = require("../services/mtprotoConfigStore");
 const telegramHealthService_1 = require("../services/telegramHealthService");
 const tgChainPair_1 = require("../utils/tgChainPair");
+const telegramLinkedChats_1 = require("../utils/telegramLinkedChats");
 const tgChainPostPurge_1 = require("../services/tgChainPostPurge");
 const logAnalysisService_1 = require("../services/logAnalysisService");
 const logger_1 = require("../utils/logger");
@@ -123,7 +125,13 @@ function parseTgDiscussionChatId(value) {
     if (value === null || value === '') {
         return null;
     }
-    const raw = parseNonEmptyString(value);
+    let raw = null;
+    if (typeof value === 'number' && Number.isFinite(value)) {
+        raw = String(Math.trunc(value));
+    }
+    else {
+        raw = parseNonEmptyString(value);
+    }
     if (!raw) {
         return undefined;
     }
@@ -132,6 +140,135 @@ function parseTgDiscussionChatId(value) {
         return undefined;
     }
     return normalized;
+}
+const TG_CHAIN_PATCH_FIELDS = [
+    'forward_posts',
+    'forward_comments',
+    'forward_posts_since',
+    'tg_discussion_chat_id',
+    'tg_discussion_send_as',
+    'comment_sync_keywords',
+    'comment_sync_match_mode',
+    'add_comments_button',
+    'add_signature',
+    'active',
+    'bot_token',
+    'max_chat_id',
+    'tg_channel_id',
+    'tg_username',
+    'max_title',
+];
+function buildTgChainPatchFromBody(body, chainId, callerIp) {
+    const patch = {};
+    for (const field of TG_CHAIN_PATCH_FIELDS) {
+        if (!(field in body)) {
+            continue;
+        }
+        switch (field) {
+            case 'active':
+            case 'forward_posts':
+            case 'forward_comments':
+            case 'add_comments_button':
+            case 'add_signature':
+                if (typeof body[field] === 'boolean') {
+                    patch[field] = body[field];
+                    if (field === 'forward_posts' && body.forward_posts === false) {
+                        logger_1.logger.warn('[tgChain PATCH] forward_posts explicitly set to false', {
+                            chainId,
+                            callerIp,
+                        });
+                    }
+                }
+                break;
+            case 'forward_posts_since': {
+                const since = body.forward_posts_since;
+                if (since === null || since === '') {
+                    patch.forward_posts_since = null;
+                }
+                else if (typeof since === 'string' && since.trim()) {
+                    patch.forward_posts_since = since.trim();
+                }
+                break;
+            }
+            case 'tg_discussion_chat_id': {
+                const discussionChatId = parseTgDiscussionChatId(body.tg_discussion_chat_id);
+                if (discussionChatId !== undefined) {
+                    patch.tg_discussion_chat_id = discussionChatId;
+                }
+                break;
+            }
+            case 'tg_discussion_send_as': {
+                const discussionSendAs = parseDiscussionSendAs(body.tg_discussion_send_as);
+                if (discussionSendAs !== undefined) {
+                    patch.tg_discussion_send_as = discussionSendAs;
+                }
+                break;
+            }
+            case 'comment_sync_keywords': {
+                const commentSyncKeywords = parseCommentSyncKeywords(body.comment_sync_keywords);
+                patch.comment_sync_keywords = (0, commentSyncFilter_1.normalizeCommentSyncKeywords)(commentSyncKeywords ?? []);
+                break;
+            }
+            case 'comment_sync_match_mode': {
+                const commentSyncMatchMode = parseCommentSyncMatchMode(body.comment_sync_match_mode);
+                patch.comment_sync_match_mode = commentSyncMatchMode ?? 'contains';
+                break;
+            }
+            case 'bot_token': {
+                const token = parseNonEmptyString(body.bot_token);
+                if (token) {
+                    patch.bot_token = token;
+                }
+                break;
+            }
+            case 'max_chat_id': {
+                const maxChatId = parseNonZeroInt(body.max_chat_id);
+                if (maxChatId !== null) {
+                    patch.max_chat_id = maxChatId;
+                }
+                break;
+            }
+            case 'tg_channel_id': {
+                const tgChannelId = parseNonEmptyString(body.tg_channel_id);
+                if (tgChannelId) {
+                    patch.tg_channel_id = tgChannelId;
+                }
+                break;
+            }
+            case 'tg_username': {
+                const tgUsername = parseNonEmptyString(body.tg_username);
+                if (tgUsername) {
+                    patch.tg_username = tgUsername.replace(/^@/, '');
+                }
+                break;
+            }
+            case 'max_title': {
+                if (body.max_title === null) {
+                    patch.max_title = null;
+                }
+                else {
+                    const maxTitle = parseNonEmptyString(body.max_title);
+                    if (maxTitle) {
+                        patch.max_title = maxTitle;
+                    }
+                }
+                break;
+            }
+            default:
+                break;
+        }
+    }
+    return patch;
+}
+function getTgChainLastForwardedAt(chainId) {
+    const row = (0, database_1.getDb)()
+        .prepare(`SELECT MAX(forwarded_at) AS last_forwarded_at
+       FROM tg_chain_forwarded
+       WHERE chain_id = ?
+         AND max_message_mid IS NOT NULL
+         AND TRIM(max_message_mid) != ''`)
+        .get(chainId);
+    return row?.last_forwarded_at ?? null;
 }
 function parseDiscussionSendAs(value) {
     if (value === 'channel' || value === 'chat') {
@@ -312,7 +449,7 @@ function createAdminRouter(deps) {
     secured.get('/dashboard-telegram', async (_req, res) => {
         await integrationsStore_1.integrationsStore.load();
         const integ = integrationsStore_1.integrationsStore.getTelegramIntegration();
-        const channels = integ?.linkedChats ?? [];
+        const channels = (0, telegramLinkedChats_1.normalizeTelegramLinkedChatsForApi)(integ?.linkedChats);
         const flows = integrationsStore_1.integrationsStore.getFlows().filter((f) => f.source.platform === 'telegram');
         const flowsActive = flows.filter((f) => f.enabled).length;
         const forwardedLog = integrationsStore_1.integrationsStore.getForwardedLog(50);
@@ -414,7 +551,7 @@ function createAdminRouter(deps) {
         const readerToken = (process.env.TG_READER_BOT_TOKEN || '').trim();
         const readerHealth = readerToken ? await (0, telegramHealthService_1.probeTelegramBotApi)(readerToken) : null;
         const vkChains = await (0, adminPanelState_1.listVkChains)();
-        const tgLinked = tgInteg?.linkedChats ?? [];
+        const tgLinked = (0, telegramLinkedChats_1.normalizeTelegramLinkedChatsForApi)(tgInteg?.linkedChats);
         res.json({
             active: true,
             label: 'MAX бот активен',
@@ -1242,12 +1379,16 @@ function createAdminRouter(deps) {
     });
     secured.get('/tg-chains', async (_req, res) => {
         const chains = await (0, adminPanelState_1.listTgChains)();
+        const chainsWithHealth = chains.map((chain) => ({
+            ...chain,
+            health: (0, adminPanelState_1.buildTgChainHealth)(chain, getTgChainLastForwardedAt(chain.id)),
+        }));
         const active = chains.filter((c) => c.active).length;
         const forwardedToday = chains.reduce((s, c) => s + c.forwarded_today, 0);
         const errorsToday = chains.reduce((s, c) => s + c.errors_today, 0);
         const mtproto = (0, mtprotoConfigStore_1.resolveMtprotoCredentials)();
         res.json({
-            chains,
+            chains: chainsWithHealth,
             stats: { active, forwarded_today: forwardedToday, errors_today: errorsToday },
             mtproto: {
                 ready: (0, mtprotoConfigStore_1.isMtprotoSessionReady)(),
@@ -1326,30 +1467,7 @@ function createAdminRouter(deps) {
             res.status(400).json({ error: 'invalid id' });
             return;
         }
-        const patch = {};
-        if (typeof req.body.active === 'boolean')
-            patch.active = req.body.active;
-        if (typeof req.body.forward_posts === 'boolean')
-            patch.forward_posts = req.body.forward_posts;
-        if (typeof req.body.forward_comments === 'boolean')
-            patch.forward_comments = req.body.forward_comments;
-        const discussionChatId = parseTgDiscussionChatId(req.body.tg_discussion_chat_id);
-        if (discussionChatId !== undefined)
-            patch.tg_discussion_chat_id = discussionChatId;
-        const discussionSendAs = parseDiscussionSendAs(req.body.tg_discussion_send_as);
-        if (discussionSendAs !== undefined)
-            patch.tg_discussion_send_as = discussionSendAs;
-        const commentSyncKeywords = parseCommentSyncKeywords(req.body.comment_sync_keywords);
-        if ('comment_sync_keywords' in req.body) {
-            patch.comment_sync_keywords = (0, commentSyncFilter_1.normalizeCommentSyncKeywords)(commentSyncKeywords ?? []);
-        }
-        const commentSyncMatchMode = parseCommentSyncMatchMode(req.body.comment_sync_match_mode);
-        if ('comment_sync_match_mode' in req.body) {
-            patch.comment_sync_match_mode = commentSyncMatchMode ?? 'contains';
-        }
-        if (typeof req.body.add_comments_button === 'boolean') {
-            patch.add_comments_button = req.body.add_comments_button;
-        }
+        const patch = buildTgChainPatchFromBody(req.body, id, req.ip);
         const updated = await (0, adminPanelState_1.updateTgChain)(id, patch);
         if (!updated) {
             res.status(404).json({ error: 'not found' });
@@ -1622,8 +1740,11 @@ function createAdminRouter(deps) {
             return;
         }
         const limit = isRecord(body) ? parsePositiveInt(body.limit) : null;
+        const onlyWithPending = isRecord(body) ? parseBoolean(body.only_with_pending) === true : false;
         try {
-            const result = await (0, commentSyncDiagnostics_1.repairMissingThreadMappings)(chainId, limit ?? 30);
+            const result = await (0, commentSyncDiagnostics_1.repairMissingThreadMappings)(chainId, limit ?? 30, {
+                onlyWithPending,
+            });
             const diagnostics = await (0, commentSyncDiagnostics_1.diagnoseCommentSync)(chainId);
             res.json({ ok: true, repair: result, diagnostics });
         }

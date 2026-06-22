@@ -41,6 +41,11 @@ const TG_ALBUM_BUFFER_MS = 900;
 const TG_ALBUM_MAX_MEDIA_PER_POST = 10;
 const lastMaxSendAt = new Map();
 const albumBuffer = new Map();
+/** Время последней активности long-poll / пересылки по chain_id. */
+const chainLastActivity = new Map();
+function touchChainActivity(chainId) {
+    chainLastActivity.set(chainId, Date.now());
+}
 async function throttleMaxChatSend(chatId) {
     const now = Date.now();
     const last = lastMaxSendAt.get(chatId) ?? 0;
@@ -743,6 +748,7 @@ async function processChainMessageGroup(chain, messages, tgToken) {
         if (published > 0) {
             const forwardedToday = chain.forwarded_today + published;
             chain.forwarded_today = forwardedToday;
+            touchChainActivity(chain.id);
             await (0, adminPanelState_1.updateTgChain)(chain.id, { forwarded_today: forwardedToday });
             // thread chat/msg id — через handleDiscussionAutoForward / ensurePostThreadMapping
             logger_1.logger.info('[tgChain] forwarded', {
@@ -938,6 +944,9 @@ async function runTgChainsOnce() {
         if (nextOffset > offset) {
             setReaderOffset(tgToken, nextOffset);
         }
+        for (const chain of group) {
+            touchChainActivity(chain.id);
+        }
     }
     if (await flushReadyAlbums()) {
         receivedAny = true;
@@ -945,10 +954,36 @@ async function runTgChainsOnce() {
     return receivedAny;
 }
 let loopStarted = false;
+let watchdogStarted = false;
+function startTgChainWatchdog() {
+    if (watchdogStarted)
+        return;
+    watchdogStarted = true;
+    setInterval(() => {
+        const now = Date.now();
+        const silentThresholdMs = 15 * 60 * 1000;
+        for (const chain of (0, adminPanelState_1.listTgChainsSync)()) {
+            if (!chain.forward_posts || !chain.active)
+                continue;
+            const lastSeen = chainLastActivity.get(chain.id);
+            if (!lastSeen)
+                continue;
+            const silentMs = now - lastSeen;
+            if (silentMs > silentThresholdMs) {
+                logger_1.logger.warn('[tgChain] watchdog: chain silent', {
+                    chainId: chain.id,
+                    title: chain.max_title,
+                    silentMinutes: Math.round(silentMs / 60000),
+                });
+            }
+        }
+    }, 10 * 60 * 1000);
+}
 function startTgChainForwarder() {
     if (loopStarted)
         return;
     loopStarted = true;
+    startTgChainWatchdog();
     logger_1.logger.info('[tgChain] forwarder started (long-poll channel_post)');
     const loop = async () => {
         while (true) {

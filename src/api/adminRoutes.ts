@@ -7,6 +7,7 @@ import express from 'express'
 import pLimit from 'p-limit'
 
 import { config, getTelegramToken } from '../config'
+import { getDb } from '../db/database'
 import { checkAdminAuth } from '../middleware/adminAuth'
 import {
   normalizeCommentSyncKeywords,
@@ -49,6 +50,7 @@ import {
 } from '../utils/adminPanelSession'
 import {
   countAntispamBlocksToday,
+  buildTgChainHealth,
   createTgChain,
   createVkChain,
   deleteTgChain,
@@ -64,6 +66,7 @@ import {
   saveChannelExtras,
   updateTgChain,
   updateVkChain,
+  type TgChainRecord,
 } from './adminPanelState'
 import { createAutopostRouter } from './autopostRoutes'
 import { buildDashboardAnalytics, parseDashboardPeriodDays } from '../services/analyticsService'
@@ -79,6 +82,7 @@ import {
   probeTelegramBotApi,
 } from '../services/telegramHealthService'
 import { findActiveTgChainForPair } from '../utils/tgChainPair'
+import { normalizeTelegramLinkedChatsForApi } from '../utils/telegramLinkedChats'
 import { purgeTgChainForwardedMaxPosts } from '../services/tgChainPostPurge'
 import {
   analyzeLogs,
@@ -150,7 +154,12 @@ function parseTgDiscussionChatId(value: unknown): string | null | undefined {
   if (value === null || value === '') {
     return null
   }
-  const raw = parseNonEmptyString(value)
+  let raw: string | null = null
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    raw = String(Math.trunc(value))
+  } else {
+    raw = parseNonEmptyString(value)
+  }
   if (!raw) {
     return undefined
   }
@@ -159,6 +168,144 @@ function parseTgDiscussionChatId(value: unknown): string | null | undefined {
     return undefined
   }
   return normalized
+}
+
+const TG_CHAIN_PATCH_FIELDS: (keyof TgChainRecord)[] = [
+  'forward_posts',
+  'forward_comments',
+  'forward_posts_since',
+  'tg_discussion_chat_id',
+  'tg_discussion_send_as',
+  'comment_sync_keywords',
+  'comment_sync_match_mode',
+  'add_comments_button',
+  'add_signature',
+  'active',
+  'bot_token',
+  'max_chat_id',
+  'tg_channel_id',
+  'tg_username',
+  'max_title',
+]
+
+function buildTgChainPatchFromBody(
+  body: Record<string, unknown>,
+  chainId: string,
+  callerIp: string | undefined,
+): Partial<TgChainRecord> {
+  const patch: Partial<TgChainRecord> = {}
+
+  for (const field of TG_CHAIN_PATCH_FIELDS) {
+    if (!(field in body)) {
+      continue
+    }
+    switch (field) {
+      case 'active':
+      case 'forward_posts':
+      case 'forward_comments':
+      case 'add_comments_button':
+      case 'add_signature':
+        if (typeof body[field] === 'boolean') {
+          patch[field] = body[field]
+          if (field === 'forward_posts' && body.forward_posts === false) {
+            logger.warn('[tgChain PATCH] forward_posts explicitly set to false', {
+              chainId,
+              callerIp,
+            })
+          }
+        }
+        break
+      case 'forward_posts_since': {
+        const since = body.forward_posts_since
+        if (since === null || since === '') {
+          patch.forward_posts_since = null
+        } else if (typeof since === 'string' && since.trim()) {
+          patch.forward_posts_since = since.trim()
+        }
+        break
+      }
+      case 'tg_discussion_chat_id': {
+        const discussionChatId = parseTgDiscussionChatId(body.tg_discussion_chat_id)
+        if (discussionChatId !== undefined) {
+          patch.tg_discussion_chat_id = discussionChatId
+        }
+        break
+      }
+      case 'tg_discussion_send_as': {
+        const discussionSendAs = parseDiscussionSendAs(body.tg_discussion_send_as)
+        if (discussionSendAs !== undefined) {
+          patch.tg_discussion_send_as = discussionSendAs
+        }
+        break
+      }
+      case 'comment_sync_keywords': {
+        const commentSyncKeywords = parseCommentSyncKeywords(body.comment_sync_keywords)
+        patch.comment_sync_keywords = normalizeCommentSyncKeywords(commentSyncKeywords ?? [])
+        break
+      }
+      case 'comment_sync_match_mode': {
+        const commentSyncMatchMode = parseCommentSyncMatchMode(body.comment_sync_match_mode)
+        patch.comment_sync_match_mode = commentSyncMatchMode ?? 'contains'
+        break
+      }
+      case 'bot_token': {
+        const token = parseNonEmptyString(body.bot_token)
+        if (token) {
+          patch.bot_token = token
+        }
+        break
+      }
+      case 'max_chat_id': {
+        const maxChatId = parseNonZeroInt(body.max_chat_id)
+        if (maxChatId !== null) {
+          patch.max_chat_id = maxChatId
+        }
+        break
+      }
+      case 'tg_channel_id': {
+        const tgChannelId = parseNonEmptyString(body.tg_channel_id)
+        if (tgChannelId) {
+          patch.tg_channel_id = tgChannelId
+        }
+        break
+      }
+      case 'tg_username': {
+        const tgUsername = parseNonEmptyString(body.tg_username)
+        if (tgUsername) {
+          patch.tg_username = tgUsername.replace(/^@/, '')
+        }
+        break
+      }
+      case 'max_title': {
+        if (body.max_title === null) {
+          patch.max_title = null
+        } else {
+          const maxTitle = parseNonEmptyString(body.max_title)
+          if (maxTitle) {
+            patch.max_title = maxTitle
+          }
+        }
+        break
+      }
+      default:
+        break
+    }
+  }
+
+  return patch
+}
+
+function getTgChainLastForwardedAt(chainId: string): string | null {
+  const row = getDb()
+    .prepare(
+      `SELECT MAX(forwarded_at) AS last_forwarded_at
+       FROM tg_chain_forwarded
+       WHERE chain_id = ?
+         AND max_message_mid IS NOT NULL
+         AND TRIM(max_message_mid) != ''`,
+    )
+    .get(chainId) as { last_forwarded_at: string | null } | undefined
+  return row?.last_forwarded_at ?? null
 }
 
 function parseDiscussionSendAs(value: unknown): 'channel' | 'chat' | undefined {
@@ -373,7 +520,7 @@ export function createAdminRouter(deps: AdminRouterDeps): express.Router {
   secured.get('/dashboard-telegram', async (_req, res) => {
     await integrationsStore.load()
     const integ = integrationsStore.getTelegramIntegration()
-    const channels = integ?.linkedChats ?? []
+    const channels = normalizeTelegramLinkedChatsForApi(integ?.linkedChats)
     const flows = integrationsStore.getFlows().filter((f) => f.source.platform === 'telegram')
     const flowsActive = flows.filter((f) => f.enabled).length
     const forwardedLog = integrationsStore.getForwardedLog(50)
@@ -484,7 +631,7 @@ export function createAdminRouter(deps: AdminRouterDeps): express.Router {
     const readerToken = (process.env.TG_READER_BOT_TOKEN || '').trim()
     const readerHealth = readerToken ? await probeTelegramBotApi(readerToken) : null
     const vkChains = await listVkChains()
-    const tgLinked = tgInteg?.linkedChats ?? []
+    const tgLinked = normalizeTelegramLinkedChatsForApi(tgInteg?.linkedChats)
     res.json({
       active: true,
       label: 'MAX бот активен',
@@ -1372,12 +1519,16 @@ export function createAdminRouter(deps: AdminRouterDeps): express.Router {
 
   secured.get('/tg-chains', async (_req, res) => {
     const chains = await listTgChains()
+    const chainsWithHealth = chains.map((chain) => ({
+      ...chain,
+      health: buildTgChainHealth(chain, getTgChainLastForwardedAt(chain.id)),
+    }))
     const active = chains.filter((c) => c.active).length
     const forwardedToday = chains.reduce((s, c) => s + c.forwarded_today, 0)
     const errorsToday = chains.reduce((s, c) => s + c.errors_today, 0)
     const mtproto = resolveMtprotoCredentials()
     res.json({
-      chains,
+      chains: chainsWithHealth,
       stats: { active, forwarded_today: forwardedToday, errors_today: errorsToday },
       mtproto: {
         ready: isMtprotoSessionReady(),
@@ -1467,25 +1618,7 @@ export function createAdminRouter(deps: AdminRouterDeps): express.Router {
       res.status(400).json({ error: 'invalid id' })
       return
     }
-    const patch: Record<string, unknown> = {}
-    if (typeof req.body.active === 'boolean') patch.active = req.body.active
-    if (typeof req.body.forward_posts === 'boolean') patch.forward_posts = req.body.forward_posts
-    if (typeof req.body.forward_comments === 'boolean') patch.forward_comments = req.body.forward_comments
-    const discussionChatId = parseTgDiscussionChatId(req.body.tg_discussion_chat_id)
-    if (discussionChatId !== undefined) patch.tg_discussion_chat_id = discussionChatId
-    const discussionSendAs = parseDiscussionSendAs(req.body.tg_discussion_send_as)
-    if (discussionSendAs !== undefined) patch.tg_discussion_send_as = discussionSendAs
-    const commentSyncKeywords = parseCommentSyncKeywords(req.body.comment_sync_keywords)
-    if ('comment_sync_keywords' in req.body) {
-      patch.comment_sync_keywords = normalizeCommentSyncKeywords(commentSyncKeywords ?? [])
-    }
-    const commentSyncMatchMode = parseCommentSyncMatchMode(req.body.comment_sync_match_mode)
-    if ('comment_sync_match_mode' in req.body) {
-      patch.comment_sync_match_mode = commentSyncMatchMode ?? 'contains'
-    }
-    if (typeof req.body.add_comments_button === 'boolean') {
-      patch.add_comments_button = req.body.add_comments_button
-    }
+    const patch = buildTgChainPatchFromBody(req.body, id, req.ip)
     const updated = await updateTgChain(id, patch)
     if (!updated) {
       res.status(404).json({ error: 'not found' })
@@ -1782,8 +1915,11 @@ export function createAdminRouter(deps: AdminRouterDeps): express.Router {
       return
     }
     const limit = isRecord(body) ? parsePositiveInt(body.limit) : null
+    const onlyWithPending = isRecord(body) ? parseBoolean(body.only_with_pending) === true : false
     try {
-      const result = await repairMissingThreadMappings(chainId, limit ?? 30)
+      const result = await repairMissingThreadMappings(chainId, limit ?? 30, {
+        onlyWithPending,
+      })
       const diagnostics = await diagnoseCommentSync(chainId)
       res.json({ ok: true, repair: result, diagnostics })
     } catch (err: unknown) {
