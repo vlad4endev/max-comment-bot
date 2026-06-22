@@ -43,7 +43,7 @@ import { startAutopostScheduler } from './services/autopostScheduler'
 import { startChannelImportWorker } from './services/channelImportService'
 import { ensureAdminPanelStateLoaded } from './api/adminPanelState'
 import { repairLegacyMiniappTgChains } from './services/channelLinkService'
-import { repairTgChainsForForwarding, repairStaleTgChainBotTokens } from './services/tgChainChannelRef'
+import { repairTgChainsForForwarding, repairStaleTgChainBotTokens, repairMiniappChainsForwardComments } from './services/tgChainChannelRef'
 import { setTgChainForwarderBot, startTgChainForwarder } from './services/tgChainForwarder'
 import { setVkChainForwarderBot, startVkChainForwarder, stopVkChainForwarder } from './services/vkChainForwarder'
 import { setTelegramTgChainLifecycleBot } from './services/telegramTgChainLifecycle'
@@ -78,6 +78,12 @@ async function main(): Promise<void> {
   await integrationsStore.load()
   await ensureAdminPanelStateLoaded()
   await repairLegacyMiniappTgChains()
+  const forwardCommentsRepaired = await repairMiniappChainsForwardComments()
+  if (forwardCommentsRepaired > 0) {
+    logger.warn('Включена синхронизация комментариев для miniapp-цепочек', {
+      chains: forwardCommentsRepaired,
+    })
+  }
   await repairTgChainsForForwarding()
   const staleChainTokens = await repairStaleTgChainBotTokens()
   if (staleChainTokens.repaired > 0) {

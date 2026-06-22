@@ -3304,10 +3304,10 @@
         html += '<div id="tcToggles">';
         html += toggleRow('forward_posts', 'Пересылать посты', 'Новые публикации в TG → MAX', true);
         html += toggleRow('add_comments_button', 'Кнопка «Комментарии» в MAX', '', true);
+        html += toggleRow('forward_comments', 'Синхронизация комментариев', 'MAX ↔ Telegram (обсуждения)', true);
         html += '</div>';
         html += '<details class="tg-chain-advanced"><summary>Дополнительно</summary><div style="margin-top:10px">';
         html += toggleRow('add_signature', 'Подпись «— TG»', '', false);
-        html += toggleRow('forward_comments', 'Пересылать комментарии TG', 'Синхронизация TG → MAX', false);
         html += '</div></details>';
         html += '<div id="tc_comment_sync_block" class="tg-chain-comment-sync hidden">';
         html +=

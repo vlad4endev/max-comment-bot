@@ -4,6 +4,7 @@ exports.resolveTgChainChannelFields = resolveTgChainChannelFields;
 exports.repairTgChainsForForwarding = repairTgChainsForForwarding;
 exports.syncTgChainBotTokensOnTelegramReconnect = syncTgChainBotTokensOnTelegramReconnect;
 exports.repairStaleTgChainBotTokens = repairStaleTgChainBotTokens;
+exports.repairMiniappChainsForwardComments = repairMiniappChainsForwardComments;
 const adminPanelState_1 = require("../api/adminPanelState");
 const integrationPlatformClient_1 = require("./integrationPlatformClient");
 const resolveTelegramBotToken_1 = require("./resolveTelegramBotToken");
@@ -134,5 +135,32 @@ async function repairStaleTgChainBotTokens() {
         logger_1.logger.info('repairStaleTgChainBotTokens: done', { repaired, checked });
     }
     return { repaired, checked };
+}
+/** Включает forward_comments у старых miniapp-цепочек, где синхронизация была выключена по умолчанию. */
+async function repairMiniappChainsForwardComments() {
+    await (0, adminPanelState_1.ensureAdminPanelStateLoaded)();
+    const chains = await (0, adminPanelState_1.listTgChains)();
+    let repaired = 0;
+    for (const chain of chains) {
+        if (chain.active === false) {
+            continue;
+        }
+        if (chain.forward_comments === true) {
+            continue;
+        }
+        if (chain.created_via !== 'miniapp_link') {
+            continue;
+        }
+        await (0, adminPanelState_1.updateTgChain)(chain.id, { forward_comments: true });
+        repaired += 1;
+        logger_1.logger.info('repairMiniappChainsForwardComments: enabled forward_comments', {
+            chainId: chain.id,
+            tgUsername: chain.tg_username,
+        });
+    }
+    if (repaired > 0) {
+        logger_1.logger.info('repairMiniappChainsForwardComments: done', { repaired });
+    }
+    return repaired;
 }
 //# sourceMappingURL=tgChainChannelRef.js.map

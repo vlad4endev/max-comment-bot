@@ -118,7 +118,7 @@ async function finalizeDraftToChain(draft, tgChannelId, tgUsername, tgUserId) {
         tg_channel_id: tgChannelId,
         bot_token: tgToken,
         forward_posts: draft.forward_posts !== false,
-        forward_comments: false,
+        forward_comments: true,
         add_comments_button: draft.add_comments_button !== false,
         add_signature: false,
         active: true,

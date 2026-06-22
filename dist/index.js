@@ -95,6 +95,12 @@ async function main() {
     await integrationsStore_1.integrationsStore.load();
     await (0, adminPanelState_1.ensureAdminPanelStateLoaded)();
     await (0, channelLinkService_1.repairLegacyMiniappTgChains)();
+    const forwardCommentsRepaired = await (0, tgChainChannelRef_1.repairMiniappChainsForwardComments)();
+    if (forwardCommentsRepaired > 0) {
+        logger_1.logger.warn('Включена синхронизация комментариев для miniapp-цепочек', {
+            chains: forwardCommentsRepaired,
+        });
+    }
     await (0, tgChainChannelRef_1.repairTgChainsForForwarding)();
     const staleChainTokens = await (0, tgChainChannelRef_1.repairStaleTgChainBotTokens)();
     if (staleChainTokens.repaired > 0) {

@@ -16,3 +16,5 @@ export declare function repairStaleTgChainBotTokens(): Promise<{
     repaired: number;
     checked: number;
 }>;
+/** Включает forward_comments у старых miniapp-цепочек, где синхронизация была выключена по умолчанию. */
+export declare function repairMiniappChainsForwardComments(): Promise<number>;

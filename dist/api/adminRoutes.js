@@ -1304,7 +1304,7 @@ function createAdminRouter(deps) {
             tg_channel_id: tgChannelId,
             bot_token: parseNonEmptyString(req.body.bot_token)?.trim() || tgToken,
             forward_posts: req.body.forward_posts !== false,
-            forward_comments: Boolean(req.body.forward_comments),
+            forward_comments: req.body.forward_comments !== false,
             tg_discussion_chat_id: discussionChatId === undefined ? null : discussionChatId,
             ...(discussionSendAs ? { tg_discussion_send_as: discussionSendAs } : {}),
             comment_sync_keywords: (0, commentSyncFilter_1.normalizeCommentSyncKeywords)(commentSyncKeywords ?? []),

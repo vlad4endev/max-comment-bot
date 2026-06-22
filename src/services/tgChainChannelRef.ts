@@ -170,3 +170,33 @@ export async function repairStaleTgChainBotTokens(): Promise<{ repaired: number;
   }
   return { repaired, checked }
 }
+
+/** Включает forward_comments у старых miniapp-цепочек, где синхронизация была выключена по умолчанию. */
+export async function repairMiniappChainsForwardComments(): Promise<number> {
+  await ensureAdminPanelStateLoaded()
+  const chains = await listTgChains()
+  let repaired = 0
+
+  for (const chain of chains) {
+    if (chain.active === false) {
+      continue
+    }
+    if (chain.forward_comments === true) {
+      continue
+    }
+    if (chain.created_via !== 'miniapp_link') {
+      continue
+    }
+    await updateTgChain(chain.id, { forward_comments: true })
+    repaired += 1
+    logger.info('repairMiniappChainsForwardComments: enabled forward_comments', {
+      chainId: chain.id,
+      tgUsername: chain.tg_username,
+    })
+  }
+
+  if (repaired > 0) {
+    logger.info('repairMiniappChainsForwardComments: done', { repaired })
+  }
+  return repaired
+}
