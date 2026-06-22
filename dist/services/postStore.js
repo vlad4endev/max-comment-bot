@@ -702,9 +702,13 @@ function buildPostCommentKeyboard(post) {
             [max_bot_api_1.Keyboard.button.link((0, commentSyncFilter_1.formatMaxBookedInVkButtonLabel)(post.comment_count), url)],
         ]);
     }
-    return max_bot_api_1.Keyboard.inlineKeyboard([
-        [max_bot_api_1.Keyboard.button.link(`💬 Комментарии (${post.comment_count})`, url)],
-    ]);
+    const POST_ARCHIVE_DAYS = Number(process.env.COMMENT_TTL_DAYS ?? 21);
+    const postAgeMs = Date.now() - new Date(post.timestamp).getTime();
+    const isOld = postAgeMs > POST_ARCHIVE_DAYS * 24 * 60 * 60 * 1000;
+    const buttonText = isOld
+        ? '📦 Архив комментариев'
+        : `💬 Комментарии (${post.comment_count})`;
+    return max_bot_api_1.Keyboard.inlineKeyboard([[max_bot_api_1.Keyboard.button.link(buttonText, url)]]);
 }
 exports.postStore = new PostStore();
 //# sourceMappingURL=postStore.js.map

@@ -1800,6 +1800,11 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
       userId: requestUserId,
       chatId: chatIdRaw,
     })
+    const ARCHIVE_TTL_DAYS = Number(process.env.COMMENT_TTL_DAYS ?? 21)
+    const archiveCutoff = new Date(
+      Date.now() - ARCHIVE_TTL_DAYS * 24 * 60 * 60 * 1000,
+    ).toISOString()
+
     const post = await resolvePostForMiniAppOpen(
       req.params.postId,
       chatIdRaw,
@@ -1807,9 +1812,17 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
       startParamHeader,
     )
     if (!post) {
-      res.status(404).json({ error: 'post not found' })
+      res.status(200).json({
+        ok: false,
+        is_archived: true,
+        error: 'post_not_found',
+        archived_reason: 'deleted',
+        ttl_days: ARCHIVE_TTL_DAYS,
+      })
       return
     }
+
+    const isArchived = post.timestamp < archiveCutoff
     const channelBranding = await resolveChannelBrandingCached(deps.bot, post.chat_id)
     const channel_post_url = post.channel_post_url?.trim() || null
     res.json({
@@ -1824,6 +1837,9 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
       comments_closed: isPostCommentsClosedInMax(post),
       channel_title: channelBranding.title,
       channel_avatar_url: channelBranding.avatar_url,
+      is_archived: isArchived,
+      archived_reason: isArchived ? 'expired' : null,
+      ttl_days: ARCHIVE_TTL_DAYS,
     })
   })
 

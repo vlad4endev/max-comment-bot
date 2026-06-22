@@ -2539,6 +2539,7 @@
       var replyContext = null; // { comment_id, username, post_id }
       var pendingPhotoFiles = [];
       var postRecoveryUiVisible = false;
+      var postArchivedUiVisible = false;
       var postRecoveryInFlight = false;
       var lastCommentsSnapshot = null;
       var commentsClosed = false;
@@ -2740,6 +2741,70 @@
         if (!postRecoveryUiVisible) return;
         postRecoveryUiVisible = false;
         if (composerWrapEl && !commentsClosed) composerWrapEl.style.display = '';
+      }
+
+      function showArchivedPage(ttlDays) {
+        if (postArchivedUiVisible) return;
+        postArchivedUiVisible = true;
+        document.body.style.overflow = 'hidden';
+
+        var main = document.querySelector('.app-container, .comments-wrap, main, #app');
+        if (main) main.style.display = 'none';
+
+        var loader = document.querySelector('.loader, #loader, .loading');
+        if (loader) loader.style.display = 'none';
+
+        var days = ttlDays || 21;
+        var el = document.createElement('div');
+        el.id = 'archived-page';
+        el.innerHTML =
+          '<div class="arc-wrap">' +
+          '<div class="arc-dino" aria-hidden="true">' +
+          '<svg width="120" height="120" viewBox="0 0 120 120" fill="none" xmlns="http://www.w3.org/2000/svg">' +
+          '<ellipse cx="60" cy="110" rx="36" ry="6" fill="rgba(255,255,255,0.04)"/>' +
+          '<rect x="44" y="72" width="16" height="30" rx="4" fill="#444441"/>' +
+          '<rect x="44" y="72" width="16" height="7" rx="2" fill="#2C2C2A"/>' +
+          '<text x="52" y="84" text-anchor="middle" fill="rgba(255,255,255,0.3)" font-size="9" font-family="system-ui" letter-spacing="0.05em" font-weight="500">R.I.P</text>' +
+          '<text x="52" y="93" text-anchor="middle" fill="rgba(255,255,255,0.2)" font-size="7" font-family="system-ui">пост</text>' +
+          '<ellipse cx="50" cy="32" rx="18" ry="14" fill="#1D9E75"/>' +
+          '<ellipse cx="64" cy="26" rx="10" ry="8" fill="#1D9E75"/>' +
+          '<circle cx="69" cy="22" r="3" fill="#1D9E75"/>' +
+          '<ellipse cx="32" cy="44" rx="5" ry="3" fill="#0F6E56" transform="rotate(-30 32 44)"/>' +
+          '<ellipse cx="42" cy="48" rx="5" ry="3" fill="#0F6E56" transform="rotate(-20 42 48)"/>' +
+          '<circle cx="68" cy="20" r="2" fill="#04342C"/>' +
+          '<path d="M70 24 L74 22 L72 26" fill="#5DCAA5"/>' +
+          '<circle cx="47" cy="8" r="4" fill="rgba(93,202,165,0.2)"/>' +
+          '<circle cx="60" cy="4" r="3" fill="rgba(93,202,165,0.15)"/>' +
+          '<circle cx="37" cy="12" r="2.5" fill="rgba(93,202,165,0.15)"/>' +
+          '<path d="M62 36 Q66 40 62 44" stroke="#0F6E56" stroke-width="2.5" stroke-linecap="round" fill="none"/>' +
+          '</svg>' +
+          '</div>' +
+          '<div class="arc-badge">' +
+          days +
+          ' день — и всё</div>' +
+          '<h2 class="arc-title">Пост устарел и удалён</h2>' +
+          '<p class="arc-desc">' +
+          'Комментарии живут&nbsp;' +
+          days +
+          '&nbsp;недели, потом уходят<br>' +
+          'в лучший мир. Этот пост уже не&nbsp;с&nbsp;нами.' +
+          '</p>' +
+          '<div class="arc-stats">' +
+          '<div class="arc-stat"><span class="arc-num">' +
+          days +
+          '</span><span class="arc-lbl">дней хранится</span></div>' +
+          '<div class="arc-stat"><span class="arc-num">∞</span><span class="arc-lbl">новых постов</span></div>' +
+          '<div class="arc-stat"><span class="arc-num">0</span><span class="arc-lbl">шансов вернуть</span></div>' +
+          '</div>' +
+          '<button type="button" class="arc-btn" id="archivedBackBtn">← Вернуться назад</button>' +
+          '</div>';
+        document.body.appendChild(el);
+        var backBtn = document.getElementById('archivedBackBtn');
+        if (backBtn) {
+          backBtn.addEventListener('click', function () {
+            window.history.back();
+          });
+        }
       }
 
       function refreshMissingPost() {
@@ -4139,6 +4204,10 @@
             });
           })
           .then(function (p) {
+            if (p.is_archived || p.error === 'post_not_found') {
+              showArchivedPage(p.ttl_days || 21);
+              return false;
+            }
             hidePostRecoveryCard();
             if (p.post_id && p.post_id !== postId) {
               postId = p.post_id;
@@ -4218,7 +4287,7 @@
       }
 
       function loadComments(initial) {
-        if (postRecoveryUiVisible) return Promise.resolve();
+        if (postRecoveryUiVisible || postArchivedUiVisible) return Promise.resolve();
         var ids = resolveLookupIds();
         if (!ids.postId) return Promise.resolve();
         return fetch('/api/comments/' + encodeURIComponent(ids.postId) + postApiQuery(), {
@@ -4600,7 +4669,7 @@
         });
 
       setInterval(function () {
-        if (postRecoveryUiVisible) return;
+        if (postRecoveryUiVisible || postArchivedUiVisible) return;
         loadComments(false);
       }, 15000);
     }
