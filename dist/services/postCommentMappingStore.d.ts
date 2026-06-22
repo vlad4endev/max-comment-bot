@@ -1,4 +1,4 @@
-import type { TgChainRecord } from '../api/adminPanelState';
+import { type TgChainRecord } from '../api/adminPanelState';
 export interface PostCommentMappingRow {
     chain_id: string;
     tg_msg_id: number;
@@ -7,10 +7,19 @@ export interface PostCommentMappingRow {
     tg_thread_chat_id: number | null;
     tg_thread_msg_id: number | null;
 }
+/** Ключ TG-канала для API: предпочитаем tg_chat_id из маппинга (фактический источник поста). */
+export declare function resolveTelegramChannelKeyForMapping(mapping: PostCommentMappingRow, chain?: TgChainRecord | null): string | null;
+/** Уникальные ключи канала для GetDiscussionMessage (сначала tg_chat_id из маппинга). */
+export declare function listTelegramChannelKeyCandidatesForMapping(mapping: PostCommentMappingRow, chain?: TgChainRecord | null): string[];
+export declare function countMappingChannelIdMismatch(chainId: string): number;
 export declare function upsertPostCommentMapping(chainId: string, tgMsgId: number, maxMid: string, tgChatId: number | null): void;
 export declare function linkThreadMessageToChannelPost(chainId: string, channelMsgId: number, threadChatId: number, threadMsgId: number): void;
 /** Сбрасывает устаревший thread id — для повторного resolve через GetDiscussionMessage. */
 export declare function clearPostThreadMapping(chainId: string, tgMsgId: number): void;
+/** Удаляет битый маппинг (MSG_ID_INVALID / удалённый пост в TG). */
+export declare function deletePostCommentMapping(chainId: string, tgMsgId: number): boolean;
+/** Пересоздаёт маппинг для max_mid из tg_chain_forwarded (последняя пересылка). */
+export declare function backfillPostCommentMappingForMaxMid(maxMid: string): boolean;
 export interface PostMappingThreadStats {
     total: number;
     with_thread: number;

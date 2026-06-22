@@ -3,6 +3,9 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.resolveTelegramChannelKeyForMapping = resolveTelegramChannelKeyForMapping;
+exports.listTelegramChannelKeyCandidatesForMapping = listTelegramChannelKeyCandidatesForMapping;
+exports.countMappingChannelIdMismatch = countMappingChannelIdMismatch;
 exports.upsertPostCommentMapping = upsertPostCommentMapping;
 exports.linkThreadMessageToChannelPost = linkThreadMessageToChannelPost;
 exports.clearPostThreadMapping = clearPostThreadMapping;
@@ -17,10 +20,78 @@ exports.backfillPostCommentMappingsFromForwarded = backfillPostCommentMappingsFr
 exports.resolveDiscussionChatId = resolveDiscussionChatId;
 exports.storeDiscussionChatIdForChain = storeDiscussionChatIdForChain;
 const axios_1 = __importDefault(require("axios"));
+const adminPanelState_1 = require("../api/adminPanelState");
 const database_1 = require("../db/database");
 const logger_1 = require("../utils/logger");
+const tgChannelMatch_1 = require("../utils/tgChannelMatch");
 const TG_API = 'https://api.telegram.org';
 const discussionChatCache = new Map();
+/** Ключ TG-канала для API: предпочитаем tg_chat_id из маппинга (фактический источник поста). */
+function resolveTelegramChannelKeyForMapping(mapping, chain) {
+    if (typeof mapping.tg_chat_id === 'number') {
+        return String(mapping.tg_chat_id);
+    }
+    const resolvedChain = chain ?? (0, adminPanelState_1.listTgChainsSync)().find((c) => c.id === mapping.chain_id);
+    const fromChainId = resolvedChain?.tg_channel_id?.trim();
+    if (fromChainId) {
+        return fromChainId;
+    }
+    const username = resolvedChain?.tg_username?.trim();
+    if (username) {
+        return username.startsWith('@') ? username : `@${username}`;
+    }
+    return null;
+}
+/** Уникальные ключи канала для GetDiscussionMessage (сначала tg_chat_id из маппинга). */
+function listTelegramChannelKeyCandidatesForMapping(mapping, chain) {
+    const resolvedChain = chain ?? (0, adminPanelState_1.listTgChainsSync)().find((c) => c.id === mapping.chain_id);
+    const keys = [];
+    const seen = new Set();
+    const push = (key) => {
+        const trimmed = key?.trim();
+        if (!trimmed || seen.has(trimmed)) {
+            return;
+        }
+        seen.add(trimmed);
+        keys.push(trimmed);
+    };
+    if (typeof mapping.tg_chat_id === 'number') {
+        push(String(mapping.tg_chat_id));
+    }
+    push(resolvedChain?.tg_channel_id);
+    const username = resolvedChain?.tg_username?.trim();
+    if (username) {
+        push(username.startsWith('@') ? username : `@${username}`);
+    }
+    return keys;
+}
+function countMappingChannelIdMismatch(chainId) {
+    const chain = (0, adminPanelState_1.listTgChainsSync)().find((c) => c.id === chainId);
+    if (!chain) {
+        return 0;
+    }
+    const chainKeys = [
+        chain.tg_channel_id?.trim(),
+        chain.tg_username?.trim() ? `@${chain.tg_username.trim().replace(/^@/, '')}` : null,
+    ].filter(Boolean);
+    if (chainKeys.length === 0) {
+        return 0;
+    }
+    const rows = (0, database_1.getDb)()
+        .prepare(`SELECT tg_chat_id
+       FROM post_comment_mapping
+       WHERE chain_id = ?
+         AND tg_chat_id IS NOT NULL`)
+        .all(chainId);
+    let mismatched = 0;
+    for (const row of rows) {
+        const chat = { id: row.tg_chat_id };
+        if (!chainKeys.some((key) => (0, tgChannelMatch_1.telegramChannelMatchesTarget)(chat, key))) {
+            mismatched += 1;
+        }
+    }
+    return mismatched;
+}
 function upsertPostCommentMapping(chainId, tgMsgId, maxMid, tgChatId) {
     (0, database_1.getDb)()
         .prepare(`INSERT INTO post_comment_mapping (chain_id, tg_msg_id, max_mid, tg_chat_id)

@@ -38,19 +38,7 @@ function isCommentForwardEnabled(chainId) {
     return chain?.active !== false && chain?.forward_comments === true;
 }
 function resolveChannelKeyForMapping(mapping) {
-    const chain = (0, adminPanelState_1.listTgChainsSync)().find((c) => c.id === mapping.chain_id);
-    const fromChainId = chain?.tg_channel_id?.trim();
-    if (fromChainId) {
-        return fromChainId;
-    }
-    const username = chain?.tg_username?.trim();
-    if (username) {
-        return username.startsWith('@') ? username : `@${username}`;
-    }
-    if (typeof mapping.tg_chat_id === 'number') {
-        return String(mapping.tg_chat_id);
-    }
-    return null;
+    return (0, postCommentMappingStore_1.resolveTelegramChannelKeyForMapping)(mapping);
 }
 function resolvePostThreadTargetFromMapping(mapping) {
     if (!mapping.tg_thread_chat_id || !mapping.tg_thread_msg_id) {

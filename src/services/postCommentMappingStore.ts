@@ -1,8 +1,9 @@
 import axios from 'axios'
 
-import type { TgChainRecord } from '../api/adminPanelState'
+import { listTgChainsSync, type TgChainRecord } from '../api/adminPanelState'
 import { getDb } from '../db/database'
 import { logger } from '../utils/logger'
+import { telegramChannelMatchesTarget } from '../utils/tgChannelMatch'
 
 const TG_API = 'https://api.telegram.org'
 
@@ -16,6 +17,88 @@ export interface PostCommentMappingRow {
 }
 
 const discussionChatCache = new Map<string, number | null>()
+
+/** Ключ TG-канала для API: предпочитаем tg_chat_id из маппинга (фактический источник поста). */
+export function resolveTelegramChannelKeyForMapping(
+  mapping: PostCommentMappingRow,
+  chain?: TgChainRecord | null,
+): string | null {
+  if (typeof mapping.tg_chat_id === 'number') {
+    return String(mapping.tg_chat_id)
+  }
+  const resolvedChain = chain ?? listTgChainsSync().find((c) => c.id === mapping.chain_id)
+  const fromChainId = resolvedChain?.tg_channel_id?.trim()
+  if (fromChainId) {
+    return fromChainId
+  }
+  const username = resolvedChain?.tg_username?.trim()
+  if (username) {
+    return username.startsWith('@') ? username : `@${username}`
+  }
+  return null
+}
+
+/** Уникальные ключи канала для GetDiscussionMessage (сначала tg_chat_id из маппинга). */
+export function listTelegramChannelKeyCandidatesForMapping(
+  mapping: PostCommentMappingRow,
+  chain?: TgChainRecord | null,
+): string[] {
+  const resolvedChain = chain ?? listTgChainsSync().find((c) => c.id === mapping.chain_id)
+  const keys: string[] = []
+  const seen = new Set<string>()
+
+  const push = (key: string | null | undefined): void => {
+    const trimmed = key?.trim()
+    if (!trimmed || seen.has(trimmed)) {
+      return
+    }
+    seen.add(trimmed)
+    keys.push(trimmed)
+  }
+
+  if (typeof mapping.tg_chat_id === 'number') {
+    push(String(mapping.tg_chat_id))
+  }
+  push(resolvedChain?.tg_channel_id)
+  const username = resolvedChain?.tg_username?.trim()
+  if (username) {
+    push(username.startsWith('@') ? username : `@${username}`)
+  }
+
+  return keys
+}
+
+export function countMappingChannelIdMismatch(chainId: string): number {
+  const chain = listTgChainsSync().find((c) => c.id === chainId)
+  if (!chain) {
+    return 0
+  }
+  const chainKeys = [
+    chain.tg_channel_id?.trim(),
+    chain.tg_username?.trim() ? `@${chain.tg_username.trim().replace(/^@/, '')}` : null,
+  ].filter(Boolean) as string[]
+  if (chainKeys.length === 0) {
+    return 0
+  }
+
+  const rows = getDb()
+    .prepare(
+      `SELECT tg_chat_id
+       FROM post_comment_mapping
+       WHERE chain_id = ?
+         AND tg_chat_id IS NOT NULL`,
+    )
+    .all(chainId) as Array<{ tg_chat_id: number }>
+
+  let mismatched = 0
+  for (const row of rows) {
+    const chat = { id: row.tg_chat_id }
+    if (!chainKeys.some((key) => telegramChannelMatchesTarget(chat, key))) {
+      mismatched += 1
+    }
+  }
+  return mismatched
+}
 
 export function upsertPostCommentMapping(
   chainId: string,

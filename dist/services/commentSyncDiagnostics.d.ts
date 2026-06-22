@@ -62,4 +62,7 @@ export interface BootstrapCommentSyncResult {
     pending_without_mapping: number;
 }
 /** На старте: backfill post_comment_mapping и починка тредов для активных цепочек. */
-export declare function bootstrapCommentSyncOnStartup(): Promise<BootstrapCommentSyncResult>;
+export declare function bootstrapCommentSyncOnStartup(options?: {
+    threadRepairLimit?: number;
+    repairThreads?: boolean;
+}): Promise<BootstrapCommentSyncResult>;

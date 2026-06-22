@@ -130,7 +130,7 @@ function analyzeLogSignals(entries) {
 }
 function buildChainIssues(input) {
     const issues = [];
-    const { chain, tokenPresent, botId, discussionChatId, botChannelAdmin, botDiscussionMember, mappingStats, pendingMaxToTg } = input;
+    const { chain, tokenPresent, botId, discussionChatId, botChannelAdmin, botDiscussionMember, mappingStats, mappingChannelMismatch, pendingMaxToTg, } = input;
     if (tokenPresent && botId == null) {
         issues.push({
             severity: 'critical',
@@ -196,6 +196,15 @@ function buildChainIssues(input) {
             what_to_do: 'Переключите tg_discussion_send_as на chat или настройте MTProto user-сессию.',
         });
     }
+    if (mappingChannelMismatch > 0) {
+        issues.push({
+            severity: 'warning',
+            code: 'mapping_channel_mismatch',
+            title: 'Маппинги привязаны к другому TG-каналу',
+            description: `${mappingChannelMismatch} записей post_comment_mapping имеют tg_chat_id, не совпадающий с настройками цепочки.`,
+            what_to_do: 'Проверьте tg_channel_id / tg_username в цепочке или пересоздайте связку. После деплоя repair-threads использует tg_chat_id из маппинга.',
+        });
+    }
     if (mappingStats.missing_thread > 0) {
         issues.push({
             severity: mappingStats.missing_thread > mappingStats.with_thread ? 'critical' : 'warning',
@@ -235,6 +244,7 @@ async function diagnoseCommentSync(chainIdFilter) {
             botDiscussionMember = await isBotChatMember(token, discussionChatId, botId);
         }
         const mappingStats = (0, postCommentMappingStore_1.countPostMappingThreadStats)(chain.id);
+        const mappingChannelMismatch = (0, postCommentMappingStore_1.countMappingChannelIdMismatch)(chain.id);
         const pendingMaxToTg = countPendingMaxToTelegram(chain.max_chat_id);
         const issues = buildChainIssues({
             chain,
@@ -244,6 +254,7 @@ async function diagnoseCommentSync(chainIdFilter) {
             botChannelAdmin,
             botDiscussionMember,
             mappingStats,
+            mappingChannelMismatch,
             pendingMaxToTg,
         });
         resultChains.push({

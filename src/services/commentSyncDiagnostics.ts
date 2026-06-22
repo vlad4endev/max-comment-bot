@@ -16,6 +16,7 @@ import {
 } from '../utils/telegramSyncErrors'
 import {
   countPostMappingThreadStats,
+  countMappingChannelIdMismatch,
   listMappingsMissingThread,
   resolveDiscussionChatId,
   backfillPostCommentMappingsFromForwarded,
@@ -204,11 +205,21 @@ function buildChainIssues(input: {
   botChannelAdmin: boolean | null
   botDiscussionMember: boolean | null
   mappingStats: ReturnType<typeof countPostMappingThreadStats>
+  mappingChannelMismatch: number
   pendingMaxToTg: number
 }): CommentSyncIssue[] {
   const issues: CommentSyncIssue[] = []
-  const { chain, tokenPresent, botId, discussionChatId, botChannelAdmin, botDiscussionMember, mappingStats, pendingMaxToTg } =
-    input
+  const {
+    chain,
+    tokenPresent,
+    botId,
+    discussionChatId,
+    botChannelAdmin,
+    botDiscussionMember,
+    mappingStats,
+    mappingChannelMismatch,
+    pendingMaxToTg,
+  } = input
 
   if (tokenPresent && botId == null) {
     issues.push({
@@ -285,6 +296,17 @@ function buildChainIssues(input: {
     })
   }
 
+  if (mappingChannelMismatch > 0) {
+    issues.push({
+      severity: 'warning',
+      code: 'mapping_channel_mismatch',
+      title: 'Маппинги привязаны к другому TG-каналу',
+      description: `${mappingChannelMismatch} записей post_comment_mapping имеют tg_chat_id, не совпадающий с настройками цепочки.`,
+      what_to_do:
+        'Проверьте tg_channel_id / tg_username в цепочке или пересоздайте связку. После деплоя repair-threads использует tg_chat_id из маппинга.',
+    })
+  }
+
   if (mappingStats.missing_thread > 0) {
     issues.push({
       severity: mappingStats.missing_thread > mappingStats.with_thread ? 'critical' : 'warning',
@@ -331,6 +353,7 @@ export async function diagnoseCommentSync(chainIdFilter?: string): Promise<Comme
     }
 
     const mappingStats = countPostMappingThreadStats(chain.id)
+    const mappingChannelMismatch = countMappingChannelIdMismatch(chain.id)
     const pendingMaxToTg = countPendingMaxToTelegram(chain.max_chat_id)
     const issues = buildChainIssues({
       chain,
@@ -340,6 +363,7 @@ export async function diagnoseCommentSync(chainIdFilter?: string): Promise<Comme
       botChannelAdmin,
       botDiscussionMember,
       mappingStats,
+      mappingChannelMismatch,
       pendingMaxToTg,
     })
 

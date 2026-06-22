@@ -9,7 +9,7 @@ import type { Bot } from '@maxhub/max-bot-api'
 import { listTgChainsSync } from '../api/adminPanelState'
 import type { Comment } from './commentStore'
 import { commentStore } from './commentStore'
-import { findMappingByMaxMid } from './postCommentMappingStore'
+import { findMappingByMaxMid, resolveTelegramChannelKeyForMapping } from './postCommentMappingStore'
 import { ensurePostThreadMapping, refreshPostThreadMapping } from './telegramDiscussionThreadResolver'
 import type { Post } from './postStore'
 import { postStore } from './postStore'
@@ -76,19 +76,7 @@ function isCommentForwardEnabled(chainId: string): boolean {
 }
 
 function resolveChannelKeyForMapping(mapping: PostCommentMappingRow): string | null {
-  const chain = listTgChainsSync().find((c) => c.id === mapping.chain_id)
-  const fromChainId = chain?.tg_channel_id?.trim()
-  if (fromChainId) {
-    return fromChainId
-  }
-  const username = chain?.tg_username?.trim()
-  if (username) {
-    return username.startsWith('@') ? username : `@${username}`
-  }
-  if (typeof mapping.tg_chat_id === 'number') {
-    return String(mapping.tg_chat_id)
-  }
-  return null
+  return resolveTelegramChannelKeyForMapping(mapping)
 }
 
 function resolvePostThreadTargetFromMapping(mapping: PostCommentMappingRow): ThreadTarget | null {

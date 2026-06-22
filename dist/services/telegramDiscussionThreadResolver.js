@@ -21,20 +21,6 @@ function resolveBotTokenForChain(chain) {
     }
     return (0, resolveTelegramBotToken_1.resolveTelegramBotToken)();
 }
-function resolveChannelKey(chain, mapping) {
-    const fromChainId = chain.tg_channel_id?.trim();
-    if (fromChainId) {
-        return fromChainId;
-    }
-    const username = chain.tg_username?.trim();
-    if (username) {
-        return username.startsWith('@') ? username : `@${username}`;
-    }
-    if (typeof mapping.tg_chat_id === 'number') {
-        return String(mapping.tg_chat_id);
-    }
-    return null;
-}
 function peerIdToBotChatId(peerId) {
     if (peerId instanceof telegram_1.Api.PeerChannel) {
         return Number(`-100${peerId.channelId}`);
@@ -76,52 +62,70 @@ async function resolveThreadViaMtproto(chain, mapping) {
     if (typeof mapping.tg_msg_id !== 'number' || mapping.tg_msg_id <= 0) {
         return null;
     }
-    const channelKey = resolveChannelKey(chain, mapping);
-    if (!channelKey) {
+    const channelKeys = (0, postCommentMappingStore_1.listTelegramChannelKeyCandidatesForMapping)(mapping, chain);
+    if (channelKeys.length === 0) {
         return null;
     }
     const client = await (0, telegramUserArchive_1.connectTelegramUserClient)();
     try {
-        const channelPeer = await (0, telegramUserArchive_1.resolveTelegramChannelEntity)(client, channelKey);
-        const result = await client.invoke(new telegram_1.Api.messages.GetDiscussionMessage({
-            peer: channelPeer,
-            msgId: mapping.tg_msg_id,
-        }));
-        const extracted = extractThreadFromDiscussionMessage(result);
-        if (extracted) {
-            logger_1.logger.info('[discussionThreadResolver] resolved thread via GetDiscussionMessage', {
-                chainId: chain.id,
-                channelMsgId: mapping.tg_msg_id,
-                maxMid: mapping.max_mid,
-                threadChatId: extracted.threadChatId,
-                threadMsgId: extracted.threadMsgId,
-            });
+        let lastInvalidMsgId = false;
+        for (const channelKey of channelKeys) {
+            try {
+                const channelPeer = await (0, telegramUserArchive_1.resolveTelegramChannelEntity)(client, channelKey);
+                const result = await client.invoke(new telegram_1.Api.messages.GetDiscussionMessage({
+                    peer: channelPeer,
+                    msgId: mapping.tg_msg_id,
+                }));
+                const extracted = extractThreadFromDiscussionMessage(result);
+                if (extracted) {
+                    logger_1.logger.info('[discussionThreadResolver] resolved thread via GetDiscussionMessage', {
+                        chainId: chain.id,
+                        channelMsgId: mapping.tg_msg_id,
+                        maxMid: mapping.max_mid,
+                        channelKey,
+                        threadChatId: extracted.threadChatId,
+                        threadMsgId: extracted.threadMsgId,
+                    });
+                    return extracted;
+                }
+            }
+            catch (err) {
+                const errText = err instanceof Error
+                    ? err.message
+                    : typeof err === 'object' && err !== null && 'errorMessage' in err
+                        ? String(err.errorMessage ?? err)
+                        : String(err);
+                if ((0, telegramSyncErrors_1.isInvalidTelegramMessageIdError)(errText)) {
+                    lastInvalidMsgId = true;
+                    logger_1.logger.debug('[discussionThreadResolver] GetDiscussionMessage MSG_ID_INVALID for channel key', {
+                        chainId: chain.id,
+                        channelMsgId: mapping.tg_msg_id,
+                        maxMid: mapping.max_mid,
+                        channelKey,
+                        errText,
+                    });
+                    continue;
+                }
+                logger_1.logger.warn('[discussionThreadResolver] GetDiscussionMessage failed', {
+                    chainId: chain.id,
+                    channelMsgId: mapping.tg_msg_id,
+                    maxMid: mapping.max_mid,
+                    channelKey,
+                    err,
+                });
+                return null;
+            }
         }
-        return extracted;
-    }
-    catch (err) {
-        const errText = err instanceof Error
-            ? err.message
-            : typeof err === 'object' && err !== null && 'errorMessage' in err
-                ? String(err.errorMessage ?? err)
-                : String(err);
-        if ((0, telegramSyncErrors_1.isInvalidTelegramMessageIdError)(errText)) {
+        if (lastInvalidMsgId) {
             logger_1.logger.warn('[discussionThreadResolver] stale channel message id, dropping mapping', {
                 chainId: chain.id,
                 channelMsgId: mapping.tg_msg_id,
                 maxMid: mapping.max_mid,
-                errText,
+                channelKeysTried: channelKeys,
             });
             (0, postCommentMappingStore_1.deletePostCommentMapping)(mapping.chain_id, mapping.tg_msg_id);
             (0, postCommentMappingStore_1.backfillPostCommentMappingForMaxMid)(mapping.max_mid);
-            return null;
         }
-        logger_1.logger.warn('[discussionThreadResolver] GetDiscussionMessage failed', {
-            chainId: chain.id,
-            channelMsgId: mapping.tg_msg_id,
-            maxMid: mapping.max_mid,
-            err,
-        });
         return null;
     }
     finally {

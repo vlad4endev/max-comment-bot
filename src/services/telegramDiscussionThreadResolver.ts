@@ -14,6 +14,7 @@ import {
   deletePostCommentMapping,
   backfillPostCommentMappingForMaxMid,
   resolveDiscussionChatId,
+  listTelegramChannelKeyCandidatesForMapping,
   type PostCommentMappingRow,
 } from './postCommentMappingStore'
 import { resolveTelegramBotToken } from './resolveTelegramBotToken'
@@ -30,21 +31,6 @@ function resolveBotTokenForChain(chain: TgChainRecord): string {
     return fromChain
   }
   return resolveTelegramBotToken()
-}
-
-function resolveChannelKey(chain: TgChainRecord, mapping: PostCommentMappingRow): string | null {
-  const fromChainId = chain.tg_channel_id?.trim()
-  if (fromChainId) {
-    return fromChainId
-  }
-  const username = chain.tg_username?.trim()
-  if (username) {
-    return username.startsWith('@') ? username : `@${username}`
-  }
-  if (typeof mapping.tg_chat_id === 'number') {
-    return String(mapping.tg_chat_id)
-  }
-  return null
 }
 
 function peerIdToBotChatId(peerId: Api.TypePeer | undefined): number | null {
@@ -96,55 +82,74 @@ async function resolveThreadViaMtproto(
     return null
   }
 
-  const channelKey = resolveChannelKey(chain, mapping)
-  if (!channelKey) {
+  const channelKeys = listTelegramChannelKeyCandidatesForMapping(mapping, chain)
+  if (channelKeys.length === 0) {
     return null
   }
 
   const client = await connectTelegramUserClient()
   try {
-    const channelPeer = await resolveTelegramChannelEntity(client, channelKey)
-    const result = await client.invoke(
-      new Api.messages.GetDiscussionMessage({
-        peer: channelPeer,
-        msgId: mapping.tg_msg_id,
-      }),
-    )
-    const extracted = extractThreadFromDiscussionMessage(result)
-    if (extracted) {
-      logger.info('[discussionThreadResolver] resolved thread via GetDiscussionMessage', {
-        chainId: chain.id,
-        channelMsgId: mapping.tg_msg_id,
-        maxMid: mapping.max_mid,
-        threadChatId: extracted.threadChatId,
-        threadMsgId: extracted.threadMsgId,
-      })
+    let lastInvalidMsgId = false
+    for (const channelKey of channelKeys) {
+      try {
+        const channelPeer = await resolveTelegramChannelEntity(client, channelKey)
+        const result = await client.invoke(
+          new Api.messages.GetDiscussionMessage({
+            peer: channelPeer,
+            msgId: mapping.tg_msg_id,
+          }),
+        )
+        const extracted = extractThreadFromDiscussionMessage(result)
+        if (extracted) {
+          logger.info('[discussionThreadResolver] resolved thread via GetDiscussionMessage', {
+            chainId: chain.id,
+            channelMsgId: mapping.tg_msg_id,
+            maxMid: mapping.max_mid,
+            channelKey,
+            threadChatId: extracted.threadChatId,
+            threadMsgId: extracted.threadMsgId,
+          })
+          return extracted
+        }
+      } catch (err: unknown) {
+        const errText =
+          err instanceof Error
+            ? err.message
+            : typeof err === 'object' && err !== null && 'errorMessage' in err
+              ? String((err as { errorMessage?: string }).errorMessage ?? err)
+              : String(err)
+        if (isInvalidTelegramMessageIdError(errText)) {
+          lastInvalidMsgId = true
+          logger.debug('[discussionThreadResolver] GetDiscussionMessage MSG_ID_INVALID for channel key', {
+            chainId: chain.id,
+            channelMsgId: mapping.tg_msg_id,
+            maxMid: mapping.max_mid,
+            channelKey,
+            errText,
+          })
+          continue
+        }
+        logger.warn('[discussionThreadResolver] GetDiscussionMessage failed', {
+          chainId: chain.id,
+          channelMsgId: mapping.tg_msg_id,
+          maxMid: mapping.max_mid,
+          channelKey,
+          err,
+        })
+        return null
+      }
     }
-    return extracted
-  } catch (err: unknown) {
-    const errText =
-      err instanceof Error
-        ? err.message
-        : typeof err === 'object' && err !== null && 'errorMessage' in err
-          ? String((err as { errorMessage?: string }).errorMessage ?? err)
-          : String(err)
-    if (isInvalidTelegramMessageIdError(errText)) {
+
+    if (lastInvalidMsgId) {
       logger.warn('[discussionThreadResolver] stale channel message id, dropping mapping', {
         chainId: chain.id,
         channelMsgId: mapping.tg_msg_id,
         maxMid: mapping.max_mid,
-        errText,
+        channelKeysTried: channelKeys,
       })
       deletePostCommentMapping(mapping.chain_id, mapping.tg_msg_id)
       backfillPostCommentMappingForMaxMid(mapping.max_mid)
-      return null
     }
-    logger.warn('[discussionThreadResolver] GetDiscussionMessage failed', {
-      chainId: chain.id,
-      channelMsgId: mapping.tg_msg_id,
-      maxMid: mapping.max_mid,
-      err,
-    })
     return null
   } finally {
     await disconnectTelegramUserClient(client)
