@@ -27,7 +27,10 @@ import {
 import { postStore } from './postStore'
 import type { Post } from './postStore'
 import { claimAndPropagateCommentsBooking } from './commentsBookingService'
-import { evaluateComment } from './antispamService'
+import {
+  isTelegramAntispamBotConfigured,
+  tryBlockTelegramCommentByAntispam,
+} from './telegramAntispamBotService'
 import { resolveCanonicalChannelChatId } from './resolveChannelChatId'
 import { resolveTelegramBotToken } from './resolveTelegramBotToken'
 import { isCommentSynced, markCommentSynced } from '../utils/commentSyncGuard'
@@ -216,6 +219,12 @@ export async function handleTgComment(
       return
     }
 
+    if (!isTelegramAntispamBotConfigured()) {
+      if (await tryBlockTelegramCommentByAntispam(message, chain, discussionChatId, tgCommentId)) {
+        return
+      }
+    }
+
     let mapping = findMappingByThreadMsgId(chain.id, threadRootMsgId)
     if (!mapping?.max_mid) {
       const threadRoot = resolveThreadRootMessage(message)
@@ -311,25 +320,6 @@ export async function handleTgComment(
       chain,
       discussionChatId,
     )
-
-    const antispam = evaluateComment({
-      text,
-      userId,
-      username: authorName,
-      channelChatId: maxChatId,
-      source: 'telegram',
-      isChannelAdmin: isAdmin,
-    })
-    if (!antispam.allowed) {
-      markCommentSynced(`tg:${tgCommentId}`)
-      logger.info('[tgCommentSync] blocked by antispam', {
-        chainId: chain.id,
-        tgCommentId,
-        spamScore: antispam.spamScore,
-        reason: antispam.reason,
-      })
-      return
-    }
 
     const saved = commentStore.saveTelegramThreadComment(
       {

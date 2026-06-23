@@ -47,6 +47,7 @@ import { backfillPostCommentMappingsFromForwarded } from './services/postComment
 import { bootstrapCommentSyncOnStartup } from './services/commentSyncDiagnostics'
 import { repairTgChainsForForwarding, repairStaleTgChainBotTokens, repairMiniappChainsForwardComments, repairTgChainForwardPostsSince } from './services/tgChainChannelRef'
 import { setTgChainForwarderBot, startTgChainForwarder } from './services/tgChainForwarder'
+import { startTelegramAntispamBotPoller } from './services/telegramAntispamBotService'
 import { startTgPostDeletionWatcher } from './services/tgPostDeletionWatcher'
 import { setVkChainForwarderBot, startVkChainForwarder, stopVkChainForwarder } from './services/vkChainForwarder'
 import { setTelegramTgChainLifecycleBot } from './services/telegramTgChainLifecycle'
@@ -265,6 +266,9 @@ async function main(): Promise<void> {
     })
     startChannelImportWorker()
     startTgChainForwarder()
+    const stopAntispamBot = startTelegramAntispamBotPoller()
+    process.once('SIGINT', () => stopAntispamBot())
+    process.once('SIGTERM', () => stopAntispamBot())
     scheduleDeferredCommentSyncBootstrap()
   } else {
     const app = createHttpApp({ bot })
@@ -286,6 +290,9 @@ async function main(): Promise<void> {
 
     startChannelImportWorker()
     startTgChainForwarder()
+    const stopAntispamBot = startTelegramAntispamBotPoller()
+    process.once('SIGINT', () => stopAntispamBot())
+    process.once('SIGTERM', () => stopAntispamBot())
     scheduleDeferredCommentSyncBootstrap()
     await startBotLongPolling(bot)
   }

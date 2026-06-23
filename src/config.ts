@@ -38,6 +38,8 @@ export interface Config {
    * Не путать с {@link Config.TG_TOKEN}.
    */
   tgReaderToken: string
+  /** Отдельный TG-бот только для антиспама в группах обсуждений. */
+  tgAntispamToken: string
   /** Опционально: TG_TOKEN из .env (дублирует getTelegramToken на старте). */
   TG_TOKEN: string
   /**
@@ -162,6 +164,7 @@ function getConfig(): Config {
   const base: Config = {
     BOT_TOKEN,
     tgReaderToken: process.env.TG_READER_BOT_TOKEN || '',
+    tgAntispamToken: process.env.TG_ANTISPAM_BOT_TOKEN || '',
     TG_TOKEN,
     ownerUserId: ownerParsed,
     adminToken: computeAdminToken(ownerParsed, BOT_TOKEN),

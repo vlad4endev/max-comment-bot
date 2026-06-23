@@ -97,6 +97,7 @@ function getConfig() {
     const base = {
         BOT_TOKEN,
         tgReaderToken: process.env.TG_READER_BOT_TOKEN || '',
+        tgAntispamToken: process.env.TG_ANTISPAM_BOT_TOKEN || '',
         TG_TOKEN,
         ownerUserId: ownerParsed,
         adminToken: computeAdminToken(ownerParsed, BOT_TOKEN),

@@ -18,7 +18,7 @@ const channelRegistry_1 = require("./channelRegistry");
 const postCommentMappingStore_1 = require("./postCommentMappingStore");
 const postStore_1 = require("./postStore");
 const commentsBookingService_1 = require("./commentsBookingService");
-const antispamService_1 = require("./antispamService");
+const telegramAntispamBotService_1 = require("./telegramAntispamBotService");
 const resolveChannelChatId_1 = require("./resolveChannelChatId");
 const resolveTelegramBotToken_1 = require("./resolveTelegramBotToken");
 const commentSyncGuard_1 = require("../utils/commentSyncGuard");
@@ -157,6 +157,11 @@ async function handleTgComment(message, chain, bot, discussionChatId) {
         if (commentStore_1.commentStore.findCommentByTgMessageId(tgCommentId)) {
             return;
         }
+        if (!(0, telegramAntispamBotService_1.isTelegramAntispamBotConfigured)()) {
+            if (await (0, telegramAntispamBotService_1.tryBlockTelegramCommentByAntispam)(message, chain, discussionChatId, tgCommentId)) {
+                return;
+            }
+        }
         let mapping = (0, postCommentMappingStore_1.findMappingByThreadMsgId)(chain.id, threadRootMsgId);
         if (!mapping?.max_mid) {
             const threadRoot = (0, commentSyncFilter_1.resolveThreadRootMessage)(message);
@@ -226,24 +231,6 @@ async function handleTgComment(message, chain, bot, discussionChatId) {
             return;
         }
         const { userId, username: authorName } = (0, commentSyncFilter_1.resolveTgCommentAuthor)(message, chain, discussionChatId);
-        const antispam = (0, antispamService_1.evaluateComment)({
-            text,
-            userId,
-            username: authorName,
-            channelChatId: maxChatId,
-            source: 'telegram',
-            isChannelAdmin: isAdmin,
-        });
-        if (!antispam.allowed) {
-            (0, commentSyncGuard_1.markCommentSynced)(`tg:${tgCommentId}`);
-            logger_1.logger.info('[tgCommentSync] blocked by antispam', {
-                chainId: chain.id,
-                tgCommentId,
-                spamScore: antispam.spamScore,
-                reason: antispam.reason,
-            });
-            return;
-        }
         const saved = commentStore_1.commentStore.saveTelegramThreadComment({
             post_id: post.post_id,
             user_id: userId,

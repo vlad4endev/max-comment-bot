@@ -10,6 +10,8 @@ export interface Config {
      * Не путать с {@link Config.TG_TOKEN}.
      */
     tgReaderToken: string;
+    /** Отдельный TG-бот только для антиспама в группах обсуждений. */
+    tgAntispamToken: string;
     /** Опционально: TG_TOKEN из .env (дублирует getTelegramToken на старте). */
     TG_TOKEN: string;
     /**

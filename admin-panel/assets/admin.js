@@ -5756,6 +5756,21 @@
             '</div></div>';
           html += '</div>';
 
+          var tgAsBot = w.telegram_antispam_bot || {};
+          html += '<div class="as-hint-box mt-md"><i data-lucide="bot"></i><div><strong>Telegram-бот антиспама</strong>';
+          if (tgAsBot.configured) {
+            html +=
+              '<p>Отдельный бот: <code>' +
+              esc(tgAsBot.bot_username ? '@' + tgAsBot.bot_username : tgAsBot.token_preview || '—') +
+              '</code> — ' +
+              (tgAsBot.api_ok ? 'подключён' : 'ошибка API') +
+              '. Модерирует группы обсуждений, основной CommentBot занимается синхронизацией.</p>';
+          } else {
+            html +=
+              '<p>Не задан <code>TG_ANTISPAM_BOT_TOKEN</code> — антиспам выполняет основной CommentBot. Для разделения создайте второго бота через @BotFather, добавьте его админом в группу обсуждений (удаление + ограничение) и пропишите токен в <code>.env</code>.</p>';
+          }
+          html += '</div></div>';
+
           html += '<div class="panel">';
           html += sectionHead('Как работает скоринг', 'Каждому комментарию начисляются баллы за подозрительные признаки. Итоговое действие зависит от суммы.');
           html += renderAntispamScoreScale(engine);

@@ -82,6 +82,7 @@ import {
   isTelegramTokenAuthorized,
   probeTelegramBotApi,
 } from '../services/telegramHealthService'
+import { resolveTelegramAntispamBotToken } from '../services/resolveTelegramAntispamBotToken'
 import { findActiveTgChainForPair } from '../utils/tgChainPair'
 import { normalizeTelegramLinkedChatsForApi } from '../utils/telegramLinkedChats'
 import { purgeTgChainForwardedMaxPosts } from '../services/tgChainPostPurge'
@@ -1369,6 +1370,29 @@ export function createAdminRouter(deps: AdminRouterDeps): express.Router {
   secured.get('/antispam/words', async (_req, res) => {
     const data = await getAntispamWords()
     const log = await getAntispamLog(200)
+    const antispamBotToken = resolveTelegramAntispamBotToken()
+    let telegram_antispam_bot: {
+      configured: boolean
+      api_ok: boolean
+      bot_username: string | null
+      token_preview: string | null
+    } = {
+      configured: false,
+      api_ok: false,
+      bot_username: null,
+      token_preview: null,
+    }
+    if (antispamBotToken) {
+      const probe = await probeTelegramBotApi(antispamBotToken)
+      telegram_antispam_bot = {
+        configured: true,
+        api_ok: probe.api_ok,
+        bot_username: probe.bot_username,
+        token_preview: antispamBotToken.includes(':')
+          ? `${antispamBotToken.split(':')[0]}:…${antispamBotToken.slice(-4)}`
+          : `…${antispamBotToken.slice(-4)}`,
+      }
+    }
     res.json({
       global: data.global,
       byChannel: data.byChannel,
@@ -1379,6 +1403,7 @@ export function createAdminRouter(deps: AdminRouterDeps): express.Router {
       scored_words_total: data.scored_words_total,
       score_tiers: [...ANTISPAM_SCORE_TIERS],
       blocked_today: countAntispamBlocksToday(log),
+      telegram_antispam_bot,
     })
   })
 

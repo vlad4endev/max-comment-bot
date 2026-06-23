@@ -74,6 +74,7 @@ const integrationPlatformClient_1 = require("../services/integrationPlatformClie
 const mtprotoConfigStore_1 = require("../services/mtprotoConfigStore");
 const tgPostDeletionWatcher_1 = require("../services/tgPostDeletionWatcher");
 const telegramHealthService_1 = require("../services/telegramHealthService");
+const resolveTelegramAntispamBotToken_1 = require("../services/resolveTelegramAntispamBotToken");
 const tgChainPair_1 = require("../utils/tgChainPair");
 const telegramLinkedChats_1 = require("../utils/telegramLinkedChats");
 const tgChainPostPurge_1 = require("../services/tgChainPostPurge");
@@ -1234,6 +1235,24 @@ function createAdminRouter(deps) {
     secured.get('/antispam/words', async (_req, res) => {
         const data = await (0, adminPanelState_1.getAntispamWords)();
         const log = await (0, adminPanelState_1.getAntispamLog)(200);
+        const antispamBotToken = (0, resolveTelegramAntispamBotToken_1.resolveTelegramAntispamBotToken)();
+        let telegram_antispam_bot = {
+            configured: false,
+            api_ok: false,
+            bot_username: null,
+            token_preview: null,
+        };
+        if (antispamBotToken) {
+            const probe = await (0, telegramHealthService_1.probeTelegramBotApi)(antispamBotToken);
+            telegram_antispam_bot = {
+                configured: true,
+                api_ok: probe.api_ok,
+                bot_username: probe.bot_username,
+                token_preview: antispamBotToken.includes(':')
+                    ? `${antispamBotToken.split(':')[0]}:…${antispamBotToken.slice(-4)}`
+                    : `…${antispamBotToken.slice(-4)}`,
+            };
+        }
         res.json({
             global: data.global,
             byChannel: data.byChannel,
@@ -1244,6 +1263,7 @@ function createAdminRouter(deps) {
             scored_words_total: data.scored_words_total,
             score_tiers: [...seedAntispamScoredWords_1.ANTISPAM_SCORE_TIERS],
             blocked_today: (0, adminPanelState_1.countAntispamBlocksToday)(log),
+            telegram_antispam_bot,
         });
     });
     secured.post('/antispam/words', async (req, res) => {

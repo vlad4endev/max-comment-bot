@@ -69,6 +69,7 @@ const postCommentMappingStore_1 = require("./services/postCommentMappingStore");
 const commentSyncDiagnostics_1 = require("./services/commentSyncDiagnostics");
 const tgChainChannelRef_1 = require("./services/tgChainChannelRef");
 const tgChainForwarder_1 = require("./services/tgChainForwarder");
+const telegramAntispamBotService_1 = require("./services/telegramAntispamBotService");
 const tgPostDeletionWatcher_1 = require("./services/tgPostDeletionWatcher");
 const vkChainForwarder_1 = require("./services/vkChainForwarder");
 const telegramTgChainLifecycle_1 = require("./services/telegramTgChainLifecycle");
@@ -258,6 +259,9 @@ async function main() {
         });
         (0, channelImportService_1.startChannelImportWorker)();
         (0, tgChainForwarder_1.startTgChainForwarder)();
+        const stopAntispamBot = (0, telegramAntispamBotService_1.startTelegramAntispamBotPoller)();
+        process.once('SIGINT', () => stopAntispamBot());
+        process.once('SIGTERM', () => stopAntispamBot());
         scheduleDeferredCommentSyncBootstrap();
     }
     else {
@@ -274,6 +278,9 @@ async function main() {
         });
         (0, channelImportService_1.startChannelImportWorker)();
         (0, tgChainForwarder_1.startTgChainForwarder)();
+        const stopAntispamBot = (0, telegramAntispamBotService_1.startTelegramAntispamBotPoller)();
+        process.once('SIGINT', () => stopAntispamBot());
+        process.once('SIGTERM', () => stopAntispamBot());
         scheduleDeferredCommentSyncBootstrap();
         await (0, bot_1.startBotLongPolling)(bot);
     }
