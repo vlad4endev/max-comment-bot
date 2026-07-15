@@ -263,7 +263,8 @@ export class PostStore {
     if (!post) {
       return null
     }
-    const next: Post = { ...post, comment_count: post.comment_count + 1 }
+    const actual = this.countCommentsInDb(postId)
+    const next: Post = { ...post, comment_count: actual }
     this.savePost(next)
     return next.comment_count
   }
@@ -273,9 +274,38 @@ export class PostStore {
     if (!post) {
       return null
     }
-    const next: Post = { ...post, comment_count: Math.max(0, post.comment_count - 1) }
+    const actual = this.countCommentsInDb(postId)
+    const next: Post = { ...post, comment_count: actual }
     this.savePost(next)
     return next.comment_count
+  }
+
+  /**
+   * Aligns {@link Post.comment_count} with rows in `comments` (source of truth).
+   * Fixes drift after migration or upsert that reset the cached counter.
+   */
+  reconcileCommentCount(postId: string): number | null {
+    const post = this.getPost(postId)
+    if (!post) {
+      return null
+    }
+    const actual = this.countCommentsInDb(postId)
+    if (actual !== post.comment_count) {
+      logger.info('postStore: reconciled comment_count', {
+        postId,
+        was: post.comment_count,
+        now: actual,
+      })
+      this.savePost({ ...post, comment_count: actual })
+    }
+    return actual
+  }
+
+  private countCommentsInDb(postId: string): number {
+    const row = getDb()
+      .prepare('SELECT COUNT(*) AS n FROM comments WHERE post_id = ?')
+      .get(postId) as { n: number }
+    return Number(row.n) || 0
   }
 
   removePostsForChatId(chatId: number): string[] {
@@ -349,6 +379,7 @@ export class PostStore {
    * Updates the channel message inline keyboard to show the current comment count.
    */
   async updateButtonCaption(bot: Bot, post: Post): Promise<boolean> {
+    this.reconcileCommentCount(post.post_id)
     const fresh = this.getPost(post.post_id) ?? post
     const bookedBy = fresh.comments_booked_by
     const bookedByTelegram = bookedBy === 'telegram'
@@ -438,6 +469,7 @@ export class PostStore {
     return {
       ...existing,
       ...post,
+      comment_count: Math.max(existing.comment_count ?? 0, post.comment_count ?? 0),
       comments_booked_by: post.comments_booked_by ?? existing.comments_booked_by,
       tg_booked_marker_msg_id: post.tg_booked_marker_msg_id ?? existing.tg_booked_marker_msg_id,
       tg_booked_in_max_applied:
@@ -485,15 +517,19 @@ export class PostStore {
           text                    = excluded.text,
           photo_url               = excluded.photo_url,
           media_attachments       = excluded.media_attachments,
-          comment_count           = excluded.comment_count,
+          comment_count           = MAX(posts.comment_count, excluded.comment_count),
           data                    = json_set(
             json_set(
-              json_set(excluded.data, '$.post_id', posts.post_id),
-              '$.chat_id',
-              posts.chat_id
+              json_set(
+                json_set(excluded.data, '$.post_id', posts.post_id),
+                '$.chat_id',
+                posts.chat_id
+              ),
+              '$.message_mid',
+              posts.message_mid
             ),
-            '$.message_mid',
-            posts.message_mid
+            '$.comment_count',
+            MAX(posts.comment_count, excluded.comment_count)
           )`,
       ),
       selectIdsByChatId: db.prepare('SELECT post_id FROM posts WHERE chat_id = ?'),
