@@ -69,13 +69,13 @@ export function countFreshBlockedComments(chainId: string, staleCutoff?: string)
     .get(chainId, cutoff) as { n: number }
   return Number(row.n) || 0
 }
-/** Списывает комментарии к постам старше STALE_UNDELIVERABLE_DAYS без треда (tg_comment_id = -1). */
+/** Списывает комментарии к постам старше STALE_UNDELIVERABLE_DAYS без треда (tg_comment_id < 0, уникально через -rowid). */
 export function purgeStaleUndeliverableComments(chainId: string): number {
   const staleCutoff = staleUndeliverableCutoffIso()
   const result = getDb()
     .prepare(
       `UPDATE comments
-       SET tg_comment_id = -1
+       SET tg_comment_id = -rowid
        WHERE (tg_comment_id IS NULL OR tg_comment_id = 0)
          AND (source IS NULL OR source = 'max')
          AND post_id IN (
