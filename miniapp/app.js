@@ -336,14 +336,16 @@
     }
 
     function isTelegramMiniappBridge(bridge) {
+      // Prefer-Telegram runtime must stay on TG API path even if Max WebApp is also injected.
+      if (isMiniappTelegramRuntime()) return true
       if (window.Telegram && window.Telegram.WebApp && bridge === window.Telegram.WebApp) {
         return true
       }
       if (!window.Telegram || !window.Telegram.WebApp) {
-        return isMiniappTelegramRuntime() || isLikelyTelegramWebView()
+        return isLikelyTelegramWebView()
       }
       if (bridge && window.WebApp && bridge === window.WebApp) return false
-      return isMiniappTelegramRuntime() || isLikelyTelegramWebView()
+      return isLikelyTelegramWebView()
     }
 
     function normalizeBridgeUser(rawUser) {
@@ -832,8 +834,8 @@
         bridge = window.Telegram.WebApp
       }
       bridge = bridge || {}
-      var inTelegram = isTelegramMiniappBridge(bridge);
-      var inMax = isMaxMiniappBridge(bridge);
+      var inTelegram = isTelegramMiniappBridge(bridge) || isMiniappTelegramRuntime();
+      var inMax = isMaxMiniappBridge(bridge) && !inTelegram;
       try {
         if (typeof bridge.ready === 'function') {
           bridge.ready();
@@ -992,11 +994,17 @@
 
       var homeErr = document.getElementById('homeErr');
       var botNick = '@bot';
-      var platformQs = inTelegram ? '&platform=telegram' : '';
+      // Always pin TG platform when opened as Telegram miniapp (never hit Max registry by mistake).
+      var useTelegramPlatform = !!(inTelegram || isMiniappTelegramRuntime());
+      var platformQs = useTelegramPlatform ? '&platform=telegram' : '';
+      var homeBootGen = (window.__miniappHomeBootGen = (window.__miniappHomeBootGen || 0) + 1);
       function homeApiHeaders(withJson) {
         var h = withJson ? { 'Content-Type': 'application/json' } : {};
-        if (inTelegram) h['X-Miniapp-Platform'] = 'telegram';
+        if (useTelegramPlatform) h['X-Miniapp-Platform'] = 'telegram';
         return h;
+      }
+      function isStaleHomeBoot() {
+        return homeBootGen !== window.__miniappHomeBootGen;
       }
 
       function setHomeErr(t, fallback) {
@@ -1260,7 +1268,7 @@
             var next = !sw.classList.contains('on');
             sw.classList.toggle('on', next);
             sw.setAttribute('aria-checked', next ? 'true' : 'false');
-            fetch('/api/settings' + (inTelegram ? '?platform=telegram' : ''), {
+            fetch('/api/settings' + (useTelegramPlatform ? '?platform=telegram' : ''), {
               method: 'POST',
               headers: homeApiHeaders(true),
               body: JSON.stringify({ user_id: apiUid, feature: feature, enabled: next }),
@@ -1548,6 +1556,7 @@
             return r.json()
           })
           .then(function (data) {
+            if (isStaleHomeBoot()) return data
             applyHomeChannelsData(data)
             enrichChannelsLive(apiUid)
             var sel = document.getElementById('linkTgChannelSelect')
@@ -1630,6 +1639,7 @@
           return r.json();
         })
         .then(function (data) {
+          if (isStaleHomeBoot()) return;
           syncSwitch('comments', data.comments);
           syncSwitch('notifications', data.notifications);
           syncSwitch('moderation', data.moderation);
@@ -1645,17 +1655,20 @@
           return r.json();
         })
         .then(function (s) {
+          if (isStaleHomeBoot()) return;
           document.getElementById('statCh').textContent = String(s.channels ?? 0);
           document.getElementById('statPosts').textContent = String(s.posts ?? 0);
           document.getElementById('statComm').textContent = String(s.comments ?? 0);
           if (s.bot_nickname) botNick = '@' + String(s.bot_nickname).replace(/^@/, '');
         })
         .catch(function () {
+          if (isStaleHomeBoot()) return;
           setHomeErr('Не удалось загрузить статистику');
         });
 
       reloadHomeChannels(uid)
         .then(function () {
+          if (isStaleHomeBoot()) return;
           if (pendingOpenChannelLink && inTelegram) {
             fillLinkChannelSelect(
               document.getElementById('linkTgChannelSelect'),
@@ -1664,8 +1677,17 @@
             )
             showChannelLinkOverlay('tg')
           }
+          // After background TG discovery finishes, refresh once so first open matches Max reliability.
+          if (useTelegramPlatform) {
+            window.setTimeout(function () {
+              if (isStaleHomeBoot()) return
+              reloadHomeChannels(uid).catch(function () {})
+              loadChannelLinks(uid)
+            }, 2800)
+          }
         })
         .catch(function () {
+          if (isStaleHomeBoot()) return;
           setHomeErr('Не удалось загрузить список каналов')
         })
 
@@ -1756,6 +1778,7 @@
             return r.ok ? r.json() : { links: [] }
           })
           .then(function (data) {
+            if (isStaleHomeBoot()) return
             var links = data.links || []
             window.__channelLinksCache = links
             host.innerHTML = ''
@@ -4749,8 +4772,9 @@
       var preferTg = isMiniappTelegramRuntime();
       var likelyMax = isLikelyMaxMiniapp();
       var postContextHint = hasPostContextInLocation();
+      // TG: don't block UI for 10s — launch sooner and resolve user via homeUserRetry (like Max feel).
       var hardDeadlineMs =
-        preferTg && !postContextHint ? 10000 : likelyMax ? 12000 : 3000;
+        preferTg && !postContextHint ? 2500 : likelyMax ? 12000 : 3000;
       try {
         var earlySp = new URLSearchParams(location.search);
         var earlyStart = String(earlySp.get('startapp') || earlySp.get('start_param') || '');

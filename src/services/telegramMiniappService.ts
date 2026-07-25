@@ -41,8 +41,19 @@ import {
 } from '../utils/telegramMiniAppUrl'
 import { config } from '../config'
 import { logger } from '../utils/logger'
+import {
+  cacheDelete,
+  cacheGetJson,
+  cacheGetOrCompute,
+  cacheSetJson,
+} from '../cache/tieredCache'
 
 const TG_API = 'https://api.telegram.org/bot'
+
+/** Same ballpark as Max miniapp admin-channels cache — keeps TG home snappy. */
+const TG_MINIAPP_CHANNELS_TTL_SEC = 120
+const TG_DISCOVERY_TTL_SEC = 60
+const TG_ADMIN_CHECK_TTL_SEC = 90
 
 export interface TelegramMiniappChannelWire {
   chat_id: string
@@ -51,6 +62,30 @@ export interface TelegramMiniappChannelWire {
   avatar_url: string | null
   status: 'pending' | 'active'
   platform: 'telegram'
+}
+
+type TelegramMiniappChannelsPayload = {
+  channels: TelegramMiniappChannelWire[]
+  bot_username: string
+}
+
+const listChannelsInFlight = new Map<number, Promise<TelegramMiniappChannelsPayload>>()
+
+function tgChannelsCacheKey(telegramUserId: number): string {
+  return `miniapp:tg-channels:${telegramUserId}`
+}
+
+function tgAdminCheckCacheKey(chatId: string, telegramUserId: number): string {
+  return `miniapp:tg-admin:${chatId}:${telegramUserId}`
+}
+
+export async function invalidateTelegramMiniappChannelsCache(
+  telegramUserId?: number,
+): Promise<void> {
+  if (telegramUserId != null) {
+    listChannelsInFlight.delete(telegramUserId)
+    await cacheDelete(tgChannelsCacheKey(telegramUserId))
+  }
 }
 
 async function sendTelegramBotMessage(
@@ -230,6 +265,41 @@ async function isTelegramChannelAdmin(
   return admins.some((a) => a.userId === telegramUserId)
 }
 
+async function isTelegramChannelAdminCached(
+  token: string,
+  channelChatId: string,
+  telegramUserId: number,
+): Promise<boolean> {
+  return cacheGetOrCompute(
+    tgAdminCheckCacheKey(channelChatId, telegramUserId),
+    TG_ADMIN_CHECK_TTL_SEC,
+    () => isTelegramChannelAdmin(token, channelChatId, telegramUserId),
+  )
+}
+
+/** Heavy TG Bot API discovery — throttled so home/stats/links don't all re-run getUpdates.
+ *  @returns true when discovery actually ran */
+async function maybeRefreshTelegramChannelsCache(
+  token: string,
+  telegramUserId: number,
+  force: boolean,
+): Promise<boolean> {
+  if (force) {
+    await refreshTelegramChannelsCache(token, telegramUserId)
+    await cacheSetJson('miniapp:tg-discovery:global', { at: Date.now() }, TG_DISCOVERY_TTL_SEC)
+    return true
+  }
+  const existing = await cacheGetJson<{ at: number }>('miniapp:tg-discovery:global')
+  if (existing) {
+    return false
+  }
+  await cacheGetOrCompute('miniapp:tg-discovery:global', TG_DISCOVERY_TTL_SEC, async () => {
+    await refreshTelegramChannelsCache(token, telegramUserId)
+    return { at: Date.now() }
+  })
+  return true
+}
+
 function isNumericTelegramChatId(raw: string): boolean {
   return /^-?\d+$/.test(String(raw).trim())
 }
@@ -379,6 +449,9 @@ export async function registerTelegramChannelByKeyForMiniappUser(
     notify: false,
   })
 
+  await cacheDelete(tgAdminCheckCacheKey(resolved.chatId, telegramUserId))
+  await invalidateTelegramMiniappChannelsCache(telegramUserId)
+
   const fresh = telegramChannelRegistry.getChannel(resolved.chatId)
   return {
     chat_id: resolved.chatId,
@@ -390,44 +463,115 @@ export async function registerTelegramChannelByKeyForMiniappUser(
   }
 }
 
-export async function listTelegramMiniappChannelsForUser(
+async function computeTelegramMiniappChannelsForUser(
+  token: string,
   telegramUserId: number,
-): Promise<{ channels: TelegramMiniappChannelWire[]; bot_username: string }> {
-  const token = resolveTelegramBotToken()
-  if (!token) {
-    return { channels: [], bot_username: 'commentvmax_bot' }
+  options?: { forceRefresh?: boolean },
+): Promise<TelegramMiniappChannelsPayload> {
+  await integrationsStore.load()
+  await ensureAdminPanelStateLoaded()
+
+  if (options?.forceRefresh) {
+    await maybeRefreshTelegramChannelsCache(token, telegramUserId, true)
+  } else {
+    // Match Max: serve from registry immediately; throttle discovery off the request path.
+    void maybeRefreshTelegramChannelsCache(token, telegramUserId, false)
+      .then(async (didRefresh) => {
+        if (didRefresh) {
+          await invalidateTelegramMiniappChannelsCache(telegramUserId)
+        }
+      })
+      .catch((err: unknown) => {
+        logger.warn('telegram miniapp background discovery failed', { telegramUserId, err })
+      })
   }
-  await refreshTelegramChannelsCache(token, telegramUserId)
 
-  const channels: TelegramMiniappChannelWire[] = []
+  const candidates = collectTelegramMiniappChannelCandidateIds(telegramUserId)
   const seen = new Set<string>()
-
-  for (const chatId of collectTelegramMiniappChannelCandidateIds(telegramUserId)) {
-    if (seen.has(chatId)) {
-      continue
-    }
+  const uniqueIds: string[] = []
+  for (const chatId of candidates) {
+    if (seen.has(chatId)) continue
     seen.add(chatId)
     const row = telegramChannelRegistry.getChannel(chatId)
     const type = row?.type ?? 'channel'
-    if (type !== 'channel' && type !== 'supergroup') {
-      continue
-    }
-    if (!(await isTelegramChannelAdmin(token, chatId, telegramUserId))) {
-      continue
-    }
-    await reconcileTelegramChannelForMiniappUser(chatId, telegramUserId)
-    const fresh = telegramChannelRegistry.getChannel(chatId)
+    if (type !== 'channel' && type !== 'supergroup') continue
+    uniqueIds.push(chatId)
+  }
+
+  const adminFlags = await Promise.all(
+    uniqueIds.map(async (chatId) => ({
+      chatId,
+      isAdmin: await isTelegramChannelAdminCached(token, chatId, telegramUserId),
+    })),
+  )
+
+  const channels: TelegramMiniappChannelWire[] = []
+  const toReconcile: string[] = []
+  for (const { chatId, isAdmin } of adminFlags) {
+    if (!isAdmin) continue
+    toReconcile.push(chatId)
+    const row = telegramChannelRegistry.getChannel(chatId)
     channels.push({
       chat_id: chatId,
-      title: fresh?.title ?? row?.title ?? null,
+      title: row?.title ?? null,
       subscribers: null,
       avatar_url: null,
-      status: fresh?.bot_is_admin ? 'active' : 'pending',
+      status: row?.bot_is_admin ? 'active' : 'pending',
       platform: 'telegram',
     })
   }
 
+  // Activation side-effects off the request path (was 2× getChatAdministrators per channel).
+  if (toReconcile.length > 0) {
+    void Promise.all(
+      toReconcile.map((chatId) =>
+        reconcileTelegramChannelForMiniappUser(chatId, telegramUserId).catch((err: unknown) => {
+          logger.warn('telegram miniapp reconcile failed', { chatId, telegramUserId, err })
+        }),
+      ),
+    )
+  }
+
   return { channels, bot_username: 'commentvmax_bot' }
+}
+
+export async function listTelegramMiniappChannelsForUser(
+  telegramUserId: number,
+  options?: { forceRefresh?: boolean },
+): Promise<TelegramMiniappChannelsPayload> {
+  const token = resolveTelegramBotToken()
+  if (!token) {
+    return { channels: [], bot_username: 'commentvmax_bot' }
+  }
+
+  const cacheKey = tgChannelsCacheKey(telegramUserId)
+  if (!options?.forceRefresh) {
+    const cached = await cacheGetJson<TelegramMiniappChannelsPayload>(cacheKey)
+    if (cached) {
+      return cached
+    }
+    const inFlight = listChannelsInFlight.get(telegramUserId)
+    if (inFlight) {
+      return inFlight
+    }
+  }
+
+  const compute = (async () => {
+    const payload = await computeTelegramMiniappChannelsForUser(token, telegramUserId, options)
+    await cacheSetJson(cacheKey, payload, TG_MINIAPP_CHANNELS_TTL_SEC)
+    return payload
+  })()
+
+  if (!options?.forceRefresh) {
+    listChannelsInFlight.set(telegramUserId, compute)
+  }
+  try {
+    return await compute
+  } finally {
+    if (listChannelsInFlight.get(telegramUserId) === compute) {
+      listChannelsInFlight.delete(telegramUserId)
+    }
+  }
 }
 
 export async function getTelegramMiniappStats(telegramUserId: number): Promise<{
