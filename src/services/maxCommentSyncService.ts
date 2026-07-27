@@ -140,46 +140,41 @@ function purgeStaleUndeliverableOnStartup(): void {
     if (chain.forward_comments !== true) {
       continue
     }
-    const staleCount = purgeStaleUndeliverableComments(chain.id)
-    if (staleCount > 0) {
-      logger.info('[maxCommentSync] purged stale undeliverable comments', {
+    try {
+      const staleCount = purgeStaleUndeliverableComments(chain.id)
+      if (staleCount > 0) {
+        logger.info('[maxCommentSync] purged stale undeliverable comments', {
+          chainId: chain.id,
+          count: staleCount,
+          older_than_days: STALE_UNDELIVERABLE_DAYS,
+        })
+      }
+    } catch (err: unknown) {
+      // Не валим весь процесс: UNIQUE/прочие ошибки списывания не должны блокировать старт.
+      logger.error('[maxCommentSync] stale undeliverable purge failed on startup', {
         chainId: chain.id,
-        count: staleCount,
-        older_than_days: STALE_UNDELIVERABLE_DAYS,
+        err,
       })
     }
   }
 }
 
 function purgeStaleUndeliverableDaily(): void {
-  const staleCutoff = staleUndeliverableCutoffIso()
   for (const chain of listTgChainsSync()) {
     if (chain.forward_comments !== true) {
       continue
     }
-    const result = getDb()
-      .prepare(
-        `UPDATE comments
-         SET tg_comment_id = -(strftime('%s', 'now') * 1000 + ABS(RANDOM() % 1000))
-         WHERE rowid IN (
-           SELECT c.rowid FROM comments c
-           JOIN posts p ON p.post_id = c.post_id
-           LEFT JOIN post_comment_mapping m ON m.max_mid = p.message_mid AND m.chain_id = ?
-           WHERE (c.tg_comment_id IS NULL OR c.tg_comment_id = 0)
-             AND (c.source IS NULL OR c.source = 'max')
-             AND (m.tg_thread_msg_id IS NULL OR m.tg_thread_msg_id = 0)
-             AND p.timestamp < ?
-           LIMIT 500
-         )`,
-      )
-      .run(chain.id, staleCutoff)
-    const count = Number(result.changes) || 0
-    if (count > 0) {
-      logger.info('[maxCommentSync] daily stale comment write-off', {
-        chainId: chain.id,
-        count,
-        older_than_days: STALE_UNDELIVERABLE_DAYS,
-      })
+    try {
+      const count = purgeStaleUndeliverableComments(chain.id)
+      if (count > 0) {
+        logger.info('[maxCommentSync] daily stale comment write-off', {
+          chainId: chain.id,
+          count,
+          older_than_days: STALE_UNDELIVERABLE_DAYS,
+        })
+      }
+    } catch (err: unknown) {
+      logger.warn('[maxCommentSync] daily stale purge error', { chainId: chain.id, err })
     }
   }
 }

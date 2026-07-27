@@ -259,7 +259,7 @@ async function deleteMaxPost(
 
   db.prepare(
     `UPDATE comments
-     SET tg_comment_id = -999
+     SET tg_comment_id = -(2000000000000000 + rowid)
      WHERE post_id = ?
        AND (tg_comment_id IS NULL OR tg_comment_id = 0 OR tg_comment_id > 0)`,
   ).run(postId)
