@@ -75,24 +75,33 @@ export function countFreshBlockedComments(chainId: string, staleCutoff?: string)
  */
 export const UNDELIVERABLE_TG_COMMENT_ID_BASE = 2_000_000_000_000_000
 
-/** Списывает комментарии к постам старше STALE_UNDELIVERABLE_DAYS без треда (tg_comment_id < 0). */
-export function purgeStaleUndeliverableComments(chainId: string): number {
+/** Размер батча: один большой UPDATE блокирует event loop better-sqlite3. */
+export const STALE_UNDELIVERABLE_PURGE_BATCH = 100
+
+/** Списывает до `limit` комментариев к постам старше STALE_UNDELIVERABLE_DAYS без треда. */
+export function purgeStaleUndeliverableComments(
+  chainId: string,
+  limit: number = STALE_UNDELIVERABLE_PURGE_BATCH,
+): number {
   const staleCutoff = staleUndeliverableCutoffIso()
+  const batchLimit = Math.max(1, Math.min(Math.floor(limit), 500))
   const result = getDb()
     .prepare(
       `UPDATE comments
        SET tg_comment_id = -(? + rowid)
-       WHERE (tg_comment_id IS NULL OR tg_comment_id = 0)
-         AND (source IS NULL OR source = 'max')
-         AND post_id IN (
-           SELECT p.post_id FROM posts p
-           LEFT JOIN post_comment_mapping m
-             ON m.max_mid = p.message_mid AND m.chain_id = ?
-           WHERE (m.tg_thread_msg_id IS NULL OR m.tg_thread_msg_id = 0)
-             AND p.timestamp < ?
-         )`,
+       WHERE rowid IN (
+         SELECT c.rowid FROM comments c
+         JOIN posts p ON p.post_id = c.post_id
+         LEFT JOIN post_comment_mapping m
+           ON m.max_mid = p.message_mid AND m.chain_id = ?
+         WHERE (c.tg_comment_id IS NULL OR c.tg_comment_id = 0)
+           AND (c.source IS NULL OR c.source = 'max')
+           AND (m.tg_thread_msg_id IS NULL OR m.tg_thread_msg_id = 0)
+           AND p.timestamp < ?
+         LIMIT ?
+       )`,
     )
-    .run(UNDELIVERABLE_TG_COMMENT_ID_BASE, chainId, staleCutoff)
+    .run(UNDELIVERABLE_TG_COMMENT_ID_BASE, chainId, staleCutoff, batchLimit)
   return Number(result.changes) || 0
 }
 

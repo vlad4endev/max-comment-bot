@@ -14,6 +14,7 @@ import { postStore } from './postStore'
 import {
   purgeStaleUndeliverableComments,
   STALE_UNDELIVERABLE_DAYS,
+  STALE_UNDELIVERABLE_PURGE_BATCH,
 } from './commentSyncDiagnostics'
 import {
   syncAdminReplyToTelegramThread,
@@ -135,27 +136,40 @@ async function bootstrapRepairOnStartup(): Promise<void> {
 }
 
 function purgeStaleUndeliverableOnStartup(): void {
-  for (const chain of listTgChainsSync()) {
-    if (chain.forward_comments !== true) {
-      continue
+  const chains = listTgChainsSync().filter((c) => c.forward_comments === true)
+  let chainIdx = 0
+
+  const runBatch = (): void => {
+    if (chainIdx >= chains.length) {
+      return
     }
+    const chain = chains[chainIdx]!
     try {
-      const staleCount = purgeStaleUndeliverableComments(chain.id)
+      const staleCount = purgeStaleUndeliverableComments(
+        chain.id,
+        STALE_UNDELIVERABLE_PURGE_BATCH,
+      )
       if (staleCount > 0) {
         logger.info('[maxCommentSync] purged stale undeliverable comments', {
           chainId: chain.id,
           count: staleCount,
           older_than_days: STALE_UNDELIVERABLE_DAYS,
         })
+        // Ещё есть строки — следующий батч после тика event loop (HTTP/API не зависают).
+        setImmediate(runBatch)
+        return
       }
     } catch (err: unknown) {
-      // Не валим весь процесс: UNIQUE/прочие ошибки списывания не должны блокировать старт.
       logger.error('[maxCommentSync] stale undeliverable purge failed on startup', {
         chainId: chain.id,
         err,
       })
     }
+    chainIdx += 1
+    setImmediate(runBatch)
   }
+
+  setImmediate(runBatch)
 }
 
 function purgeStaleUndeliverableDaily(): void {
@@ -164,11 +178,18 @@ function purgeStaleUndeliverableDaily(): void {
       continue
     }
     try {
-      const count = purgeStaleUndeliverableComments(chain.id)
-      if (count > 0) {
+      let total = 0
+      for (let i = 0; i < 20; i += 1) {
+        const count = purgeStaleUndeliverableComments(chain.id, STALE_UNDELIVERABLE_PURGE_BATCH)
+        total += count
+        if (count < STALE_UNDELIVERABLE_PURGE_BATCH) {
+          break
+        }
+      }
+      if (total > 0) {
         logger.info('[maxCommentSync] daily stale comment write-off', {
           chainId: chain.id,
-          count,
+          count: total,
           older_than_days: STALE_UNDELIVERABLE_DAYS,
         })
       }
@@ -182,14 +203,8 @@ export function startMaxCommentSync(bot: Bot, options: SyncOptions = {}): () => 
   const intervalMs = options.intervalMs ?? getMaxCommentSyncIntervalMs()
   const batchSize = options.batchSize ?? getTelegramCommentSyncBatchSize()
 
-  // Не блокируем event loop / HTTP startup тяжёлым UPDATE по comments.
-  setImmediate(() => {
-    try {
-      purgeStaleUndeliverableOnStartup()
-    } catch (err: unknown) {
-      logger.error('[maxCommentSync] deferred startup purge failed', { err })
-    }
-  })
+  // Батчи через setImmediate — не морозим event loop одним огромным UPDATE.
+  purgeStaleUndeliverableOnStartup()
   void bootstrapRepairOnStartup().catch((err: unknown) => {
     logger.warn('[maxCommentSync] bootstrap repair error', { err })
   })

@@ -73,17 +73,8 @@ export function createHttpApp(options: HttpAppOptions): express.Express {
   )
 
   app.get('/health', (_req, res) => {
-    const db = getDb()
+    // Лёгкий ответ: COUNT по comments и тяжёлые JOIN здесь блокируют event loop / фронт.
     const chains = listTgChainsSync()
-
-    const pendingComments = db
-      .prepare(
-        `SELECT COUNT(*) AS n FROM comments
-         WHERE (tg_comment_id IS NULL OR tg_comment_id = 0)
-           AND (source IS NULL OR source = 'max')`,
-      )
-      .get() as { n: number }
-
     res.status(200).json({
       ok: true,
       uptime: Math.round(process.uptime()),
@@ -93,9 +84,6 @@ export function createHttpApp(options: HttpAppOptions): express.Express {
         forwarding: chains.filter((c) => c.forward_posts).length,
         missing_discussion: chains.filter((c) => c.forward_comments && !c.tg_discussion_chat_id)
           .length,
-      },
-      comments: {
-        pending_sync: Number(pendingComments.n) || 0,
       },
       memory: {
         heapUsedMb: Math.round(process.memoryUsage().heapUsed / 1024 / 1024),
