@@ -21,6 +21,7 @@ import {
 } from '../utils/commentSyncFilter'
 import { logger } from '../utils/logger'
 import { apiCallWithRetry } from '../utils/maxApiRetry'
+import { isCommentsBookingActive } from './commentsBookingLock'
 
 export type CommentsBookedBy = 'telegram' | 'max' | 'vk'
 
@@ -53,6 +54,8 @@ export interface Post {
   button_attach_pending?: boolean
   /** Кросс-платформенная бронь поста: кто первым синхронизировал комментарий. */
   comments_booked_by?: CommentsBookedBy
+  /** ISO-время захвата брони; от него отсчитывается TTL закрытия комментариев в MAX. */
+  comments_booked_at?: string
   /** ID служебного сообщения «Забронировано в МАКСе» в TG-треде (legacy). */
   tg_booked_marker_msg_id?: number
   /** Маркер «Забронировано в МАКСе» дописан в текст TG-поста. */
@@ -354,8 +357,13 @@ export class PostStore {
     if (!post || post.comments_booked_by) {
       return false
     }
-    this.savePost({ ...post, comments_booked_by: by })
-    logger.info('postStore: comments booking claimed', { postId, bookedBy: by })
+    const comments_booked_at = new Date().toISOString()
+    this.savePost({ ...post, comments_booked_by: by, comments_booked_at })
+    logger.info('postStore: comments booking claimed', {
+      postId,
+      bookedBy: by,
+      bookedAt: comments_booked_at,
+    })
     return true
   }
 
@@ -381,9 +389,9 @@ export class PostStore {
   async updateButtonCaption(bot: Bot, post: Post): Promise<boolean> {
     this.reconcileCommentCount(post.post_id)
     const fresh = this.getPost(post.post_id) ?? post
-    const bookedBy = fresh.comments_booked_by
-    const bookedByTelegram = bookedBy === 'telegram'
-    const bookedByVk = bookedBy === 'vk'
+    const closedInMax = isPostCommentsClosedInMax(fresh)
+    const bookedByTelegram = closedInMax && fresh.comments_booked_by === 'telegram'
+    const bookedByVk = closedInMax && fresh.comments_booked_by === 'vk'
     if (!isMiniAppOpenUrlConfigured()) {
       logger.warn('postStore.updateButtonCaption: BOT_NICKNAME / MINI_APP_URL not usable for links')
       return false
@@ -409,6 +417,8 @@ export class PostStore {
         commentCount: fresh.comment_count,
         buttonUrl: url,
         startParam,
+        bookedBy: fresh.comments_booked_by ?? null,
+        bookingActive: closedInMax,
       },
     )
     const kb = buildPostCommentKeyboard(fresh)
@@ -471,6 +481,7 @@ export class PostStore {
       ...post,
       comment_count: Math.max(existing.comment_count ?? 0, post.comment_count ?? 0),
       comments_booked_by: post.comments_booked_by ?? existing.comments_booked_by,
+      comments_booked_at: post.comments_booked_at ?? existing.comments_booked_at,
       tg_booked_marker_msg_id: post.tg_booked_marker_msg_id ?? existing.tg_booked_marker_msg_id,
       tg_booked_in_max_applied:
         post.tg_booked_in_max_applied === true
@@ -888,20 +899,23 @@ export function buildMiniAppUrl(
   return buttonUrl
 }
 
-/** Новые комментарии в MAX miniapp закрыты — обсуждение на другой платформе. */
+/** Новые комментарии в MAX miniapp закрыты — обсуждение на другой платформе (пока действует TTL брони). */
 export function isPostCommentsClosedInMax(post: Post): boolean {
+  if (!isCommentsBookingActive(post)) {
+    return false
+  }
   return post.comments_booked_by === 'telegram' || post.comments_booked_by === 'vk'
 }
 
 /** Inline-клавиатура под постом: комментарии или «Забронировано в …» с той же ссылкой в miniapp. */
 export function buildPostCommentKeyboard(post: Post): InlineKeyboardAttachmentRequest {
   const url = buildCommentMiniAppUrl(post.post_id, post.chat_id, post.message_mid)
-  if (post.comments_booked_by === 'telegram') {
+  if (isPostCommentsClosedInMax(post) && post.comments_booked_by === 'telegram') {
     return Keyboard.inlineKeyboard([
       [Keyboard.button.link(formatMaxBookedInTgButtonLabel(post.comment_count), url)],
     ])
   }
-  if (post.comments_booked_by === 'vk') {
+  if (isPostCommentsClosedInMax(post) && post.comments_booked_by === 'vk') {
     return Keyboard.inlineKeyboard([
       [Keyboard.button.link(formatMaxBookedInVkButtonLabel(post.comment_count), url)],
     ])

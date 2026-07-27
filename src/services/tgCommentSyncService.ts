@@ -305,6 +305,7 @@ export async function handleTgComment(
       postCommentCount: post.comment_count,
       threadRootMsgId,
       commentsBookedBy: post.comments_booked_by ?? null,
+      commentsBookedAt: post.comments_booked_at ?? null,
     })
     if (!shouldSync) {
       logger.debug('[tgCommentSync] skipped by filter', {

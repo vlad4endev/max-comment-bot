@@ -506,7 +506,7 @@ export async function syncMaxCommentToTelegramThread(
   post: Post,
 ): Promise<void> {
   const freshPost = postStore.getPost(post.post_id) ?? post
-  if (isCommentSyncBlockedByBooking(freshPost.comments_booked_by, 'max')) {
+  if (isCommentSyncBlockedByBooking(freshPost, 'max')) {
     markCommentSynced(`max-comment-tg-blocked:${comment.comment_id}`)
     logger.debug('[telegramThreadReplySync] skip MAX→TG: post booked elsewhere', {
       commentId: comment.comment_id,
@@ -594,7 +594,7 @@ export async function syncAdminReplyToTelegramThread(
   post: Post,
 ): Promise<void> {
   const freshPost = postStore.getPost(post.post_id) ?? post
-  if (isCommentSyncBlockedByBooking(freshPost.comments_booked_by, 'max')) {
+  if (isCommentSyncBlockedByBooking(freshPost, 'max')) {
     logger.debug('[telegramThreadReplySync] skip admin MAX→TG: post booked elsewhere', {
       commentId: comment.comment_id,
       postId: freshPost.post_id,

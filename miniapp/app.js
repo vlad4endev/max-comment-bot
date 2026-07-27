@@ -68,7 +68,7 @@
       'post not found': 'Пост не найден или удалён.',
       post_not_found: 'Пост не найден или удалён.',
       'comment not found': 'Комментарий не найден.',
-      comments_closed: 'Комментарии закрыты. Обсуждение ведётся в Telegram.',
+      comments_closed: 'Комментарии временно закрыты. Обсуждение ведётся в Telegram.',
       'Доступ запрещён': 'Недостаточно прав для этого действия.',
       'Только администраторы могут изменять комментарии': 'Изменять комментарии могут только администраторы.',
       'owner cannot be disabled': 'Владельца канала нельзя отключить.',
@@ -2567,13 +2567,17 @@
       var lastCommentsSnapshot = null;
       var commentsClosed = false;
 
-      function applyCommentsClosedUi(closed) {
+      function applyCommentsClosedUi(closed, closedMessage) {
         commentsClosed = !!closed;
         if (composerWrapEl) {
           composerWrapEl.classList.toggle('is-comments-closed', commentsClosed);
         }
         if (commentsClosedBannerEl) {
           if (commentsClosed) {
+            var textEl = commentsClosedBannerEl.querySelector('.comments-closed-text');
+            if (textEl && closedMessage) {
+              textEl.textContent = closedMessage;
+            }
             commentsClosedBannerEl.removeAttribute('hidden');
           } else {
             commentsClosedBannerEl.setAttribute('hidden', '');
@@ -2585,7 +2589,7 @@
           clearComposerInput();
           if (inputEl) {
             inputEl.disabled = true;
-            inputEl.placeholder = 'Комментарии закрыты';
+            inputEl.placeholder = 'Комментарии временно закрыты';
           }
           if (sendBtn) sendBtn.disabled = true;
           if (photoBtnEl) photoBtnEl.disabled = true;
@@ -4260,7 +4264,14 @@
               postCommentCount = p.comment_count;
               updateBadgeFromCount(postCommentCount);
             }
-            applyCommentsClosedUi(!!p.comments_closed);
+            applyCommentsClosedUi(
+              !!p.comments_closed,
+              p.comments_closed
+                ? (p.comments_booked_by === 'vk'
+                    ? 'Комментарии временно закрыты. Обсуждение ведётся во ВКонтакте.'
+                    : 'Комментарии временно закрыты. Обсуждение ведётся в Telegram.')
+                : null,
+            );
             setPostPreviewLink(p.channel_post_url || null);
             setPostPreviewReady(true);
             return true;

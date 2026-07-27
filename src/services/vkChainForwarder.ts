@@ -315,7 +315,7 @@ async function syncVkCommentsForChain(chain: VkChainRecord): Promise<void> {
     const post = postStore.findPostByChannelMessage(mapping.maxChatId, mapping.maxMid)
     if (!post) continue
 
-    if (isCommentSyncBlockedByBooking(post.comments_booked_by, 'vk')) {
+    if (isCommentSyncBlockedByBooking(post, 'vk')) {
       continue
     }
 
@@ -428,7 +428,7 @@ async function syncMaxCommentsToVk(): Promise<void> {
     const post = postStore.getPost(comment.post_id)
     if (!post) continue
 
-    if (isCommentSyncBlockedByBooking(post.comments_booked_by, 'max')) {
+    if (isCommentSyncBlockedByBooking(post, 'max')) {
       continue
     }
 

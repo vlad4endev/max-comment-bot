@@ -1,6 +1,10 @@
 /**
  * Кросс-платформенная бронь поста: при первом комментарии на одной платформе
  * помечаем пост на MAX, Telegram и VK.
+ *
+ * Закрытие комментариев в MAX при брони TG/VK действует ограниченное время
+ * ({@link getCommentsBookingLockHours}, по умолчанию 8 часов), затем в MAX
+ * снова можно писать. Поле `comments_booked_by` при этом сохраняется.
  */
 
 import type { Bot } from '@maxhub/max-bot-api'
@@ -8,11 +12,24 @@ import type { Bot } from '@maxhub/max-bot-api'
 import { listVkChainsSync } from '../api/adminPanelState'
 import { bookingMarkerForTelegram, bookingMarkerForVk } from '../utils/commentSyncFilter'
 import { logger } from '../utils/logger'
+import {
+  getCommentsBookingLockHours,
+  isCommentsBookingActive,
+  type CommentsBookingLockFields,
+} from './commentsBookingLock'
 import { appendMarkerToVkWallPost } from './integrationPlatformClient'
 import type { CommentsBookedBy, Post } from './postStore'
 import { postStore } from './postStore'
 import { applyTelegramPostBookingMarker } from './telegramPostMarker'
 import { vkPostMappingStore } from './vkPostMappingStore'
+
+export {
+  commentsClosedUntilIso,
+  getCommentsBookingLockHours,
+  getCommentsBookingLockMs,
+  isCommentsBookingActive,
+} from './commentsBookingLock'
+export type { CommentsBookingLockFields as CommentsBookingFields } from './commentsBookingLock'
 
 export async function claimAndPropagateCommentsBooking(
   postId: string,
@@ -114,9 +131,13 @@ async function applyVkPostBookingMarkers(post: Post, bookedBy: CommentsBookedBy)
 
 /** Можно ли синхронизировать комментарии с платформы `from`, если пост забронирован другой платформой. */
 export function isCommentSyncBlockedByBooking(
-  bookedBy: CommentsBookedBy | undefined,
+  post: CommentsBookingLockFields,
   from: CommentsBookedBy,
 ): boolean {
+  if (!isCommentsBookingActive(post)) {
+    return false
+  }
+  const bookedBy = post.comments_booked_by
   if (!bookedBy || bookedBy === from) {
     return false
   }
@@ -124,11 +145,13 @@ export function isCommentSyncBlockedByBooking(
 }
 
 export function commentsClosedInMaxMessage(bookedBy: CommentsBookedBy | undefined): string {
+  const hours = getCommentsBookingLockHours()
+  const hoursLabel = Number.isInteger(hours) ? String(hours) : hours.toFixed(1)
   if (bookedBy === 'telegram') {
-    return 'Комментарии закрыты. Обсуждение ведётся в Telegram.'
+    return `Комментарии временно закрыты на ${hoursLabel} ч. Обсуждение ведётся в Telegram.`
   }
   if (bookedBy === 'vk') {
-    return 'Комментарии закрыты. Обсуждение ведётся во ВКонтакте.'
+    return `Комментарии временно закрыты на ${hoursLabel} ч. Обсуждение ведётся во ВКонтакте.`
   }
-  return 'Комментарии закрыты.'
+  return `Комментарии временно закрыты на ${hoursLabel} ч.`
 }

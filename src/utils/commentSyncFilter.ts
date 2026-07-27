@@ -1,6 +1,7 @@
 import type { TgChainRecord } from '../api/adminPanelState'
 import type { TgMessage } from '../forwarder/telegramReader'
 import { listTelegramChatAdministrators } from '../services/integrationPlatformClient'
+import { isCommentsBookingActive } from '../services/commentsBookingLock'
 
 /** Режим сопоставления слов для переноса комментариев TG → MAX. */
 export type CommentSyncMatchMode = 'contains' | 'equals' | 'word' | 'starts_with' | 'ends_with'
@@ -368,8 +369,16 @@ export async function shouldSyncTgCommentToMax(params: {
   postCommentCount: number
   threadRootMsgId: number
   commentsBookedBy?: 'telegram' | 'max' | 'vk' | null
+  commentsBookedAt?: string | null
 }): Promise<boolean> {
-  if (params.commentsBookedBy === 'max' || params.commentsBookedBy === 'vk') {
+  const bookingActive = isCommentsBookingActive({
+    comments_booked_by: params.commentsBookedBy ?? undefined,
+    comments_booked_at: params.commentsBookedAt ?? undefined,
+  })
+  if (
+    bookingActive &&
+    (params.commentsBookedBy === 'max' || params.commentsBookedBy === 'vk')
+  ) {
     return false
   }
 

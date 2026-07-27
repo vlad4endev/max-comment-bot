@@ -53,7 +53,7 @@ import { telegramChannelRegistry } from '../services/telegramChannelRegistry'
 import { telegramChannelNotifyLinkStore } from '../services/telegramChannelNotifyLinkStore'
 import type { Post } from '../services/postStore'
 import { isPostCommentsClosedInMax, postStore, resolveChannelPostUrl } from '../services/postStore'
-import { commentsClosedInMaxMessage } from '../services/commentsBookingService'
+import { commentsClosedInMaxMessage, commentsClosedUntilIso } from '../services/commentsBookingService'
 import { rememberPostIdAlias } from '../services/postIdAliasStore'
 import { resolveMiniappPostOpen } from '../services/miniappPostRecovery'
 import { parseStartappPayload } from '../utils/startappPayload'
@@ -1825,6 +1825,19 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
     const isArchived = post.timestamp < archiveCutoff
     const channelBranding = await resolveChannelBrandingCached(deps.bot, post.chat_id)
     const channel_post_url = post.channel_post_url?.trim() || null
+    const commentsClosed = isPostCommentsClosedInMax(post)
+    // После истечения TTL брони вернём обычную кнопку «Комментарии» на посте в MAX.
+    if (
+      !commentsClosed &&
+      (post.comments_booked_by === 'telegram' || post.comments_booked_by === 'vk')
+    ) {
+      void postStore.updateButtonCaption(deps.bot, post).catch((err: unknown) => {
+        logger.warn('[api] restore comment button after booking TTL failed', {
+          postId: post.post_id,
+          err,
+        })
+      })
+    }
     res.json({
       post_id: post.post_id,
       text: post.text,
@@ -1834,7 +1847,8 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
       message_mid: post.message_mid,
       comment_count: post.comment_count,
       comments_booked_by: post.comments_booked_by ?? null,
-      comments_closed: isPostCommentsClosedInMax(post),
+      comments_closed: commentsClosed,
+      comments_closed_until: commentsClosed ? commentsClosedUntilIso(post) : null,
       channel_title: channelBranding.title,
       channel_avatar_url: channelBranding.avatar_url,
       is_archived: isArchived,
