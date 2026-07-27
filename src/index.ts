@@ -187,22 +187,11 @@ async function main(): Promise<void> {
   // До HTTP: иначе при EADDRINUSE channelPoller уже в логах, а flowProcessor — нет.
   await flowProcessor.start()
 
-  // Синхронизация комментариев TG ↔ Max
-  const { startMaxCommentSync } = await import('./services/maxCommentSyncService')
-  const stopCommentSync = startMaxCommentSync(bot)
-  process.once('SIGINT', () => stopCommentSync())
-  process.once('SIGTERM', () => stopCommentSync())
-
-  startVkChainForwarder()
-  process.once('SIGINT', () => stopVkChainForwarder())
-  process.once('SIGTERM', () => stopVkChainForwarder())
-
   const channelCount = channelRegistry
     .getAllChannels()
     .filter((c) => c.type === 'channel').length
   const enabledFlows = integrationsStore.getFlows().filter((f) => f.enabled)
   logMiniAppUrlDiagnostics(config.miniAppUrl, config.botNickname)
-  await logStartupChainsSummary()
 
   logger.info('🚀 Бот запущен', {
     channelCount,
@@ -223,6 +212,8 @@ async function main(): Promise<void> {
 
   const listenPort = config.listenPort
 
+  // HTTP сразу после базовой инициализации — /health не должен ждать purge/sync/alerts.
+  let httpServer: ReturnType<typeof createServer>
   if (config.receiveMode === 'webhook') {
     const webhookPath = config.webhookPath!
     const webhookUrl = config.webhookUrl!
@@ -233,11 +224,11 @@ async function main(): Promise<void> {
       webhookSecret: config.webhookSecret,
     })
 
-    const server = createServer(app)
+    httpServer = createServer(app)
 
     await new Promise<void>((resolve, reject) => {
-      server.listen(listenPort, '0.0.0.0', () => resolve())
-      server.once('error', reject)
+      httpServer.listen(listenPort, '0.0.0.0', () => resolve())
+      httpServer.once('error', reject)
     })
 
     logger.info(
@@ -261,22 +252,16 @@ async function main(): Promise<void> {
 
     setupGracefulShutdown(bot, {
       receiveMode: 'webhook',
-      httpServer: server,
+      httpServer,
       webhookUrl,
     })
-    startChannelImportWorker()
-    startTgChainForwarder()
-    const stopAntispamBot = startTelegramAntispamBotPoller()
-    process.once('SIGINT', () => stopAntispamBot())
-    process.once('SIGTERM', () => stopAntispamBot())
-    scheduleDeferredCommentSyncBootstrap()
   } else {
     const app = createHttpApp({ bot })
-    const server = createServer(app)
+    httpServer = createServer(app)
 
     await new Promise<void>((resolve, reject) => {
-      server.listen(listenPort, '0.0.0.0', () => resolve())
-      server.once('error', reject)
+      httpServer.listen(listenPort, '0.0.0.0', () => resolve())
+      httpServer.once('error', reject)
     })
 
     logger.info(
@@ -285,15 +270,32 @@ async function main(): Promise<void> {
 
     setupGracefulShutdown(bot, {
       receiveMode: 'polling',
-      httpServer: server,
+      httpServer,
     })
+  }
 
-    startChannelImportWorker()
-    startTgChainForwarder()
-    const stopAntispamBot = startTelegramAntispamBotPoller()
-    process.once('SIGINT', () => stopAntispamBot())
-    process.once('SIGTERM', () => stopAntispamBot())
-    scheduleDeferredCommentSyncBootstrap()
+  // Диагностика цепочек и тяжёлая синхронизация — после listen.
+  void logStartupChainsSummary().catch((err: unknown) => {
+    logger.warn('[startup] chains summary failed', { err })
+  })
+
+  const { startMaxCommentSync } = await import('./services/maxCommentSyncService')
+  const stopCommentSync = startMaxCommentSync(bot)
+  process.once('SIGINT', () => stopCommentSync())
+  process.once('SIGTERM', () => stopCommentSync())
+
+  startVkChainForwarder()
+  process.once('SIGINT', () => stopVkChainForwarder())
+  process.once('SIGTERM', () => stopVkChainForwarder())
+
+  startChannelImportWorker()
+  startTgChainForwarder()
+  const stopAntispamBot = startTelegramAntispamBotPoller()
+  process.once('SIGINT', () => stopAntispamBot())
+  process.once('SIGTERM', () => stopAntispamBot())
+  scheduleDeferredCommentSyncBootstrap()
+
+  if (config.receiveMode !== 'webhook') {
     await startBotLongPolling(bot)
   }
 }

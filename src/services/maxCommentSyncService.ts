@@ -14,7 +14,6 @@ import { postStore } from './postStore'
 import {
   purgeStaleUndeliverableComments,
   STALE_UNDELIVERABLE_DAYS,
-  staleUndeliverableCutoffIso,
 } from './commentSyncDiagnostics'
 import {
   syncAdminReplyToTelegramThread,
@@ -183,7 +182,14 @@ export function startMaxCommentSync(bot: Bot, options: SyncOptions = {}): () => 
   const intervalMs = options.intervalMs ?? getMaxCommentSyncIntervalMs()
   const batchSize = options.batchSize ?? getTelegramCommentSyncBatchSize()
 
-  purgeStaleUndeliverableOnStartup()
+  // Не блокируем event loop / HTTP startup тяжёлым UPDATE по comments.
+  setImmediate(() => {
+    try {
+      purgeStaleUndeliverableOnStartup()
+    } catch (err: unknown) {
+      logger.error('[maxCommentSync] deferred startup purge failed', { err })
+    }
+  })
   void bootstrapRepairOnStartup().catch((err: unknown) => {
     logger.warn('[maxCommentSync] bootstrap repair error', { err })
   })
