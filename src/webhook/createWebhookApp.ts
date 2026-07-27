@@ -15,7 +15,6 @@ import {
 } from '../api/integrationsRoutes'
 import { createCommentApiRouter } from '../api/routes'
 import { isAdminPanelSessionValid } from '../middleware/adminAuth'
-import { getDb } from '../db/database'
 import { logger } from '../utils/logger'
 import { enqueueUpdate } from '../utils/updateQueue'
 import { dispatchBotUpdate } from './dispatchUpdate'
