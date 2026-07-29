@@ -65,12 +65,19 @@ async function uploadTgPhotoToVk(
   groupId: string,
   tgToken: string,
   fileId: string,
+  filenameHint?: string,
 ): Promise<string | null> {
   const url = await getTgFileUrl(tgToken, fileId)
   if (!url) return null
   const buffer = await downloadBinary(url)
   if (!buffer) return null
-  return uploadVkWallPhotoFromBuffer(vkToken, groupId, buffer)
+  const fromPath = url.split('/').pop()?.split('?')[0]
+  return uploadVkWallPhotoFromBuffer(
+    vkToken,
+    groupId,
+    buffer,
+    filenameHint || fromPath || 'photo.jpg',
+  )
 }
 
 async function uploadTgVideoToVk(
@@ -100,6 +107,19 @@ async function buildVkAttachmentsFromTgMessages(
     if (msg.photo && msg.photo.length > 0) {
       const largest = msg.photo[msg.photo.length - 1]!
       const att = await uploadTgPhotoToVk(vkToken, groupId, tgToken, largest.file_id)
+      if (att) out.push(att)
+      continue
+    }
+    const doc = msg.document
+    const docMime = doc?.mime_type?.toLowerCase() ?? ''
+    if (doc?.file_id && docMime.startsWith('image/')) {
+      const att = await uploadTgPhotoToVk(
+        vkToken,
+        groupId,
+        tgToken,
+        doc.file_id,
+        doc.file_name || 'photo.jpg',
+      )
       if (att) out.push(att)
       continue
     }
@@ -254,6 +274,14 @@ async function publishPostToVkChain(
 ): Promise<void> {
   try {
     const message = postText.trim() || '\u00a0'
+    const sourceHadMedia = Boolean(
+      mediaContext?.tgMessages?.some(
+        (m) =>
+          (m.photo && m.photo.length > 0) ||
+          Boolean(m.video?.file_id) ||
+          Boolean(m.document?.mime_type?.toLowerCase().startsWith('image/')),
+      ),
+    )
     const attachments = await resolveVkWallAttachments(
       chain.vk_token,
       chain.vk_group_id,
@@ -261,6 +289,14 @@ async function publishPostToVkChain(
       maxMid,
       mediaContext,
     )
+    if (sourceHadMedia && attachments.length === 0) {
+      logger.warn('[vkChain] source had media but VK attachments empty — posting text only', {
+        chainId: chain.id,
+        maxMid,
+        groupId: chain.vk_group_id,
+        tgMessages: mediaContext?.tgMessages?.length ?? 0,
+      })
+    }
     const vkPostId = await publishVkWallPost(
       chain.vk_token,
       chain.vk_group_id,

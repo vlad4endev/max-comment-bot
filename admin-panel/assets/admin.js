@@ -3787,7 +3787,8 @@
         html +=
           '<div class="chains-requirements"><strong>Требования</strong><ul>' +
           '<li>Бот MAX — админ в исходном канале</li>' +
-          '<li>Токен VK с правами <code>wall</code>, <code>photos</code>, <code>comments</code></li>' +
+          '<li>Токен пользователя VK (не сообщества) с правами <code>wall</code>, <code>photos</code>, <code>groups</code></li>' +
+          '<li>Для комментариев дополнительно <code>wall</code> / доступ к обсуждениям сообщества</li>' +
           '</ul></div>';
         html += '<div class="forwarding-add-form forwarding-add-form--picks">';
         html +=
@@ -3800,8 +3801,9 @@
         if (!vkInt) {
           html +=
             '<div class="form-group">' +
-            '<label>Токен сообщества VK <span class="label-hint">— права: wall, comments</span></label>' +
+            '<label>Токен пользователя VK <span class="label-hint">— права: wall, photos (не токен сообщества)</span></label>' +
             '<input class="input mono" id="vc_token" type="password" placeholder="vk1.a.xxxxxxxx"/>' +
+            '<p class="form-hint">Токен сообщества публикует только текст: VK не даёт ему <code>photos.getWallUploadServer</code>.</p>' +
             '</div>';
         } else {
           html += '<input type="hidden" id="vc_token" value=""/>';
@@ -4956,17 +4958,17 @@
     }
     html +=
       '<div class="form-group"><label>' +
-      (platform === 'vk' ? 'Access Token сообщества' : 'Bot Token') +
+      (platform === 'vk' ? 'Access Token пользователя VK' : 'Bot Token') +
       '</label><input class="input mono" type="password" id="' +
       prefix +
       '-token" value="' +
       esc(savedToken) +
       '" placeholder="' +
       (hasToken ? 'Оставьте пустым, чтобы не менять · ' : '') +
-      (platform === 'vk' ? 'Токен VK API' : 'Токен от @BotFather') +
+      (platform === 'vk' ? 'Токен VK API (user, не community)' : 'Токен от @BotFather') +
       '" autocomplete="off"/><p class="muted text-sm form-hint">' +
       (platform === 'vk'
-        ? 'Права: wall, photos, docs. ID сообщества — число без минуса.'
+        ? 'Нужен user-токен с правами wall + photos. Токен сообщества публикует посты без фото.'
         : 'Создайте бота через @BotFather. Без webhook — иначе перехват постов не работает.') +
       '</p></div>';
 

@@ -1306,25 +1306,104 @@ function vkPositiveGroupId(groupId: string): string {
   return groupId.replace(/^public/i, '').replace(/^-/, '')
 }
 
+type VkApiErrorBody = {
+  error_code?: number
+  error_msg?: string
+}
+
+function formatVkApiError(method: string, error: VkApiErrorBody | undefined): string {
+  const code = error?.error_code != null ? ` [${error.error_code}]` : ''
+  const msg = error?.error_msg ?? `VK ${method} failed`
+  return `${msg}${code}`
+}
+
 async function vkApiCall<T>(
   method: string,
   token: string,
   params: Record<string, string | number>,
+  options?: { usePost?: boolean },
 ): Promise<T> {
-  const { data } = await axios.get<{ response?: T; error?: { error_msg?: string } }>(
-    `https://api.vk.com/method/${method}`,
-    {
-      params: { ...params, access_token: token, v: '5.199' },
-      timeout: 60_000,
-    },
-  )
+  const payload = { ...params, access_token: token, v: '5.199' }
+  const url = `https://api.vk.com/method/${method}`
+  const { data } = options?.usePost
+    ? await axios.post<{ response?: T; error?: VkApiErrorBody }>(url, new URLSearchParams(
+        Object.entries(payload).map(([k, v]) => [k, String(v)]),
+      ).toString(), {
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        timeout: 60_000,
+      })
+    : await axios.get<{ response?: T; error?: VkApiErrorBody }>(url, {
+        params: payload,
+        timeout: 60_000,
+      })
   if (data.error) {
-    throw new Error(data.error.error_msg ?? `VK ${method} failed`)
+    throw new Error(formatVkApiError(method, data.error))
   }
   if (data.response === undefined) {
     throw new Error(`VK ${method}: empty response`)
   }
   return data.response
+}
+
+function detectVkImageMeta(buffer: Buffer, filenameHint?: string): { filename: string; contentType: string } {
+  const hintName = filenameHint?.trim() || ''
+  const hint = hintName.toLowerCase()
+  if (buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) {
+    return {
+      filename: hint.endsWith('.jpg') || hint.endsWith('.jpeg') ? hintName : 'photo.jpg',
+      contentType: 'image/jpeg',
+    }
+  }
+  if (
+    buffer.length >= 8 &&
+    buffer[0] === 0x89 &&
+    buffer[1] === 0x50 &&
+    buffer[2] === 0x4e &&
+    buffer[3] === 0x47
+  ) {
+    return { filename: hint.endsWith('.png') ? hintName : 'photo.png', contentType: 'image/png' }
+  }
+  if (
+    buffer.length >= 12 &&
+    buffer.toString('ascii', 0, 4) === 'RIFF' &&
+    buffer.toString('ascii', 8, 12) === 'WEBP'
+  ) {
+    return { filename: hint.endsWith('.webp') ? hintName : 'photo.webp', contentType: 'image/webp' }
+  }
+  if (buffer.length >= 6 && buffer.toString('ascii', 0, 3) === 'GIF') {
+    return { filename: hint.endsWith('.gif') ? hintName : 'photo.gif', contentType: 'image/gif' }
+  }
+  if (hint.endsWith('.png')) return { filename: hintName, contentType: 'image/png' }
+  if (hint.endsWith('.webp')) return { filename: hintName, contentType: 'image/webp' }
+  if (hint.endsWith('.gif')) return { filename: hintName, contentType: 'image/gif' }
+  return { filename: hintName || 'photo.jpg', contentType: 'image/jpeg' }
+}
+
+function parseVkUploadPayload(raw: unknown): {
+  server?: number | string
+  photo?: string
+  hash?: string
+} {
+  let data: unknown = raw
+  if (typeof data === 'string') {
+    const trimmed = data.trim()
+    if (!trimmed) return {}
+    try {
+      data = JSON.parse(trimmed) as unknown
+    } catch {
+      logger.warn('uploadVkWallPhotoFromBuffer: upload body is not JSON', {
+        preview: trimmed.slice(0, 200),
+      })
+      return {}
+    }
+  }
+  if (!data || typeof data !== 'object') return {}
+  const obj = data as Record<string, unknown>
+  return {
+    server: typeof obj.server === 'number' || typeof obj.server === 'string' ? obj.server : undefined,
+    photo: typeof obj.photo === 'string' ? obj.photo : undefined,
+    hash: typeof obj.hash === 'string' ? obj.hash : undefined,
+  }
 }
 
 /** Загружает фото на стену VK; возвращает attachment вида photo{owner_id}_{id}. */
@@ -1336,34 +1415,70 @@ export async function uploadVkWallPhotoFromBuffer(
 ): Promise<string | null> {
   const groupIdNum = vkPositiveGroupId(groupId)
   try {
+    if (!buffer.length) {
+      logger.warn('uploadVkWallPhotoFromBuffer: empty buffer', { groupId })
+      return null
+    }
     const uploadServer = await vkApiCall<{ upload_url: string }>('photos.getWallUploadServer', token, {
       group_id: groupIdNum,
     })
-    const form = new FormData()
-    form.append('photo', buffer, { filename, contentType: 'image/jpeg' })
-    const uploadRes = await axios.post<{ server?: number | string; photo?: string; hash?: string }>(
-      uploadServer.upload_url,
-      form,
-      { headers: form.getHeaders(), timeout: 120_000 },
-    )
-    const server = uploadRes.data.server
-    const photo = uploadRes.data.photo
-    const hash = uploadRes.data.hash
-    if (server == null || !photo || !hash) {
-      logger.warn('uploadVkWallPhotoFromBuffer: invalid upload response', { groupId })
+    if (!uploadServer.upload_url) {
+      logger.warn('uploadVkWallPhotoFromBuffer: empty upload_url', { groupId })
       return null
     }
-    const saved = await vkApiCall<Array<{ owner_id: number; id: number }>>('photos.saveWallPhoto', token, {
-      group_id: groupIdNum,
-      photo,
-      server,
-      hash,
+    const meta = detectVkImageMeta(buffer, filename)
+    const form = new FormData()
+    form.append('photo', buffer, { filename: meta.filename, contentType: meta.contentType })
+    const uploadRes = await axios.post(uploadServer.upload_url, form, {
+      headers: form.getHeaders(),
+      timeout: 120_000,
+      // VK upload.php часто отдаёт text/html с JSON-телом.
+      transformResponse: [(body) => body],
+      responseType: 'text',
     })
+    const uploaded = parseVkUploadPayload(uploadRes.data)
+    const server = uploaded.server
+    const photo = uploaded.photo
+    const hash = uploaded.hash
+    if (server == null || !photo || photo === '[]' || !hash) {
+      logger.warn('uploadVkWallPhotoFromBuffer: invalid upload response', {
+        groupId,
+        hasServer: server != null,
+        photoLen: typeof photo === 'string' ? photo.length : 0,
+        hasHash: Boolean(hash),
+        contentType: meta.contentType,
+        bytes: buffer.length,
+      })
+      return null
+    }
+    // photo — длинный JSON; через GET query string часто обрезается → только POST.
+    const saved = await vkApiCall<Array<{ owner_id: number; id: number }>>(
+      'photos.saveWallPhoto',
+      token,
+      {
+        group_id: groupIdNum,
+        photo,
+        server,
+        hash,
+      },
+      { usePost: true },
+    )
     const item = saved[0]
-    if (!item) return null
+    if (!item) {
+      logger.warn('uploadVkWallPhotoFromBuffer: empty saveWallPhoto response', { groupId })
+      return null
+    }
     return `photo${item.owner_id}_${item.id}`
   } catch (err: unknown) {
-    logger.warn('uploadVkWallPhotoFromBuffer failed', { groupId, err })
+    const message = err instanceof Error ? err.message : String(err)
+    logger.warn('uploadVkWallPhotoFromBuffer failed', {
+      groupId,
+      err: message,
+      hint:
+        /\[27\]|\[15\]|group auth|unavailable with group|no access to call this method/i.test(message)
+          ? 'Нужен user-токен VK с правом photos (токен сообщества не умеет photos.getWallUploadServer)'
+          : undefined,
+    })
     return null
   }
 }
@@ -1407,26 +1522,15 @@ export async function publishVkWallPost(
 ): Promise<number | null> {
   const ownerId = groupId.startsWith('-') ? groupId : `-${groupId.replace(/^public/, '')}`
   const params: Record<string, string | number> = {
-    access_token: token,
     owner_id: ownerId,
     from_group: 1,
     message,
-    v: '5.199',
   }
   if (attachments && attachments.length > 0) {
     params.attachments = attachments.slice(0, 10).join(',')
   }
-  const { data } = await axios.get<{
-    response?: { post_id?: number }
-    error?: { error_msg?: string }
-  }>('https://api.vk.com/method/wall.post', {
-    params,
-    timeout: 60_000,
-  })
-  if (data.error) {
-    throw new Error(data.error.error_msg ?? 'VK wall.post failed')
-  }
-  return data.response?.post_id ?? null
+  const response = await vkApiCall<{ post_id?: number }>('wall.post', token, params, { usePost: true })
+  return response.post_id ?? null
 }
 
 function vkOwnerId(groupId: string): string {
