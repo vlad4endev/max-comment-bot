@@ -74,7 +74,8 @@
   <link rel="stylesheet" href="styles.css" />
   <style>
     /* Critical: экран загрузки до styles.css (важно для WebView MAX без gzip) */
-    html, body { margin: 0; min-height: 100%; background: #0d0d18; color: rgba(255,255,255,0.92); font-family: system-ui, sans-serif; }
+    html, body { margin: 0; min-height: 100%; background: #0c0d14; color: rgba(255,255,255,0.92); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    html[data-theme="light"], html[data-theme="light"] body { background: #eef1f6; color: #151821; }
     #miniappLoading {
       position: fixed; inset: 0; z-index: 9998; display: flex; align-items: center;
       justify-content: center; font-size: 14px; padding: 24px; text-align: center;
