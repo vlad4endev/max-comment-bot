@@ -13,10 +13,12 @@ import {
   buildCommentMiniAppUrl,
   buildPostCommentKeyboard,
   commentButtonStartappHasMid,
+  isBlankPostText,
   isMiniAppOpenUrlConfigured,
   isPostCommentsClosedInMax,
   mediaAttachmentRequestsFromMessageBody,
   postStore,
+  resolveChannelPostEditText,
   type Post,
 } from './postStore'
 
@@ -213,9 +215,10 @@ export function buildPostFromChannelMessage(
   chatId: number,
   postId: string,
   user?: User,
+  knownText?: string,
 ): Post {
   const mid = message.body?.mid ?? ''
-  const text = message.body.text?.trim() ?? ''
+  const text = resolveChannelPostEditText([knownText, message.body.text])
   const photoUrl = firstImageUrlFromMessage(message)
   const media_attachments = mediaAttachmentRequestsFromMessageBody(message.body.attachments)
   const channelPostUrl =
@@ -225,7 +228,7 @@ export function buildPostFromChannelMessage(
     chat_id: chatId,
     message_mid: mid,
     sender_name: user?.name ?? 'Канал',
-    text,
+    text: isBlankPostText(text) ? '' : text,
     photo_url: photoUrl,
     channel_post_url: channelPostUrl,
     media_attachments,
@@ -277,6 +280,11 @@ export async function tryAttachCommentsToChannelPost(
     inlineOnly?: boolean
     /** When recovering an orphan button link, reuse this `post_id` if the row is new. */
     preferredPostId?: string
+    /**
+     * Caption known from the publisher (e.g. TG→MAX forward).
+     * Prefer this over a flaky `getMessage` body that may omit text right after send.
+     */
+    knownText?: string
   } = {},
 ): Promise<AttachChannelCommentsResult> {
   const attachStartedAt = performance.now()
@@ -417,8 +425,13 @@ export async function tryAttachCommentsToChannelPost(
       return result
     }
     const postForKb = postStore.getPost(freshPost.post_id) ?? freshPost
-    if (!postForKb.comments_booked_by) {
-      const openUrl = buildCommentMiniAppUrl(postForKb.post_id, chatId, mid)
+    const knownText = options.knownText
+    if (!isBlankPostText(knownText) && isBlankPostText(postForKb.text)) {
+      postStore.savePost({ ...postForKb, text: resolveChannelPostEditText([knownText]) })
+    }
+    const postWithText = postStore.getPost(freshPost.post_id) ?? postForKb
+    if (!postWithText.comments_booked_by) {
+      const openUrl = buildCommentMiniAppUrl(postWithText.post_id, chatId, mid)
       const reattachStartParam = (() => {
         try {
           return new URL(openUrl).searchParams.get('startapp')
@@ -427,7 +440,7 @@ export async function tryAttachCommentsToChannelPost(
         }
       })()
       logger.info('commentButton: creating button', {
-        postId: postForKb.post_id,
+        postId: postWithText.post_id,
         chatId,
         messageMid: mid,
         buttonUrl: openUrl,
@@ -435,33 +448,33 @@ export async function tryAttachCommentsToChannelPost(
       logger.info('commentButton: button payload', {
         buttonUrl: openUrl,
         startParam: reattachStartParam,
-        postId: postForKb.post_id,
+        postId: postWithText.post_id,
         chatId,
         messageMid: mid,
       })
     }
-    const kb = buildPostCommentKeyboard(postForKb)
-    const editText = postForKb.text.trim() === '' ? '\u00a0' : postForKb.text
-    const reattached = await attachCommentButtonToChannelPost(bot, postForKb, editText, kb, {
+    const kb = buildPostCommentKeyboard(postWithText)
+    const editText = resolveChannelPostEditText([knownText, postWithText.text, message.body?.text])
+    const reattached = await attachCommentButtonToChannelPost(bot, postWithText, editText, kb, {
       source: source ?? 'unknown',
       phase: 'reattach',
       inlineOnly: options.inlineOnly,
     })
     if (reattached) {
-      clearButtonAttachPending(postForKb)
+      clearButtonAttachPending(postWithText)
       logCommentButtonOk(
         source,
         {
           chatId,
           messageMid: mid,
-          postId: postForKb.post_id,
+          postId: postWithText.post_id,
           reattached: true,
         },
         attachStartedAt,
       )
       return { ok: true }
     }
-    markButtonAttachPending(postForKb)
+    markButtonAttachPending(postWithText)
     scheduleCommentButtonRetry(chatId, mid)
     const fail = { ok: false as const, reason: 'attach_failed' as const }
     logCommentButtonSkip(
@@ -525,7 +538,7 @@ export async function tryAttachCommentsToChannelPost(
 
   const postId = allocatePostIdForChannelMessage(chatId, mid, options.preferredPostId)
   const post: Post = {
-    ...buildPostFromChannelMessage(message, chatId, postId, user),
+    ...buildPostFromChannelMessage(message, chatId, postId, user, options.knownText),
     button_attach_pending: true,
   }
   postStore.savePost(post)
@@ -557,7 +570,7 @@ export async function tryAttachCommentsToChannelPost(
     messageMid: mid,
   })
   const kb = buildPostCommentKeyboard(post)
-  const editText = post.text === '' ? '\u00a0' : post.text
+  const editText = resolveChannelPostEditText([options.knownText, post.text, message.body?.text])
 
   const attached = await attachCommentButtonToChannelPost(bot, post, editText, kb, {
     source: source ?? 'unknown',

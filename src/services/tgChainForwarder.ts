@@ -44,8 +44,8 @@ const TG_CHAIN_IDLE_MS = 3_000
 const MAX_SEND_INTERVAL_MS = 2_500
 const UPLOAD_STAGGER_MS = 450
 const TG_CHAIN_MAX_API_RETRIES = 6
-/** Буферизация Telegram-альбомов по media_group_id. */
-const TG_ALBUM_BUFFER_MS = 900
+/** Буферизация Telegram-альбомов по media_group_id (тишина после последнего кадра). */
+const TG_ALBUM_BUFFER_MS = 1_800
 /** Telegram media group ограничен 10 элементами. */
 const TG_ALBUM_MAX_MEDIA_PER_POST = 10
 
@@ -863,6 +863,7 @@ async function processChainMessageGroup(
           if (attachComments) {
             keepPublished = await attachAndVerifyCommentsForForwardedPost(bot, chain.max_chat_id, maxMid, {
               chainId: chain.id,
+              knownCaption: chunkCaption,
             })
           }
           if (keepPublished) {
@@ -907,6 +908,7 @@ async function processChainMessageGroup(
         if (attachComments) {
           keepPublished = await attachAndVerifyCommentsForForwardedPost(bot, chain.max_chat_id, maxMid, {
             chainId: chain.id,
+            knownCaption: caption,
           })
         }
         if (keepPublished) {

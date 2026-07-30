@@ -5,7 +5,13 @@ import { tryAttachCommentsToChannelPost, type AttachChannelCommentsResult } from
 import { resolveCanonicalChannelChatId } from './resolveChannelChatId'
 import { logger } from '../utils/logger'
 import { apiCallWithRetry } from '../utils/maxApiRetry'
-import { commentButtonStartappHasMid, postStore, type Post } from './postStore'
+import {
+  commentButtonStartappHasMid,
+  isBlankPostText,
+  postStore,
+  resolveChannelPostEditText,
+  type Post,
+} from './postStore'
 
 const GATE_VERIFY_ATTEMPTS = 5
 const GATE_VERIFY_DELAY_MS = 250
@@ -121,12 +127,15 @@ async function waitForVerifiedPost(
 /**
  * After TG→MAX forward: attach button, verify Mini App lookup.
  * On failure deletes the MAX post and DB row so the TG message can be forwarded again.
+ *
+ * @param knownCaption — text that was actually sent with `sendMessageToChat` (album/single).
+ *   Used when `getMessage` briefly returns media without text right after publish.
  */
 export async function attachAndVerifyCommentsForForwardedPost(
   bot: Bot,
   maxChatId: number,
   maxMessageMid: string,
-  context?: { chainId?: string },
+  context?: { chainId?: string; knownCaption?: string },
 ): Promise<boolean> {
   const chatId = resolveCanonicalChannelChatId(maxChatId) ?? maxChatId
   const mid = maxMessageMid.trim()
@@ -134,10 +143,31 @@ export async function attachAndVerifyCommentsForForwardedPost(
     return false
   }
 
-  const message = await loadChannelMessage(bot, chatId, mid)
+  const knownCaption = context?.knownCaption
+  const knownText = isBlankPostText(knownCaption)
+    ? undefined
+    : resolveChannelPostEditText([knownCaption])
+
+  let message = await loadChannelMessage(bot, chatId, mid)
   if (!message?.body?.mid) {
     await tryDeleteMaxMessage(bot, mid)
     return false
+  }
+
+  if (knownText && isBlankPostText(message.body.text)) {
+    message = {
+      ...message,
+      body: {
+        ...message.body,
+        text: knownText,
+      },
+    }
+    logger.info('[tgChain] comment gate: using knownCaption (API text empty)', {
+      chainId: context?.chainId,
+      chatId,
+      messageMid: mid,
+      textLen: knownText.length,
+    })
   }
 
   const attachResult = await tryAttachCommentsToChannelPost(bot, message, {
@@ -145,6 +175,7 @@ export async function attachAndVerifyCommentsForForwardedPost(
     skipAuthorAdminCheck: true,
     source: 'tg_chain',
     inlineOnly: true,
+    knownText,
   })
 
   const registered = await waitForVerifiedPost(chatId, mid, attachResult)
@@ -169,13 +200,23 @@ export async function attachAndVerifyCommentsForForwardedPost(
       messageMid: mid,
       postId: registered.post_id,
     })
-    const messageRetry = await loadChannelMessage(bot, chatId, mid)
+    let messageRetry = await loadChannelMessage(bot, chatId, mid)
     if (messageRetry?.body?.mid) {
+      if (knownText && isBlankPostText(messageRetry.body.text)) {
+        messageRetry = {
+          ...messageRetry,
+          body: {
+            ...messageRetry.body,
+            text: knownText,
+          },
+        }
+      }
       const retryAttach = await tryAttachCommentsToChannelPost(bot, messageRetry, {
         channelChatIdOverride: chatId,
         skipAuthorAdminCheck: true,
         source: 'tg_chain',
         inlineOnly: true,
+        knownText,
       })
       const registeredRetry = await waitForVerifiedPost(chatId, mid, retryAttach)
       if (

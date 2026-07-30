@@ -25,6 +25,29 @@ import { isCommentsBookingActive } from './commentsBookingLock'
 
 export type CommentsBookedBy = 'telegram' | 'max' | 'vk'
 
+/** Placeholder when MAX requires non-empty `text` but the post has no caption. */
+export const CHANNEL_POST_EMPTY_TEXT_PLACEHOLDER = '\u00a0'
+
+/** True for empty / whitespace-only / NBSP-only captions (MAX stub text). */
+export function isBlankPostText(text: string | undefined | null): boolean {
+  return (text ?? '').replace(/\u00a0/g, ' ').trim() === ''
+}
+
+/**
+ * Picks the first non-blank caption candidate for `editMessage`.
+ * Never prefers `\u00a0` / empty over a real caption — that was wiping album descriptions.
+ */
+export function resolveChannelPostEditText(
+  candidates: Array<string | undefined | null>,
+): string {
+  for (const candidate of candidates) {
+    if (!isBlankPostText(candidate)) {
+      return (candidate ?? '').replace(/\u00a0/g, ' ').trim()
+    }
+  }
+  return CHANNEL_POST_EMPTY_TEXT_PLACEHOLDER
+}
+
 /**
  * Channel post tracked for Mini App comments (MAX message id is {@link Post.message_mid}).
  */
@@ -422,14 +445,20 @@ export class PostStore {
       },
     )
     const kb = buildPostCommentKeyboard(fresh)
-    const editText =
-      fresh.comments_ui_message_mid !== undefined
-        ? '\u00a0'
-        : fresh.text.trim() === ''
-          ? '\u00a0'
-          : fresh.text
     const targetMid = fresh.comments_ui_message_mid ?? fresh.message_mid
     const usesReplyUi = fresh.comments_ui_message_mid !== undefined
+    const editText = usesReplyUi
+      ? CHANNEL_POST_EMPTY_TEXT_PLACEHOLDER
+      : await resolveSafeChannelPostEditText(bot, fresh, fresh.text, {
+          postId: fresh.post_id,
+          chatId: fresh.chat_id,
+          messageMid: fresh.message_mid,
+          source: 'caption_update',
+        })
+    if (!usesReplyUi && !isBlankPostText(editText) && isBlankPostText(fresh.text)) {
+      this.savePost({ ...fresh, text: editText })
+      fresh.text = editText
+    }
     const { media, warnMissingSnapshot } = usesReplyUi
       ? { media: [] as AttachmentRequest[], warnMissingSnapshot: false }
       : await resolveChannelPostMediaForEdit(bot, fresh)
@@ -476,9 +505,13 @@ export class PostStore {
     if (!existing) {
       return post
     }
+    // Never let a blank/NBSP snapshot overwrite a real caption (getMessage race after publish).
+    const text =
+      isBlankPostText(post.text) && !isBlankPostText(existing.text) ? existing.text : post.text
     return {
       ...existing,
       ...post,
+      text,
       comment_count: Math.max(existing.comment_count ?? 0, post.comment_count ?? 0),
       comments_booked_by: post.comments_booked_by ?? existing.comments_booked_by,
       comments_booked_at: post.comments_booked_at ?? existing.comments_booked_at,
@@ -568,6 +601,57 @@ async function throttleChannelAttach(chatId: number): Promise<void> {
     await new Promise((r) => setTimeout(r, wait))
   }
   lastAttachAt.set(chatId, Date.now())
+}
+
+async function fetchLiveChannelMessageText(bot: Bot, post: Post): Promise<string | undefined> {
+  try {
+    const message = await bot.api.getMessage(post.message_mid)
+    return message.body?.text
+  } catch {
+    try {
+      const { messages } = await bot.api.getMessages(post.chat_id, {
+        message_ids: [post.message_mid],
+      })
+      return messages[0]?.body?.text
+    } catch {
+      return undefined
+    }
+  }
+}
+
+/**
+ * Resolves text for editing the original channel post.
+ * Reloads live message when candidates are blank so a flaky getMessage right after
+ * publish cannot clear a caption that was just sent with media.
+ */
+async function resolveSafeChannelPostEditText(
+  bot: Bot,
+  post: Post,
+  editText: string,
+  logBase: Record<string, unknown>,
+): Promise<string> {
+  let safe = resolveChannelPostEditText([editText, post.text])
+  if (!isBlankPostText(safe)) {
+    return safe
+  }
+
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    if (attempt > 0) {
+      await new Promise((r) => setTimeout(r, 200 * attempt))
+    }
+    const liveText = await fetchLiveChannelMessageText(bot, post)
+    safe = resolveChannelPostEditText([liveText, editText, post.text])
+    if (!isBlankPostText(safe)) {
+      logger.info('commentButton: recovered live caption before edit', {
+        ...logBase,
+        attempt: attempt + 1,
+        textLen: safe.length,
+      })
+      return safe
+    }
+  }
+
+  return CHANNEL_POST_EMPTY_TEXT_PLACEHOLDER
 }
 
 /** True when original media plus an inline keyboard fit in one {@link Bot.api.editMessage}. */
@@ -685,7 +769,10 @@ export async function attachCommentButtonToChannelPost(
     try {
       const editStartedAt = performance.now()
       await apiCallWithRetry(() =>
-        bot.api.editMessage(existingUiMid, { text: '\u00a0', attachments: [keyboard] }),
+        bot.api.editMessage(existingUiMid, {
+          text: CHANNEL_POST_EMPTY_TEXT_PLACEHOLDER,
+          attachments: [keyboard],
+        }),
       )
       const editMs = Math.round(performance.now() - editStartedAt)
       const timing = apiDuration()
@@ -721,14 +808,21 @@ export async function attachCommentButtonToChannelPost(
   } else if (mergeMediaInEdit) {
     const attachments: AttachmentRequest[] =
       media.length > 0 ? [...media, keyboard] : [keyboard]
+    const safeEditText = await resolveSafeChannelPostEditText(bot, post, editText, logBase)
+    if (!isBlankPostText(safeEditText) && isBlankPostText(post.text)) {
+      postStore.savePost({ ...post, text: safeEditText })
+      post.text = safeEditText
+    }
     logger.info('commentButton: пробуем editMessage на посте канала', {
       ...logBase,
       attachmentCount: attachments.length,
+      editTextBlank: isBlankPostText(safeEditText),
+      editTextLen: isBlankPostText(safeEditText) ? 0 : safeEditText.length,
     })
     try {
       const editStartedAt = performance.now()
       await apiCallWithRetry(() =>
-        bot.api.editMessage(post.message_mid, { text: editText, attachments }),
+        bot.api.editMessage(post.message_mid, { text: safeEditText, attachments }),
       )
       const editMs = Math.round(performance.now() - editStartedAt)
       const timing = apiDuration()
@@ -756,7 +850,7 @@ export async function attachCommentButtonToChannelPost(
   }
   try {
     const replyStartedAt = performance.now()
-    const replyStub = '\u00a0'
+    const replyStub = CHANNEL_POST_EMPTY_TEXT_PLACEHOLDER
     const sent = await apiCallWithRetry(() =>
       bot.api.sendMessageToChat(post.chat_id, replyStub, {
         attachments: [keyboard],
