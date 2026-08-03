@@ -606,13 +606,13 @@ async function throttleChannelAttach(chatId: number): Promise<void> {
 async function fetchLiveChannelMessageText(bot: Bot, post: Post): Promise<string | undefined> {
   try {
     const message = await bot.api.getMessage(post.message_mid)
-    return message.body?.text
+    return message.body?.text ?? undefined
   } catch {
     try {
       const { messages } = await bot.api.getMessages(post.chat_id, {
         message_ids: [post.message_mid],
       })
-      return messages[0]?.body?.text
+      return messages[0]?.body?.text ?? undefined
     } catch {
       return undefined
     }
