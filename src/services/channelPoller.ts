@@ -9,7 +9,7 @@ import { scheduleCommentButtonRetry } from './commentButtonRetryQueue'
 import { notifyAllAdmins } from './notificationService'
 import { resolveCanonicalChannelChatId } from './resolveChannelChatId'
 import { logger } from '../utils/logger'
-import { apiCallWithRetry } from '../utils/maxApiRetry'
+import { apiCallWithRetry, summarizeMaxApiError } from '../utils/maxApiRetry'
 import {
   loadChannelPostMessage,
   tryAttachCommentsToChannelPost,
@@ -90,27 +90,52 @@ async function pollChannelSafe(bot: Bot, channel: ChannelRecord, botUid: number 
   } catch (err: unknown) {
     const count = (errorCount.get(channel.chat_id) ?? 0) + 1
     errorCount.set(channel.chat_id, count)
-    logger.error(
-      `channelPoller: error for ${channel.chat_id} (${count}/${DISABLE_AFTER_ERRORS})`,
-      err,
-    )
+    const summary = summarizeMaxApiError(err)
+    const remainingUntilDisable = Math.max(0, DISABLE_AFTER_ERRORS - count)
+    logger.error('channelPoller: не удалось опросить канал (MAX API)', {
+      chatId: channel.chat_id,
+      title: channel.title,
+      consecutiveFailures: count,
+      disableAfter: DISABLE_AFTER_ERRORS,
+      remainingUntilDisable,
+      kind: summary.kind,
+      status: summary.status,
+      message: summary.message,
+      cause: summary.cause,
+      hint:
+        summary.kind === 'transient_network'
+          ? 'Сетевой сбой при запросе к MAX. Обычно проходит сам; ретраи внутри poll уже исчерпаны.'
+          : summary.kind === 'rate_limit'
+            ? 'MAX ограничил частоту запросов. Интервал опроса/нагрузка могут быть слишком высокими.'
+            : 'Проверьте права бота в канале и доступность platform-api.max.ru.',
+    })
 
     if (count >= DISABLE_AFTER_ERRORS) {
       const removed = channelRegistry.getChannel(channel.chat_id)
-      const title = removed?.title ?? `ID ${channel.chat_id}`
-      logger.warn(
-        `channelPoller: disabling channel ${channel.chat_id} after ${count} errors`,
-      )
+      const title = removed?.title ?? channel.title ?? `ID ${channel.chat_id}`
+      logger.warn('channelPoller: опрос канала приостановлен после серии ошибок', {
+        chatId: channel.chat_id,
+        title,
+        consecutiveFailures: count,
+        lastErrorKind: summary.kind,
+        lastMessage: summary.message,
+        lastCause: summary.cause,
+        action: 'deactivate + notify admins',
+      })
       clearAdminJoinNotifiedForChannel(channel.chat_id)
       channelRegistry.deactivate(channel.chat_id)
       errorCount.delete(channel.chat_id)
       stopChannelTimer(channel.chat_id)
+      const networkHint =
+        summary.kind === 'transient_network'
+          ? `\nПоследняя ошибка: сеть/обрыв соединения (${summary.cause ?? summary.message}).`
+          : ''
       const notifyText =
-        `⚠️ CommentBot приостановил опрос канала «${title}» после ${count} ошибок MAX API.\n\n` +
+        `⚠️ CommentBot приостановил опрос канала «${title}» после ${count} ошибок MAX API.${networkHint}\n\n` +
         `Кнопки «Комментарии» могут не появляться на новых постах. Проверьте, что бот — администратор канала, ` +
         `и нажмите «Обновить кнопки» в админ-панели или добавьте бота в канал заново.`
       void notifyAllAdmins(bot, channel.chat_id, notifyText).catch((notifyErr: unknown) => {
-        logger.warn('channelPoller: notify admins on disable failed', {
+        logger.warn('channelPoller: не удалось уведомить админов об остановке опроса', {
           chatId: channel.chat_id,
           err: notifyErr,
         })
