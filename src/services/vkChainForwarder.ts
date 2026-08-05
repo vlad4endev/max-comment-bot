@@ -2,7 +2,7 @@
  * vkChainForwarder.ts
  *
  * Сервис для связки MAX-канала с VK-сообществом:
- * 1. Публикует посты из MAX в VK (вызывается хуком из tgChainForwarder).
+ * 1. Публикует посты из MAX в VK (хук из tgChainForwarder + message_created в MAX).
  * 2. Опрашивает комментарии VK и синхронизирует их в MAX miniapp.
  * 3. Отправляет новые комментарии из MAX miniapp в VK.
  */
@@ -233,16 +233,34 @@ let botRef: Bot | null = null
 let commentPollTimer: NodeJS.Timeout | null = null
 let maxToVkSyncTimer: NodeJS.Timeout | null = null
 let started = false
+/** Защита от гонки: webhook message_created и tgChainForwarder могут вызвать хук почти одновременно. */
+const inflightVkPublish = new Set<string>()
 
 export function setVkChainForwarderBot(bot: Bot): void {
   botRef = bot
 }
 
+function vkForwardPostsEnabled(chain: VkChainRecord): boolean {
+  // Как в админ-UI: отсутствие поля = включено (не `&& chain.forward_posts`).
+  return chain.forward_posts !== false
+}
+
+function matchVkChainsForMaxChat(maxChatId: number): VkChainRecord[] {
+  const canonicalChatId = resolveCanonicalChannelChatId(maxChatId) ?? maxChatId
+  return listVkChainsSync().filter(
+    (c) =>
+      c.active !== false &&
+      vkForwardPostsEnabled(c) &&
+      (Math.abs(c.max_chat_id) === Math.abs(canonicalChatId) ||
+        Math.abs(c.max_chat_id) === Math.abs(maxChatId)),
+  )
+}
+
 // ── Публикация поста MAX → VK ────────────────────────────────────────────────
 
 /**
- * Хук, вызываемый из tgChainForwarder после того, как пост опубликован в MAX-канале.
- * Для всех активных VK-связок этого канала публикует тот же текст в VK.
+ * Хук после появления поста в MAX-канале (TG→MAX, webhook message_created, автопост).
+ * Для всех активных VK-связок этого канала публикует тот же текст на стену VK.
  */
 export async function onMaxPostPublished(
   maxChatId: number,
@@ -250,18 +268,32 @@ export async function onMaxPostPublished(
   postText: string,
   mediaContext?: MaxPostPublishedMediaContext,
 ): Promise<void> {
-  const canonicalChatId = resolveCanonicalChannelChatId(maxChatId) ?? maxChatId
-  const chains = listVkChainsSync().filter(
-    (c) =>
-      c.active &&
-      c.forward_posts &&
-      (Math.abs(c.max_chat_id) === Math.abs(canonicalChatId) ||
-        Math.abs(c.max_chat_id) === Math.abs(maxChatId)),
-  )
-  if (chains.length === 0) return
+  const mid = maxMid.trim()
+  if (!mid) return
+
+  const chains = matchVkChainsForMaxChat(maxChatId)
+  if (chains.length === 0) {
+    logger.debug('[vkChain] onMaxPostPublished: no matching active chains', {
+      maxChatId,
+      maxMid: mid,
+      knownChains: listVkChainsSync().length,
+    })
+    return
+  }
 
   for (const chain of chains) {
-    await publishPostToVkChain(chain, maxMid, postText, maxChatId, mediaContext)
+    await publishPostToVkChain(chain, mid, postText, maxChatId, mediaContext)
+  }
+}
+
+async function maxMessageStillExists(maxMid: string): Promise<boolean> {
+  const bot = botRef
+  if (!bot) return true
+  try {
+    const message = await bot.api.getMessage(maxMid)
+    return Boolean(message?.body?.mid)
+  } catch {
+    return false
   }
 }
 
@@ -272,7 +304,30 @@ async function publishPostToVkChain(
   maxChatId: number,
   mediaContext?: MaxPostPublishedMediaContext,
 ): Promise<void> {
+  const lockKey = `${chain.id}:${maxMid}`
+  if (inflightVkPublish.has(lockKey)) {
+    return
+  }
+
+  await vkPostMappingStore.load().catch((err: unknown) => {
+    logger.warn('[vkChain] mapping store load failed before publish', err)
+  })
+  if (vkPostMappingStore.findByMaxMid(chain.id, maxMid)) {
+    logger.debug('[vkChain] skip — already mapped to VK', { chainId: chain.id, maxMid })
+    return
+  }
+
+  inflightVkPublish.add(lockKey)
   try {
+    // Comment-gate rollback удаляет пост в MAX — не публикуем «осиротевший» пост в VK.
+    if (!(await maxMessageStillExists(maxMid))) {
+      logger.info('[vkChain] skip — MAX message missing (rolled back?)', {
+        chainId: chain.id,
+        maxMid,
+      })
+      return
+    }
+
     const message = postText.trim() || '\u00a0'
     const sourceHadMedia = Boolean(
       mediaContext?.tgMessages?.some(
@@ -333,6 +388,8 @@ async function publishPostToVkChain(
       errors_today: (chain.errors_today ?? 0) + 1,
     })
     logger.error('[vkChain] failed to publish post to VK', { chainId: chain.id, maxMid, err })
+  } finally {
+    inflightVkPublish.delete(lockKey)
   }
 }
 

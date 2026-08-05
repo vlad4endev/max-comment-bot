@@ -82,7 +82,7 @@ export interface VkChainRecord {
   vk_name?: string
   /** User-токен VK с правами wall + photos (+ comments для синка). Токен сообщества не умеет загружать фото. */
   vk_token: string
-  /** Пересылать посты из MAX → VK (вызывается хуком из tgChainForwarder). */
+  /** Публиковать посты канала MAX на стену VK (хук onMaxPostPublished). */
   forward_posts: boolean
   /** Синхронизировать комментарии VK ↔ MAX miniapp. */
   sync_comments: boolean

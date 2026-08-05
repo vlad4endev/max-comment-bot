@@ -12,6 +12,7 @@ import {
   type ExternalPost,
 } from './integrationPlatformClient'
 import { flowStateStore } from './flowStateStore'
+import { onMaxPostPublished } from './vkChainForwarder'
 import {
   integrationsStore,
   type FlowDestination,
@@ -351,7 +352,13 @@ export class FlowProcessor {
       if (!Number.isFinite(chatId)) {
         throw new Error('Invalid MAX channel id')
       }
-      await this.bot.api.sendMessageToChat(chatId, text)
+      const sent = await this.bot.api.sendMessageToChat(chatId, text)
+      const maxMid = sent.body?.mid?.trim()
+      if (maxMid) {
+        void onMaxPostPublished(chatId, maxMid, text).catch((err: unknown) => {
+          logger.warn('flowProcessor: VK hook failed', { flowId: flow.id, maxMid, err })
+        })
+      }
       return
     }
 

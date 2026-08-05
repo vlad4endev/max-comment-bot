@@ -41,7 +41,7 @@ import { flowProcessor } from './services/flowProcessor'
 import { integrationsStore } from './services/integrationsStore'
 import { startAutopostScheduler } from './services/autopostScheduler'
 import { startChannelImportWorker } from './services/channelImportService'
-import { ensureAdminPanelStateLoaded, listTgChainsSync } from './api/adminPanelState'
+import { ensureAdminPanelStateLoaded, listTgChainsSync, listVkChainsSync } from './api/adminPanelState'
 import { repairLegacyMiniappTgChains } from './services/channelLinkService'
 import { backfillPostCommentMappingsFromForwarded } from './services/postCommentMappingStore'
 import { bootstrapCommentSyncOnStartup } from './services/commentSyncDiagnostics'
@@ -70,6 +70,7 @@ function scheduleDeferredCommentSyncBootstrap(): void {
 
 async function logStartupChainsSummary(): Promise<void> {
   const chains = listTgChainsSync()
+  const vkChains = listVkChainsSync()
   const issues: string[] = []
 
   for (const c of chains) {
@@ -87,6 +88,15 @@ async function logStartupChainsSummary(): Promise<void> {
     }
   }
 
+  for (const c of vkChains) {
+    if (c.active !== false && c.forward_posts === false) {
+      issues.push(`VK ${c.vk_name ?? c.vk_group_id}: forward_posts выключен`)
+    }
+    if (c.active !== false && !c.vk_token?.trim()) {
+      issues.push(`VK ${c.vk_name ?? c.vk_group_id}: пустой vk_token`)
+    }
+  }
+
   logger.info('[startup] chains summary', {
     chains: chains.map((c) => ({
       title: c.max_title,
@@ -95,6 +105,14 @@ async function logStartupChainsSummary(): Promise<void> {
       forward_comments: c.forward_comments,
       discussion: c.tg_discussion_chat_id ? 'ok' : 'MISSING',
       since: c.forward_posts_since?.slice(0, 16),
+    })),
+    vk_chains: vkChains.map((c) => ({
+      title: c.vk_name ?? c.vk_group_id,
+      max_chat_id: c.max_chat_id,
+      active: c.active,
+      forward_posts: c.forward_posts !== false,
+      sync_comments: c.sync_comments,
+      has_token: Boolean(c.vk_token?.trim()),
     })),
     issues,
   })
