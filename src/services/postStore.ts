@@ -49,6 +49,30 @@ export function resolveChannelPostEditText(
 }
 
 /**
+ * True when an `editMessage` with blank/`\u00a0` text would risk clearing a real media caption.
+ * Prefer skipping the edit (leave the comment-count button stale) over wiping album text.
+ */
+export function wouldRiskWipingMediaCaption(
+  editText: string | undefined | null,
+  post: Post,
+  media: AttachmentRequest[],
+): boolean {
+  if (!isBlankPostText(editText)) {
+    return false
+  }
+  if (media.length > 0) {
+    return true
+  }
+  if (post.photo_url?.trim()) {
+    return true
+  }
+  if (Array.isArray(post.media_attachments) && post.media_attachments.length > 0) {
+    return true
+  }
+  return false
+}
+
+/**
  * Channel post tracked for Mini App comments (MAX message id is {@link Post.message_mid}).
  */
 export interface Post {
@@ -463,6 +487,21 @@ export class PostStore {
       ? { media: [] as AttachmentRequest[], warnMissingSnapshot: false }
       : await resolveChannelPostMediaForEdit(bot, fresh)
 
+    // Caption unknown + media: never editMessage with `\u00a0` — that clears album text and keeps photos.
+    if (!usesReplyUi && wouldRiskWipingMediaCaption(editText, fresh, media)) {
+      logger.warn(
+        'postStore.updateButtonCaption: skip edit — caption unknown, refuse to wipe media post',
+        {
+          postId: fresh.post_id,
+          chatId: fresh.chat_id,
+          messageMid: fresh.message_mid,
+          mediaCount: media.length,
+          hasPhotoUrl: Boolean(fresh.photo_url?.trim()),
+        },
+      )
+      return false
+    }
+
     const tryAttachFallback = async (reason: string, keyboard = kb): Promise<boolean> => {
       logger.info('postStore.updateButtonCaption: fallback attach', {
         postId: fresh.post_id,
@@ -682,13 +721,16 @@ export function mediaAttachmentRequestsFromMessageBody(
  * Resolves media to send with `editMessage` on the original channel post: prefers {@link Post.media_attachments},
  * otherwise loads the message via {@link Bot.api.getMessage} or {@link Bot.api.getMessages}.
  *
+ * Empty `media_attachments: []` is treated as missing (refetch) — a stale empty snapshot must not
+ * suppress live media and pair with a blank caption edit.
+ *
  * @returns `warnMissingSnapshot` true when the post had no cached media and the API did not yield a usable attachment list (fetch failure or empty `body.attachments`).
  */
 async function resolveChannelPostMediaForEdit(
   bot: Bot,
   post: Post,
 ): Promise<{ media: AttachmentRequest[]; warnMissingSnapshot: boolean }> {
-  if (post.media_attachments !== undefined) {
+  if (Array.isArray(post.media_attachments) && post.media_attachments.length > 0) {
     return { media: [...post.media_attachments], warnMissingSnapshot: false }
   }
   let original: Message | undefined
@@ -817,38 +859,53 @@ export async function attachCommentButtonToChannelPost(
       postStore.savePost({ ...post, text: safeEditText })
       post.text = safeEditText
     }
-    logger.info('commentButton: пробуем editMessage на посте канала', {
-      ...logBase,
-      attachmentCount: attachments.length,
-      editTextBlank: isBlankPostText(safeEditText),
-      editTextLen: isBlankPostText(safeEditText) ? 0 : safeEditText.length,
-    })
-    try {
-      const editStartedAt = performance.now()
-      await apiCallWithRetry(() =>
-        bot.api.editMessage(post.message_mid, { text: safeEditText, attachments }),
-      )
-      const editMs = Math.round(performance.now() - editStartedAt)
-      const timing = apiDuration()
-      logger.info(`commentButton: кнопка добавлена через edit поста (${timing.apiDuration})`, {
+
+    // Never rewrite a media post with `\u00a0` — that clears the caption and keeps photos.
+    if (wouldRiskWipingMediaCaption(safeEditText, post, media)) {
+      logger.warn('commentButton: skip inline edit — caption unknown, refuse to wipe media post', {
         ...logBase,
-        method: 'edit',
-        editMs,
-        ...timing,
-      })
-      return true
-    } catch (err: unknown) {
-      logger.warn('commentButton: editMessage не удался — пробуем reply с кнопкой', {
-        ...logBase,
-        attachmentCount: attachments.length,
-        ...apiDuration(),
-        err,
+        mediaCount: media.length,
+        hasPhotoUrl: Boolean(post.photo_url?.trim()),
+        inlineOnly: Boolean(logCtx?.inlineOnly),
       })
       if (logCtx?.inlineOnly) {
-        logger.info('commentButton: inline-only mode, skip reply fallback after edit failure', {
-          ...logBase,
-        })
         return false
+      }
+      // Fall through to reply under the post (does not touch original caption).
+    } else {
+      logger.info('commentButton: пробуем editMessage на посте канала', {
+        ...logBase,
+        attachmentCount: attachments.length,
+        editTextBlank: isBlankPostText(safeEditText),
+        editTextLen: isBlankPostText(safeEditText) ? 0 : safeEditText.length,
+      })
+      try {
+        const editStartedAt = performance.now()
+        await apiCallWithRetry(() =>
+          bot.api.editMessage(post.message_mid, { text: safeEditText, attachments }),
+        )
+        const editMs = Math.round(performance.now() - editStartedAt)
+        const timing = apiDuration()
+        logger.info(`commentButton: кнопка добавлена через edit поста (${timing.apiDuration})`, {
+          ...logBase,
+          method: 'edit',
+          editMs,
+          ...timing,
+        })
+        return true
+      } catch (err: unknown) {
+        logger.warn('commentButton: editMessage не удался — пробуем reply с кнопкой', {
+          ...logBase,
+          attachmentCount: attachments.length,
+          ...apiDuration(),
+          err,
+        })
+        if (logCtx?.inlineOnly) {
+          logger.info('commentButton: inline-only mode, skip reply fallback after edit failure', {
+            ...logBase,
+          })
+          return false
+        }
       }
     }
   }
