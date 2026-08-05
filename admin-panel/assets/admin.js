@@ -49,7 +49,7 @@
       items: [{ id: 'dashboard', label: 'Дашборд', icon: 'layout-dashboard' }],
     },
     {
-      group: 'MAX-каналы',
+      group: 'Контент',
       items: [
         { id: 'channels', label: 'Каналы', icon: 'radio' },
         { id: 'comments', label: 'Комментарии', icon: 'message-square' },
@@ -57,11 +57,11 @@
       ],
     },
     {
-      group: 'Telegram → MAX',
+      group: 'Мосты',
       items: [
         { id: 'tgchains', label: 'Цепочки', icon: 'link-2' },
-        { id: 'channelimport', label: 'Импорт архива', icon: 'upload-cloud' },
         { id: 'integrations', label: 'Интеграции', icon: 'plug' },
+        { id: 'channelimport', label: 'Импорт архива', icon: 'upload-cloud' },
       ],
     },
     {
@@ -89,32 +89,32 @@
     },
     channels: {
       title: 'Каналы',
-      group: 'MAX-каналы',
+      group: 'Контент',
       desc: 'Подключённые MAX-каналы, статистика, настройки комментариев и антиспам.',
     },
     comments: {
       title: 'Комментарии',
-      group: 'MAX-каналы',
+      group: 'Контент',
       desc: 'Просмотр и удаление комментариев по каналам.',
     },
     autoposts: {
       title: 'Автопостинг',
-      group: 'MAX-каналы',
+      group: 'Контент',
       desc: 'Планировщик публикаций в Telegram-каналы: расписание, серии, статистика и шаблоны.',
     },
     tgchains: {
       title: 'Цепочки',
-      group: 'Telegram → MAX',
+      group: 'Мосты',
       desc: 'Пересылка Telegram → MAX и публикация MAX → VK, синхронизация комментариев.',
     },
     channelimport: {
       title: 'Импорт архива',
-      group: 'Telegram → MAX',
+      group: 'Мосты',
       desc: 'Перенос истории канала из Telegram в MAX через MTProto.',
     },
     integrations: {
       title: 'Интеграции',
-      group: 'Telegram → MAX',
+      group: 'Мосты',
       desc: 'Токены платформ, списки каналов и простые потоки пересылки.',
     },
     antispam: {
@@ -1742,10 +1742,10 @@
 
   function renderQuickNav() {
     var items = [
-      { route: 'channels', icon: 'radio', label: 'Каналы', desc: 'MAX-каналы' },
-      { route: 'comments', icon: 'message-square', label: 'Комментарии', desc: 'Модерация' },
-      { route: 'tgchains', icon: 'link-2', label: 'Цепочки', desc: 'TG→MAX и MAX→VK' },
-      { route: 'autoposts', icon: 'calendar-clock', label: 'Автопосты', desc: 'Расписание' },
+      { route: 'channels', icon: 'radio', label: 'Каналы', desc: 'Контент MAX' },
+      { route: 'comments', icon: 'message-square', label: 'Комментарии', desc: 'Модерация ленты' },
+      { route: 'autoposts', icon: 'calendar-clock', label: 'Автопостинг', desc: 'Расписание' },
+      { route: 'tgchains', icon: 'link-2', label: 'Цепочки', desc: 'Мосты TG ↔ MAX' },
       { route: 'antispam', icon: 'shield', label: 'Антиспам', desc: 'Фильтры' },
       { route: 'users', icon: 'users', label: 'Пользователи', desc: 'Ограничения' },
     ];
