@@ -1,8 +1,8 @@
 /**
  * vkChainForwarder.ts
  *
- * Сервис для связки MAX-канала с VK-сообществом:
- * 1. Публикует посты из MAX в VK (хук из tgChainForwarder + message_created в MAX).
+ * Сервис для связки Telegram→VK (через MAX-канал как якорь связки):
+ * 1. Берёт посты из Telegram (текст + фото/видео как в TG) и публикует на стену VK.
  * 2. Опрашивает комментарии VK и синхронизирует их в MAX miniapp.
  * 3. Отправляет новые комментарии из MAX miniapp в VK.
  */
@@ -26,7 +26,7 @@ import {
   uploadVkWallPhotoFromBuffer,
   uploadVkWallVideoFromBuffer,
 } from './integrationPlatformClient'
-import { mediaAttachmentRequestsFromMessageBody, postStore } from './postStore'
+import { postStore } from './postStore'
 import { resolveCanonicalChannelChatId } from './resolveChannelChatId'
 import { vkPostMappingStore } from './vkPostMappingStore'
 import { isCommentSynced, markCommentSynced } from '../utils/commentSyncGuard'
@@ -42,9 +42,33 @@ const VK_USER_PREFIX = 'vk:'
 const VK_WALL_ATTACHMENTS_LIMIT = 10
 const TG_DOWNLOAD_TIMEOUT_MS = 120_000
 
-export interface MaxPostPublishedMediaContext {
-  tgToken?: string
-  tgMessages?: TgMessage[]
+export interface TelegramPostToVkInput {
+  /** MAX chat id — якорь VK-связки (тот же канал, куда идёт TG→MAX). */
+  maxChatId: number
+  /** mid поста в MAX после пересылки (для маппинга комментариев). */
+  maxMid: string
+  /** Токен TG-бота, через который читаем файл постов. */
+  tgToken: string
+  /** Сообщения Telegram (одно или альбом) — источник текста и медиа. */
+  tgMessages: TgMessage[]
+}
+
+/** Текст поста ровно как в Telegram (caption/text), без подписей MAX/«— TG». */
+export function exactTelegramPostText(messages: TgMessage[]): string {
+  const ordered = [...messages].sort((a, b) => a.message_id - b.message_id)
+  for (const msg of ordered) {
+    const raw = (msg.caption || msg.text || '').trim()
+    if (raw) return raw
+  }
+  return ''
+}
+
+function tgMessageHasMedia(msg: TgMessage): boolean {
+  if (msg.photo && msg.photo.length > 0) return true
+  if (msg.video?.file_id) return true
+  const docMime = msg.document?.mime_type?.toLowerCase() ?? ''
+  if (msg.document?.file_id && docMime.startsWith('image/')) return true
+  return false
 }
 
 async function downloadBinary(url: string): Promise<Buffer | null> {
@@ -132,96 +156,13 @@ async function buildVkAttachmentsFromTgMessages(
   return out
 }
 
-async function buildVkAttachmentsFromMaxMid(
-  bot: Bot,
+async function resolveVkWallAttachmentsFromTelegram(
   vkToken: string,
   groupId: string,
-  maxMid: string,
+  tgToken: string,
+  messages: TgMessage[],
 ): Promise<string[]> {
-  const out: string[] = []
-  try {
-    const message = await bot.api.getMessage(maxMid)
-    const media = mediaAttachmentRequestsFromMessageBody(message.body.attachments)
-    for (const att of media) {
-      if (out.length >= VK_WALL_ATTACHMENTS_LIMIT) break
-      const payload = (att as { payload?: { url?: string } }).payload
-      const url = payload?.url?.trim()
-      if (!url) continue
-      const buffer = await downloadBinary(url)
-      if (!buffer) continue
-      if (att.type === 'video') {
-        const vkAtt = await uploadVkWallVideoFromBuffer(vkToken, groupId, buffer, 'video.mp4', 'video')
-        if (vkAtt) out.push(vkAtt)
-      } else if (att.type === 'image') {
-        const vkAtt = await uploadVkWallPhotoFromBuffer(vkToken, groupId, buffer)
-        if (vkAtt) out.push(vkAtt)
-      }
-    }
-  } catch (err: unknown) {
-    logger.warn('[vkChain] buildVkAttachmentsFromMaxMid failed', { maxMid, err })
-  }
-  return out
-}
-
-async function buildVkAttachmentsFromPostRecord(
-  vkToken: string,
-  groupId: string,
-  maxChatId: number,
-  maxMid: string,
-): Promise<string[]> {
-  const chatId = resolveCanonicalChannelChatId(maxChatId) ?? maxChatId
-  const post = postStore.findPostByChannelMessage(chatId, maxMid)
-  if (!post?.media_attachments?.length) {
-    return []
-  }
-  const out: string[] = []
-  for (const att of post.media_attachments) {
-    if (out.length >= VK_WALL_ATTACHMENTS_LIMIT) break
-    const payload = (att as { payload?: { url?: string } }).payload
-    const url = payload?.url?.trim()
-    if (!url) continue
-    const buffer = await downloadBinary(url)
-    if (!buffer) continue
-    if (att.type === 'video') {
-      const vkAtt = await uploadVkWallVideoFromBuffer(vkToken, groupId, buffer, 'video.mp4', 'video')
-      if (vkAtt) out.push(vkAtt)
-    } else if (att.type === 'image') {
-      const vkAtt = await uploadVkWallPhotoFromBuffer(vkToken, groupId, buffer)
-      if (vkAtt) out.push(vkAtt)
-    }
-  }
-  return out
-}
-
-async function resolveVkWallAttachments(
-  vkToken: string,
-  groupId: string,
-  maxChatId: number,
-  maxMid: string,
-  mediaContext?: MaxPostPublishedMediaContext,
-): Promise<string[]> {
-  if (mediaContext?.tgToken && mediaContext.tgMessages && mediaContext.tgMessages.length > 0) {
-    const fromTg = await buildVkAttachmentsFromTgMessages(
-      vkToken,
-      groupId,
-      mediaContext.tgToken,
-      mediaContext.tgMessages,
-    )
-    if (fromTg.length > 0) {
-      return fromTg
-    }
-  }
-
-  const fromPost = await buildVkAttachmentsFromPostRecord(vkToken, groupId, maxChatId, maxMid)
-  if (fromPost.length > 0) {
-    return fromPost
-  }
-
-  const bot = botRef
-  if (bot) {
-    return buildVkAttachmentsFromMaxMid(bot, vkToken, groupId, maxMid)
-  }
-  return []
+  return buildVkAttachmentsFromTgMessages(vkToken, groupId, tgToken, messages)
 }
 
 function formatVkCommentUsername(fromId: number): string {
@@ -233,7 +174,7 @@ let botRef: Bot | null = null
 let commentPollTimer: NodeJS.Timeout | null = null
 let maxToVkSyncTimer: NodeJS.Timeout | null = null
 let started = false
-/** Защита от гонки: webhook message_created и tgChainForwarder могут вызвать хук почти одновременно. */
+/** Защита от гонки при повторном вызове для одного и того же MAX mid. */
 const inflightVkPublish = new Set<string>()
 
 export function setVkChainForwarderBot(bot: Bot): void {
@@ -256,34 +197,71 @@ function matchVkChainsForMaxChat(maxChatId: number): VkChainRecord[] {
   )
 }
 
-// ── Публикация поста MAX → VK ────────────────────────────────────────────────
+// ── Публикация Telegram → VK ─────────────────────────────────────────────────
 
 /**
- * Хук после появления поста в MAX-канале (TG→MAX, webhook message_created, автопост).
- * Для всех активных VK-связок этого канала публикует тот же текст на стену VK.
+ * Публикует пост из Telegram на стену VK для всех активных связок MAX-канала.
+ * Текст и вложения берутся только из Telegram (как в исходном посте).
  */
-export async function onMaxPostPublished(
-  maxChatId: number,
-  maxMid: string,
-  postText: string,
-  mediaContext?: MaxPostPublishedMediaContext,
-): Promise<void> {
-  const mid = maxMid.trim()
-  if (!mid) return
+export async function publishTelegramPostToVk(input: TelegramPostToVkInput): Promise<void> {
+  const mid = input.maxMid.trim()
+  const tgToken = input.tgToken.trim()
+  const tgMessages = input.tgMessages
+  if (!mid || !tgToken || tgMessages.length === 0) {
+    logger.warn('[vkChain] publishTelegramPostToVk: incomplete Telegram payload', {
+      maxMid: mid || null,
+      hasToken: Boolean(tgToken),
+      tgMessages: tgMessages.length,
+    })
+    return
+  }
 
-  const chains = matchVkChainsForMaxChat(maxChatId)
+  const chains = matchVkChainsForMaxChat(input.maxChatId)
   if (chains.length === 0) {
-    logger.debug('[vkChain] onMaxPostPublished: no matching active chains', {
-      maxChatId,
+    logger.debug('[vkChain] publishTelegramPostToVk: no matching active chains', {
+      maxChatId: input.maxChatId,
       maxMid: mid,
       knownChains: listVkChainsSync().length,
     })
     return
   }
 
+  const caption = exactTelegramPostText(tgMessages)
   for (const chain of chains) {
-    await publishPostToVkChain(chain, mid, postText, maxChatId, mediaContext)
+    await publishTelegramPostToVkChain(chain, {
+      maxChatId: input.maxChatId,
+      maxMid: mid,
+      tgToken,
+      tgMessages,
+      caption,
+    })
   }
+}
+
+/**
+ * @deprecated Используйте {@link publishTelegramPostToVk}. Оставлено для совместимости вызовов.
+ */
+export async function onMaxPostPublished(
+  maxChatId: number,
+  maxMid: string,
+  _postText: string,
+  mediaContext?: { tgToken?: string; tgMessages?: TgMessage[] },
+): Promise<void> {
+  const tgToken = mediaContext?.tgToken?.trim()
+  const tgMessages = mediaContext?.tgMessages
+  if (!tgToken || !tgMessages || tgMessages.length === 0) {
+    logger.debug('[vkChain] onMaxPostPublished skipped — нужен Telegram source (tgToken + tgMessages)', {
+      maxChatId,
+      maxMid,
+    })
+    return
+  }
+  await publishTelegramPostToVk({
+    maxChatId,
+    maxMid,
+    tgToken,
+    tgMessages,
+  })
 }
 
 async function maxMessageStillExists(maxMid: string): Promise<boolean> {
@@ -297,13 +275,17 @@ async function maxMessageStillExists(maxMid: string): Promise<boolean> {
   }
 }
 
-async function publishPostToVkChain(
+async function publishTelegramPostToVkChain(
   chain: VkChainRecord,
-  maxMid: string,
-  postText: string,
-  maxChatId: number,
-  mediaContext?: MaxPostPublishedMediaContext,
+  input: {
+    maxChatId: number
+    maxMid: string
+    tgToken: string
+    tgMessages: TgMessage[]
+    caption: string
+  },
 ): Promise<void> {
+  const { maxMid, tgToken, tgMessages, caption } = input
   const lockKey = `${chain.id}:${maxMid}`
   if (inflightVkPublish.has(lockKey)) {
     return
@@ -328,30 +310,24 @@ async function publishPostToVkChain(
       return
     }
 
-    const message = postText.trim() || '\u00a0'
-    const sourceHadMedia = Boolean(
-      mediaContext?.tgMessages?.some(
-        (m) =>
-          (m.photo && m.photo.length > 0) ||
-          Boolean(m.video?.file_id) ||
-          Boolean(m.document?.mime_type?.toLowerCase().startsWith('image/')),
-      ),
-    )
-    const attachments = await resolveVkWallAttachments(
+    const sourceHadMedia = tgMessages.some(tgMessageHasMedia)
+    const attachments = await resolveVkWallAttachmentsFromTelegram(
       chain.vk_token,
       chain.vk_group_id,
-      maxChatId,
-      maxMid,
-      mediaContext,
+      tgToken,
+      tgMessages,
     )
     if (sourceHadMedia && attachments.length === 0) {
-      logger.warn('[vkChain] source had media but VK attachments empty — posting text only', {
+      logger.warn('[vkChain] Telegram had media but VK attachments empty — posting text only', {
         chainId: chain.id,
         maxMid,
         groupId: chain.vk_group_id,
-        tgMessages: mediaContext?.tgMessages?.length ?? 0,
+        tgMessages: tgMessages.length,
       })
     }
+
+    // Текст ровно как в Telegram; nbsp если пост media-only без подписи.
+    const message = caption.trim() || '\u00a0'
     const vkPostId = await publishVkWallPost(
       chain.vk_token,
       chain.vk_group_id,
@@ -376,18 +352,24 @@ async function publishPostToVkChain(
     await updateVkChain(chain.id, {
       forwarded_today: (chain.forwarded_today ?? 0) + 1,
     })
-    logger.info('[vkChain] post published to VK', {
+    logger.info('[vkChain] Telegram post published to VK', {
       chainId: chain.id,
       maxMid,
       vkPostId,
       groupId: chain.vk_group_id,
       attachmentCount: attachments.length,
+      captionLen: caption.length,
+      tgMessages: tgMessages.length,
     })
   } catch (err: unknown) {
     await updateVkChain(chain.id, {
       errors_today: (chain.errors_today ?? 0) + 1,
     })
-    logger.error('[vkChain] failed to publish post to VK', { chainId: chain.id, maxMid, err })
+    logger.error('[vkChain] failed to publish Telegram post to VK', {
+      chainId: chain.id,
+      maxMid,
+      err,
+    })
   } finally {
     inflightVkPublish.delete(lockKey)
   }

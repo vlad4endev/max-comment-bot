@@ -33,7 +33,7 @@ import {
   handleTgComment,
   isDiscussionAutoForward,
 } from './tgCommentSyncService'
-import { onMaxPostPublished } from './vkChainForwarder'
+import { publishTelegramPostToVk } from './vkChainForwarder'
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
@@ -872,13 +872,13 @@ async function processChainMessageGroup(
               markForwarded(chain.id, msg, maxMid, i)
               syncTgMetadataOnForwardedPost(chain.max_chat_id, maxMid, chain, msg)
             }
-            void onMaxPostPublished(
-              chain.max_chat_id,
+            void publishTelegramPostToVk({
+              maxChatId: chain.max_chat_id,
               maxMid,
-              i === 0 ? firstCaption : '',
-              { tgToken, tgMessages: chunk },
-            ).catch((err: unknown) => {
-              logger.warn('[tgChain] VK hook (album) failed', { chainId: chain.id, maxMid, err })
+              tgToken,
+              tgMessages: chunk,
+            }).catch((err: unknown) => {
+              logger.warn('[tgChain] VK publish (album) failed', { chainId: chain.id, maxMid, err })
             })
           } else {
             logger.warn('[tgChain] chunk not marked forwarded — comment gate rollback, TG retry later', {
@@ -915,11 +915,13 @@ async function processChainMessageGroup(
           published = 1
           markForwarded(chain.id, msg, maxMid, null)
           syncTgMetadataOnForwardedPost(chain.max_chat_id, maxMid, chain, msg)
-          void onMaxPostPublished(chain.max_chat_id, maxMid, caption, {
+          void publishTelegramPostToVk({
+            maxChatId: chain.max_chat_id,
+            maxMid,
             tgToken,
             tgMessages: [msg],
           }).catch((err: unknown) => {
-            logger.warn('[tgChain] VK hook (single) failed', { chainId: chain.id, maxMid, err })
+            logger.warn('[tgChain] VK publish (single) failed', { chainId: chain.id, maxMid, err })
           })
         } else {
           logger.warn('[tgChain] post not marked forwarded — comment gate rollback, TG retry later', {

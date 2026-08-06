@@ -36,42 +36,8 @@ import { settingsStore } from '../services/settingsStore'
 import { subscriberStore } from '../services/subscriberStore'
 import { stateManager } from '../services/stateManager'
 import { buildTelegramNotifyInviteUrlForMaxChannel } from '../services/maxChannelTelegramAdminInvite'
-import { onMaxPostPublished } from '../services/vkChainForwarder'
 import { buildBotJoinUrl } from '../utils/deeplink'
 import { logger } from '../utils/logger'
-
-/**
- * Дублирует пост канала MAX в VK-связки.
- * Служебные сообщения бота (reply-stub кнопки) пропускаем — у них reason skip_bot.
- * Для постов бота (TG→MAX / автопост) даём короткую задержку, чтобы tgChainForwarder
- * успел опубликовать в VK с медиа из Telegram; идемпотентность не даст дубль.
- */
-function scheduleVkForwardForMaxChannelPost(
-  chatId: number,
-  message: Message,
-  attachReason: string | undefined,
-  botUserId: number | undefined,
-): void {
-  const mid = message.body?.mid
-  if (typeof mid !== 'string' || mid.trim() === '') return
-  if (attachReason === 'skip_bot') return
-
-  const postText = message.body?.text?.trim() ?? ''
-  const fromBot =
-    botUserId !== undefined && message.sender != null && message.sender.user_id === botUserId
-  const delayMs = fromBot ? 2_500 : 0
-
-  const run = (): void => {
-    void onMaxPostPublished(chatId, mid.trim(), postText).catch((err: unknown) => {
-      logger.warn('message_created: VK forward failed', { chatId, messageMid: mid, err })
-    })
-  }
-  if (delayMs > 0) {
-    setTimeout(run, delayMs)
-  } else {
-    run()
-  }
-}
 
 /** Mini App deeplink (`startapp` → `initDataUnsafe.start_param`). */
 function buildBotStartappUrl(startappPayload: string): string {
@@ -1190,12 +1156,6 @@ export function registerEventHandlers(bot: Bot): void {
           reason: r.reason,
         })
       }
-      scheduleVkForwardForMaxChannelPost(
-        registered.chatId,
-        message,
-        r.ok ? undefined : r.reason,
-        ctx.myId,
-      )
       return
     }
 
@@ -1217,7 +1177,6 @@ export function registerEventHandlers(bot: Bot): void {
           reason: r.reason,
         })
       }
-      scheduleVkForwardForMaxChannelPost(chatId, message, r.ok ? undefined : r.reason, ctx.myId)
       return
     }
 

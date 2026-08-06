@@ -105,7 +105,7 @@
     tgchains: {
       title: 'Цепочки',
       group: 'Мосты',
-      desc: 'Пересылка Telegram → MAX и публикация MAX → VK, синхронизация комментариев.',
+      desc: 'Пересылка Telegram → MAX и Telegram → VK (текст и фото как в TG), синхронизация комментариев.',
     },
     channelimport: {
       title: 'Импорт архива',
@@ -677,7 +677,7 @@
       (active === 'vk' ? ' active' : '') +
       '" data-chains-tab="vk" aria-selected="' +
       (active === 'vk' ? 'true' : 'false') +
-      '"><i data-lucide="share-2"></i> MAX → VK<span class="chains-tab-count">' +
+      '"><i data-lucide="share-2"></i> TG → VK<span class="chains-tab-count">' +
       esc(String(vkCount)) +
       '</span></button>' +
       '</div>'
@@ -687,10 +687,10 @@
   function renderChainsPageHead(platform, stats) {
     var st = stats || {};
     var isTg = platform === 'tg';
-    var title = isTg ? 'Пересылка Telegram → MAX' : 'Публикация MAX → VK';
+    var title = isTg ? 'Пересылка Telegram → MAX' : 'Публикация Telegram → VK';
     var desc = isTg
       ? 'Автоматическая публикация постов из Telegram в MAX с опциональной синхронизацией комментариев.'
-      : 'Дублирование постов из MAX на стену VK и синхронизация комментариев.';
+      : 'Посты из Telegram-канала (через TG→MAX того же MAX) уходят на стену VK с тем же текстом и фото.';
     var errNum = Number(st.errors_today) || 0;
     var html = '<header class="chains-page-head">';
     html += '<div class="chains-page-head-text"><h2>' + esc(title) + '</h2><p>' + esc(desc) + '</p></div>';
@@ -760,7 +760,7 @@
         '<p class="chains-empty-hint">' +
         (isTg
           ? 'Настройте пару каналов слева и нажмите «Включить пересылку»'
-          : 'Укажите канал MAX и сообщество VK слева') +
+          : 'Нужна TG→MAX связка на тот же MAX-канал, затем укажите сообщество VK') +
         '</p>';
     }
     html += '</div>';
@@ -3613,10 +3613,14 @@
     html += '</header>';
     html += '<div class="chain-card__flow">';
     html += '<div class="chain-card__node chain-card__node--max">';
-    html += '<span class="chain-card__platform-icon">MAX</span>';
+    html += '<span class="chain-card__platform-icon">TG</span>';
     html += '<div class="chain-card__node-info">';
-    html += '<span class="chain-card__node-name">' + esc(mx.title) + '</span>';
-    if (mx.sub) html += '<span class="chain-card__node-id">' + esc(mx.sub) + '</span>';
+    html += '<span class="chain-card__node-name">Telegram → VK</span>';
+    html +=
+      '<span class="chain-card__node-id">якорь MAX: ' +
+      esc(mx.title) +
+      (mx.sub ? ' · ' + esc(mx.sub) : '') +
+      '</span>';
     html += '</div></div>';
     html += '<div class="chain-card__connector"><i data-lucide="arrow-right"></i></div>';
     html += '<div class="chain-card__node chain-card__node--vk">';
@@ -3786,13 +3790,13 @@
         html += renderChainsWizardPanelHead('Новая связка', 'plus-circle');
         html +=
           '<div class="chains-requirements"><strong>Требования</strong><ul>' +
-          '<li>Бот MAX — админ в исходном канале</li>' +
+          '<li>Активная связка <strong>Telegram → MAX</strong> на тот же канал MAX (источник постов — Telegram)</li>' +
           '<li>Токен пользователя VK (не сообщества) с правами <code>wall</code>, <code>photos</code>, <code>groups</code></li>' +
-          '<li>Для комментариев дополнительно <code>wall</code> / доступ к обсуждениям сообщества</li>' +
+          '<li>Для комментариев дополнительно доступ к обсуждениям сообщества</li>' +
           '</ul></div>';
         html += '<div class="forwarding-add-form forwarding-add-form--picks">';
         html +=
-          '<div class="form-group"><div class="flex-between" style="align-items:center;gap:8px;margin-bottom:6px"><label style="margin:0">Канал MAX — источник</label><button type="button" class="btn btn-ghost btn-sm" id="vc_refresh_max"><i data-lucide="refresh-cw"></i></button></div>';
+          '<div class="form-group"><div class="flex-between" style="align-items:center;gap:8px;margin-bottom:6px"><label style="margin:0">Канал MAX — якорь (тот же, что в TG→MAX)</label><button type="button" class="btn btn-ghost btn-sm" id="vc_refresh_max"><i data-lucide="refresh-cw"></i></button></div>';
         html +=
           '<select class="select" id="vc_max">' +
           buildMaxChannelSelectOptions(maxChannels, { adminOnly: true }) +
@@ -3826,7 +3830,7 @@
         html += '<input type="hidden" id="vc_group_id"/>';
         html += '</div>';
         html += '<div id="vcToggles">';
-        html += toggleRow('forward_posts', 'Публиковать посты в VK', '', true);
+        html += toggleRow('forward_posts', 'Публиковать посты Telegram → VK', 'Текст и фото как в Telegram', true);
         html += toggleRow('sync_comments', 'Синхронизировать комментарии', 'VK ↔ MAX miniapp', false);
         html += '</div>';
         html += '<div class="forwarding-add-form-actions" style="margin-top:14px">';
@@ -4732,7 +4736,7 @@
           html += integrationCardHtml(
             'vk',
             'ВКонтакте',
-            'Публикация MAX → VK и работа с сообществами',
+            'Публикация Telegram → VK и работа с сообществами',
             vk,
             'vk',
           );
