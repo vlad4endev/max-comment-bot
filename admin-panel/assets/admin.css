@@ -5423,3 +5423,78 @@ tbody tr:hover td {
     max-height: none;
   }
 }
+
+/* Backup */
+.backup-layout {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.backup-include-list {
+  list-style: none;
+  margin: 0 0 1rem;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+}
+
+.backup-include-list li {
+  display: flex;
+  gap: 0.7rem;
+  align-items: flex-start;
+}
+
+.backup-include-list li i,
+.backup-include-list li svg {
+  width: 18px;
+  height: 18px;
+  margin-top: 2px;
+  color: var(--accent);
+  flex-shrink: 0;
+}
+
+.backup-include-list strong {
+  display: block;
+  font-size: 0.875rem;
+}
+
+.backup-include-list span {
+  display: block;
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+  line-height: 1.4;
+}
+
+.backup-skip-note {
+  margin: 0 0 1rem;
+}
+
+.backup-secret-hint {
+  background: var(--warning-muted);
+  border-color: rgba(217, 119, 6, 0.28);
+}
+
+.backup-secret-hint svg {
+  color: var(--warning);
+}
+
+.backup-row-actions {
+  display: flex;
+  gap: 0.4rem;
+  justify-content: flex-end;
+  white-space: nowrap;
+}
+
+.backup-table td {
+  vertical-align: middle;
+}
+
+@keyframes backup-spin {
+  to { transform: rotate(360deg); }
+}
+
+#backupCreateBtn[disabled] svg {
+  animation: backup-spin 0.9s linear infinite;
+}

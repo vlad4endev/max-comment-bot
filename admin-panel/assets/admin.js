@@ -76,6 +76,7 @@
       items: [
         { id: 'logs', label: 'Логи', icon: 'terminal' },
         { id: 'ailog', label: 'ИИ-анализ', icon: 'sparkles' },
+        { id: 'backup', label: 'Резервная копия', icon: 'hard-drive' },
         { id: 'settings', label: 'Настройки', icon: 'settings' },
       ],
     },
@@ -137,6 +138,11 @@
       group: 'Система',
       desc: 'Отчёты о проблемах бота простым языком. Настройка оператора — в разделе «Настройки».',
     },
+    backup: {
+      title: 'Резервная копия',
+      group: 'Система',
+      desc: 'Полный архив баз данных, настроек, токенов и медиа — чтобы ничего не потерять.',
+    },
     settings: {
       title: 'Настройки',
       group: 'Система',
@@ -156,6 +162,7 @@
     users: 'Пользователи',
     logs: 'Логи',
     ailog: 'ИИ-анализ',
+    backup: 'Резервная копия',
     settings: 'Настройки',
   };
 
@@ -285,6 +292,15 @@
       hour: '2-digit',
       minute: '2-digit',
     });
+  }
+
+  function formatBytes(n) {
+    var v = Number(n);
+    if (!Number.isFinite(v) || v < 0) return '—';
+    if (v < 1024) return v + ' Б';
+    if (v < 1024 * 1024) return (v / 1024).toFixed(v < 10 * 1024 ? 1 : 0) + ' КБ';
+    if (v < 1024 * 1024 * 1024) return (v / (1024 * 1024)).toFixed(v < 10 * 1024 * 1024 ? 1 : 0) + ' МБ';
+    return (v / (1024 * 1024 * 1024)).toFixed(1) + ' ГБ';
   }
 
   function truncateText(text, maxLen) {
@@ -550,6 +566,7 @@
   function postJson(path, body) {
     var timeoutMs = 20000;
     if (path === '/refresh-buttons') timeoutMs = 60000;
+    if (path === '/backup') timeoutMs = 300000;
     if (path === '/logs/analyze') timeoutMs = 120000;
     if (path === '/logs/ai-test') timeoutMs = 60000;
     return authFetch(apiPath(path), {
@@ -1658,6 +1675,7 @@
       users: 1,
       logs: 1,
       ailog: 1,
+      backup: 1,
       settings: 1,
     };
     return allowed[id] ? id : 'dashboard';
@@ -7600,6 +7618,171 @@
     refreshIcons();
   }
 
+  function renderBackup() {
+    var main = qs('#mainContent');
+    if (!main) return;
+    main.innerHTML = skeletonPage(3);
+    getJson('/backup')
+      .then(function (data) {
+        if (currentRoute !== 'backup') return;
+        paintBackupPage(main, data || {});
+      })
+      .catch(function (e) {
+        main.innerHTML = '<p class="muted">Не удалось загрузить раздел: ' + esc(e.message || 'ошибка') + '</p>';
+      });
+  }
+
+  function paintBackupPage(main, data) {
+    var source = data.source || {};
+    var items = Array.isArray(data.items) ? data.items : [];
+    var creating = !!data.creating;
+    var dbs = Array.isArray(source.databases) ? source.databases : [];
+    var html = '';
+
+    html += '<div class="backup-layout">';
+    html += '<div class="panel backup-create-panel">';
+    html += sectionHead(
+      'Полный архив проекта',
+      'Снимок баз данных, всех настроек, токенов и медиа. Скачайте файл и храните его отдельно от сервера.',
+    );
+    html +=
+      '<div class="as-hint-box backup-secret-hint"><i data-lucide="shield-alert"></i><div><strong>В архиве есть секреты</strong><p>Токены ботов, пароль админки и сессия Telegram. Не отправляйте файл в открытый чат и не кладите в публичный репозиторий.</p></div></div>';
+
+    html += '<ul class="backup-include-list">';
+    html +=
+      '<li><i data-lucide="database"></i><div><strong>Базы SQLite</strong><span>' +
+      esc(
+        dbs
+          .map(function (d) {
+            return d.name + (d.exists ? ' (' + formatBytes(d.size_bytes) + ')' : ' — нет файла');
+          })
+          .join(', ') || 'bot.db, posts.db, antispam.db',
+      ) +
+      '</span></div></li>';
+    html +=
+      '<li><i data-lucide="sliders"></i><div><strong>Настройки и цепочки</strong><span>JSON-конфиги админки, интеграций, антиспама, MTProto — файлов: ' +
+      esc(String(source.json_files != null ? source.json_files : '—')) +
+      '</span></div></li>';
+    html +=
+      '<li><i data-lucide="key-round"></i><div><strong>Переменные окружения</strong><span>' +
+      (source.env_file ? 'Файл .env будет включён. ' : '') +
+      'Даже в Docker снимок текущих токенов попадёт в env/settings.env.</span></div></li>';
+    html +=
+      '<li><i data-lucide="image"></i><div><strong>Медиа и загрузки</strong><span>Автопостинг: ' +
+      esc(String(source.media_files || 0)) +
+      ' файл(ов)' +
+      (source.uploads ? ', плюс загрузки Mini App' : '') +
+      '</span></div></li>';
+    html += '</ul>';
+    html +=
+      '<p class="muted text-sm backup-skip-note">Журналы runtime.log не входят в архив — для восстановления бота они не нужны.</p>';
+    html +=
+      '<button type="button" class="btn btn-primary" id="backupCreateBtn"' +
+      (creating ? ' disabled' : '') +
+      '><i data-lucide="download"></i> ' +
+      (creating ? 'Создаём архив…' : 'Создать резервную копию') +
+      '</button>';
+    html += '</div>';
+
+    html += '<div class="panel">';
+    html += sectionHead(
+      'Скачать копии',
+      items.length
+        ? 'Хранится на сервере: ' + items.length + ', всего ' + formatBytes(data.total_size_bytes || 0)
+        : 'Пока нет ни одной копии — создайте первую.',
+    );
+    if (!items.length) {
+      html += emptyState(
+        'hard-drive',
+        'Копий ещё нет',
+        'Нажмите «Создать резервную копию», затем скачайте архив на свой компьютер.',
+      );
+    } else {
+      html += '<div class="table-wrap"><table class="backup-table"><thead><tr>';
+      html += '<th>Создана</th><th>Размер</th><th>Состав</th><th></th>';
+      html += '</tr></thead><tbody>';
+      items.forEach(function (it) {
+        var bits = [];
+        if (it.databases) {
+          if (it.databases.bot) bits.push('bot.db');
+          if (it.databases.posts) bits.push('posts.db');
+          if (it.databases.antispam) bits.push('antispam.db');
+        }
+        if (it.includes_env_file || it.includes_runtime_env) bits.push('env');
+        if (it.includes_uploads) bits.push('uploads');
+        html += '<tr data-backup-id="' + esc(it.id) + '">';
+        html += '<td>' + esc(fmtDateTime(it.created_at)) + '</td>';
+        html += '<td class="mono">' + esc(formatBytes(it.size_bytes)) + '</td>';
+        html += '<td class="muted text-sm">' + esc(bits.join(' · ') || 'архив') + '</td>';
+        html += '<td class="backup-row-actions">';
+        html +=
+          '<a class="btn btn-primary btn-sm" href="' +
+          esc(apiPath('/backup/download/' + it.id)) +
+          '" download="' +
+          esc(it.filename || '') +
+          '"><i data-lucide="download"></i> Скачать</a>';
+        html +=
+          '<button type="button" class="btn btn-ghost btn-sm backup-delete-btn" data-id="' +
+          esc(it.id) +
+          '"><i data-lucide="trash-2"></i></button>';
+        html += '</td></tr>';
+      });
+      html += '</tbody></table></div>';
+    }
+    html += '</div></div>';
+
+    main.innerHTML = html;
+    refreshIcons();
+
+    var createBtn = qs('#backupCreateBtn', main);
+    if (createBtn) {
+      createBtn.addEventListener('click', function () {
+        createBtn.disabled = true;
+        createBtn.innerHTML = '<i data-lucide="loader-circle"></i> Создаём архив…';
+        refreshIcons();
+        postJson('/backup', {})
+          .then(function (rec) {
+            showToast('Архив готов — можно скачать', 'success');
+            renderBackup();
+            if (rec && rec.id) {
+              var a = document.createElement('a');
+              a.href = apiPath('/backup/download/' + rec.id);
+              a.setAttribute('download', rec.filename || '');
+              a.style.display = 'none';
+              document.body.appendChild(a);
+              a.click();
+              document.body.removeChild(a);
+            }
+          })
+          .catch(function (e) {
+            showToast(e.message || 'Не удалось создать копию', 'error');
+            renderBackup();
+          });
+      });
+    }
+
+    qsa('.backup-delete-btn', main).forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var id = btn.getAttribute('data-id') || '';
+        if (!id) return;
+        showConfirm(
+          'Удалить копию?',
+          'Файл будет удалён с сервера. Скачанные ранее архивы на вашем компьютере не затронуты.',
+          function () {
+            deleteReq('/backup/' + encodeURIComponent(id))
+              .then(function () {
+                showToast('Копия удалена', 'success');
+                renderBackup();
+              })
+              .catch(function (e) {
+                showToast(e.message || 'Не удалось удалить', 'error');
+              });
+          },
+        );
+      });
+    });
+  }
+
   function renderSettings() {
     var main = qs('#mainContent');
     if (!main) return;
@@ -7818,6 +8001,8 @@
       renderLogs();
     } else if (currentRoute === 'ailog') {
       renderAiLogPage();
+    } else if (currentRoute === 'backup') {
+      renderBackup();
     } else if (currentRoute === 'settings') {
       renderSettings();
     }

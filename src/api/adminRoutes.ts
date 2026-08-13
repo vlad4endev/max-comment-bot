@@ -1,3 +1,4 @@
+import { createReadStream } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
@@ -94,6 +95,13 @@ import {
   type LogAnalysisFocus,
 } from '../services/logAnalysisService'
 import { getAdminLogTail, logger } from '../utils/logger'
+import {
+  BackupBusyError,
+  createBackup,
+  deleteBackup,
+  getBackupFile,
+  getBackupListPayload,
+} from '../services/backupService'
 import { extractMemberAvatarUrl } from '../utils/memberAvatar'
 import {
   ANTISPAM_SCORE_TIERS,
@@ -501,6 +509,62 @@ export function createAdminRouter(deps: AdminRouterDeps): express.Router {
       admin_panel_user: config.adminPanelUser,
       log_ai: getLogAiPublicConfig(),
     })
+  })
+
+  secured.get('/backup', async (_req, res) => {
+    try {
+      res.json(await getBackupListPayload())
+    } catch (err) {
+      logger.warn('admin GET /backup failed', { err })
+      res.status(500).json({ error: 'Не удалось получить список резервных копий' })
+    }
+  })
+
+  secured.post('/backup', async (_req, res) => {
+    try {
+      const record = await createBackup()
+      res.status(201).json(record)
+    } catch (err) {
+      if (err instanceof BackupBusyError) {
+        res.status(409).json({ error: err.message })
+        return
+      }
+      logger.error('admin POST /backup failed', { err })
+      res.status(500).json({ error: 'Не удалось создать резервную копию' })
+    }
+  })
+
+  secured.get('/backup/download/:id', async (req, res) => {
+    const id = typeof req.params.id === 'string' ? req.params.id.trim() : ''
+    const file = await getBackupFile(id)
+    if (!file) {
+      res.status(404).json({ error: 'Резервная копия не найдена' })
+      return
+    }
+    res.setHeader('Content-Type', 'application/gzip')
+    res.setHeader('Content-Disposition', `attachment; filename="${file.filename}"`)
+    res.setHeader('Content-Length', String(file.size_bytes))
+    res.setHeader('Cache-Control', 'no-store')
+    const stream = createReadStream(file.absPath)
+    stream.on('error', (err) => {
+      logger.warn('admin GET /backup/download stream failed', { id, err })
+      if (!res.headersSent) {
+        res.status(500).json({ error: 'Не удалось скачать архив' })
+      } else {
+        res.destroy()
+      }
+    })
+    stream.pipe(res)
+  })
+
+  secured.delete('/backup/:id', async (req, res) => {
+    const id = typeof req.params.id === 'string' ? req.params.id.trim() : ''
+    const removed = await deleteBackup(id)
+    if (!removed) {
+      res.status(404).json({ error: 'Резервная копия не найдена' })
+      return
+    }
+    res.json({ ok: true })
   })
 
   secured.get('/stats', (_req, res) => {
