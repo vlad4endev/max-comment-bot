@@ -10,6 +10,7 @@ import {
   extractTelegramErrorText,
   isTelegramForbiddenError,
   isTelegramUnauthorizedError,
+  parseTelegramAxiosResponseBody,
 } from './telegramSyncErrors'
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
@@ -159,12 +160,25 @@ export async function callTelegramBotApi<T extends TelegramBotApiResponse>(
         return response
       })
     } catch (err: unknown) {
-      const errText = extractTelegramErrorText(err)
-      if (isTelegramUnauthorizedError(errText)) {
-        const { reportTelegramUnauthorized } = await import('../services/telegramSyncAlertService')
-        void reportTelegramUnauthorized({ method, description: errText })
+      const fromAxiosBody = parseTelegramAxiosResponseBody(err)
+      if (fromAxiosBody) {
+        data = fromAxiosBody as T
+      } else {
+        const errText = extractTelegramErrorText(err)
+        if (axios.isAxiosError(err)) {
+          logger.warn('[telegramRateLimiter] Telegram HTTP error', {
+            method,
+            chatId,
+            status: err.response?.status ?? null,
+            description: errText,
+          })
+        }
+        if (isTelegramUnauthorizedError(errText)) {
+          const { reportTelegramUnauthorized } = await import('../services/telegramSyncAlertService')
+          void reportTelegramUnauthorized({ method, description: errText })
+        }
+        throw err
       }
-      throw err
     }
 
     if (data.ok) {

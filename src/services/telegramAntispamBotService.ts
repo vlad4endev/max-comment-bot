@@ -102,14 +102,25 @@ export async function tryBlockTelegramCommentByAntispam(
   }
 
   const telegramUserId = typeof message.from?.id === 'number' ? message.from.id : null
-  await enforceTelegramAntispamAction({
-    token,
-    chatId: message.chat.id,
-    messageId: tgCommentId,
-    telegramUserId,
-    channelChatId: maxChatId,
-    evaluation: antispam,
-  })
+  try {
+    await enforceTelegramAntispamAction({
+      token,
+      chatId: message.chat.id,
+      messageId: tgCommentId,
+      telegramUserId,
+      channelChatId: maxChatId,
+      evaluation: antispam,
+    })
+  } catch (err: unknown) {
+    logger.warn('[antispam/tg] enforce action failed', {
+      chainId: chain.id,
+      tgCommentId,
+      chatId: message.chat.id,
+      action: antispam.action,
+      err,
+    })
+    return false
+  }
 
   markCommentSynced(`tg:${tgCommentId}`)
   logger.info('[antispam/tg] blocked comment', {
@@ -124,13 +135,16 @@ export async function tryBlockTelegramCommentByAntispam(
   return true
 }
 
-async function buildDiscussionChainMap(token: string): Promise<Map<number, TgChainRecord[]>> {
+async function buildDiscussionChainMap(antispamToken: string): Promise<Map<number, TgChainRecord[]>> {
+  const mainToken = resolveTelegramBotToken()
   const map = new Map<number, TgChainRecord[]>()
   for (const chain of listTgChainsSync()) {
     if (!chain.active || !chain.forward_comments) {
       continue
     }
-    const discussionId = await resolveDiscussionChatId(token, chain)
+    const tokenForDiscussion =
+      chain.bot_token?.trim() || mainToken || antispamToken
+    const discussionId = await resolveDiscussionChatId(tokenForDiscussion, chain)
     if (discussionId == null) {
       continue
     }
@@ -211,15 +225,25 @@ export async function runTelegramAntispamBotOnce(): Promise<boolean> {
       continue
     }
 
-    const blocked = await tryBlockTelegramCommentByAntispam(
-      msg,
-      chain,
-      msg.chat.id,
-      msg.message_id,
-      token,
-    )
-    if (blocked) {
-      handledAny = true
+    try {
+      const blocked = await tryBlockTelegramCommentByAntispam(
+        msg,
+        chain,
+        msg.chat.id,
+        msg.message_id,
+        token,
+      )
+      if (blocked) {
+        handledAny = true
+      }
+    } catch (err: unknown) {
+      logger.warn('[antispamBot] comment enforcement failed', {
+        chainId: chain.id,
+        tgCommentId: msg.message_id,
+        chatId: msg.chat.id,
+        err,
+        description: err instanceof Error ? err.message : String(err),
+      })
     }
   }
 

@@ -2,7 +2,46 @@
  * Классификация ошибок Telegram Bot API и MTProto для синхронизации комментариев.
  */
 
+import axios from 'axios'
+
+export interface TelegramAxiosResponseBody {
+  ok: boolean
+  description?: string
+  error_code?: number
+  parameters?: { retry_after?: number }
+  result?: unknown
+}
+
+/** Разбирает тело ответа Telegram из axios-ошибки (HTTP 4xx с JSON `{ ok: false }`). */
+export function parseTelegramAxiosResponseBody(err: unknown): TelegramAxiosResponseBody | null {
+  if (!axios.isAxiosError(err)) {
+    return null
+  }
+  const data = err.response?.data
+  if (typeof data !== 'object' || data === null || !('ok' in data)) {
+    return null
+  }
+  return data as TelegramAxiosResponseBody
+}
+
 export function extractTelegramErrorText(err: unknown): string {
+  if (axios.isAxiosError(err)) {
+    const data = err.response?.data
+    if (typeof data === 'object' && data !== null) {
+      if ('description' in data) {
+        const description = String((data as { description?: string }).description || '').trim()
+        if (description) {
+          return description
+        }
+      }
+      if ('error' in data) {
+        const nested = (data as { error?: { message?: string } }).error?.message
+        if (typeof nested === 'string' && nested.trim()) {
+          return nested.trim()
+        }
+      }
+    }
+  }
   if (err instanceof Error && err.message.trim()) {
     return err.message.trim()
   }

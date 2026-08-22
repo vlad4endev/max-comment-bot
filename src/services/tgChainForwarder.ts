@@ -17,7 +17,7 @@ import { ensureTelegramPollingMode } from './integrationPlatformClient'
 import { attachAndVerifyCommentsForForwardedPost } from './channelPostPublishGate'
 import { postStore } from './postStore'
 import { resolveCanonicalChannelChatId } from './resolveChannelChatId'
-import { telegramChannelMatchesTarget, telegramMessageMatchesTgChain } from '../utils/tgChannelMatch'
+import { telegramMessageMatchesTgChain } from '../utils/tgChannelMatch'
 import { logger } from '../utils/logger'
 import { sendAdminAlert } from '../utils/alertService'
 import { apiCallWithRetry } from '../utils/maxApiRetry'
@@ -36,6 +36,9 @@ import {
 import { publishTelegramPostToVk } from './vkChainForwarder'
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+
+/** Пост намеренно пропущен (старее forward_posts_since) — не пересылать и не ретраить. */
+export const TG_FORWARD_SKIPPED_MID = '__skipped__'
 
 /** Long-poll Telegram for new channel_post (сек). */
 const TG_CHAIN_LONG_POLL_SEC = 25
@@ -199,9 +202,10 @@ function isTgPostTooOldForForward(chain: TgChainRecord, message: TgMessage): boo
 
 function isAlreadyForwarded(chainId: string, messageId: number): boolean {
   const row = getDb()
-    .prepare('SELECT 1 FROM tg_chain_forwarded WHERE chain_id = ? AND tg_message_id = ?')
-    .get(chainId, messageId)
-  return !!row
+    .prepare('SELECT max_message_mid FROM tg_chain_forwarded WHERE chain_id = ? AND tg_message_id = ?')
+    .get(chainId, messageId) as { max_message_mid: string | null } | undefined
+  const mid = row?.max_message_mid?.trim()
+  return Boolean(mid)
 }
 
 type ForwardedRecord = {
@@ -721,10 +725,10 @@ async function processEditedChainMessage(
   msg: TgMessage,
   tgToken: string,
 ): Promise<void> {
-  const sourceKey = chainSourceKey(chain)
-  if (!telegramChannelMatchesTarget(msg.chat, sourceKey)) return
+  if (!telegramMessageMatchesTgChain(msg.chat, chain)) return
   const mapping = getForwardedRecord(chain.id, msg.message_id)
-  if (!mapping?.max_message_mid) {
+  const mappedMid = mapping?.max_message_mid?.trim()
+  if (!mappedMid || mappedMid === TG_FORWARD_SKIPPED_MID) {
     logger.info('[tgChain] skip edit: original post was not forwarded', {
       chainId: chain.id,
       tgMessageId: msg.message_id,
@@ -738,7 +742,7 @@ async function processEditedChainMessage(
 
   try {
     const isAlbum = Boolean(msg.media_group_id?.trim() || mapping.tg_media_group_id?.trim())
-    const maxMid = mapping.max_message_mid
+    const maxMid = mappedMid
     if (isAlbum) {
       const mediaGroupId = (msg.media_group_id?.trim() || mapping.tg_media_group_id?.trim()) ?? ''
       const chunkIndex = mapping.album_chunk_index ?? 0
@@ -807,16 +811,15 @@ async function processChainMessageGroup(
   messages: TgMessage[],
   tgToken: string,
 ): Promise<void> {
-  const sourceKey = chainSourceKey(chain)
   const pending = messages.filter((m) => {
-    if (!telegramChannelMatchesTarget(m.chat, sourceKey)) {
+    if (!telegramMessageMatchesTgChain(m.chat, chain)) {
       return false
     }
     if (isAlreadyForwarded(chain.id, m.message_id)) {
       return false
     }
     if (isTgPostTooOldForForward(chain, m)) {
-      markForwarded(chain.id, m, null, null)
+      markForwarded(chain.id, m, TG_FORWARD_SKIPPED_MID, null)
       logger.info('[tgChain] skip old TG post (before forward_posts_since)', {
         chainId: chain.id,
         tgMessageId: m.message_id,
@@ -930,15 +933,6 @@ async function processChainMessageGroup(
             tgMessageId: msg.message_id,
           })
         }
-      }
-    }
-
-    // Если публикация не удалась, всё равно сохраняем payload по TG id:
-    // это позволит позже корректно обработать edited_channel_post.
-    for (const msg of pending) {
-      const existing = getForwardedRecord(chain.id, msg.message_id)
-      if (!existing) {
-        markForwarded(chain.id, msg, null, null)
       }
     }
 
