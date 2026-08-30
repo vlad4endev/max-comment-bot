@@ -32,8 +32,8 @@ import { vkPostMappingStore } from './vkPostMappingStore'
 import { isCommentSynced, markCommentSynced } from '../utils/commentSyncGuard'
 import { logger } from '../utils/logger'
 
-const VK_COMMENT_POLL_INTERVAL_MS = 30_000
-const VK_MAX_TO_VK_SYNC_INTERVAL_MS = 20_000
+const VK_COMMENT_POLL_INTERVAL_MS = 3_000
+const VK_MAX_TO_VK_SYNC_INTERVAL_MS = 2_000
 /** Не опрашивать VK-пост старше 30 дней */
 const VK_POST_MAX_AGE_DAYS = 30
 /** Формат имени VK-пользователя в miniapp */

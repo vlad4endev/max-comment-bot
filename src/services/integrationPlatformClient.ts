@@ -1,8 +1,9 @@
-import axios from 'axios'
+import axios, { type AxiosRequestConfig, type AxiosResponse } from 'axios'
 import FormData from 'form-data'
 
 import { ensureAdminPanelStateLoaded, listTgChainsSync } from '../api/adminPanelState'
 import { logger } from '../utils/logger'
+import { telegramAxios } from '../utils/telegramAxios'
 import { isTelegramUnauthorizedError } from '../utils/telegramSyncErrors'
 import { telegramBotUserStore } from './telegramBotUserStore'
 import { processMainTelegramBotMyChatMemberUpdate } from './telegramMainBotUpdates'
@@ -15,6 +16,7 @@ import {
 } from './telegramMainBotOffsetStore'
 import { normalizeTelegramChannelKey } from '../utils/tgChannelMatch'
 import { telegramChannelRegistry } from './telegramChannelRegistry'
+import { isTelegramGetUpdatesOwnedByForwarder } from './telegramGetUpdatesOwner'
 
 export interface PlatformTestResult {
   ok: boolean
@@ -48,6 +50,13 @@ export type TelegramLinkedChat = PlatformChannelInfo & {
 }
 
 const TG_API = 'https://api.telegram.org'
+
+async function httpGet<T>(url: string, config?: AxiosRequestConfig): Promise<AxiosResponse<T>> {
+  if (url.startsWith(TG_API)) {
+    return telegramAxios.get<T>(url, config)
+  }
+  return axios.get<T>(url, config)
+}
 
 const TELEGRAM_DISCOVERY_UPDATES = [
   'message',
@@ -173,7 +182,7 @@ async function finalizeTelegramLinkedChatsList(options: {
 /** Webhook блокирует getUpdates — для опроса и обнаружения чатов нужен polling. */
 export async function ensureTelegramPollingMode(token: string): Promise<void> {
   try {
-    const { data } = await axios.get<{
+    const { data } = await httpGet<{
       ok: boolean
       result?: { url?: string }
     }>(`${TG_API}/bot${token}/getWebhookInfo`, { timeout: 10_000 })
@@ -181,7 +190,7 @@ export async function ensureTelegramPollingMode(token: string): Promise<void> {
     if (!data.ok || !url) {
       return
     }
-    await axios.get(`${TG_API}/bot${token}/deleteWebhook`, {
+    await httpGet(`${TG_API}/bot${token}/deleteWebhook`, {
       params: { drop_pending_updates: false },
       timeout: 15_000,
     })
@@ -330,7 +339,7 @@ export function mergePlatformChannels(
 
 export async function getTelegramBotUserId(token: string): Promise<number | null> {
   try {
-    const { data } = await axios.get<{
+    const { data } = await httpGet<{
       ok: boolean
       result?: { id?: number }
     }>(`${TG_API}/bot${token}/getMe`, { timeout: 15_000 })
@@ -347,7 +356,7 @@ async function fetchTelegramChatMemberStatus(
   botUserId: number,
 ): Promise<{ botIsAdmin: boolean; title?: string; username?: string; type?: TelegramChatType }> {
   try {
-    const { data } = await axios.get<{
+    const { data } = await httpGet<{
       ok: boolean
       result?: { status?: string }
     }>(`${TG_API}/bot${token}/getChatMember`, {
@@ -362,7 +371,7 @@ async function fetchTelegramChatMemberStatus(
     }
     let chatMeta: { ok: boolean; result?: Record<string, unknown> } = { ok: false }
     try {
-      const { data: chatData } = await axios.get<{
+      const { data: chatData } = await httpGet<{
         ok: boolean
         result?: Record<string, unknown>
       }>(`${TG_API}/bot${token}/getChat`, {
@@ -419,7 +428,7 @@ export async function enrichTelegramChatsWithBotAdmin(
 
 export async function validateTelegramToken(token: string): Promise<PlatformTestResult> {
   try {
-    const { data } = await axios.get<{
+    const { data } = await httpGet<{
       ok: boolean
       description?: string
       result?: { username?: string; first_name?: string }
@@ -454,7 +463,7 @@ export async function validateVkToken(
     if (groupId && groupId.trim() !== '') {
       params.group_id = groupId.replace(/^-/, '').replace(/^public/, '')
     }
-    const { data } = await axios.get<{
+    const { data } = await httpGet<{
       response?: Array<{ name?: string; screen_name?: string }>
       error?: { error_msg?: string }
     }>('https://api.vk.com/method/groups.getById', { params, timeout: 15_000 })
@@ -464,7 +473,7 @@ export async function validateVkToken(
     }
     const g = data.response?.[0]
     if (!g && groupId) {
-      const userCheck = await axios.get<{
+      const userCheck = await httpGet<{
         response?: Array<{ first_name?: string; last_name?: string }>
         error?: { error_msg?: string }
       }>('https://api.vk.com/method/users.get', {
@@ -641,7 +650,7 @@ export async function resolveTelegramChannelChatIdFromKey(
   }
 
   try {
-    const { data } = await axios.get<{
+    const { data } = await httpGet<{
       ok: boolean
       result?: Record<string, unknown>
     }>(`${TG_API}/bot${tgToken}/getChat`, {
@@ -686,6 +695,10 @@ export async function listTelegramBotChats(
 
   await ensureTelegramPollingMode(trimmed)
 
+  if (isMainTelegramBotToken(trimmed) && isTelegramGetUpdatesOwnedByForwarder(trimmed)) {
+    return enrichTelegramChatsWithBotAdmin(trimmed, listTelegramChannelsFromRegistry())
+  }
+
   const seen = new Map<string, PlatformChannelInfo>()
   await flowStateStore.load()
   const useMainBotOffset = isMainTelegramBotToken(trimmed)
@@ -705,7 +718,7 @@ export async function listTelegramBotChats(
       if (offset !== undefined) {
         params.offset = offset
       }
-      const { data } = await axios.get<{
+      const { data } = await httpGet<{
         ok: boolean
         result?: Array<Record<string, unknown>>
       }>(`${TG_API}/bot${trimmed}/getUpdates`, { params, timeout: 20_000 })
@@ -759,7 +772,7 @@ export async function listTelegramChatAdministrators(
     return []
   }
   try {
-    const { data } = await axios.get<{
+    const { data } = await httpGet<{
       ok: boolean
       result?: Array<{
         status?: string
@@ -891,7 +904,7 @@ async function fetchVkGroupByLookup(
   }
 
   try {
-    const { data } = await axios.get<{
+    const { data } = await httpGet<{
       response?: unknown
       error?: { error_code?: number; error_msg?: string }
     }>('https://api.vk.com/method/groups.getById', {
@@ -954,7 +967,7 @@ export async function resolveVkGroup(
  */
 export async function listVkManagedGroups(token: string): Promise<VkGroupInfo[]> {
   try {
-    const { data } = await axios.get<{
+    const { data } = await httpGet<{
       response?: {
         count?: number
         items?: Array<{
@@ -1079,7 +1092,7 @@ async function withTelegramIntegrationLock<T>(
 
 async function warnIfTelegramWebhookActive(token: string): Promise<void> {
   try {
-    const { data } = await axios.get<{
+    const { data } = await httpGet<{
       ok: boolean
       result?: { url?: string }
     }>(`${TG_API}/bot${token}/getWebhookInfo`, { timeout: 10_000 })
@@ -1097,7 +1110,7 @@ async function warnIfTelegramWebhookActive(token: string): Promise<void> {
 
 async function probeTelegramChannelAccess(token: string, channelId: string): Promise<void> {
   try {
-    const { data } = await axios.get<{
+    const { data } = await httpGet<{
       ok: boolean
       result?: { title?: string; type?: string }
     }>(`${TG_API}/bot${token}/getChat`, {
@@ -1142,6 +1155,9 @@ export async function fetchTelegramChannelPosts(
     const trimmedToken = token.trim()
     await ensureTelegramPollingMode(trimmedToken)
     const useMainBotOffset = isMainTelegramBotToken(trimmedToken)
+    if (useMainBotOffset && isTelegramGetUpdatesOwnedByForwarder(trimmedToken)) {
+      return { posts: [], lastMessageId: afterMessageId, discoveredChats: [] }
+    }
     const readOffset = useMainBotOffset
       ? getTelegramBotUpdatesOffset(trimmedToken)
       : flowStateStore.getTelegramUpdateOffset(integrationId)
@@ -1154,7 +1170,7 @@ export async function fetchTelegramChannelPosts(
         params.offset = readOffset
       }
 
-      const { data } = await axios.get<{
+      const { data } = await httpGet<{
         ok: boolean
         result?: Array<Record<string, unknown>>
       }>(`${TG_API}/bot${trimmedToken}/getUpdates`, { params, timeout: 20_000 })
@@ -1262,7 +1278,7 @@ export async function fetchVkWallPosts(
 ): Promise<{ posts: ExternalPost[]; lastPostId: number }> {
   const ownerId = groupId.startsWith('-') ? groupId : `-${groupId.replace(/^public/, '')}`
   try {
-    const { data } = await axios.get<{
+    const { data } = await httpGet<{
       response?: { items?: Array<Record<string, unknown>> }
       error?: { error_msg?: string }
     }>('https://api.vk.com/method/wall.get', {
@@ -1332,7 +1348,7 @@ async function vkApiCall<T>(
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
         timeout: 60_000,
       })
-    : await axios.get<{ response?: T; error?: VkApiErrorBody }>(url, {
+    : await httpGet<{ response?: T; error?: VkApiErrorBody }>(url, {
         params: payload,
         timeout: 60_000,
       })
@@ -1545,7 +1561,7 @@ export async function fetchVkWallPostText(
 ): Promise<string | null> {
   const ownerId = vkOwnerId(groupId)
   try {
-    const { data } = await axios.get<{
+    const { data } = await httpGet<{
       response?: Array<{ text?: string }> | { items?: Array<{ text?: string }> }
       error?: { error_msg?: string }
     }>('https://api.vk.com/method/wall.getById', {
@@ -1579,7 +1595,7 @@ export async function editVkWallPostMessage(
 ): Promise<boolean> {
   const ownerId = vkOwnerId(groupId)
   try {
-    const { data } = await axios.get<{
+    const { data } = await httpGet<{
       response?: { post_id?: number }
       error?: { error_msg?: string }
     }>('https://api.vk.com/method/wall.edit', {
@@ -1634,7 +1650,7 @@ export async function fetchVkWallComments(
 ): Promise<{ comments: VkComment[]; lastCommentId: number }> {
   const ownerId = groupId.startsWith('-') ? groupId : `-${groupId.replace(/^public/, '')}`
   try {
-    const { data } = await axios.get<{
+    const { data } = await httpGet<{
       response?: { items?: Array<Record<string, unknown>> }
       error?: { error_msg?: string }
     }>('https://api.vk.com/method/wall.getComments', {
@@ -1696,7 +1712,7 @@ export async function publishVkWallComment(
     if (replyToCommentId != null && replyToCommentId > 0) {
       params.reply_to_comment = replyToCommentId
     }
-    const { data } = await axios.get<{
+    const { data } = await httpGet<{
       response?: { comment_id?: number }
       error?: { error_msg?: string }
     }>('https://api.vk.com/method/wall.createComment', { params, timeout: 15_000 })

@@ -347,7 +347,7 @@ export async function handleTgComment(
     if (newCount !== null) {
       const updatedPost = postStore.getPost(post.post_id)
       if (updatedPost) {
-        await postStore.updateButtonCaption(bot, updatedPost)
+        void postStore.updateButtonCaption(bot, updatedPost)
       }
     }
 

@@ -1,4 +1,6 @@
 import axios from 'axios'
+
+import { telegramAxios } from '../utils/telegramAxios'
 import { logger } from '../utils/logger'
 
 const TG_API = 'https://api.telegram.org/bot'
@@ -63,7 +65,7 @@ export async function getTgUpdates(token: string, offset: number = 0): Promise<T
   const url = `${TG_API}${token}/getUpdates?offset=${offset}&timeout=10&allowed_updates=["channel_post"]`
   for (let attempt = 0; attempt < 5; attempt++) {
     try {
-      const res = await axios.get(url)
+      const res = await telegramAxios.get(url)
       const updates = res.data?.result || []
       return updates
         .filter((u: any) => u.channel_post)
@@ -85,8 +87,9 @@ export async function getTgUpdates(token: string, offset: number = 0): Promise<T
 
 export async function getTgFileUrl(token: string, fileId: string): Promise<string | null> {
   try {
-    const res = await axios.get(`${TG_API}${token}/getFile`, {
+    const res = await telegramAxios.get(`${TG_API}${token}/getFile`, {
       params: { file_id: fileId },
+      timeout: 15_000,
     })
     const path = res.data?.result?.file_path
     if (!path) return null
@@ -109,14 +112,17 @@ export async function getTelegramUpdatesWithIds(
   } else if (options?.includeDiscussionMessages) {
     allowed.push('message')
   }
+  const requestTimeoutMs = Math.max(20_000, (timeoutSec + 8) * 1000)
   for (let attempt = 0; attempt < 5; attempt++) {
     try {
-      const res = await axios.get(`${TG_API}${token}/getUpdates`, {
+      const res = await telegramAxios.get(`${TG_API}${token}/getUpdates`, {
         params: {
           offset,
           timeout: timeoutSec,
           allowed_updates: JSON.stringify(allowed),
         },
+        timeout: requestTimeoutMs,
+        signal: AbortSignal.timeout(requestTimeoutMs),
       })
       const updates = res.data?.result || []
       return updates

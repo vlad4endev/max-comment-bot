@@ -6,6 +6,7 @@
 import axios from 'axios'
 
 import { logger } from './logger'
+import { telegramAxios } from './telegramAxios'
 import {
   extractTelegramErrorText,
   isTelegramForbiddenError,
@@ -23,15 +24,15 @@ export interface TelegramBotApiResponse {
   result?: unknown
 }
 
-/** Минимальный интервал между вызовами Bot API (мс). По умолчанию 2000. */
+/** Минимальный интервал между вызовами Bot API (мс). По умолчанию 350. */
 export function getTelegramApiMinIntervalMs(): number {
   const raw = (process.env.TELEGRAM_API_MIN_INTERVAL_MS ?? '').trim()
   if (raw === '') {
-    return 2_000
+    return 350
   }
   const parsed = Number.parseInt(raw, 10)
-  if (!Number.isFinite(parsed) || parsed < 1_000) {
-    return 2_000
+  if (!Number.isFinite(parsed) || parsed < 50) {
+    return 350
   }
   return Math.min(parsed, 10_000)
 }
@@ -40,24 +41,24 @@ export function getTelegramApiMinIntervalMs(): number {
 export function getTelegramCommentSyncBatchSize(): number {
   const raw = (process.env.TELEGRAM_COMMENT_SYNC_BATCH_SIZE ?? '').trim()
   if (raw === '') {
-    return 5
+    return 15
   }
   const parsed = Number.parseInt(raw, 10)
   if (!Number.isFinite(parsed) || parsed < 1) {
-    return 5
+    return 15
   }
-  return Math.min(parsed, 25)
+  return Math.min(parsed, 40)
 }
 
 /** Интервал цикла синхронизации комментариев MAX→TG (мс). */
 export function getMaxCommentSyncIntervalMs(): number {
   const raw = (process.env.MAX_COMMENT_SYNC_INTERVAL_MS ?? '').trim()
   if (raw === '') {
-    return 30_000
+    return 2_000
   }
   const parsed = Number.parseInt(raw, 10)
-  if (!Number.isFinite(parsed) || parsed < 5_000) {
-    return 30_000
+  if (!Number.isFinite(parsed) || parsed < 1_000) {
+    return 2_000
   }
   return Math.min(parsed, 300_000)
 }
@@ -156,7 +157,7 @@ export async function callTelegramBotApi<T extends TelegramBotApiResponse>(
     let data: T
     try {
       data = await enqueueTelegramApiCall(async () => {
-        const { data: response } = await axios.post<T>(url, payload, { timeout: 20_000 })
+        const { data: response } = await telegramAxios.post<T>(url, payload, { timeout: 20_000 })
         return response
       })
     } catch (err: unknown) {
@@ -201,6 +202,9 @@ export async function callTelegramBotApi<T extends TelegramBotApiResponse>(
         waitSeconds: floodSeconds,
         description,
       })
+      if (floodSeconds >= 60) {
+        return data
+      }
       continue
     }
 
@@ -243,6 +247,9 @@ export async function withTelegramFloodWaitBackoff<T>(
           waitSeconds: floodSeconds,
           description: errText,
         })
+        if (floodSeconds >= 60) {
+          throw err
+        }
         continue
       }
       throw err

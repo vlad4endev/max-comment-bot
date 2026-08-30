@@ -1,9 +1,11 @@
 import axios from 'axios'
+import pLimit from 'p-limit'
 import type { Bot } from '@maxhub/max-bot-api'
 import type { AttachmentRequest, ImageAttachmentRequest } from '@maxhub/max-bot-api/types'
 
 import { isMainTelegramBotToken, resolveTelegramBotToken } from './resolveTelegramBotToken'
 import { getDb } from '../db/database'
+import { telegramAxios } from '../utils/telegramAxios'
 import {
   type TgChannelUpdate,
   TelegramGetUpdatesConflictError,
@@ -11,7 +13,7 @@ import {
   getTelegramUpdatesWithIds,
   type TgMessage,
 } from '../forwarder/telegramReader'
-import { listTgChains, listTgChainsSync, updateTgChain, type TgChainRecord } from '../api/adminPanelState'
+import { listTgChainsSync, updateTgChain, type TgChainRecord } from '../api/adminPanelState'
 import { assertTelegramPollingReady } from './channelImportService'
 import { ensureTelegramPollingMode } from './integrationPlatformClient'
 import { attachAndVerifyCommentsForForwardedPost } from './channelPostPublishGate'
@@ -25,6 +27,10 @@ import {
   getTelegramBotUpdatesOffset,
   setTelegramBotUpdatesOffset,
 } from './telegramMainBotOffsetStore'
+import {
+  isTelegramGetUpdatesOwnedByForwarder,
+  setTelegramGetUpdatesOwner,
+} from './telegramGetUpdatesOwner'
 import { processTelegramMiniappBotUpdates } from './telegramMiniappService'
 import { upsertPostCommentMapping, resolveDiscussionChatId } from './postCommentMappingStore'
 import { ensurePostThreadMapping } from './telegramDiscussionThreadResolver'
@@ -42,17 +48,22 @@ export const TG_FORWARD_SKIPPED_MID = '__skipped__'
 
 /** Long-poll Telegram for new channel_post (сек). */
 const TG_CHAIN_LONG_POLL_SEC = 25
-const TG_CHAIN_IDLE_MS = 3_000
+/** Пауза только между пустыми тиками; long-poll сам ждёт апдейт. */
+const TG_CHAIN_IDLE_MS = 40
 /** MIN gap between `sendMessageToChat` to the same MAX channel (API 429). */
-const MAX_SEND_INTERVAL_MS = 2_500
-const UPLOAD_STAGGER_MS = 450
+const MAX_SEND_INTERVAL_MS = 350
 const TG_CHAIN_MAX_API_RETRIES = 6
 /** Буферизация Telegram-альбомов по media_group_id (тишина после последнего кадра). */
-const TG_ALBUM_BUFFER_MS = 1_800
+const TG_ALBUM_BUFFER_MS = 450
 /** Telegram media group ограничен 10 элементами. */
 const TG_ALBUM_MAX_MEDIA_PER_POST = 10
+const MEDIA_DOWNLOAD_TIMEOUT_MS = 90_000
+const ALBUM_UPLOAD_CONCURRENCY = 4
+const albumUploadLimit = pLimit(ALBUM_UPLOAD_CONCURRENCY)
 
 const lastMaxSendAt = new Map<number, number>()
+const channelWorkTails = new Map<number, Promise<void>>()
+const inFlightForwardKeys = new Set<string>()
 type BufferedAlbum = {
   chain: TgChainRecord
   tgToken: string
@@ -60,6 +71,48 @@ type BufferedAlbum = {
   flushAt: number
 }
 const albumBuffer = new Map<string, BufferedAlbum>()
+
+function enqueueChannelWork(maxChatId: number, work: () => Promise<void>): void {
+  const prev = channelWorkTails.get(maxChatId) ?? Promise.resolve()
+  const next = prev.then(work, work)
+  channelWorkTails.set(
+    maxChatId,
+    next.then(
+      () => undefined,
+      () => undefined,
+    ),
+  )
+}
+
+function forwardKey(chainId: string, messages: TgMessage[]): string {
+  return `${chainId}:${messages.map((m) => m.message_id).join(',')}`
+}
+
+function enqueueForward(chain: TgChainRecord, messages: TgMessage[], tgToken: string): void {
+  const key = forwardKey(chain.id, messages)
+  if (inFlightForwardKeys.has(key)) {
+    return
+  }
+  if (messages.every((m) => isAlreadyForwarded(chain.id, m.message_id))) {
+    return
+  }
+  inFlightForwardKeys.add(key)
+  enqueueChannelWork(chain.max_chat_id, async () => {
+    try {
+      await processChainMessageGroup(chain, messages, tgToken)
+    } finally {
+      inFlightForwardKeys.delete(key)
+    }
+  })
+}
+
+async function downloadTgFileBuffer(
+  url: string,
+  timeoutMs: number = MEDIA_DOWNLOAD_TIMEOUT_MS,
+): Promise<Buffer> {
+  const res = await telegramAxios.get<ArrayBuffer>(url, { responseType: 'arraybuffer', timeout: timeoutMs })
+  return Buffer.from(res.data)
+}
 
 /** Время последней активности long-poll / пересылки по chain_id. */
 const chainLastActivity = new Map<string, number>()
@@ -112,6 +165,12 @@ export async function syncMainTelegramBotDiscoveryUpdates(
   if (!isMainTelegramBotToken(tgToken)) {
     return 0
   }
+  const timeoutSec = options?.timeoutSec ?? 0
+  // Живой long-poll уже читает ту же очередь. Повторный getUpdates (timeout=0)
+  // даёт 409, сдвигает offset и выкидывает channel_post без пересылки в MAX.
+  if (timeoutSec === 0 && isTelegramGetUpdatesOwnedByForwarder(tgToken)) {
+    return 0
+  }
   await ensureTelegramPollingMode(tgToken)
   const pollErr = await assertTelegramPollingReady(tgToken)
   if (pollErr) {
@@ -120,7 +179,6 @@ export async function syncMainTelegramBotDiscoveryUpdates(
   }
 
   let offset = getReaderOffset(tgToken)
-  const timeoutSec = options?.timeoutSec ?? 0
   const maxPages = options?.maxPages ?? 8
   let processed = 0
 
@@ -145,8 +203,10 @@ export async function syncMainTelegramBotDiscoveryUpdates(
       .map((u) => u.raw)
       .filter((u): u is Record<string, unknown> => !!u)
     if (rawUpdates.length > 0) {
-      await processTelegramMiniappBotUpdates(tgToken, rawUpdates, botRef)
+      void processTelegramMiniappBotUpdates(tgToken, rawUpdates, botRef)
     }
+
+    dispatchChannelUpdatesToChains(tgToken, batch)
 
     for (const u of batch) {
       offset = Math.max(offset, u.update_id + 1)
@@ -352,9 +412,10 @@ function getAlbumBufferDelayMs(now: number = Date.now(), tgToken?: string): numb
   return minDelay
 }
 
-function takeReadyAlbumEntries(now: number = Date.now()): BufferedAlbum[] {
+function takeReadyAlbumEntries(now: number = Date.now(), tgToken?: string): BufferedAlbum[] {
   const ready: BufferedAlbum[] = []
   for (const [key, entry] of albumBuffer.entries()) {
+    if (tgToken && entry.tgToken !== tgToken) continue
     if (entry.flushAt <= now) {
       ready.push(entry)
       albumBuffer.delete(key)
@@ -416,8 +477,8 @@ async function forwardOneTgMessageToMax(
     if (url) {
       let image: { toJson(): unknown }
       try {
-        const res = await axios.get<ArrayBuffer>(url, { responseType: 'arraybuffer', timeout: 120_000 })
-        image = await maxApi(() => bot.api.uploadImage({ source: Buffer.from(res.data) }))
+        const fileBuf = await downloadTgFileBuffer(url, 120_000)
+        image = await maxApi(() => bot.api.uploadImage({ source: fileBuf }))
       } catch (err: unknown) {
         logger.warn('[tgChain] binary photo upload failed, fallback to url', {
           messageId: msg.message_id,
@@ -438,8 +499,8 @@ async function forwardOneTgMessageToMax(
   if (msg.video?.file_id) {
     const url = await getTgFileUrl(tgToken, msg.video.file_id)
     if (url) {
-      const res = await axios.get<ArrayBuffer>(url, { responseType: 'arraybuffer' })
-      const video = await maxApi(() => bot.api.uploadVideo({ source: Buffer.from(res.data) }))
+      const videoBuf = await downloadTgFileBuffer(url)
+      const video = await maxApi(() => bot.api.uploadVideo({ source: videoBuf }))
       await throttleMaxChatSend(chatId)
       const sent = await maxApi(() =>
         bot.api.sendMessageToChat(chatId, messageText, {
@@ -452,8 +513,8 @@ async function forwardOneTgMessageToMax(
   if (msg.document?.file_id) {
     const url = await getTgFileUrl(tgToken, msg.document.file_id)
     if (url) {
-      const res = await axios.get<ArrayBuffer>(url, { responseType: 'arraybuffer' })
-      const file = await maxApi(() => bot.api.uploadFile({ source: Buffer.from(res.data) }))
+      const fileBuf = await downloadTgFileBuffer(url)
+      const file = await maxApi(() => bot.api.uploadFile({ source: fileBuf }))
       await throttleMaxChatSend(chatId)
       const sent = await maxApi(() =>
         bot.api.sendMessageToChat(chatId, messageText, {
@@ -483,8 +544,8 @@ async function uploadTgPhotoAttachment(
   try {
     // Prefer binary upload so MAX returns token-based image payloads.
     // Those can be safely merged into one album attachment (`payload.photos`).
-    const res = await axios.get<ArrayBuffer>(url, { responseType: 'arraybuffer' })
-    uploaded = await maxApi(() => bot.api.uploadImage({ source: Buffer.from(res.data) }))
+    const fileBuf = await downloadTgFileBuffer(url)
+    uploaded = await maxApi(() => bot.api.uploadImage({ source: fileBuf }))
   } catch (err: unknown) {
     logger.warn('[tgChain] album: binary image upload failed, fallback to url upload', {
       fileId,
@@ -533,22 +594,18 @@ async function buildAlbumImageAttachments(
   photoMessages: TgMessage[],
   tgToken: string,
 ): Promise<AttachmentRequest[]> {
-  const uploaded: ImageAttachmentRequest[] = []
-
-  for (let i = 0; i < photoMessages.length; i += 1) {
-    const msg = photoMessages[i]!
-    if (!msg.photo?.length) continue
-    const largest = msg.photo[msg.photo.length - 1]!
-    const att = await uploadTgPhotoAttachment(bot, tgToken, largest.file_id)
-    if (att) {
-      uploaded.push(att)
-    }
-    if (i < photoMessages.length - 1) {
-      await sleep(UPLOAD_STAGGER_MS)
-    }
-  }
-
-  return mergeAlbumImageAttachments(uploaded)
+  const uploaded = await Promise.all(
+    photoMessages.map((msg) =>
+      albumUploadLimit(async (): Promise<ImageAttachmentRequest | null> => {
+        if (!msg.photo?.length) return null
+        const largest = msg.photo[msg.photo.length - 1]!
+        return uploadTgPhotoAttachment(bot, tgToken, largest.file_id)
+      }),
+    ),
+  )
+  return mergeAlbumImageAttachments(
+    uploaded.filter((att): att is ImageAttachmentRequest => att !== null),
+  )
 }
 
 async function buildAlbumAttachments(
@@ -570,25 +627,30 @@ async function buildAlbumAttachments(
     return []
   }
 
-  for (const msg of messages) {
-    if (msg.photo?.length) continue
-    if (msg.video?.file_id) {
-      const url = await getTgFileUrl(tgToken, msg.video.file_id)
-      if (url) {
-        const res = await axios.get<ArrayBuffer>(url, { responseType: 'arraybuffer' })
-        const video = await maxApi(() => bot.api.uploadVideo({ source: Buffer.from(res.data) }))
-        attachments.push(video.toJson() as AttachmentRequest)
-        await sleep(UPLOAD_STAGGER_MS)
-      }
-    } else if (msg.document?.file_id) {
-      const url = await getTgFileUrl(tgToken, msg.document.file_id)
-      if (url) {
-        const res = await axios.get<ArrayBuffer>(url, { responseType: 'arraybuffer' })
-        const file = await maxApi(() => bot.api.uploadFile({ source: Buffer.from(res.data) }))
-        attachments.push(file.toJson() as AttachmentRequest)
-        await sleep(UPLOAD_STAGGER_MS)
-      }
-    }
+  const extraMedia = messages.filter((m) => !m.photo?.length && (m.video?.file_id || m.document?.file_id))
+  const extraAtts = await Promise.all(
+    extraMedia.map((msg) =>
+      albumUploadLimit(async (): Promise<AttachmentRequest | null> => {
+        if (msg.video?.file_id) {
+          const url = await getTgFileUrl(tgToken, msg.video.file_id)
+          if (!url) return null
+          const videoBuf = await downloadTgFileBuffer(url)
+          const video = await maxApi(() => bot.api.uploadVideo({ source: videoBuf }))
+          return video.toJson() as AttachmentRequest
+        }
+        if (msg.document?.file_id) {
+          const url = await getTgFileUrl(tgToken, msg.document.file_id)
+          if (!url) return null
+          const fileBuf = await downloadTgFileBuffer(url)
+          const file = await maxApi(() => bot.api.uploadFile({ source: fileBuf }))
+          return file.toJson() as AttachmentRequest
+        }
+        return null
+      }),
+    ),
+  )
+  for (const att of extraAtts) {
+    if (att) attachments.push(att)
   }
 
   return attachments
@@ -609,15 +671,15 @@ async function buildSingleMessageAttachments(
   if (msg.video?.file_id) {
     const url = await getTgFileUrl(tgToken, msg.video.file_id)
     if (!url) return []
-    const res = await axios.get<ArrayBuffer>(url, { responseType: 'arraybuffer' })
-    const video = await maxApi(() => bot.api.uploadVideo({ source: Buffer.from(res.data) }))
+    const videoBuf = await downloadTgFileBuffer(url)
+    const video = await maxApi(() => bot.api.uploadVideo({ source: videoBuf }))
     return [video.toJson() as AttachmentRequest]
   }
   if (msg.document?.file_id) {
     const url = await getTgFileUrl(tgToken, msg.document.file_id)
     if (!url) return []
-    const res = await axios.get<ArrayBuffer>(url, { responseType: 'arraybuffer' })
-    const file = await maxApi(() => bot.api.uploadFile({ source: Buffer.from(res.data) }))
+    const fileBuf = await downloadTgFileBuffer(url)
+    const file = await maxApi(() => bot.api.uploadFile({ source: fileBuf }))
     return [file.toJson() as AttachmentRequest]
   }
   return []
@@ -941,20 +1003,22 @@ async function processChainMessageGroup(
       chain.forwarded_today = forwardedToday
       touchChainActivity(chain.id)
       await updateTgChain(chain.id, { forwarded_today: forwardedToday })
-      // thread chat/msg id — через handleDiscussionAutoForward / ensurePostThreadMapping
+      const tgDateSec = pending[0]?.date
       logger.info('[tgChain] forwarded', {
         chainId: chain.id,
-        from: sourceKey,
+        from: chainSourceKey(chain),
         to: chain.max_chat_id,
         published,
         album: isAlbum,
         maxMessageMid: resultMid,
         photoCount: isAlbum ? pending.filter((m) => m.photo?.length).length : undefined,
         messageIds: pending.map((m) => m.message_id),
+        lagMs:
+          typeof tgDateSec === 'number' && Number.isFinite(tgDateSec)
+            ? Date.now() - tgDateSec * 1000
+            : undefined,
       })
     }
-
-    await sleep(1_500 + Math.random() * 500)
   } catch (err: unknown) {
     const axiosDetail =
       axios.isAxiosError(err) && err.response
@@ -962,7 +1026,7 @@ async function processChainMessageGroup(
         : undefined
     logger.error('[tgChain] forward failed', {
       chainId: chain.id,
-      from: sourceKey,
+      from: chainSourceKey(chain),
       to: chain.max_chat_id,
       messageIds: pending.map((m) => m.message_id),
       err,
@@ -974,30 +1038,144 @@ async function processChainMessageGroup(
   }
 }
 
-async function flushReadyAlbums(): Promise<boolean> {
-  const ready = takeReadyAlbumEntries()
+function flushReadyAlbums(tgToken?: string): boolean {
+  const ready = takeReadyAlbumEntries(Date.now(), tgToken)
   if (ready.length === 0) return false
   for (const entry of ready) {
-    await processChainMessageGroup(entry.chain, entry.messages, entry.tgToken)
+    enqueueForward(entry.chain, entry.messages, entry.tgToken)
   }
   return true
 }
 
-export async function runTgChainsOnce(): Promise<boolean> {
-  // Сначала освобождаем альбомы, чей таймер буфера уже истёк.
-  let receivedAny = await flushReadyAlbums()
+function listActiveForwardChains(): TgChainRecord[] {
+  return listTgChainsSync().filter(
+    (c) => c.active && (c.forward_posts || c.forward_comments) && chainSourceKey(c) !== '',
+  )
+}
+
+function collectTokensToPoll(): string[] {
+  const tokens = new Set<string>()
+  for (const chain of listActiveForwardChains()) {
+    const token = resolveTgToken(chain)
+    if (token) tokens.add(token)
+  }
+  const mainToken = resolveTelegramBotToken()
+  if (mainToken && isMainTelegramBotToken(mainToken)) {
+    tokens.add(mainToken)
+  }
+  return [...tokens]
+}
+
+function dispatchChannelUpdatesToChains(tgToken: string, batch: TgChannelUpdate[]): void {
+  const group = listActiveForwardChains().filter((c) => resolveTgToken(c) === tgToken)
+  if (group.length === 0) {
+    return
+  }
+
+  const channelPosts: TgMessage[] = []
+  const editedChannelPosts: TgMessage[] = []
+  const editedMessages: TgMessage[] = []
+  const discussionMessages: TgMessage[] = []
+  for (const u of batch) {
+    if (u.channel_post) {
+      channelPosts.push(u.channel_post)
+    }
+    if (u.edited_channel_post) {
+      editedChannelPosts.push(u.edited_channel_post)
+    }
+    if (u.edited_message) {
+      editedMessages.push(u.edited_message)
+    }
+    if (u.message) {
+      discussionMessages.push(u.message)
+    }
+  }
+
+  for (const chain of group) {
+    const sourceKey = chainSourceKey(chain)
+    const forChain = channelPosts.filter((m) => telegramMessageMatchesTgChain(m.chat, chain))
+    if (channelPosts.length > 0 && forChain.length === 0) {
+      logger.debug('[tgChain] channel_post batch did not match chain', {
+        chainId: chain.id,
+        sourceKey,
+        tg_channel_id: chain.tg_channel_id ?? null,
+        tg_username: chain.tg_username ?? null,
+        sampleChatId: channelPosts[0]?.chat?.id,
+        sampleUsername: channelPosts[0]?.chat?.username ?? null,
+      })
+    }
+    if (forChain.length > 0) {
+      const first = forChain[0]
+      const tgDateSec = first?.date
+      logger.info('[tgChain] received', {
+        chainId: chain.id,
+        messageIds: forChain.map((m) => m.message_id),
+        lagMs:
+          typeof tgDateSec === 'number' && Number.isFinite(tgDateSec)
+            ? Date.now() - tgDateSec * 1000
+            : undefined,
+      })
+    }
+    const chainGroups = groupChannelPostsForForward(forChain)
+    for (const msgs of chainGroups) {
+      const isMediaGroup = msgs.length > 1 || Boolean(msgs[0]?.media_group_id)
+      if (isMediaGroup) {
+        for (const msg of msgs) {
+          queueAlbumMessage(chain, tgToken, msg)
+        }
+        continue
+      }
+      enqueueForward(chain, msgs, tgToken)
+    }
+
+    const editedForChain = editedChannelPosts.filter((m) =>
+      telegramMessageMatchesTgChain(m.chat, chain),
+    )
+    for (const edited of editedForChain) {
+      enqueueChannelWork(chain.max_chat_id, () => processEditedChainMessage(chain, edited, tgToken))
+    }
+    const editedMessagesForChain = editedMessages.filter((m) =>
+      telegramMessageMatchesTgChain(m.chat, chain),
+    )
+    for (const edited of editedMessagesForChain) {
+      enqueueChannelWork(chain.max_chat_id, () => processEditedChainMessage(chain, edited, tgToken))
+    }
+
+    if (chain.forward_comments && discussionMessages.length > 0 && botRef) {
+      const bot = botRef
+      void (async () => {
+        const discussionChatId = await resolveDiscussionChatId(tgToken, chain)
+        if (discussionChatId == null) {
+          return
+        }
+        for (const msg of discussionMessages) {
+          if (msg.chat.id !== discussionChatId) {
+            continue
+          }
+          if (isDiscussionAutoForward(msg)) {
+            handleDiscussionAutoForward(msg, chain.id)
+            continue
+          }
+          if (msg.reply_to_message) {
+            void handleTgComment(msg, chain, bot, discussionChatId)
+          }
+        }
+      })()
+    }
+  }
+}
+
+async function runTgChainsForToken(tgToken: string): Promise<boolean> {
+  let receivedAny = flushReadyAlbums(tgToken)
   if (!botRef) {
     logger.warn('[tgChain] MAX bot not set — skip tick')
     return receivedAny
   }
 
-  const chains = (await listTgChains()).filter(
-    (c) => c.active && (c.forward_posts || c.forward_comments) && chainSourceKey(c) !== '',
-  )
-  if (chains.length === 0) {
-    const mainToken = resolveTelegramBotToken()
-    if (mainToken && isMainTelegramBotToken(mainToken)) {
-      const n = await syncMainTelegramBotDiscoveryUpdates(mainToken, {
+  const group = listActiveForwardChains().filter((c) => resolveTgToken(c) === tgToken)
+  if (group.length === 0) {
+    if (isMainTelegramBotToken(tgToken)) {
+      const n = await syncMainTelegramBotDiscoveryUpdates(tgToken, {
         timeoutSec: TG_CHAIN_LONG_POLL_SEC,
       })
       if (n > 0) {
@@ -1007,167 +1185,85 @@ export async function runTgChainsOnce(): Promise<boolean> {
     return receivedAny
   }
 
-  const tokenByChain = new Map<string, string>()
-  for (const chain of chains) {
-    const t = resolveTgToken(chain)
-    if (!t) {
-      logger.warn('[tgChain] no TG token for chain', { chainId: chain.id })
-      continue
-    }
-    tokenByChain.set(chain.id, t)
+  await ensureTelegramPollingMode(tgToken)
+  const pollErr = await assertTelegramPollingReady(tgToken)
+  if (pollErr) {
+    logger.warn('[tgChain] telegram polling not ready', { err: pollErr, chainIds: group.map((c) => c.id) })
+    return receivedAny
   }
 
-  const tokenGroups = new Map<string, TgChainRecord[]>()
-  for (const chain of chains) {
-    const token = tokenByChain.get(chain.id)
-    if (!token) continue
-    const list = tokenGroups.get(token) ?? []
-    list.push(chain)
-    tokenGroups.set(token, list)
+  const offset = getReaderOffset(tgToken)
+  const includeMiniappBotUpdates = isMainTelegramBotToken(tgToken)
+  const includeDiscussionMessages = group.some((c) => c.forward_comments)
+  let batch: TgChannelUpdate[]
+  try {
+    const pendingAlbumDelayMs = getAlbumBufferDelayMs(Date.now(), tgToken)
+    const timeoutSec =
+      pendingAlbumDelayMs === null
+        ? TG_CHAIN_LONG_POLL_SEC
+        : Math.max(0, Math.min(TG_CHAIN_LONG_POLL_SEC, Math.ceil(pendingAlbumDelayMs / 1000)))
+    batch = await getTelegramUpdatesWithIds(tgToken, offset, timeoutSec, {
+      includeMiniappBotUpdates,
+      includeDiscussionMessages,
+    })
+  } catch (err: unknown) {
+    if (err instanceof TelegramGetUpdatesConflictError) {
+      await sleep(10_000)
+      return receivedAny
+    }
+    if (axios.isAxiosError(err) && err.response?.status === 409) {
+      logger.warn('[tgChain] 409 conflict — another instance may be running, waiting 10s')
+      await sleep(10_000)
+      return receivedAny
+    }
+    throw err
+  }
+  let nextOffset = offset
+
+  for (const u of batch) {
+    receivedAny = true
+    nextOffset = Math.max(nextOffset, u.update_id + 1)
   }
 
-  for (const [tgToken, group] of tokenGroups) {
-    await ensureTelegramPollingMode(tgToken)
-    const pollErr = await assertTelegramPollingReady(tgToken)
-    if (pollErr) {
-      logger.warn('[tgChain] telegram polling not ready', { err: pollErr, chainIds: group.map((c) => c.id) })
-      continue
-    }
+  // Сначала очередь постов, потом миниапп: иначе callback/FLOOD_WAIT держит getUpdates.
+  dispatchChannelUpdatesToChains(tgToken, batch)
 
-    const offset = getReaderOffset(tgToken)
-    const includeMiniappBotUpdates = isMainTelegramBotToken(tgToken)
-    const includeDiscussionMessages = group.some((c) => c.forward_comments)
-    let batch: TgChannelUpdate[]
-    try {
-      // При ожидающемся flush альбома не блокируемся длинным long-poll.
-      const pendingAlbumDelayMs = getAlbumBufferDelayMs(Date.now(), tgToken)
-      const timeoutSec =
-        pendingAlbumDelayMs === null
-          ? TG_CHAIN_LONG_POLL_SEC
-          : Math.max(0, Math.min(TG_CHAIN_LONG_POLL_SEC, Math.ceil(pendingAlbumDelayMs / 1000)))
-      batch = await getTelegramUpdatesWithIds(tgToken, offset, timeoutSec, {
-        includeMiniappBotUpdates,
-        includeDiscussionMessages,
-      })
-    } catch (err: unknown) {
-      if (err instanceof TelegramGetUpdatesConflictError) {
-        await sleep(10_000)
-        continue
-      }
-      if (axios.isAxiosError(err) && err.response?.status === 409) {
-        logger.warn('[tgChain] 409 conflict — another instance may be running, waiting 10s')
-        await sleep(10_000)
-        continue
-      }
-      throw err
-    }
-    let nextOffset = offset
-
-    if (includeMiniappBotUpdates) {
-      const rawUpdates = batch
-        .map((u) => u.raw)
-        .filter((u): u is Record<string, unknown> => !!u)
-      if (rawUpdates.length > 0) {
-        await processTelegramMiniappBotUpdates(tgToken, rawUpdates, botRef)
-      }
-    }
-
-    const channelPosts: TgMessage[] = []
-    const editedChannelPosts: TgMessage[] = []
-    const editedMessages: TgMessage[] = []
-    const discussionMessages: TgMessage[] = []
-    for (const u of batch) {
-      receivedAny = true
-      nextOffset = Math.max(nextOffset, u.update_id + 1)
-      if (u.channel_post) {
-        channelPosts.push(u.channel_post)
-      }
-      if (u.edited_channel_post) {
-        editedChannelPosts.push(u.edited_channel_post)
-      }
-      if (u.edited_message) {
-        editedMessages.push(u.edited_message)
-      }
-      if (u.message) {
-        discussionMessages.push(u.message)
-      }
-    }
-
-    for (const chain of group) {
-      const sourceKey = chainSourceKey(chain)
-      const forChain = channelPosts.filter((m) => telegramMessageMatchesTgChain(m.chat, chain))
-      if (channelPosts.length > 0 && forChain.length === 0) {
-        logger.debug('[tgChain] channel_post batch did not match chain', {
-          chainId: chain.id,
-          sourceKey,
-          tg_channel_id: chain.tg_channel_id ?? null,
-          tg_username: chain.tg_username ?? null,
-          sampleChatId: channelPosts[0]?.chat?.id,
-          sampleUsername: channelPosts[0]?.chat?.username ?? null,
-        })
-      }
-      const chainGroups = groupChannelPostsForForward(forChain)
-      for (const msgs of chainGroups) {
-        const isMediaGroup = msgs.length > 1 || Boolean(msgs[0]?.media_group_id)
-        if (isMediaGroup) {
-          for (const msg of msgs) {
-            queueAlbumMessage(chain, tgToken, msg)
-          }
-          continue
-        }
-        await processChainMessageGroup(chain, msgs, tgToken)
-      }
-
-      const editedForChain = editedChannelPosts.filter((m) =>
-        telegramMessageMatchesTgChain(m.chat, chain),
-      )
-      for (const edited of editedForChain) {
-        await processEditedChainMessage(chain, edited, tgToken)
-      }
-      const editedMessagesForChain = editedMessages.filter((m) =>
-        telegramMessageMatchesTgChain(m.chat, chain),
-      )
-      for (const edited of editedMessagesForChain) {
-        await processEditedChainMessage(chain, edited, tgToken)
-      }
-
-      if (chain.forward_comments && discussionMessages.length > 0 && botRef) {
-        const discussionChatId = await resolveDiscussionChatId(tgToken, chain)
-        if (discussionChatId != null) {
-          for (const msg of discussionMessages) {
-            if (msg.chat.id !== discussionChatId) {
-              continue
-            }
-            if (isDiscussionAutoForward(msg)) {
-              handleDiscussionAutoForward(msg, chain.id)
-              continue
-            }
-            if (msg.reply_to_message) {
-              await handleTgComment(msg, chain, botRef, discussionChatId)
-            }
-          }
-        }
-      }
-    }
-
-    if (nextOffset > offset) {
-      setReaderOffset(tgToken, nextOffset)
-    }
-
-    for (const chain of group) {
-      touchChainActivity(chain.id)
+  if (includeMiniappBotUpdates) {
+    const rawUpdates = batch
+      .map((u) => u.raw)
+      .filter((u): u is Record<string, unknown> => !!u)
+    if (rawUpdates.length > 0) {
+      void processTelegramMiniappBotUpdates(tgToken, rawUpdates, botRef)
     }
   }
 
-  if (await flushReadyAlbums()) {
+  if (nextOffset > offset) {
+    setReaderOffset(tgToken, nextOffset)
+  }
+
+  for (const chain of group) {
+    touchChainActivity(chain.id)
+  }
+
+  if (flushReadyAlbums(tgToken)) {
     receivedAny = true
   }
 
   return receivedAny
 }
 
+export async function runTgChainsOnce(): Promise<boolean> {
+  const tokens = collectTokensToPoll()
+  if (tokens.length === 0) {
+    return false
+  }
+  const results = await Promise.all(tokens.map((token) => runTgChainsForToken(token)))
+  return results.some(Boolean)
+}
+
 let loopStarted = false
 let watchdogStarted = false
+const tokenLoops = new Map<string, { stop: () => void }>()
 
 async function restartChainForwarder(chainId: string): Promise<void> {
   const existing = activeForwarders.get('__global__')
@@ -1176,26 +1272,29 @@ async function restartChainForwarder(chainId: string): Promise<void> {
     activeForwarders.delete('__global__')
     globalForwarderHandle = null
   }
-  await sleep(3000)
+  await sleep(400)
   startForwarderLoop()
   logger.info('[tgChain] watchdog: forwarder restarted', { chainId })
 }
 
-function startForwarderLoop(): void {
-  if (globalForwarderHandle) {
-    return
-  }
+function startTokenPollLoop(tgToken: string): { stop: () => void } {
   let stopped = false
+  setTelegramGetUpdatesOwner(tgToken, true)
+  for (const chain of listActiveForwardChains()) {
+    if (resolveTgToken(chain) === tgToken) {
+      touchChainActivity(chain.id)
+    }
+  }
   const loop = async () => {
     while (!stopped) {
       try {
-        const hadUpdates = await runTgChainsOnce()
+        const hadUpdates = await runTgChainsForToken(tgToken)
         if (!hadUpdates) {
-          const albumDelayMs = getAlbumBufferDelayMs()
+          const albumDelayMs = getAlbumBufferDelayMs(Date.now(), tgToken)
           if (albumDelayMs === null) {
             await sleep(TG_CHAIN_IDLE_MS)
           } else {
-            await sleep(Math.min(TG_CHAIN_IDLE_MS, Math.max(50, albumDelayMs)))
+            await sleep(Math.min(TG_CHAIN_IDLE_MS, Math.max(15, albumDelayMs)))
           }
         }
       } catch (err: unknown) {
@@ -1209,18 +1308,58 @@ function startForwarderLoop(): void {
           await sleep(10_000)
           continue
         }
-        logger.error('[tgChain] loop error', { err })
+        logger.error('[tgChain] loop error', { err, tokenHint: tgToken.slice(-6) })
         await sendAdminAlert('forwarder_crash', 'Форвардер упал с ошибкой', {
           error: String(err),
         })
-        await sleep(TG_CHAIN_IDLE_MS)
+        await sleep(1_000)
       }
     }
   }
   void loop()
+  return {
+    stop: () => {
+      stopped = true
+      setTelegramGetUpdatesOwner(tgToken, false)
+    },
+  }
+}
+
+function syncTokenPollLoops(): void {
+  const tokens = new Set(collectTokensToPoll())
+  for (const [token, handle] of tokenLoops) {
+    if (!tokens.has(token)) {
+      handle.stop()
+      tokenLoops.delete(token)
+    }
+  }
+  for (const token of tokens) {
+    if (!tokenLoops.has(token)) {
+      tokenLoops.set(token, startTokenPollLoop(token))
+      logger.info('[tgChain] token poll loop started', { tokenHint: token.slice(-6) })
+    }
+  }
+}
+
+function startForwarderLoop(): void {
+  if (globalForwarderHandle) {
+    return
+  }
+  let stopped = false
+  syncTokenPollLoops()
+  const supervisor = setInterval(() => {
+    if (!stopped) {
+      syncTokenPollLoops()
+    }
+  }, 2_000)
   globalForwarderHandle = {
     stop: () => {
       stopped = true
+      clearInterval(supervisor)
+      for (const handle of tokenLoops.values()) {
+        handle.stop()
+      }
+      tokenLoops.clear()
     },
   }
   activeForwarders.set('__global__', globalForwarderHandle)
@@ -1232,7 +1371,7 @@ function startTgChainWatchdog(): void {
   setInterval(() => {
     void (async () => {
       const now = Date.now()
-      const silentThresholdMs = 20 * 60 * 1000
+      const silentThresholdMs = 2 * 60 * 1000
 
       for (const chain of listTgChainsSync()) {
         if (!chain.forward_posts || !chain.active) continue
@@ -1265,13 +1404,13 @@ function startTgChainWatchdog(): void {
     })().catch((err: unknown) => {
       logger.warn('[tgChain] watchdog error', { err })
     })
-  }, 5 * 60 * 1000)
+  }, 30 * 1000)
 }
 
 export function startTgChainForwarder(): void {
   if (loopStarted) return
   loopStarted = true
   startTgChainWatchdog()
-  logger.info('[tgChain] forwarder started (long-poll channel_post)')
+  logger.info('[tgChain] forwarder started (per-token long-poll, async publish)')
   startForwarderLoop()
 }

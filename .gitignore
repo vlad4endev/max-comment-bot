@@ -8,5 +8,8 @@ data/channels.json
 data/subscribers.json
 data/mtproto-config.json
 data/log-ai-config.json
+data/telegram-proxies.json
+data/xray-telegram.json
+data/xray-telegram-probe.json
 data/backups/
 miniapp/uploads/

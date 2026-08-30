@@ -42,7 +42,7 @@ function isDiscussionAutoForwardMessage(message: TgMessage): boolean {
 export { isTelegramAntispamBotConfigured, resolveTelegramAntispamBotToken }
 
 const TG_ANTISPAM_LONG_POLL_SEC = 25
-const TG_ANTISPAM_IDLE_MS = 3_000
+const TG_ANTISPAM_IDLE_MS = 40
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 

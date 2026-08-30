@@ -13,8 +13,8 @@ import {
   type Post,
 } from './postStore'
 
-const GATE_VERIFY_ATTEMPTS = 5
-const GATE_VERIFY_DELAY_MS = 250
+const GATE_VERIFY_ATTEMPTS = 3
+const GATE_VERIFY_DELAY_MS = 80
 
 function sleepMs(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
