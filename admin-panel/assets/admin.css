@@ -2681,6 +2681,10 @@ tbody tr:hover td {
   gap: 1rem;
 }
 
+.tg-proxy-panel + .two-col {
+  margin-top: 0.25rem;
+}
+
 @media (max-width: 1100px) {
   .metrics-grid {
     grid-template-columns: repeat(2, 1fr);
@@ -5497,4 +5501,179 @@ tbody tr:hover td {
 
 #backupCreateBtn[disabled] svg {
   animation: backup-spin 0.9s linear infinite;
+}
+
+/* Telegram proxy settings */
+.tg-proxy-panel {
+  margin-bottom: 0.75rem;
+}
+
+.tg-proxy-status-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.tg-proxy-status-card {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 0.75rem 0.9rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.tg-proxy-status-kicker {
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.tg-proxy-active-name {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.tg-proxy-badge {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  padding: 0.2rem 0.55rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 650;
+  background: var(--surface-2);
+  color: var(--text-secondary);
+}
+
+.tg-proxy-badge.is-good {
+  background: var(--success-muted);
+  color: var(--success);
+}
+
+.tg-proxy-badge.is-poor {
+  background: var(--warning-muted);
+  color: var(--warning);
+}
+
+.tg-proxy-badge.is-down {
+  background: var(--danger-muted);
+  color: var(--danger);
+}
+
+.tg-proxy-ms {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+.tg-proxy-warn {
+  margin: 0 0 0.85rem;
+  padding: 0.65rem 0.8rem;
+  border-radius: var(--radius-sm);
+  background: var(--warning-muted);
+  color: var(--warning);
+  font-size: 0.82rem;
+}
+
+.tg-proxy-toolbar {
+  display: flex;
+  gap: 0.5rem;
+  margin: 0.75rem 0 1rem;
+}
+
+.tg-proxy-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+  margin-bottom: 1.1rem;
+}
+
+.tg-proxy-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 0.85rem 1rem;
+  background: var(--bg-surface);
+}
+
+.tg-proxy-card.is-active {
+  border-color: var(--accent-border);
+  box-shadow: 0 0 0 3px var(--accent-muted);
+}
+
+.tg-proxy-card-top {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: flex-start;
+}
+
+.tg-proxy-card-name {
+  font-weight: 650;
+  font-size: 0.95rem;
+}
+
+.tg-proxy-card-meta {
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+  margin-top: 0.15rem;
+}
+
+.tg-proxy-card-uri {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  margin-top: 0.35rem;
+  word-break: break-all;
+}
+
+.tg-proxy-card-quality {
+  text-align: right;
+  flex-shrink: 0;
+}
+
+.tg-proxy-err {
+  margin-top: 0.3rem;
+  font-size: 0.72rem;
+  color: var(--danger);
+  max-width: 220px;
+}
+
+.tg-proxy-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-top: 0.75rem;
+}
+
+.tg-proxy-active-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.3rem 0.7rem;
+  border-radius: var(--radius-sm);
+  background: var(--accent-muted);
+  color: var(--accent);
+  font-size: 0.78rem;
+  font-weight: 650;
+}
+
+.tg-proxy-forms {
+  border-top: 1px dashed var(--border);
+  padding-top: 1rem;
+}
+
+.tg-proxy-add {
+  margin-top: 1.1rem;
+}
+
+@media (max-width: 720px) {
+  .tg-proxy-card-top {
+    flex-direction: column;
+  }
+  .tg-proxy-card-quality {
+    text-align: left;
+  }
 }

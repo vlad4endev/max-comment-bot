@@ -2,7 +2,7 @@
  * Диагностика и восстановление синхронизации комментариев MAX ↔ Telegram.
  */
 
-import axios from 'axios'
+import { telegramAxios as axios } from '../utils/telegramAxios'
 
 import { listTgChainsSync, type TgChainRecord } from '../api/adminPanelState'
 import { getDb } from '../db/database'
@@ -406,7 +406,7 @@ function buildChainIssues(input: {
       code: 'pending_max_to_tg',
       title: 'Комментарии MAX ждут отправки в TG',
       description: `${pendingMaxToTg} комментариев из miniapp ещё не синхронизированы в Telegram.`,
-      what_to_do: 'Исправьте thread mapping и права бота. Синхронизация идёт пакетами (TELEGRAM_COMMENT_SYNC_BATCH_SIZE) с интервалом MAX_COMMENT_SYNC_INTERVAL_MS.',
+      what_to_do: 'Исправьте thread mapping и права бота. Синхронизация идёт пакетами (TELEGRAM_COMMENT_SYNC_BATCH_SIZE, по умолчанию 15) с интервалом MAX_COMMENT_SYNC_INTERVAL_MS (по умолчанию 2 с).',
     })
   }
 
@@ -517,7 +517,7 @@ export async function diagnoseCommentSync(chainIdFilter?: string): Promise<Comme
   }
   if (logSignals.flood_wait > 0) {
     recommendations.push(
-      'Обнаружен FLOOD_WAIT: увеличьте TELEGRAM_API_MIN_INTERVAL_MS (рекомендуется 2000–3000) и уменьшите TELEGRAM_COMMENT_SYNC_BATCH_SIZE.',
+      'Обнаружен FLOOD_WAIT: увеличьте TELEGRAM_API_MIN_INTERVAL_MS (например 500–1000) и уменьшите TELEGRAM_COMMENT_SYNC_BATCH_SIZE.',
     )
   }
   if (!mtprotoReady) {

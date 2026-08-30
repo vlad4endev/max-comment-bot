@@ -1,5 +1,5 @@
 import type { Bot } from '@maxhub/max-bot-api'
-import axios from 'axios'
+import { telegramAxios as axios } from '../utils/telegramAxios'
 
 import { getTelegramToken } from '../config'
 import { logger } from '../utils/logger'

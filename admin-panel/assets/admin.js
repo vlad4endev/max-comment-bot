@@ -146,7 +146,7 @@
     settings: {
       title: 'Настройки',
       group: 'Система',
-      desc: 'Интервал опроса, оператор ИИ для анализа логов и опасные операции.',
+      desc: 'Интервал опроса, прокси Telegram (VLESS/SOCKS), оператор ИИ и опасные операции.',
     },
   };
 
@@ -569,6 +569,7 @@
     if (path === '/backup') timeoutMs = 300000;
     if (path === '/logs/analyze') timeoutMs = 120000;
     if (path === '/logs/ai-test') timeoutMs = 60000;
+    if (path.indexOf('/telegram-proxy') === 0 && path.indexOf('probe') !== -1) timeoutMs = 120000;
     return authFetch(apiPath(path), {
       method: 'POST',
       body: body || {},
@@ -7783,12 +7784,321 @@
     });
   }
 
+  function proxyQualityBadge(probe) {
+    if (!probe) {
+      return '<span class="tg-proxy-badge">Не проверялась</span>';
+    }
+    if (probe.quality === 'good') {
+      return '<span class="tg-proxy-badge is-good">Хорошая</span>';
+    }
+    if (probe.quality === 'poor') {
+      return '<span class="tg-proxy-badge is-poor">Плохая</span>';
+    }
+    return '<span class="tg-proxy-badge is-down">Нет связи</span>';
+  }
+
+  function proxyLatencyLabel(probe) {
+    if (!probe || probe.latency_ms == null || !Number.isFinite(Number(probe.latency_ms))) {
+      return '';
+    }
+    return '<span class="tg-proxy-ms">' + esc(String(Math.round(probe.latency_ms))) + ' мс</span>';
+  }
+
+  function proxyKindLabel(kind) {
+    if (kind === 'vless') return 'VLESS';
+    if (kind === 'socks5') return 'SOCKS5';
+    if (kind === 'http') return 'HTTP';
+    return kind || '—';
+  }
+
+  function renderTelegramProxyPanel(data) {
+    var d = data || {};
+    var runtime = d.runtime || {};
+    var proxies = Array.isArray(d.proxies) ? d.proxies : [];
+    var html = '<div class="panel tg-proxy-panel" id="tgProxyPanel">';
+    html += sectionHead(
+      'Прокси Telegram',
+      'VLESS, SOCKS5 и HTTP для Bot API и MTProto. Можно сразу заменить все ключи и увидеть, какая связь хорошая, а какая плохая.',
+    );
+
+    html += '<div class="tg-proxy-status-row">';
+    html +=
+      '<div class="tg-proxy-status-card"><div class="tg-proxy-status-kicker">Напрямую</div>' +
+      proxyQualityBadge(d.direct_probe) +
+      proxyLatencyLabel(d.direct_probe) +
+      '</div>';
+    var active = null;
+    for (var i = 0; i < proxies.length; i++) {
+      if (proxies[i].active) active = proxies[i];
+    }
+    html += '<div class="tg-proxy-status-card">';
+    html += '<div class="tg-proxy-status-kicker">Активный прокси</div>';
+    if (!d.enabled) {
+      html += '<span class="tg-proxy-badge">Выключен</span>';
+    } else if (active) {
+      html +=
+        '<div class="tg-proxy-active-name">' +
+        esc(active.name || active.host) +
+        ' · ' +
+        esc(proxyKindLabel(active.kind)) +
+        '</div>';
+      html += proxyQualityBadge(active.last_probe) + proxyLatencyLabel(active.last_probe);
+    } else {
+      html += '<span class="tg-proxy-badge">Не выбран</span>';
+    }
+    html += '</div>';
+    html +=
+      '<div class="tg-proxy-status-card"><div class="tg-proxy-status-kicker">Туннель VLESS</div>' +
+      (runtime.xray_available
+        ? runtime.tunnel_running
+          ? '<span class="tg-proxy-badge is-good">xray работает</span>'
+          : '<span class="tg-proxy-badge">xray установлен</span>'
+        : '<span class="tg-proxy-badge is-poor">xray не найден</span>') +
+      (runtime.applied ? '<span class="tg-proxy-ms">трафик через прокси</span>' : '') +
+      '</div>';
+    html += '</div>';
+
+    if (runtime.warning) {
+      html += '<p class="tg-proxy-warn">' + esc(runtime.warning) + '</p>';
+    }
+
+    html += toggleRow(
+      'tg_proxy_enabled',
+      'Использовать прокси',
+      'Запросы к Telegram пойдут через выбранное соединение',
+      !!d.enabled,
+    );
+
+    html += '<div class="tg-proxy-toolbar">';
+    html +=
+      '<button type="button" class="btn btn-ghost btn-sm" id="tgProxyProbeAll"><i data-lucide="activity"></i> Проверить связь</button>';
+    html += '</div>';
+
+    if (proxies.length === 0) {
+      html +=
+        '<p class="muted text-sm">Пока нет сохранённых соединений. Вставьте ключи VLESS или SOCKS5 ниже.</p>';
+    } else {
+      html += '<div class="tg-proxy-list">';
+      proxies.forEach(function (item) {
+        html += '<div class="tg-proxy-card' + (item.active && d.enabled ? ' is-active' : '') + '" data-proxy-id="' + esc(item.id) + '">';
+        html += '<div class="tg-proxy-card-top">';
+        html += '<div>';
+        html += '<div class="tg-proxy-card-name">' + esc(item.name || item.host) + '</div>';
+        html +=
+          '<div class="tg-proxy-card-meta">' +
+          esc(proxyKindLabel(item.kind)) +
+          ' · ' +
+          esc(item.host + ':' + item.port);
+        if (item.security) html += ' · ' + esc(item.security);
+        if (item.network && item.network !== 'tcp') html += '/' + esc(item.network);
+        html += '</div>';
+        html += '<div class="tg-proxy-card-uri mono">' + esc(item.uri_preview || '') + '</div>';
+        html += '</div>';
+        html += '<div class="tg-proxy-card-quality">' + proxyQualityBadge(item.last_probe) + proxyLatencyLabel(item.last_probe);
+        if (item.last_probe && item.last_probe.error) {
+          html += '<div class="tg-proxy-err">' + esc(item.last_probe.error) + '</div>';
+        }
+        html += '</div></div>';
+        html += '<div class="tg-proxy-card-actions">';
+        if (!item.active) {
+          html +=
+            '<button type="button" class="btn btn-primary btn-sm" data-proxy-act="activate"><i data-lucide="check"></i> Сделать активным</button>';
+        } else {
+          html += '<span class="tg-proxy-active-pill">Активен</span>';
+        }
+        html +=
+          '<button type="button" class="btn btn-ghost btn-sm" data-proxy-act="probe"><i data-lucide="activity"></i> Проверить</button>';
+        html +=
+          '<button type="button" class="btn btn-ghost btn-sm" data-proxy-act="delete"><i data-lucide="trash-2"></i> Удалить</button>';
+        html += '</div></div>';
+      });
+      html += '</div>';
+    }
+
+    html += '<div class="tg-proxy-forms">';
+    html += '<div class="form-group"><label>Заменить все ключи VLESS и прокси</label>';
+    html +=
+      '<textarea class="textarea mono" id="tgProxyBulk" rows="5" placeholder="vless://uuid@host:443?security=reality&pbk=…#NL-1&#10;vless://…&#10;socks5://user:pass@127.0.0.1:1080"></textarea>';
+    html +=
+      '<p class="muted text-sm" style="margin-top:0.35rem">По одной ссылке на строку. Старый список будет заменён целиком.</p></div>';
+    html +=
+      '<button type="button" class="btn btn-primary" id="tgProxyReplace"><i data-lucide="refresh-cw"></i> Заменить все ключи</button>';
+
+    html += '<div class="tg-proxy-add">';
+    html += '<div class="form-group"><label>Добавить одно соединение</label>';
+    html +=
+      '<input class="input" id="tgProxyAddName" placeholder="Название (необязательно)"/>';
+    html +=
+      '<textarea class="textarea mono" id="tgProxyAddUri" rows="2" placeholder="vless://… или socks5://host:1080 или http://host:8080" style="margin-top:8px"></textarea></div>';
+    html +=
+      '<button type="button" class="btn btn-ghost" id="tgProxyAdd"><i data-lucide="plus"></i> Добавить</button>';
+    html += '</div></div>';
+
+    html += '</div>';
+    return html;
+  }
+
+  function applyTelegramProxyPanel(main, data) {
+    var panel = qs('#tgProxyPanel', main);
+    if (!panel) return;
+    var tmp = document.createElement('div');
+    tmp.innerHTML = renderTelegramProxyPanel(data);
+    var next = tmp.firstElementChild;
+    if (!next) return;
+    panel.replaceWith(next);
+    bindTelegramProxyPanel(main);
+    refreshIcons();
+  }
+
+  function reloadTelegramProxyPanel(main) {
+    return getJson('/telegram-proxy').then(function (data) {
+      applyTelegramProxyPanel(main, data);
+      return data;
+    });
+  }
+
+  function bindTelegramProxyPanel(main) {
+    var panel = qs('#tgProxyPanel', main);
+    if (!panel) return;
+    bindToggleRows(panel, function (key, on) {
+      if (key !== 'tg_proxy_enabled') return;
+      postJson('/telegram-proxy', { enabled: on })
+        .then(function (data) {
+          applyTelegramProxyPanel(main, data);
+          showToast(on ? 'Прокси включён' : 'Прокси выключен, Telegram напрямую', 'success');
+        })
+        .catch(function (e) {
+          showToast(e.message || 'Не удалось сохранить', 'error');
+          reloadTelegramProxyPanel(main);
+        });
+    });
+
+    var probeAll = qs('#tgProxyProbeAll', panel);
+    if (probeAll) {
+      probeAll.addEventListener('click', function () {
+        probeAll.disabled = true;
+        postJson('/telegram-proxy/probe', {})
+          .then(function (data) {
+            applyTelegramProxyPanel(main, data);
+            showToast('Проверка связи завершена', 'success');
+          })
+          .catch(function (e) {
+            showToast(e.message || 'Не удалось проверить', 'error');
+          })
+          .finally(function () {
+            var btn = qs('#tgProxyProbeAll', main);
+            if (btn) btn.disabled = false;
+          });
+      });
+    }
+
+    var replaceBtn = qs('#tgProxyReplace', panel);
+    if (replaceBtn) {
+      replaceBtn.addEventListener('click', function () {
+        var text = (qs('#tgProxyBulk', panel).value || '').trim();
+        if (!text) {
+          showToast('Вставьте хотя бы одну ссылку', 'error');
+          return;
+        }
+        showConfirm(
+          'Заменить все ключи?',
+          'Текущий список VLESS и прокси будет полностью заменён вставленными ссылками.',
+          function () {
+            replaceBtn.disabled = true;
+            postJson('/telegram-proxy/replace', { text: text })
+              .then(function (data) {
+                applyTelegramProxyPanel(main, data);
+                showToast('Ключи обновлены', 'success');
+              })
+              .catch(function (e) {
+                showToast(e.message || 'Не удалось заменить ключи', 'error');
+              })
+              .finally(function () {
+                var btn = qs('#tgProxyReplace', main);
+                if (btn) btn.disabled = false;
+              });
+          },
+        );
+      });
+    }
+
+    var addBtn = qs('#tgProxyAdd', panel);
+    if (addBtn) {
+      addBtn.addEventListener('click', function () {
+        var uri = (qs('#tgProxyAddUri', panel).value || '').trim();
+        var name = (qs('#tgProxyAddName', panel).value || '').trim();
+        if (!uri) {
+          showToast('Вставьте ссылку vless://, socks5:// или http://', 'error');
+          return;
+        }
+        addBtn.disabled = true;
+        postJson('/telegram-proxy/items', { uri: uri, name: name })
+          .then(function (data) {
+            applyTelegramProxyPanel(main, data);
+            showToast('Соединение добавлено', 'success');
+          })
+          .catch(function (e) {
+            showToast(e.message || 'Не удалось добавить', 'error');
+          })
+          .finally(function () {
+            var btn = qs('#tgProxyAdd', main);
+            if (btn) btn.disabled = false;
+          });
+      });
+    }
+
+    qsa('[data-proxy-act]', panel).forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var card = btn.closest('.tg-proxy-card');
+        var id = card ? card.getAttribute('data-proxy-id') : '';
+        var act = btn.getAttribute('data-proxy-act');
+        if (!id || !act) return;
+        if (act === 'delete') {
+          showConfirm('Удалить прокси?', 'Соединение будет убрано из списка. Активный ключ переключится на следующий.', function () {
+            deleteReq('/telegram-proxy/items/' + encodeURIComponent(id))
+              .then(function (data) {
+                applyTelegramProxyPanel(main, data);
+                showToast('Удалено', 'success');
+              })
+              .catch(function (e) {
+                showToast(e.message || 'Не удалось удалить', 'error');
+              });
+          });
+          return;
+        }
+        btn.disabled = true;
+        var req =
+          act === 'activate'
+            ? postJson('/telegram-proxy/items/' + encodeURIComponent(id) + '/activate', {})
+            : postJson('/telegram-proxy/items/' + encodeURIComponent(id) + '/probe', {});
+        req
+          .then(function (data) {
+            applyTelegramProxyPanel(main, data);
+            showToast(act === 'activate' ? 'Прокси включён' : 'Проверка готова', 'success');
+          })
+          .catch(function (e) {
+            showToast(e.message || 'Ошибка', 'error');
+          })
+          .finally(function () {
+            btn.disabled = false;
+          });
+      });
+    });
+  }
+
   function renderSettings() {
     var main = qs('#mainContent');
     if (!main) return;
     main.innerHTML = skeletonPage();
-    getJson('/settings')
-      .then(function (s) {
+    Promise.all([
+      getJson('/settings'),
+      getJson('/telegram-proxy').catch(function () {
+        return null;
+      }),
+    ])
+      .then(function (pair) {
+        var s = pair[0];
+        var proxy = pair[1];
         if (currentRoute !== 'settings') return;
         var logAi = (s && s.log_ai) || {};
         if (!logAi.presets) {
@@ -7798,19 +8108,20 @@
             })
             .then(function (aiCfg) {
               if (currentRoute !== 'settings') return;
-              paintSettingsPage(main, s, aiCfg && aiCfg.presets ? aiCfg : logAi);
+              paintSettingsPage(main, s, aiCfg && aiCfg.presets ? aiCfg : logAi, proxy);
             });
         }
-        paintSettingsPage(main, s, logAi);
+        paintSettingsPage(main, s, logAi, proxy);
       })
       .catch(function () {
         main.innerHTML = '<p class="muted">Ошибка загрузки</p>';
       });
   }
 
-  function paintSettingsPage(main, s, logAi) {
+  function paintSettingsPage(main, s, logAi, proxy) {
         var sec = s.poll_interval_sec != null ? s.poll_interval_sec : 30;
-        var html = '<div class="two-col">';
+        var html = renderTelegramProxyPanel(proxy);
+        html += '<div class="two-col">';
 
         html += '<div>';
         html += '<div class="panel" style="margin-bottom:0.75rem">';
@@ -7858,6 +8169,7 @@
 
         html += '</div>';
         main.innerHTML = html;
+        bindTelegramProxyPanel(main);
         bindToggleRows(main, null);
         bindAiOperatorPanel(main, logAi);
         qs('#set_save_poll', main).addEventListener('click', function () {

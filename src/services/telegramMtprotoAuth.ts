@@ -4,6 +4,7 @@ import { Api, TelegramClient } from 'telegram'
 import { StringSession } from 'telegram/sessions'
 
 import { logger } from '../utils/logger'
+import { getGramJsClientOptions } from '../utils/telegramProxyRuntime'
 import {
   clearMtprotoSession,
   maskPhone,
@@ -134,9 +135,7 @@ export async function sendMtprotoLoginCode(phoneRaw: string): Promise<{
   }
   const { apiId, apiHash } = requireApiCredentials()
 
-  const client = new TelegramClient(new StringSession(''), apiId, apiHash, {
-    connectionRetries: 3,
-  })
+  const client = new TelegramClient(new StringSession(''), apiId, apiHash, getGramJsClientOptions())
   await client.connect()
 
   try {
@@ -267,9 +266,7 @@ export async function testMtprotoConnection(): Promise<{ user_display: string }>
   if (apiId === null || !apiHash || !session) {
     throw new Error('MTProto не настроен: нужны api_id, api_hash и сессия')
   }
-  const client = new TelegramClient(new StringSession(session), apiId, apiHash, {
-    connectionRetries: 3,
-  })
+  const client = new TelegramClient(new StringSession(session), apiId, apiHash, getGramJsClientOptions())
   await client.connect()
   try {
     if (!(await client.checkAuthorization())) {

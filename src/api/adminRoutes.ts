@@ -70,6 +70,7 @@ import {
   type TgChainRecord,
 } from './adminPanelState'
 import { createAutopostRouter } from './autopostRoutes'
+import { createTelegramProxyRouter } from './telegramProxyRoutes'
 import { buildDashboardAnalytics, parseDashboardPeriodDays } from '../services/analyticsService'
 import { integrationsStore } from '../services/integrationsStore'
 import { parseAdminLogLine, type AdminLogEntry, type AdminLogLevel } from '../utils/adminLogFormat'
@@ -1958,6 +1959,7 @@ export function createAdminRouter(deps: AdminRouterDeps): express.Router {
   })
 
   secured.use('/autoposts', createAutopostRouter())
+  secured.use('/telegram-proxy', createTelegramProxyRouter())
 
   secured.post('/refresh-buttons', async (req, res) => {
     const body = req.body

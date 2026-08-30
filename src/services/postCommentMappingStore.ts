@@ -1,4 +1,4 @@
-import axios from 'axios'
+import { telegramAxios as axios } from '../utils/telegramAxios'
 
 import { listTgChainsSync, type TgChainRecord } from '../api/adminPanelState'
 import { getDb } from '../db/database'

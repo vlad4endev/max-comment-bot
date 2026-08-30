@@ -1,4 +1,4 @@
-import axios from 'axios'
+import { telegramAxios as axios } from '../utils/telegramAxios'
 
 import { listTelegramChatAdministrators } from './integrationPlatformClient'
 import { resolveTelegramBotToken } from './resolveTelegramBotToken'

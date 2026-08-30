@@ -2,7 +2,7 @@
  * Маркировка TG-постов при кросс-платформенной брони комментариев.
  */
 
-import axios from 'axios'
+import { telegramAxios as axios } from '../utils/telegramAxios'
 
 import { listTgChainsSync } from '../api/adminPanelState'
 import { appendBookingMarker } from '../utils/commentSyncFilter'

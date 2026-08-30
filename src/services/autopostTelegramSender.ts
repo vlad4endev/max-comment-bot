@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 
-import axios from 'axios'
+import { telegramAxios as axios } from '../utils/telegramAxios'
 import FormData from 'form-data'
 
 import { prepareMessengerHtmlText } from '../utils/messengerHtml'

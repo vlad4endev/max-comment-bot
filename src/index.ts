@@ -22,6 +22,12 @@ import { channelSettingsStore } from './services/channelSettingsStore'
 import { commentStore } from './services/commentStore'
 import { adminRuntimeSettingsStore } from './services/adminRuntimeSettingsStore'
 import { logAiSettingsStore } from './services/logAiSettingsStore'
+import { telegramProxyStore } from './services/telegramProxyStore'
+import { invalidatePersistentMtprotoClient } from './services/telegramUserArchive'
+import {
+  applyTelegramProxyRuntime,
+  setTelegramProxyChangeHandler,
+} from './utils/telegramProxyRuntime'
 import { disabledAdminStore } from './services/disabledAdminStore'
 import { subscriberStore } from './services/subscriberStore'
 import {
@@ -142,6 +148,11 @@ async function main(): Promise<void> {
   await adminRuntimeSettingsStore.loadFromDisk()
   await disabledAdminStore.loadFromDisk()
   await logAiSettingsStore.loadFromDisk()
+  await telegramProxyStore.loadFromDisk()
+  setTelegramProxyChangeHandler(() => {
+    invalidatePersistentMtprotoClient()
+  })
+  await applyTelegramProxyRuntime()
   await integrationsStore.load()
   await ensureAdminPanelStateLoaded()
   await repairLegacyMiniappTgChains()

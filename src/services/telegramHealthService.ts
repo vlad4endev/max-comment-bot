@@ -6,6 +6,7 @@ import axios from 'axios'
 
 import { getTelegramToken } from '../config'
 import { logger } from '../utils/logger'
+import { telegramAxios } from '../utils/telegramAxios'
 import { isTelegramUnauthorizedError } from '../utils/telegramSyncErrors'
 import { integrationsStore } from './integrationsStore'
 import { resolveTelegramBotToken } from './resolveTelegramBotToken'
@@ -120,7 +121,7 @@ export async function isTelegramTokenAuthorized(token: string): Promise<boolean>
     return false
   }
   try {
-    const { data } = await axios.get<{ ok: boolean; result?: { id?: number } }>(
+    const { data } = await telegramAxios.get<{ ok: boolean; result?: { id?: number } }>(
       `${TG_API}/bot${trimmed}/getMe`,
       { timeout: 10_000 },
     )
@@ -148,7 +149,7 @@ export async function probeTelegramBotApi(token?: string): Promise<TelegramHealt
   }
 
   try {
-    const { data, status } = await axios.get<{
+    const { data, status } = await telegramAxios.get<{
       ok: boolean
       description?: string
       error_code?: number

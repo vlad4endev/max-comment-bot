@@ -1,7 +1,6 @@
-import axios from 'axios'
-
 import { config, getTelegramToken } from '../config'
 import { logger } from './logger'
+import { telegramAxios } from './telegramAxios'
 
 const ALERT_COOLDOWN_MS = 10 * 60 * 1000
 const lastAlerts = new Map<string, number>()
@@ -32,7 +31,7 @@ export async function sendAdminAlert(
       return
     }
 
-    await axios.post(
+    await telegramAxios.post(
       `https://api.telegram.org/bot${tgBotToken}/sendMessage`,
       {
         chat_id: adminId,

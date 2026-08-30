@@ -9,6 +9,7 @@ import { StringSession } from 'telegram/sessions'
 
 import { logger } from '../utils/logger'
 import { normalizeTelegramChannelKey } from '../utils/tgChannelMatch'
+import { getGramJsClientOptions } from '../utils/telegramProxyRuntime'
 import type { StagedPayload } from './channelImportService'
 import { resolveMtprotoCredentials, isMtprotoSessionReady } from './mtprotoConfigStore'
 
@@ -164,9 +165,7 @@ async function createUserClient(): Promise<TelegramClient> {
       'Не настроен user-аккаунт: войдите в MTProto в админке (TG→MAX или Импорт TG→MAX) или задайте TG_API_ID, TG_API_HASH, TG_USER_SESSION в .env',
     )
   }
-  const client = new TelegramClient(new StringSession(session), apiId, apiHash, {
-    connectionRetries: 3,
-  })
+  const client = new TelegramClient(new StringSession(session), apiId, apiHash, getGramJsClientOptions())
   await client.connect()
   if (!(await client.checkAuthorization())) {
     await client.destroy().catch(() => {})

@@ -13,6 +13,7 @@ import { stopChannelPostPoller } from './services/channelPoller'
 import { stopCommentButtonRetryLoop } from './services/commentButtonRetryQueue'
 import { stopPostLinkAutoRecovery } from './services/postLinkAutoRecovery'
 import { stopAutopostScheduler } from './services/autopostScheduler'
+import { stopMainVlessTunnel } from './services/telegramProxyTunnel'
 import { flowProcessor } from './services/flowProcessor'
 import { stateManager } from './services/stateManager'
 import { disconnectRedis } from './cache/redisClient'
@@ -61,6 +62,7 @@ function setupGracefulShutdown(bot: Bot, options: GracefulShutdownOptions): void
       stopCommentButtonRetryLoop()
       stopPostLinkAutoRecovery()
       stopAutopostScheduler()
+      void stopMainVlessTunnel()
       flowProcessor.stop()
       stopRuntimeLogRotationScheduler()
       stateManager.destroy()
