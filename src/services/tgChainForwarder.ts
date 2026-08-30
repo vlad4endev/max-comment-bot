@@ -790,7 +790,7 @@ async function processEditedChainMessage(
   if (!telegramMessageMatchesTgChain(msg.chat, chain)) return
   const mapping = getForwardedRecord(chain.id, msg.message_id)
   const mappedMid = mapping?.max_message_mid?.trim()
-  if (!mappedMid || mappedMid === TG_FORWARD_SKIPPED_MID) {
+  if (!mapping || !mappedMid || mappedMid === TG_FORWARD_SKIPPED_MID) {
     logger.info('[tgChain] skip edit: original post was not forwarded', {
       chainId: chain.id,
       tgMessageId: msg.message_id,
