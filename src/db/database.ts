@@ -148,6 +148,32 @@ function initSchema(targetDb: Database.Database): void {
       PRIMARY KEY (chain_id, tg_message_id)
     );
 
+    CREATE TABLE IF NOT EXISTS tg_chain_forward_queue (
+      job_key TEXT PRIMARY KEY,
+      chain_id TEXT NOT NULL,
+      tg_token TEXT NOT NULL,
+      payload TEXT NOT NULL,
+      attempts INTEGER NOT NULL DEFAULT 0,
+      next_retry_at INTEGER NOT NULL,
+      last_error TEXT,
+      created_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_tg_chain_forward_queue_retry
+      ON tg_chain_forward_queue(next_retry_at);
+
+    CREATE TABLE IF NOT EXISTS tg_comment_inbound_queue (
+      job_key TEXT PRIMARY KEY,
+      chain_id TEXT NOT NULL,
+      discussion_chat_id INTEGER NOT NULL,
+      payload TEXT NOT NULL,
+      attempts INTEGER NOT NULL DEFAULT 0,
+      next_retry_at INTEGER NOT NULL,
+      last_error TEXT,
+      created_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_tg_comment_inbound_queue_retry
+      ON tg_comment_inbound_queue(next_retry_at);
+
     CREATE TABLE IF NOT EXISTS tg_bot_users (
       user_id      INTEGER PRIMARY KEY,
       username     TEXT,
@@ -241,6 +267,7 @@ function initSchema(targetDb: Database.Database): void {
   migratePostsSchema(targetDb)
   migratePostIdAliasesSchema(targetDb)
   migrateTgChainForwardedSchema(targetDb)
+  migrateTgChainForwardQueueSchema(targetDb)
   migrateChannelLinkDraftsSchema(targetDb)
   migrateAccountPairingTokensSchema(targetDb)
   migrateChannelJoinNotifiedSchema(targetDb)
@@ -348,6 +375,35 @@ function migratePostsSchema(database: Database.Database): void {
     'CREATE UNIQUE INDEX IF NOT EXISTS idx_posts_unique_chat_mid ON posts(chat_id, message_mid)',
   )
   log.info('db.migrate: UNIQUE индекс создан', { posts: after })
+}
+
+function migrateTgChainForwardQueueSchema(database: Database.Database): void {
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS tg_chain_forward_queue (
+      job_key TEXT PRIMARY KEY,
+      chain_id TEXT NOT NULL,
+      tg_token TEXT NOT NULL,
+      payload TEXT NOT NULL,
+      attempts INTEGER NOT NULL DEFAULT 0,
+      next_retry_at INTEGER NOT NULL,
+      last_error TEXT,
+      created_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_tg_chain_forward_queue_retry
+      ON tg_chain_forward_queue(next_retry_at);
+    CREATE TABLE IF NOT EXISTS tg_comment_inbound_queue (
+      job_key TEXT PRIMARY KEY,
+      chain_id TEXT NOT NULL,
+      discussion_chat_id INTEGER NOT NULL,
+      payload TEXT NOT NULL,
+      attempts INTEGER NOT NULL DEFAULT 0,
+      next_retry_at INTEGER NOT NULL,
+      last_error TEXT,
+      created_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_tg_comment_inbound_queue_retry
+      ON tg_comment_inbound_queue(next_retry_at);
+  `)
 }
 
 function migrateTgChainForwardedSchema(database: Database.Database): void {

@@ -421,6 +421,8 @@ export class CommentStore {
     findByTgCommentId: Database.Statement
     listPendingThreadReply: Database.Statement
     listPendingMaxToTelegram: Database.Statement
+    listPendingThreadReplyForChat: Database.Statement
+    listPendingMaxToTelegramForChat: Database.Statement
     deleteById: Database.Statement
     deleteAll: Database.Statement
     countAll: Database.Statement
@@ -1031,6 +1033,21 @@ export class CommentStore {
     return out
   }
 
+  listCommentsPendingMaxToTelegramForChat(chatId: number, limit = 10): Comment[] {
+    const rows = this.getStatements().listPendingMaxToTelegramForChat.all(
+      chatId,
+      limit,
+    ) as CommentStorageRow[]
+    const out: Comment[] = []
+    for (const row of rows) {
+      const c = commentFromStorageRow(row)
+      if (c && c.source !== 'telegram' && c.source !== 'vk' && !c.tg_comment_id) {
+        out.push(c)
+      }
+    }
+    return out
+  }
+
   /**
    * Последний ответ администратора из MAX (не импортированный из TG-треда).
    */
@@ -1050,6 +1067,21 @@ export class CommentStore {
    */
   listCommentsPendingTelegramThreadReply(limit = 20): Comment[] {
     const rows = this.getStatements().listPendingThreadReply.all(limit) as CommentStorageRow[]
+    const out: Comment[] = []
+    for (const row of rows) {
+      const c = commentFromStorageRow(row)
+      if (c && this.latestMaxAdminReply(c)) {
+        out.push(c)
+      }
+    }
+    return out
+  }
+
+  listCommentsPendingTelegramThreadReplyForChat(chatId: number, limit = 8): Comment[] {
+    const rows = this.getStatements().listPendingThreadReplyForChat.all(
+      chatId,
+      limit,
+    ) as CommentStorageRow[]
     const out: Comment[] = []
     for (const row of rows) {
       const c = commentFromStorageRow(row)
@@ -1160,6 +1192,27 @@ export class CommentStore {
          INNER JOIN posts p ON p.post_id = c.post_id
          LEFT JOIN post_comment_mapping m ON m.max_mid = p.message_mid
          WHERE (c.source IS NULL OR c.source = 'max')
+           AND (c.tg_comment_id IS NULL OR c.tg_comment_id = 0)
+         ORDER BY
+           CASE WHEN m.tg_thread_msg_id IS NOT NULL AND m.tg_thread_msg_id > 0 THEN 0 ELSE 1 END,
+           c.timestamp ASC
+         LIMIT ?`,
+      ),
+      listPendingThreadReplyForChat: db.prepare(
+        `SELECT ${storageFieldsAliased} FROM comments c
+         INNER JOIN posts p ON p.post_id = c.post_id
+         WHERE p.chat_id = ?
+           AND c.reply IS NOT NULL AND TRIM(c.reply) != ''
+           AND (c.tg_thread_reply_id IS NULL OR c.tg_thread_reply_id = 0)
+         ORDER BY c.timestamp DESC
+         LIMIT ?`,
+      ),
+      listPendingMaxToTelegramForChat: db.prepare(
+        `SELECT ${storageFieldsAliased} FROM comments c
+         INNER JOIN posts p ON p.post_id = c.post_id
+         LEFT JOIN post_comment_mapping m ON m.max_mid = p.message_mid
+         WHERE p.chat_id = ?
+           AND (c.source IS NULL OR c.source = 'max')
            AND (c.tg_comment_id IS NULL OR c.tg_comment_id = 0)
          ORDER BY
            CASE WHEN m.tg_thread_msg_id IS NOT NULL AND m.tg_thread_msg_id > 0 THEN 0 ELSE 1 END,

@@ -4,6 +4,7 @@ import {
   updateTgChain,
   type TgChainRecord,
 } from '../api/adminPanelState'
+import { getDb } from '../db/database'
 import { resolveTelegramChannelChatIdFromKey } from './integrationPlatformClient'
 import { resolveTelegramBotToken } from './resolveTelegramBotToken'
 import { isTelegramTokenAuthorized } from './telegramHealthService'
@@ -122,6 +123,24 @@ export async function repairTgChainForwardPostsSince(): Promise<number> {
     logger.info('repairTgChainForwardPostsSince: done', { repaired })
   }
   return repaired
+}
+
+/**
+ * Удаляет «застрявшие» строки tg_chain_forwarded с max_message_mid IS NULL.
+ * Раньше после отката comment gate они блокировали повторную пересылку поста.
+ */
+export function repairStuckTgChainForwardedNullRows(): number {
+  const result = getDb()
+    .prepare(
+      `DELETE FROM tg_chain_forwarded
+       WHERE max_message_mid IS NULL OR TRIM(max_message_mid) = ''`,
+    )
+    .run()
+  const removed = result.changes ?? 0
+  if (removed > 0) {
+    logger.warn('repairStuckTgChainForwardedNullRows: cleared retry-blocked rows', { removed })
+  }
+  return removed
 }
 
 /** После смены токена в интеграциях — обновить цепочки со старым или пустым bot_token. */

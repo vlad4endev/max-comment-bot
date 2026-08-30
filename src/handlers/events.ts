@@ -966,6 +966,7 @@ export function registerEventHandlers(bot: Bot): void {
   })
 
   bot.on('message_created', async (ctx) => {
+    try {
     const message = ctx.message
     if (!message) {
       return
@@ -1256,6 +1257,9 @@ export function registerEventHandlers(bot: Bot): void {
 
     await ctx.reply('Сессия устарела. Откройте комментарии снова из канала.')
     stateManager.deleteState(chatId, user.user_id)
+    } catch (err: unknown) {
+      logger.error('message_created: handler error', err)
+    }
   })
 
   logger.info('✅ Обработчики событий зарегистрированы')

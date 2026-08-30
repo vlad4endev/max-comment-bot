@@ -257,8 +257,33 @@ export function startMaxCommentSync(bot: Bot, options: SyncOptions = {}): () => 
     }
 
     try {
-      const pendingComments = commentStore.listCommentsPendingMaxToTelegram(batchSize)
-      const pendingReplies = commentStore.listCommentsPendingTelegramThreadReply(batchSize)
+      const chains = listTgChainsSync().filter((c) => c.active && c.forward_comments)
+      const perChain = Math.max(3, Math.ceil(batchSize / Math.max(chains.length, 1)))
+
+      const pendingComments: ReturnType<typeof commentStore.listCommentsPendingMaxToTelegram> = []
+      const pendingReplies: typeof pendingComments = []
+      const seenCommentIds = new Set<string>()
+      const seenReplyIds = new Set<string>()
+      for (const chain of chains) {
+        const chatId = chain.max_chat_id
+        for (const comment of commentStore.listCommentsPendingMaxToTelegramForChat(chatId, perChain)) {
+          if (seenCommentIds.has(comment.comment_id)) continue
+          seenCommentIds.add(comment.comment_id)
+          pendingComments.push(comment)
+        }
+        for (const comment of commentStore.listCommentsPendingTelegramThreadReplyForChat(chatId, perChain)) {
+          if (seenReplyIds.has(comment.comment_id)) continue
+          seenReplyIds.add(comment.comment_id)
+          pendingReplies.push(comment)
+        }
+      }
+
+      if (pendingComments.length === 0 && pendingReplies.length === 0 && chains.length === 0) {
+        const fallbackComments = commentStore.listCommentsPendingMaxToTelegram(batchSize)
+        const fallbackReplies = commentStore.listCommentsPendingTelegramThreadReply(batchSize)
+        pendingComments.push(...fallbackComments)
+        pendingReplies.push(...fallbackReplies)
+      }
 
       const messageMids: string[] = []
       for (const comment of [...pendingComments, ...pendingReplies]) {

@@ -36,15 +36,28 @@ async function ensureBotProfile(bot: Bot): Promise<void> {
   bot.botInfo = await bot.api.getMyInfo()
 }
 
+let allowMaxPollingRestart = true
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+
 async function startBotLongPolling(bot: Bot): Promise<void> {
+  const allowedUpdates = [...BOT_WEBHOOK_UPDATE_TYPES] as UpdateType[]
   logger.info('🚀 Запуск бота (long polling, GET /updates)...')
-  try {
-    const allowedUpdates = [...BOT_WEBHOOK_UPDATE_TYPES] as UpdateType[]
-    await bot.start({ allowedUpdates })
-    logger.info('🤖 Бот работает и ждёт события')
-  } catch (error) {
-    logger.error('Ошибка при запуске long polling', error)
-    throw error
+  for (let attempt = 0; allowMaxPollingRestart; attempt += 1) {
+    try {
+      await bot.start({ allowedUpdates })
+      if (!allowMaxPollingRestart) {
+        return
+      }
+      logger.warn('MAX long polling stopped unexpectedly, restarting')
+    } catch (error) {
+      logger.error('Ошибка long polling MAX', error)
+      if (!allowMaxPollingRestart) {
+        return
+      }
+    }
+    const waitMs = Math.min(15_000, 2_000 * 2 ** Math.min(attempt, 3))
+    await sleep(waitMs)
   }
 }
 
@@ -56,6 +69,7 @@ export interface GracefulShutdownOptions {
 
 function setupGracefulShutdown(bot: Bot, options: GracefulShutdownOptions): void {
   const onSignal = () => {
+    allowMaxPollingRestart = false
     void (async () => {
       logger.info('👋 Получен сигнал выключения...')
       stopChannelPostPoller()

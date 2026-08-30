@@ -119,6 +119,7 @@ export async function getTelegramUpdatesWithIds(
         params: {
           offset,
           timeout: timeoutSec,
+          limit: 100,
           allowed_updates: JSON.stringify(allowed),
         },
         timeout: requestTimeoutMs,

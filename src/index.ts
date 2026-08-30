@@ -51,7 +51,13 @@ import { ensureAdminPanelStateLoaded, listTgChainsSync, listVkChainsSync } from 
 import { repairLegacyMiniappTgChains } from './services/channelLinkService'
 import { backfillPostCommentMappingsFromForwarded } from './services/postCommentMappingStore'
 import { bootstrapCommentSyncOnStartup } from './services/commentSyncDiagnostics'
-import { repairTgChainsForForwarding, repairStaleTgChainBotTokens, repairMiniappChainsForwardComments, repairTgChainForwardPostsSince } from './services/tgChainChannelRef'
+import {
+  repairStuckTgChainForwardedNullRows,
+  repairTgChainsForForwarding,
+  repairStaleTgChainBotTokens,
+  repairMiniappChainsForwardComments,
+  repairTgChainForwardPostsSince,
+} from './services/tgChainChannelRef'
 import { setTgChainForwarderBot, startTgChainForwarder } from './services/tgChainForwarder'
 import { startTelegramAntispamBotPoller } from './services/telegramAntispamBotService'
 import { startTgPostDeletionWatcher } from './services/tgPostDeletionWatcher'
@@ -163,6 +169,12 @@ async function main(): Promise<void> {
     })
   }
   await repairTgChainsForForwarding()
+  const stuckForwardedCleared = repairStuckTgChainForwardedNullRows()
+  if (stuckForwardedCleared > 0) {
+    logger.warn('Очищены застрявшие TG-посты без max_message_mid — пересылка будет повторена', {
+      rows: stuckForwardedCleared,
+    })
+  }
   const forwardSinceRepaired = await repairTgChainForwardPostsSince()
   if (forwardSinceRepaired > 0) {
     logger.info('Задана дата forward_posts_since для TG-связок', { chains: forwardSinceRepaired })

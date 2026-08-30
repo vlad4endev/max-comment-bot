@@ -94,6 +94,15 @@ export function isTelegramUnauthorizedError(text: string): boolean {
   )
 }
 
+export function isBotNotMemberError(text: string): boolean {
+  const normalized = text.toUpperCase()
+  return (
+    normalized.includes('BOT IS NOT A MEMBER') ||
+    normalized.includes('BOT WAS KICKED') ||
+    normalized.includes('CHAT_NOT_FOUND')
+  )
+}
+
 export function isTelegramForbiddenError(text: string): boolean {
   const normalized = text.toUpperCase()
   if (isTelegramUnauthorizedError(normalized)) {
@@ -112,6 +121,9 @@ export function isTelegramForbiddenError(text: string): boolean {
 export function suggestActionForTelegramSyncError(text: string): string {
   if (isTelegramUnauthorizedError(text)) {
     return 'Токен Telegram бота недействителен. Обновите TG_TOKEN в интеграциях или @BotFather и перезапустите сервис.'
+  }
+  if (isBotNotMemberError(text)) {
+    return 'Добавьте бота в группу обсуждений канала (администратором с правом писать сообщения).'
   }
   if (isInvalidTelegramMessageIdError(text)) {
     return 'Проверьте, что у поста в канале есть связанный тред в группе обсуждений. Запустите repair-threads в админке.'

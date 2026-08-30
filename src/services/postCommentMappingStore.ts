@@ -442,7 +442,6 @@ export async function resolveDiscussionChatId(
     return linked
   } catch (err: unknown) {
     logger.warn('postCommentMapping: getChat linked_chat_id failed', { chainId: chain.id, err })
-    discussionChatCache.set(cacheKey, null)
     return null
   }
 }

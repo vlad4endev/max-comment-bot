@@ -187,6 +187,8 @@ async function handleTgReplyToMaxComment(
   })
 }
 
+export type TgCommentHandleResult = 'ok' | 'retry' | 'skip'
+
 /**
  * Комментарий в TG discussion group → комментарий в miniapp.
  */
@@ -195,33 +197,33 @@ export async function handleTgComment(
   chain: TgChainRecord,
   bot: Bot,
   discussionChatId: number,
-): Promise<void> {
+): Promise<TgCommentHandleResult> {
   if (!chain.forward_comments) {
-    return
+    return 'skip'
   }
 
   try {
     if (!message.reply_to_message) {
-      return
+      return 'skip'
     }
 
     const tgCommentId = message.message_id
     const threadRootMsgId = resolveDiscussionThreadRootMsgId(message)
     if (threadRootMsgId == null) {
-      return
+      return 'skip'
     }
 
     if (isCommentSynced(`tg:${tgCommentId}`)) {
-      return
+      return 'ok'
     }
 
     if (commentStore.findCommentByTgMessageId(tgCommentId)) {
-      return
+      return 'ok'
     }
 
     if (!isTelegramAntispamBotConfigured()) {
       if (await tryBlockTelegramCommentByAntispam(message, chain, discussionChatId, tgCommentId)) {
-        return
+        return 'skip'
       }
     }
 
@@ -253,7 +255,7 @@ export async function handleTgComment(
         threadRootMsgId,
         tgCommentId,
       })
-      return
+      return 'retry'
     }
 
     const maxChatId = resolveCanonicalChannelChatId(chain.max_chat_id) ?? chain.max_chat_id
@@ -264,12 +266,12 @@ export async function handleTgComment(
         maxMid: mapping.max_mid,
         maxChatId,
       })
-      return
+      return 'retry'
     }
 
     const tgToken = chain.bot_token?.trim() || resolveTelegramBotToken()
     if (!tgToken) {
-      return
+      return 'retry'
     }
 
     const isAdmin = await isTgCommentFromAdmin(message, tgToken, chain, discussionChatId)
@@ -288,13 +290,13 @@ export async function handleTgComment(
           tgCommentId,
           isAdmin,
         )
-        return
+        return 'ok'
       }
     }
 
     const text = (message.text || message.caption || '').trim()
     if (!text) {
-      return
+      return 'skip'
     }
 
     const shouldSync = await shouldSyncTgCommentToMax({
@@ -313,7 +315,7 @@ export async function handleTgComment(
         tgCommentId,
         postId: post.post_id,
       })
-      return
+      return 'skip'
     }
 
     const { userId, username: authorName } = resolveTgCommentAuthor(
@@ -357,7 +359,10 @@ export async function handleTgComment(
       commentId: saved.comment_id,
       postId: post.post_id,
     })
+    return 'ok'
   } catch (err: unknown) {
     logger.error('[tgCommentSync] unhandled error', err)
+    return 'retry'
   }
 }
+

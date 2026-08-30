@@ -63,7 +63,7 @@ export async function reportTelegramFloodWait(input: {
     `Метод: ${input.method}${chatPart}\n` +
     `${input.description}\n\n` +
     `Синхронизация комментариев приостановлена. ` +
-    `Увеличьте TELEGRAM_API_MIN_INTERVAL_MS (сейчас рекомендуется ≥2000).`
+    `Если FLOOD_WAIT повторяется, увеличьте TELEGRAM_API_MIN_INTERVAL_MS (сейчас по умолчанию 350).`
   await deliverOperatorAlert(text)
 }
 

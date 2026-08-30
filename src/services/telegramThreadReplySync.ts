@@ -28,11 +28,13 @@ import {
 import { logger } from '../utils/logger'
 import {
   extractTelegramErrorText,
+  isBotNotMemberError,
   isInvalidTelegramMessageIdError,
   isSendAsPeerInvalidError,
   isTelegramForbiddenError,
   suggestActionForTelegramSyncError,
 } from '../utils/telegramSyncErrors'
+import { sendAdminAlert } from '../utils/alertService'
 import {
   sendDiscussionMessageAsPeer,
   type DiscussionSendAsMode,
@@ -54,6 +56,53 @@ type ThreadTarget = {
   threadMsgId: number
   channelKey: string | null
   sendAsMode: DiscussionSendAsMode
+}
+
+const DISCUSSION_FORBIDDEN_BACKOFF_MS = 15 * 60_000
+const discussionSendBlockedUntil = new Map<number, number>()
+
+function isDiscussionChatBlocked(chatId: number): boolean {
+  const until = discussionSendBlockedUntil.get(chatId)
+  return until != null && Date.now() < until
+}
+
+function blockDiscussionChat(chatId: number): void {
+  discussionSendBlockedUntil.set(chatId, Date.now() + DISCUSSION_FORBIDDEN_BACKOFF_MS)
+}
+
+function chainTitle(chainId: string): string {
+  return listTgChainsSync().find((c) => c.id === chainId)?.max_title ?? chainId
+}
+
+async function handleDiscussionSendForbidden(
+  target: ThreadTarget,
+  commentId: string,
+  err: unknown,
+): Promise<void> {
+  const errText = extractTelegramErrorText(err)
+  const suggestion = suggestActionForTelegramSyncError(errText)
+  if (isBotNotMemberError(errText) || isTelegramForbiddenError(errText)) {
+    blockDiscussionChat(target.threadChatId)
+  }
+  logger.warn('[telegramThreadReplySync] send to TG thread failed', {
+    commentId,
+    chainId: target.chainId,
+    chainTitle: chainTitle(target.chainId),
+    threadChatId: target.threadChatId,
+    err,
+    suggestion,
+  })
+  await sendAdminAlert(
+    `tg_discussion_forbidden:${target.threadChatId}`,
+    `Бот не может писать в группу обсуждений ${target.threadChatId}`,
+    {
+      chain: chainTitle(target.chainId),
+      threadChatId: target.threadChatId,
+      commentId,
+      error: errText,
+      action: suggestion,
+    },
+  )
 }
 
 function resolveDiscussionSendAs(chainId: string): DiscussionSendAsMode {
@@ -277,11 +326,13 @@ async function deliverTelegramThreadMessageWithRetry(
     return await deliverTelegramThreadMessage(target, text, replyToId, useMtprotoSendAs, botFallbackText)
   } catch (err: unknown) {
     const errText = extractTelegramErrorText(err)
-    if (!isInvalidTelegramMessageIdError(errText)) {
+    const canRefreshMapping =
+      isInvalidTelegramMessageIdError(errText) || isBotNotMemberError(errText)
+    if (!canRefreshMapping) {
       throw err
     }
 
-    logger.warn('[telegramThreadReplySync] invalid thread message id, refreshing mapping', {
+    logger.warn('[telegramThreadReplySync] thread target rejected, refreshing mapping', {
       messageMid,
       chainId: target.chainId,
       threadChatId: target.threadChatId,
@@ -295,11 +346,14 @@ async function deliverTelegramThreadMessageWithRetry(
     if (!refreshedTarget) {
       throw err
     }
+    if (isBotNotMemberError(errText) && refreshedTarget.threadChatId === target.threadChatId) {
+      throw err
+    }
 
     return deliverTelegramThreadMessage(
       refreshedTarget,
       text,
-      refreshedTarget.threadMsgId,
+      isInvalidTelegramMessageIdError(errText) ? refreshedTarget.threadMsgId : replyToId,
       useMtprotoSendAs,
       botFallbackText,
     )
@@ -541,6 +595,15 @@ export async function syncMaxCommentToTelegramThread(
     return
   }
 
+  if (isDiscussionChatBlocked(target.threadChatId)) {
+    logger.debug('[telegramThreadReplySync] skip MAX→TG: discussion chat blocked', {
+      commentId: freshComment.comment_id,
+      chainId: target.chainId,
+      threadChatId: target.threadChatId,
+    })
+    return
+  }
+
   const body = buildMaxCommentTelegramText(freshComment)
   if (!body) {
     return
@@ -576,11 +639,7 @@ export async function syncMaxCommentToTelegramThread(
       username: freshComment.username,
     })
   } catch (err: unknown) {
-    logger.warn('[telegramThreadReplySync] send MAX comment failed', {
-      commentId: freshComment.comment_id,
-      threadChatId: target.threadChatId,
-      err,
-    })
+    await handleDiscussionSendForbidden(target, freshComment.comment_id, err)
   }
 }
 
@@ -644,6 +703,14 @@ export async function syncAdminReplyToTelegramThread(
     } else {
       logger.warn('[telegramThreadReplySync] no thread mapping for post', logPayload)
     }
+    return
+  }
+
+  if (isDiscussionChatBlocked(target.threadChatId)) {
+    logger.debug('[telegramThreadReplySync] skip admin MAX→TG: discussion chat blocked', {
+      commentId: freshComment.comment_id,
+      threadChatId: target.threadChatId,
+    })
     return
   }
 
@@ -724,11 +791,6 @@ export async function syncAdminReplyToTelegramThread(
       replyToId,
     })
   } catch (err: unknown) {
-    logger.warn('[telegramThreadReplySync] sendMessage failed', {
-      commentId: freshComment.comment_id,
-      threadChatId,
-      replyToId,
-      err,
-    })
+    await handleDiscussionSendForbidden(target, freshComment.comment_id, err)
   }
 }
