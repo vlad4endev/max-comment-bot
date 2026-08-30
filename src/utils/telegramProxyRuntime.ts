@@ -5,13 +5,15 @@ import createHttpsProxyAgent from 'https-proxy-agent'
 
 import { telegramProxyStore, type TelegramProxyRecord } from '../services/telegramProxyStore'
 import {
+  findHysteriaBinary,
   findXrayBinary,
+  getMainTunnelEngine,
   isMainTunnelRunning,
   startMainVlessTunnel,
   stopMainVlessTunnel,
 } from '../services/telegramProxyTunnel'
 import { logger } from './logger'
-import { parseVlessUri } from './vlessUri'
+import { parseTunnelUri } from './vlessUri'
 
 export interface GramJsSocksProxy {
   ip: string
@@ -59,22 +61,29 @@ function notifyChanged(): void {
 }
 
 export function describeActiveProxyRuntime(): {
-  mode: 'direct' | 'vless' | 'socks5' | 'http'
+  mode: 'direct' | 'vless' | 'hysteria2' | 'socks5' | 'http'
   tunnel_running: boolean
+  tunnel_engine: 'xray' | 'hysteria' | null
   xray_available: boolean
+  hysteria_available: boolean
   xray_path: string | null
+  hysteria_path: string | null
   applied: boolean
   warning: string | null
 } {
   const xrayPath = findXrayBinary()
+  const hysteriaPath = findHysteriaBinary()
   const state = telegramProxyStore.getState()
   const active = telegramProxyStore.getActive()
   if (!state.enabled || !active) {
     return {
       mode: 'direct',
       tunnel_running: isMainTunnelRunning(),
+      tunnel_engine: getMainTunnelEngine(),
       xray_available: xrayPath !== null,
+      hysteria_available: hysteriaPath !== null,
       xray_path: xrayPath,
+      hysteria_path: hysteriaPath,
       applied: false,
       warning: null,
     }
@@ -86,14 +95,22 @@ export function describeActiveProxyRuntime(): {
       ? 'Не удалось поднять VLESS-туннель. Проверьте ключ или логи xray.'
       : 'Для ключей VLESS нужен xray-core на сервере (переменная XRAY_BIN) либо SOCKS5 с панели.'
   }
+  if (active.kind === 'hysteria2' && !applied) {
+    warning = hysteriaPath
+      ? 'Не удалось поднять туннель Hysteria2. Проверьте ключ или логи hysteria.'
+      : 'Клиент Hysteria2 не найден в PATH — при проверке он скачается в bin/hysteria. Можно указать HYSTERIA_BIN.'
+  }
   if (active.kind === 'http' && applied) {
-    warning = 'HTTP-прокси работает для Bot API. MTProto (user-сессия) идёт напрямую — лучше SOCKS5 или VLESS.'
+    warning = 'HTTP-прокси работает для Bot API. MTProto (user-сессия) идёт напрямую — лучше SOCKS5, VLESS или Hysteria2.'
   }
   return {
     mode: active.kind,
     tunnel_running: isMainTunnelRunning(),
+    tunnel_engine: getMainTunnelEngine(),
     xray_available: xrayPath !== null,
+    hysteria_available: hysteriaPath !== null,
     xray_path: xrayPath,
+    hysteria_path: hysteriaPath,
     applied,
     warning,
   }
@@ -113,8 +130,8 @@ export async function applyTelegramProxyRuntime(): Promise<void> {
   }
 
   try {
-    if (active.kind === 'vless') {
-      const parsed = parseVlessUri(active.uri)
+    if (active.kind === 'vless' || active.kind === 'hysteria2') {
+      const parsed = parseTunnelUri(active.uri)
       await startMainVlessTunnel(parsed, state.localSocksPort)
       const agent = socksAgentFor(active, '127.0.0.1', state.localSocksPort)
       httpAgent = agent
@@ -163,7 +180,7 @@ export function getGramJsClientOptions(): {
   if (!state.enabled || !active || !getTelegramProxyAgents()) {
     return base
   }
-  if (active.kind === 'vless') {
+  if (active.kind === 'vless' || active.kind === 'hysteria2') {
     return {
       ...base,
       proxy: {

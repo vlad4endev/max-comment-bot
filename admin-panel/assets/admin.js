@@ -146,7 +146,7 @@
     settings: {
       title: 'Настройки',
       group: 'Система',
-      desc: 'Интервал опроса, прокси Telegram (VLESS/SOCKS), оператор ИИ и опасные операции.',
+      desc: 'Интервал опроса, прокси Telegram (Hysteria2/VLESS/SOCKS), оператор ИИ и опасные операции.',
     },
   };
 
@@ -7806,6 +7806,7 @@
 
   function proxyKindLabel(kind) {
     if (kind === 'vless') return 'VLESS';
+    if (kind === 'hysteria2') return 'Hysteria2';
     if (kind === 'socks5') return 'SOCKS5';
     if (kind === 'http') return 'HTTP';
     return kind || '—';
@@ -7818,7 +7819,7 @@
     var html = '<div class="panel tg-proxy-panel" id="tgProxyPanel">';
     html += sectionHead(
       'Прокси Telegram',
-      'VLESS, SOCKS5 и HTTP для Bot API и MTProto. Можно сразу заменить все ключи и увидеть, какая связь хорошая, а какая плохая.',
+      'VLESS, Hysteria2, SOCKS5 и HTTP для Bot API и MTProto. Можно сразу заменить все ключи и увидеть, какая связь хорошая, а какая плохая.',
     );
 
     html += '<div class="tg-proxy-status-row">';
@@ -7847,13 +7848,27 @@
       html += '<span class="tg-proxy-badge">Не выбран</span>';
     }
     html += '</div>';
+    var tunnelNeedsCore = runtime.mode === 'vless' || runtime.mode === 'hysteria2' || runtime.tunnel_running;
+    var tunnelBadge;
+    if (runtime.tunnel_running) {
+      var engineName = runtime.tunnel_engine === 'hysteria' ? 'hysteria' : 'xray';
+      tunnelBadge = '<span class="tg-proxy-badge is-good">' + esc(engineName) + ' работает</span>';
+    } else if (runtime.mode === 'hysteria2') {
+      tunnelBadge = runtime.hysteria_available
+        ? '<span class="tg-proxy-badge">hysteria установлен</span>'
+        : runtime.xray_available
+          ? '<span class="tg-proxy-badge">xray установлен</span>'
+          : '<span class="tg-proxy-badge is-poor">hysteria/xray не найден</span>';
+    } else if (runtime.xray_available) {
+      tunnelBadge = '<span class="tg-proxy-badge">xray установлен</span>';
+    } else if (tunnelNeedsCore || runtime.mode === 'vless') {
+      tunnelBadge = '<span class="tg-proxy-badge is-poor">xray не найден</span>';
+    } else {
+      tunnelBadge = '<span class="tg-proxy-badge">не нужен</span>';
+    }
     html +=
-      '<div class="tg-proxy-status-card"><div class="tg-proxy-status-kicker">Туннель VLESS</div>' +
-      (runtime.xray_available
-        ? runtime.tunnel_running
-          ? '<span class="tg-proxy-badge is-good">xray работает</span>'
-          : '<span class="tg-proxy-badge">xray установлен</span>'
-        : '<span class="tg-proxy-badge is-poor">xray не найден</span>') +
+      '<div class="tg-proxy-status-card"><div class="tg-proxy-status-kicker">Туннель</div>' +
+      tunnelBadge +
       (runtime.applied ? '<span class="tg-proxy-ms">трафик через прокси</span>' : '') +
       '</div>';
     html += '</div>';
@@ -7876,7 +7891,7 @@
 
     if (proxies.length === 0) {
       html +=
-        '<p class="muted text-sm">Пока нет сохранённых соединений. Вставьте ключи VLESS или SOCKS5 ниже.</p>';
+        '<p class="muted text-sm">Пока нет сохранённых соединений. Вставьте ключи Hysteria2, VLESS или SOCKS5 ниже.</p>';
     } else {
       html += '<div class="tg-proxy-list">';
       proxies.forEach(function (item) {
@@ -7916,9 +7931,9 @@
     }
 
     html += '<div class="tg-proxy-forms">';
-    html += '<div class="form-group"><label>Заменить все ключи VLESS и прокси</label>';
+    html += '<div class="form-group"><label>Заменить все ключи Hysteria2, VLESS и прокси</label>';
     html +=
-      '<textarea class="textarea mono" id="tgProxyBulk" rows="5" placeholder="vless://uuid@host:443?security=reality&pbk=…#NL-1&#10;vless://…&#10;socks5://user:pass@127.0.0.1:1080"></textarea>';
+      '<textarea class="textarea mono" id="tgProxyBulk" rows="5" placeholder="hysteria2://password@host:443?insecure=1&sni=example.com#NL-1&#10;hy2://…&#10;vless://uuid@host:443?security=reality&pbk=…#VLESS-1&#10;socks5://user:pass@127.0.0.1:1080"></textarea>';
     html +=
       '<p class="muted text-sm" style="margin-top:0.35rem">По одной ссылке на строку. Старый список будет заменён целиком.</p></div>';
     html +=
@@ -7929,7 +7944,7 @@
     html +=
       '<input class="input" id="tgProxyAddName" placeholder="Название (необязательно)"/>';
     html +=
-      '<textarea class="textarea mono" id="tgProxyAddUri" rows="2" placeholder="vless://… или socks5://host:1080 или http://host:8080" style="margin-top:8px"></textarea></div>';
+      '<textarea class="textarea mono" id="tgProxyAddUri" rows="2" placeholder="hysteria2://… или hy2://… или vless://… или socks5://host:1080" style="margin-top:8px"></textarea></div>';
     html +=
       '<button type="button" class="btn btn-ghost" id="tgProxyAdd"><i data-lucide="plus"></i> Добавить</button>';
     html += '</div></div>';
@@ -8002,7 +8017,7 @@
         }
         showConfirm(
           'Заменить все ключи?',
-          'Текущий список VLESS и прокси будет полностью заменён вставленными ссылками.',
+          'Текущий список Hysteria2, VLESS и прокси будет полностью заменён вставленными ссылками.',
           function () {
             replaceBtn.disabled = true;
             postJson('/telegram-proxy/replace', { text: text })
@@ -8028,7 +8043,7 @@
         var uri = (qs('#tgProxyAddUri', panel).value || '').trim();
         var name = (qs('#tgProxyAddName', panel).value || '').trim();
         if (!uri) {
-          showToast('Вставьте ссылку vless://, socks5:// или http://', 'error');
+          showToast('Вставьте ссылку hysteria2://, hy2://, vless://, socks5:// или http://', 'error');
           return;
         }
         addBtn.disabled = true;

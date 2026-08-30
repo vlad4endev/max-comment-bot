@@ -4,9 +4,11 @@ import { dirname, join } from 'node:path'
 
 import { logger } from '../utils/logger'
 import {
+  parseHysteria2Uri,
   parseProxyInput,
   parseProxyLines,
   parseVlessUri,
+  looksLikeHysteria2Uri,
   type ParsedProxyInput,
   type ProxyKind,
 } from '../utils/vlessUri'
@@ -107,6 +109,20 @@ function recordFromParsed(parsed: ParsedProxyInput, id?: string): TelegramProxyR
       last_probe: null,
     }
   }
+  if (parsed.kind === 'hysteria2') {
+    return {
+      id: id ?? randomUUID(),
+      name: parsed.name,
+      kind: 'hysteria2',
+      uri: parsed.uri,
+      host: parsed.host,
+      port: parsed.port,
+      username: '',
+      password: '',
+      created_at: now,
+      last_probe: null,
+    }
+  }
   const scheme = parsed.kind === 'socks5' ? 'socks5' : 'http'
   const auth =
     parsed.username || parsed.password
@@ -152,8 +168,12 @@ function parseStoredProxy(raw: unknown): TelegramProxyRecord | null {
   if (!isRecord(raw)) {
     return null
   }
-  const kind = raw.kind
-  if (kind !== 'vless' && kind !== 'socks5' && kind !== 'http') {
+  let kind = raw.kind
+  const uri = typeof raw.uri === 'string' ? raw.uri.trim() : ''
+  if (looksLikeHysteria2Uri(uri)) {
+    kind = 'hysteria2'
+  }
+  if (kind !== 'vless' && kind !== 'hysteria2' && kind !== 'socks5' && kind !== 'http') {
     return null
   }
   const host = typeof raw.host === 'string' ? raw.host.trim() : ''
@@ -165,7 +185,7 @@ function parseStoredProxy(raw: unknown): TelegramProxyRecord | null {
     id: typeof raw.id === 'string' && raw.id.trim() !== '' ? raw.id : randomUUID(),
     name: typeof raw.name === 'string' && raw.name.trim() !== '' ? raw.name.trim() : host,
     kind,
-    uri: typeof raw.uri === 'string' ? raw.uri.trim() : '',
+    uri,
     host,
     port,
     username: typeof raw.username === 'string' ? raw.username : '',
@@ -335,7 +355,7 @@ class TelegramProxyStore {
       const name = patch.name.trim()
       next.name = name || next.host
     }
-    if (next.kind !== 'vless') {
+    if (next.kind !== 'vless' && next.kind !== 'hysteria2') {
       if (patch.host !== undefined) {
         const host = patch.host.trim()
         if (!host) {
@@ -423,6 +443,15 @@ class TelegramProxyStore {
         uriPreview = `vless://${maskSecret(parsed.uuid)}@${parsed.host}:${parsed.port}`
       } catch {
         uriPreview = `vless://${maskSecret('uuid')}@${item.host}:${item.port}`
+      }
+    } else if (item.kind === 'hysteria2' && item.uri) {
+      try {
+        const parsed = parseHysteria2Uri(item.uri)
+        security = parsed.obfs || (parsed.insecure ? 'tls-insecure' : 'tls')
+        network = /[,-]/.test(parsed.hopPorts) ? 'udp-hop' : 'udp'
+        uriPreview = `hy2://${maskSecret(parsed.auth || 'auth')}@${parsed.host}:${parsed.port}`
+      } catch {
+        uriPreview = `hy2://${maskSecret('auth')}@${item.host}:${item.port}`
       }
     } else {
       const scheme = item.kind === 'socks5' ? 'socks5' : 'http'

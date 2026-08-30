@@ -11,5 +11,10 @@ data/log-ai-config.json
 data/telegram-proxies.json
 data/xray-telegram.json
 data/xray-telegram-probe.json
+data/hysteria-telegram.yaml
+data/hysteria-telegram-probe.yaml
+bin/hysteria
+bin/hysteria.exe
+bin/hysteria-*
 data/backups/
 miniapp/uploads/

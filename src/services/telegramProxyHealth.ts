@@ -16,7 +16,7 @@ import {
   createSocksAgent,
   getTelegramProxyAgents,
 } from '../utils/telegramProxyRuntime'
-import { parseVlessUri } from '../utils/vlessUri'
+import { looksLikeHysteria2Uri, parseTunnelUri } from '../utils/vlessUri'
 
 const GOOD_MS = 900
 const PROBE_TIMEOUT_MS = 12_000
@@ -146,7 +146,8 @@ export async function probeProxyRecord(record: TelegramProxyRecord): Promise<Pro
 }
 
 async function probeProxyRecordUnlocked(record: TelegramProxyRecord): Promise<ProxyProbeSnapshot> {
-  const server = await tcpPing(record.host, record.port, TCP_TIMEOUT_MS)
+  const isHy2 = record.kind === 'hysteria2' || looksLikeHysteria2Uri(record.uri)
+  const server = isHy2 ? { ok: true, ms: 0 } : await tcpPing(record.host, record.port, TCP_TIMEOUT_MS)
   try {
     let probe: ProxyProbeSnapshot
     if (record.kind === 'socks5') {
@@ -160,15 +161,23 @@ async function probeProxyRecordUnlocked(record: TelegramProxyRecord): Promise<Pr
         createHttpProxyAgent(record.host, record.port, record.username, record.password),
       )
     } else {
-      const parsed = parseVlessUri(record.uri)
+      const parsed = parseTunnelUri(record.uri)
       const state = telegramProxyStore.getState()
       const active = telegramProxyStore.getActive()
-      if (active?.id === record.id && isMainTunnelRunning() && getTelegramProxyAgents()) {
-        probe = await probeThroughAgent(server.ok, createSocksAgent('127.0.0.1', state.localSocksPort))
+      const viaMain =
+        active?.id === record.id && isMainTunnelRunning() && getTelegramProxyAgents()
+      if (viaMain) {
+        probe = await probeThroughAgent(
+          parsed.kind === 'hysteria2' || server.ok,
+          createSocksAgent('127.0.0.1', state.localSocksPort),
+        )
       } else {
         const probePort = state.localSocksPort === 10809 ? 10810 : 10809
         probe = await withTempVlessSocks(parsed, probePort, async (port) =>
-          probeThroughAgent(server.ok, createSocksAgent('127.0.0.1', port)),
+          probeThroughAgent(
+            parsed.kind === 'hysteria2' || server.ok,
+            createSocksAgent('127.0.0.1', port),
+          ),
         )
       }
     }

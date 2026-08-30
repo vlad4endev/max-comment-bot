@@ -94,7 +94,7 @@ export function createTelegramProxyRouter(): express.Router {
       const host = typeof body.host === 'string' ? body.host : ''
       const port = parsePort(body.port)
       if (!host || port === null) {
-        res.status(400).json({ error: 'Укажите ссылку VLESS или хост и порт прокси' })
+        res.status(400).json({ error: 'Укажите ссылку Hysteria2/VLESS или хост и порт прокси' })
         return
       }
       await telegramProxyStore.addSocksOrHttp({
