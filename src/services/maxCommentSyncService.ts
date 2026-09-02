@@ -128,7 +128,7 @@ async function bootstrapRepairOnStartup(): Promise<void> {
     if (pendingCount > 100) {
       await sendAdminAlert(
         `comments_pending:${chain.id}`,
-        `${pendingCount} комментариев не синхронизированы`,
+        `${pendingCount} комментариев не синхронизированы — перенос комментариев застопорился`,
         { chainId: chain.id, pendingCount },
       )
     }
@@ -326,13 +326,18 @@ export function startMaxCommentSync(bot: Bot, options: SyncOptions = {}): () => 
         if (pendingCount > 100) {
           await sendAdminAlert(
             `comments_pending:${chain.id}`,
-            `${pendingCount} комментариев не синхронизированы`,
+            `${pendingCount} комментариев не синхронизированы — перенос комментариев застопорился`,
             { chainId: chain.id, pendingCount },
           )
         }
       }
     } catch (err: unknown) {
       logger.error('[maxCommentSync] polling error', err)
+      void sendAdminAlert(
+        'comment_sync_loop',
+        'Сбой синхронизации комментариев MAX→Telegram — перенос комментариев может быть остановлен',
+        { error: err instanceof Error ? err.message : String(err) },
+      )
     }
   }
 

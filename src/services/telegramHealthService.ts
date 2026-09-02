@@ -6,6 +6,7 @@ import axios from 'axios'
 
 import { getTelegramToken } from '../config'
 import { logger } from '../utils/logger'
+import { sendAdminAlert } from '../utils/alertService'
 import { telegramAxios } from '../utils/telegramAxios'
 import { isTelegramUnauthorizedError } from '../utils/telegramSyncErrors'
 import { integrationsStore } from './integrationsStore'
@@ -169,6 +170,12 @@ export async function probeTelegramBotApi(token?: string): Promise<TelegramHealt
       lastSnapshot = snapshot
       if (isTelegramUnauthorizedError(description) || data.error_code === 401) {
         void reportTelegramUnauthorized({ method: 'getMe', description })
+      } else {
+        void sendAdminAlert(
+          'tg_api_down',
+          'Telegram Bot API недоступен — перенос постов и комментариев остановлен',
+          { error: description },
+        )
       }
       return snapshot
     }
@@ -196,6 +203,12 @@ export async function probeTelegramBotApi(token?: string): Promise<TelegramHealt
     lastSnapshot = snapshot
     if (isTelegramUnauthorizedError(errorText)) {
       void reportTelegramUnauthorized({ method: 'getMe', description: errorText })
+    } else {
+      void sendAdminAlert(
+        'tg_api_down',
+        'Telegram Bot API недоступен — перенос постов и комментариев остановлен',
+        { error: errorText },
+      )
     }
     return snapshot
   }
@@ -221,6 +234,10 @@ export async function assertTelegramBotApiOnStartup(): Promise<void> {
     logger.warn(
       '[telegramHealth] TG_TOKEN не задан — синхронизация с Telegram отключена до подключения интеграции',
     )
+    void sendAdminAlert(
+      'tg_token_missing',
+      'Токен Telegram не задан — перенос постов и комментариев из Telegram остановлен',
+    )
     return
   }
 
@@ -243,6 +260,11 @@ export async function assertTelegramBotApiOnStartup(): Promise<void> {
     integrations_token_preview: sources.integrations_token_preview,
     reader_token_preview: sources.reader_token_preview,
   })
+  void sendAdminAlert(
+    'tg_api_down',
+    'Telegram Bot API недоступен — перенос постов и комментариев остановлен',
+    { error: snapshot.error, active_source: sources.active_source },
+  )
 }
 
 export function startTelegramHealthMonitor(): void {

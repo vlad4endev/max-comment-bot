@@ -31,6 +31,7 @@ import { resolveCanonicalChannelChatId } from './resolveChannelChatId'
 import { vkPostMappingStore } from './vkPostMappingStore'
 import { isCommentSynced, markCommentSynced } from '../utils/commentSyncGuard'
 import { logger } from '../utils/logger'
+import { sendAdminAlert } from '../utils/alertService'
 
 const VK_COMMENT_POLL_INTERVAL_MS = 3_000
 const VK_MAX_TO_VK_SYNC_INTERVAL_MS = 2_000
@@ -370,6 +371,15 @@ async function publishTelegramPostToVkChain(
       maxMid,
       err,
     })
+    void sendAdminAlert(
+      `vk_publish_failed:${chain.id}`,
+      'Не удалось опубликовать пост в VK — перенос постов заблокирован',
+      {
+        chainId: chain.id,
+        maxMid,
+        error: err instanceof Error ? err.message : String(err),
+      },
+    )
   } finally {
     inflightVkPublish.delete(lockKey)
   }
@@ -558,12 +568,22 @@ export function startVkChainForwarder(): void {
   commentPollTimer = setInterval(() => {
     void syncAllVkCommentsToMax().catch((err: unknown) => {
       logger.error('[vkChain] syncAllVkCommentsToMax error', err)
+      void sendAdminAlert(
+        'vk_comment_sync',
+        'Сбой синхронизации комментариев VK→MAX — перенос комментариев может быть остановлен',
+        { error: err instanceof Error ? err.message : String(err) },
+      )
     })
   }, VK_COMMENT_POLL_INTERVAL_MS)
 
   maxToVkSyncTimer = setInterval(() => {
     void syncMaxCommentsToVk().catch((err: unknown) => {
       logger.error('[vkChain] syncMaxCommentsToVk error', err)
+      void sendAdminAlert(
+        'vk_max_comment_sync',
+        'Сбой синхронизации комментариев MAX→VK — перенос комментариев может быть остановлен',
+        { error: err instanceof Error ? err.message : String(err) },
+      )
     })
   }, VK_MAX_TO_VK_SYNC_INTERVAL_MS)
 

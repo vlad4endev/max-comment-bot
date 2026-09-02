@@ -4,18 +4,17 @@
 
 import type { Bot } from '@maxhub/max-bot-api'
 
-import { config } from '../config'
 import { logger } from '../utils/logger'
+import { sendAdminAlert, setAdminAlertBot } from '../utils/alertService'
 
 type AlertKind = 'flood_wait' | 'forbidden' | 'unauthorized'
 
 const ALERT_COOLDOWN_MS = 15 * 60 * 1_000
 const lastAlertAt = new Map<string, number>()
 
-let botRef: Bot | null = null
-
+/** @deprecated use setAdminAlertBot — оставлен для совместимости вызова из index. */
 export function setTelegramSyncAlertBot(bot: Bot): void {
-  botRef = bot
+  setAdminAlertBot(bot)
 }
 
 function alertKey(kind: AlertKind, chatId?: number | string): string {
@@ -33,19 +32,6 @@ function shouldNotify(kind: AlertKind, chatId?: number | string): boolean {
   return true
 }
 
-async function deliverOperatorAlert(text: string): Promise<void> {
-  const bot = botRef
-  if (!bot) {
-    logger.warn('[telegramSyncAlert] bot not set, alert skipped', { text: text.slice(0, 120) })
-    return
-  }
-  try {
-    await bot.api.sendMessageToChat(config.ADMIN_CHAT_ID, text)
-  } catch (err: unknown) {
-    logger.warn('[telegramSyncAlert] failed to notify operator', { err })
-  }
-}
-
 export async function reportTelegramFloodWait(input: {
   method: string
   chatId?: number | string
@@ -59,12 +45,14 @@ export async function reportTelegramFloodWait(input: {
   const chatPart =
     input.chatId != null ? `\nЧат: ${String(input.chatId)}` : ''
   const text =
-    `⚠️ Telegram FLOOD_WAIT (${input.waitSeconds} с)\n` +
+    `Telegram FLOOD_WAIT (${input.waitSeconds} с) — синхронизация комментариев приостановлена\n` +
     `Метод: ${input.method}${chatPart}\n` +
-    `${input.description}\n\n` +
-    `Синхронизация комментариев приостановлена. ` +
-    `Если FLOOD_WAIT повторяется, увеличьте TELEGRAM_API_MIN_INTERVAL_MS (сейчас по умолчанию 350).`
-  await deliverOperatorAlert(text)
+    `${input.description}`
+  await sendAdminAlert(alertKey('flood_wait', input.chatId), text, {
+    method: input.method,
+    chatId: input.chatId,
+    waitSeconds: input.waitSeconds,
+  })
 }
 
 export async function reportTelegramForbidden(input: {
@@ -79,11 +67,14 @@ export async function reportTelegramForbidden(input: {
   const chatPart =
     input.chatId != null ? `\nЧат: ${String(input.chatId)}` : ''
   const text =
-    `🚫 Telegram 403 Forbidden\n` +
+    `Telegram 403 Forbidden — перенос постов/комментариев заблокирован\n` +
     `Метод: ${input.method}${chatPart}\n` +
-    `${input.description}\n\n` +
+    `${input.description}\n` +
     `Проверьте: бот в канале и группе обсуждений, права администратора, токен.`
-  await deliverOperatorAlert(text)
+  await sendAdminAlert(alertKey('forbidden', input.chatId), text, {
+    method: input.method,
+    chatId: input.chatId,
+  })
 }
 
 export async function reportTelegramUnauthorized(input: {
@@ -95,10 +86,11 @@ export async function reportTelegramUnauthorized(input: {
     return
   }
   const text =
-    `🔴 Telegram 401 Unauthorized\n` +
+    `Telegram 401 Unauthorized — перенос постов и комментариев остановлен\n` +
     `Метод: ${input.method}\n` +
-    `${input.description}\n\n` +
-    `Проверьте токен в интеграциях (TG_TOKEN) и статус бота в @BotFather. ` +
-    `После обновления токена перезапустите сервис.`
-  await deliverOperatorAlert(text)
+    `${input.description}\n` +
+    `Проверьте токен в интеграциях (TG_TOKEN) и статус бота в @BotFather.`
+  await sendAdminAlert(alertKey('unauthorized'), text, {
+    method: input.method,
+  })
 }

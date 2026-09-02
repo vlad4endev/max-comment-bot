@@ -18,6 +18,7 @@ import { flowProcessor } from './services/flowProcessor'
 import { stateManager } from './services/stateManager'
 import { disconnectRedis } from './cache/redisClient'
 import { logger, stopRuntimeLogRotationScheduler } from './utils/logger'
+import { sendAdminAlert } from './utils/alertService'
 
 function initializeBot(): Bot {
   logger.info('🤖 Инициализация бота...')
@@ -50,8 +51,17 @@ async function startBotLongPolling(bot: Bot): Promise<void> {
         return
       }
       logger.warn('MAX long polling stopped unexpectedly, restarting')
+      void sendAdminAlert(
+        'max_polling_stopped',
+        'MAX long polling остановился — события канала (посты/комментарии) могут не приходить',
+      )
     } catch (error) {
       logger.error('Ошибка long polling MAX', error)
+      void sendAdminAlert(
+        'max_polling_error',
+        'Сбой MAX long polling — перенос постов и комментариев может быть остановлен',
+        { error: error instanceof Error ? error.message : String(error) },
+      )
       if (!allowMaxPollingRestart) {
         return
       }

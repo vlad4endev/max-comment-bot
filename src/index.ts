@@ -63,6 +63,7 @@ import { startTelegramAntispamBotPoller } from './services/telegramAntispamBotSe
 import { startTgPostDeletionWatcher } from './services/tgPostDeletionWatcher'
 import { setVkChainForwarderBot, startVkChainForwarder, stopVkChainForwarder } from './services/vkChainForwarder'
 import { setTelegramTgChainLifecycleBot } from './services/telegramTgChainLifecycle'
+import { sendAdminAlert, setAdminAlertBot } from './utils/alertService'
 import { setTelegramSyncAlertBot } from './services/telegramSyncAlertService'
 import {
   assertTelegramBotApiOnStartup,
@@ -72,7 +73,6 @@ import {
 import { initRedis } from './cache/redisClient'
 import { createHttpApp, createWebhookApp } from './webhook/createWebhookApp'
 import { logMiniAppUrlDiagnostics } from './utils/telegramMiniAppUrl'
-import { sendAdminAlert } from './utils/alertService'
 
 function scheduleDeferredCommentSyncBootstrap(): void {
   void bootstrapCommentSyncOnStartup({ threadRepairLimit: 8 }).catch((err: unknown) => {
@@ -214,6 +214,7 @@ async function main(): Promise<void> {
   startTgPostDeletionWatcher(bot)
   setVkChainForwarderBot(bot)
   setTelegramTgChainLifecycleBot(bot)
+  setAdminAlertBot(bot)
   setTelegramSyncAlertBot(bot)
   await assertTelegramBotApiOnStartup()
   startTelegramHealthMonitor()
@@ -289,6 +290,11 @@ async function main(): Promise<void> {
         'Не удалось зарегистрировать webhook — HTTP (/miniapp, /api) остаётся доступен; проверьте WEBHOOK_URL и доступ к API MAX',
         e,
       )
+      void sendAdminAlert(
+        'max_webhook_failed',
+        'Не удалось зарегистрировать webhook MAX — события канала (посты/комментарии) могут не приходить',
+        { error: e instanceof Error ? e.message : String(e) },
+      )
     }
 
     setupGracefulShutdown(bot, {
@@ -343,5 +349,20 @@ async function main(): Promise<void> {
 
 main().catch((err: unknown) => {
   console.error(err)
-  process.exit(1)
+  void sendAdminAlert('process_crash', 'Процесс бота упал — перенос постов и комментариев остановлен', {
+    error: err instanceof Error ? err.message : String(err),
+  }).finally(() => {
+    process.exit(1)
+  })
+})
+
+process.on('uncaughtException', (err: unknown) => {
+  logger.error('uncaughtException', err)
+  void sendAdminAlert(
+    'uncaught_exception',
+    'Критический сбой процесса — перенос постов и комментариев остановлен',
+    { error: err instanceof Error ? err.message : String(err) },
+  ).finally(() => {
+    process.exit(1)
+  })
 })

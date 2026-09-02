@@ -161,20 +161,44 @@ function scheduleForwardJob(
       if (ok) {
         deleteForwardQueueJob(jobKey)
       } else {
-        bumpForwardQueueRetry(jobKey, 'MAX publish incomplete')
+        const attempts = bumpForwardQueueRetry(jobKey, 'MAX publish incomplete')
         logger.warn('[tgChain] forward queued for retry', {
           chainId: chain.id,
           jobKey,
           messageIds: messages.map((m) => m.message_id),
         })
+        if (attempts >= 6) {
+          void sendAdminAlert(
+            `forward_stuck:${chain.id}`,
+            `Перенос постов заблокирован: ${attempts} неудачных попыток публикации в MAX`,
+            {
+              chainId: chain.id,
+              title: chain.max_title,
+              jobKey,
+              messageIds: messages.map((m) => m.message_id),
+            },
+          )
+        }
       }
     } catch (err: unknown) {
-      bumpForwardQueueRetry(jobKey, err)
+      const attempts = bumpForwardQueueRetry(jobKey, err)
       logger.error('[tgChain] forward job failed, will retry', {
         chainId: chain.id,
         jobKey,
         err,
       })
+      if (attempts >= 6) {
+        void sendAdminAlert(
+          `forward_stuck:${chain.id}`,
+          `Перенос постов заблокирован: ${attempts} ошибок подряд`,
+          {
+            chainId: chain.id,
+            title: chain.max_title,
+            jobKey,
+            error: err instanceof Error ? err.message : String(err),
+          },
+        )
+      }
     } finally {
       inFlightForwardKeys.delete(jobKey)
     }
@@ -207,6 +231,10 @@ function scheduleInboundComment(
   if (!bot) {
     bumpCommentInboundRetry(jobKey, 'MAX bot not set')
     inFlightCommentKeys.delete(jobKey)
+    void sendAdminAlert(
+      'max_bot_missing',
+      'MAX-бот не инициализирован — перенос комментариев остановлен',
+    )
     return
   }
   enqueueCommentWork(`${chain.id}:${discussionChatId}`, async () => {
@@ -218,7 +246,19 @@ function scheduleInboundComment(
       }
       deleteCommentInboundJob(jobKey)
     } catch (err: unknown) {
-      bumpCommentInboundRetry(jobKey, err)
+      const attempts = bumpCommentInboundRetry(jobKey, err)
+      if (attempts >= 8) {
+        void sendAdminAlert(
+          `comment_stuck:${chain.id}`,
+          `Перенос комментариев заблокирован: ${attempts} ошибок подряд`,
+          {
+            chainId: chain.id,
+            title: chain.max_title,
+            jobKey,
+            error: err instanceof Error ? err.message : String(err),
+          },
+        )
+      }
     } finally {
       inFlightCommentKeys.delete(jobKey)
     }
@@ -1497,9 +1537,13 @@ function startTokenPollLoop(tgToken: string): { stop: () => void } {
           continue
         }
         logger.error('[tgChain] loop error', { err, tokenHint: tgToken.slice(-6) })
-        await sendAdminAlert('forwarder_crash', 'Форвардер упал с ошибкой', {
-          error: String(err),
-        })
+        await sendAdminAlert(
+          'forwarder_crash',
+          'Форвардер упал с ошибкой — перенос постов и комментариев может быть остановлен',
+          {
+            error: String(err),
+          },
+        )
         await sleep(1_000)
       }
     }
@@ -1585,8 +1629,8 @@ function startTgChainWatchdog(): void {
             restartCount: restarts + 1,
           })
           await sendAdminAlert(
-            'chain_silent',
-            `Цепочка молчит ${Math.round(silentMs / 60000)} мин`,
+            `chain_silent:${chain.id}`,
+            `Цепочка «${chain.max_title}» молчит ${Math.round(silentMs / 60000)} мин — перенос постов остановлен`,
             {
               chainId: chain.id,
               title: chain.max_title,

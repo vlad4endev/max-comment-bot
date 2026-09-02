@@ -46,7 +46,7 @@ export function upsertForwardQueueJob(input: {
     )
 }
 
-export function bumpForwardQueueRetry(jobKey: string, err: unknown): void {
+export function bumpForwardQueueRetry(jobKey: string, err: unknown): number {
   const row = getDb()
     .prepare('SELECT attempts FROM tg_chain_forward_queue WHERE job_key = ?')
     .get(jobKey) as { attempts: number } | undefined
@@ -59,6 +59,7 @@ export function bumpForwardQueueRetry(jobKey: string, err: unknown): void {
        WHERE job_key = ?`,
     )
     .run(attempts, Date.now() + retryDelayMs(attempts), lastError, jobKey)
+  return attempts
 }
 
 export function deleteForwardQueueJob(jobKey: string): void {
@@ -129,7 +130,7 @@ export function upsertCommentInboundJob(input: {
   return jobKey
 }
 
-export function bumpCommentInboundRetry(jobKey: string, err: unknown): void {
+export function bumpCommentInboundRetry(jobKey: string, err: unknown): number {
   const row = getDb()
     .prepare('SELECT attempts FROM tg_comment_inbound_queue WHERE job_key = ?')
     .get(jobKey) as { attempts: number } | undefined
@@ -142,6 +143,7 @@ export function bumpCommentInboundRetry(jobKey: string, err: unknown): void {
        WHERE job_key = ?`,
     )
     .run(attempts, Date.now() + retryDelayMs(attempts), lastError, jobKey)
+  return attempts
 }
 
 export function deleteCommentInboundJob(jobKey: string): void {

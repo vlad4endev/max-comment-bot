@@ -19,6 +19,7 @@ import {
   type FlowRecord,
 } from './integrationsStore'
 import { logger } from '../utils/logger'
+import { sendAdminAlert } from '../utils/alertService'
 
 function flowPollMs(): number {
   return getFlowPollIntervalMs()
@@ -113,6 +114,15 @@ export class FlowProcessor {
     } catch (err: unknown) {
       logger.error('flowProcessor: error', { flowId: flow.id, err })
       await integrationsStore.updateFlowStats(flow.id, { incrementErrors: 1 })
+      await sendAdminAlert(
+        `flow_error:${flow.id}`,
+        'Сбой потока переноса постов — публикация может быть остановлена',
+        {
+          flowId: flow.id,
+          flowName: flow.name,
+          error: err instanceof Error ? err.message : String(err),
+        },
+      )
     }
   }
 
