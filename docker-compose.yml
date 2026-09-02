@@ -87,6 +87,12 @@ services:
         max-size: "50m"
         max-file: "10"
         compress: "true"
-
+     networks:
+      - default
+      - veresk
 volumes:
   redis-data:
+networks:
+  veresk:
+    name: veresk_bot_default
+    external: true

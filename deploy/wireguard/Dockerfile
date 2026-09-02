@@ -9,8 +9,12 @@ RUN sh /tmp/alpine-apk-add.sh \
     wireguard-tools \
     iptables \
     iproute2 \
-    microsocks \
     curl
+
+# microsocks есть только в testing — тянем отдельным шагом
+RUN apk add --no-cache \
+    --repository https://mirror.yandex.ru/mirrors/alpine/edge/testing \
+    microsocks
 
 COPY deploy/wireguard/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
