@@ -188,13 +188,20 @@ export async function recoverPostByPostIdInChannelFeed(
   return null
 }
 
+export interface ResolveMiniappPostOpenOptions {
+  /** Heavy MAX feed scan (up to 7 days). Only for explicit refresh, never on first open. */
+  allowFeedScan?: boolean
+}
+
 /**
- * Resolves a post for Mini App open: alias/DB (fast) → short race retry → ensure by mid → feed scan (slow, once).
+ * Resolves a post for Mini App open: alias/DB (fast) → short race retry → ensure by mid.
+ * Feed scan is opt-in — it blocks HTTP and the miniapp spinner for many seconds.
  */
 export async function resolveMiniappPostOpen(
   bot: Bot,
   lookup: MiniappPostLookup,
   resolveFromDb: (postId: string, chatIdRaw: number | null, messageMid: string | null) => Post | null,
+  options: ResolveMiniappPostOpenOptions = {},
 ): Promise<Post | null> {
   const postId = lookup.postId.trim()
   const mid = lookup.messageMid?.trim() ?? ''
@@ -238,7 +245,7 @@ export async function resolveMiniappPostOpen(
     }
   }
 
-  if (postId !== '' && lookup.chatIdRaw !== null) {
+  if (options.allowFeedScan && postId !== '' && lookup.chatIdRaw !== null) {
     post = await recoverPostByPostIdInChannelFeed(bot, lookup.chatIdRaw, postId)
   }
 

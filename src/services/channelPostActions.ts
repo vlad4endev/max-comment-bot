@@ -249,6 +249,23 @@ function markButtonAttachPending(post: Post): void {
   }
 }
 
+const attachInFlightUntil = new Map<string, number>()
+const ATTACH_LOCK_MS = 20_000
+
+function attachLockKey(chatId: number, messageMid: string): string {
+  const canonical = resolveCanonicalChannelChatId(chatId) ?? chatId
+  return `${canonical}:${messageMid}`
+}
+
+export function isCommentAttachInFlight(chatId: number, messageMid: string): boolean {
+  const until = attachInFlightUntil.get(attachLockKey(chatId, messageMid))
+  return typeof until === 'number' && until > Date.now()
+}
+
+function markCommentAttachInFlight(chatId: number, messageMid: string): void {
+  attachInFlightUntil.set(attachLockKey(chatId, messageMid), Date.now() + ATTACH_LOCK_MS)
+}
+
 function logCommentButtonOk(
   source: CommentButtonAttachSource | undefined,
   ctx: Record<string, unknown>,
@@ -321,6 +338,7 @@ export async function tryAttachCommentsToChannelPost(
     logCommentButtonSkip(source, result.reason, { chatId }, attachStartedAt)
     return result
   }
+  markCommentAttachInFlight(chatId, mid)
 
   logCommentButton('info', 'commentButton: проверка поста', {
     source: source ?? 'unknown',

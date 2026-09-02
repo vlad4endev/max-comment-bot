@@ -30,6 +30,7 @@ export function getPostsDb(): Database.Database {
   const instance = new Database(POSTS_DB_PATH)
   instance.pragma('journal_mode = WAL')
   instance.pragma('synchronous = NORMAL')
+  instance.pragma('busy_timeout = 5000')
   instance.pragma('foreign_keys = ON')
   initPostsSchema(instance)
   postsDb = instance

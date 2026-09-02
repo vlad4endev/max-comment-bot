@@ -22,6 +22,7 @@ export function getDb(): Database.Database {
   const instance = new Database(DB_PATH)
   instance.pragma('journal_mode = WAL')
   instance.pragma('synchronous = NORMAL')
+  instance.pragma('busy_timeout = 5000')
   instance.pragma('foreign_keys = ON')
   initSchema(instance)
   db = instance

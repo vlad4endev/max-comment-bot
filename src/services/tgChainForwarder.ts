@@ -17,6 +17,7 @@ import {
 import { listTgChainsSync, updateTgChain, type TgChainRecord } from '../api/adminPanelState'
 import { ensureTelegramPollingMode, invalidateTelegramPollingModeCache } from './integrationPlatformClient'
 import { attachAndVerifyCommentsForForwardedPost } from './channelPostPublishGate'
+import { markChannelForwardBusy } from './channelForwardBusy'
 import { postStore } from './postStore'
 import { resolveCanonicalChannelChatId } from './resolveChannelChatId'
 import { telegramMessageMatchesTgChain } from '../utils/tgChannelMatch'
@@ -69,7 +70,8 @@ const TG_CHAIN_MAX_API_RETRIES = 6
 const TG_ALBUM_BUFFER_MS = 450
 /** Telegram media group ограничен 10 элементами. */
 const TG_ALBUM_MAX_MEDIA_PER_POST = 10
-const MEDIA_DOWNLOAD_TIMEOUT_MS = 90_000
+const MEDIA_DOWNLOAD_TIMEOUT_MS = 45_000
+const MEDIA_MAX_BYTES = 32 * 1024 * 1024
 const ALBUM_UPLOAD_CONCURRENCY = 4
 const MEDIA_DOWNLOAD_CONCURRENCY = 3
 /** Глобальный зазор между send в MAX — чтобы пачка каналов не ловила 429. */
@@ -315,8 +317,30 @@ async function downloadTgFileBuffer(
     const res = await telegramAxios.get<ArrayBuffer>(url, {
       responseType: 'arraybuffer',
       timeout: timeoutMs,
+      maxContentLength: MEDIA_MAX_BYTES,
+      maxBodyLength: MEDIA_MAX_BYTES,
     })
-    return Buffer.from(res.data)
+    const buf = Buffer.from(res.data)
+    await new Promise<void>((resolve) => setImmediate(resolve))
+    return buf
+  })
+}
+
+function scheduleCommentAttach(
+  bot: Bot,
+  chain: TgChainRecord,
+  maxMid: string,
+  caption: string,
+): void {
+  void attachAndVerifyCommentsForForwardedPost(bot, chain.max_chat_id, maxMid, {
+    chainId: chain.id,
+    knownCaption: caption,
+  }).catch((err: unknown) => {
+    logger.warn('[tgChain] background comment attach failed', {
+      chainId: chain.id,
+      maxMid,
+      err,
+    })
   })
 }
 
@@ -684,7 +708,7 @@ async function forwardOneTgMessageToMax(
     if (url) {
       let image: { toJson(): unknown }
       try {
-        const fileBuf = await downloadTgFileBuffer(url, 120_000)
+        const fileBuf = await downloadTgFileBuffer(url)
         image = await maxApi(() => bot.api.uploadImage({ source: fileBuf }))
       } catch (err: unknown) {
         logger.warn('[tgChain] binary photo upload failed, fallback to url', {
@@ -706,29 +730,43 @@ async function forwardOneTgMessageToMax(
   if (msg.video?.file_id) {
     const url = await getTgFileUrl(tgToken, msg.video.file_id)
     if (url) {
-      const videoBuf = await downloadTgFileBuffer(url)
-      const video = await maxApi(() => bot.api.uploadVideo({ source: videoBuf }))
-      await throttleMaxChatSend(chatId)
-      const sent = await maxApi(() =>
-        bot.api.sendMessageToChat(chatId, messageText, {
-          attachments: [video.toJson() as AttachmentRequest],
-        }),
-      )
-      return sent.body?.mid ?? null
+      try {
+        const videoBuf = await downloadTgFileBuffer(url)
+        const video = await maxApi(() => bot.api.uploadVideo({ source: videoBuf }))
+        await throttleMaxChatSend(chatId)
+        const sent = await maxApi(() =>
+          bot.api.sendMessageToChat(chatId, messageText, {
+            attachments: [video.toJson() as AttachmentRequest],
+          }),
+        )
+        return sent.body?.mid ?? null
+      } catch (err: unknown) {
+        logger.warn('[tgChain] video upload failed — sending caption if any', {
+          messageId: msg.message_id,
+          err,
+        })
+      }
     }
   }
   if (msg.document?.file_id) {
     const url = await getTgFileUrl(tgToken, msg.document.file_id)
     if (url) {
-      const fileBuf = await downloadTgFileBuffer(url)
-      const file = await maxApi(() => bot.api.uploadFile({ source: fileBuf }))
-      await throttleMaxChatSend(chatId)
-      const sent = await maxApi(() =>
-        bot.api.sendMessageToChat(chatId, messageText, {
-          attachments: [file.toJson() as AttachmentRequest],
-        }),
-      )
-      return sent.body?.mid ?? null
+      try {
+        const fileBuf = await downloadTgFileBuffer(url)
+        const file = await maxApi(() => bot.api.uploadFile({ source: fileBuf }))
+        await throttleMaxChatSend(chatId)
+        const sent = await maxApi(() =>
+          bot.api.sendMessageToChat(chatId, messageText, {
+            attachments: [file.toJson() as AttachmentRequest],
+          }),
+        )
+        return sent.body?.mid ?? null
+      } catch (err: unknown) {
+        logger.warn('[tgChain] document upload failed — sending caption if any', {
+          messageId: msg.message_id,
+          err,
+        })
+      }
     }
   }
   if (!hasMedia && caption.trim()) {
@@ -841,16 +879,26 @@ async function buildAlbumAttachments(
         if (msg.video?.file_id) {
           const url = await getTgFileUrl(tgToken, msg.video.file_id)
           if (!url) return null
-          const videoBuf = await downloadTgFileBuffer(url)
-          const video = await maxApi(() => bot.api.uploadVideo({ source: videoBuf }))
-          return video.toJson() as AttachmentRequest
+          try {
+            const videoBuf = await downloadTgFileBuffer(url)
+            const video = await maxApi(() => bot.api.uploadVideo({ source: videoBuf }))
+            return video.toJson() as AttachmentRequest
+          } catch (err: unknown) {
+            logger.warn('[tgChain] album video skipped', { messageId: msg.message_id, err })
+            return null
+          }
         }
         if (msg.document?.file_id) {
           const url = await getTgFileUrl(tgToken, msg.document.file_id)
           if (!url) return null
-          const fileBuf = await downloadTgFileBuffer(url)
-          const file = await maxApi(() => bot.api.uploadFile({ source: fileBuf }))
-          return file.toJson() as AttachmentRequest
+          try {
+            const fileBuf = await downloadTgFileBuffer(url)
+            const file = await maxApi(() => bot.api.uploadFile({ source: fileBuf }))
+            return file.toJson() as AttachmentRequest
+          } catch (err: unknown) {
+            logger.warn('[tgChain] album document skipped', { messageId: msg.message_id, err })
+            return null
+          }
         }
         return null
       }),
@@ -878,16 +926,26 @@ async function buildSingleMessageAttachments(
   if (msg.video?.file_id) {
     const url = await getTgFileUrl(tgToken, msg.video.file_id)
     if (!url) return []
-    const videoBuf = await downloadTgFileBuffer(url)
-    const video = await maxApi(() => bot.api.uploadVideo({ source: videoBuf }))
-    return [video.toJson() as AttachmentRequest]
+    try {
+      const videoBuf = await downloadTgFileBuffer(url)
+      const video = await maxApi(() => bot.api.uploadVideo({ source: videoBuf }))
+      return [video.toJson() as AttachmentRequest]
+    } catch (err: unknown) {
+      logger.warn('[tgChain] edit/single video skipped', { messageId: msg.message_id, err })
+      return []
+    }
   }
   if (msg.document?.file_id) {
     const url = await getTgFileUrl(tgToken, msg.document.file_id)
     if (!url) return []
-    const fileBuf = await downloadTgFileBuffer(url)
-    const file = await maxApi(() => bot.api.uploadFile({ source: fileBuf }))
-    return [file.toJson() as AttachmentRequest]
+    try {
+      const fileBuf = await downloadTgFileBuffer(url)
+      const file = await maxApi(() => bot.api.uploadFile({ source: fileBuf }))
+      return [file.toJson() as AttachmentRequest]
+    } catch (err: unknown) {
+      logger.warn('[tgChain] edit/single document skipped', { messageId: msg.message_id, err })
+      return []
+    }
   }
   return []
 }
@@ -1109,6 +1167,7 @@ async function processChainMessageGroup(
 
   const isAlbum = pending.length > 1 || Boolean(pending[0]?.media_group_id)
   const attachComments = chain.add_comments_button !== false
+  markChannelForwardBusy(chain.max_chat_id, 45_000)
 
   try {
     let published = 0
@@ -1131,34 +1190,22 @@ async function processChainMessageGroup(
         )
         if (typeof resultMid === 'string' && resultMid.trim() !== '') {
           const maxMid = resultMid.trim()
-          let keepPublished = true
+          published += 1
+          for (const msg of chunk) {
+            markForwarded(chain.id, msg, maxMid, i)
+            syncTgMetadataOnForwardedPost(chain.max_chat_id, maxMid, chain, msg)
+          }
           if (attachComments) {
-            keepPublished = await attachAndVerifyCommentsForForwardedPost(bot, chain.max_chat_id, maxMid, {
-              chainId: chain.id,
-              knownCaption: chunkCaption,
-            })
+            scheduleCommentAttach(bot, chain, maxMid, chunkCaption)
           }
-          if (keepPublished) {
-            published += 1
-            for (const msg of chunk) {
-              markForwarded(chain.id, msg, maxMid, i)
-              syncTgMetadataOnForwardedPost(chain.max_chat_id, maxMid, chain, msg)
-            }
-            void publishTelegramPostToVk({
-              maxChatId: chain.max_chat_id,
-              maxMid,
-              tgToken,
-              tgMessages: chunk,
-            }).catch((err: unknown) => {
-              logger.warn('[tgChain] VK publish (album) failed', { chainId: chain.id, maxMid, err })
-            })
-          } else {
-            logger.warn('[tgChain] chunk not marked forwarded — comment gate rollback, TG retry later', {
-              chainId: chain.id,
-              maxMessageMid: maxMid,
-              chunkIndex: i,
-            })
-          }
+          void publishTelegramPostToVk({
+            maxChatId: chain.max_chat_id,
+            maxMid,
+            tgToken,
+            tgMessages: chunk,
+          }).catch((err: unknown) => {
+            logger.warn('[tgChain] VK publish (album) failed', { chainId: chain.id, maxMid, err })
+          })
         }
       }
     } else {
@@ -1176,32 +1223,20 @@ async function processChainMessageGroup(
       )
       if (typeof resultMid === 'string' && resultMid.trim() !== '') {
         const maxMid = resultMid.trim()
-        let keepPublished = true
+        published = 1
+        markForwarded(chain.id, msg, maxMid, null)
+        syncTgMetadataOnForwardedPost(chain.max_chat_id, maxMid, chain, msg)
         if (attachComments) {
-          keepPublished = await attachAndVerifyCommentsForForwardedPost(bot, chain.max_chat_id, maxMid, {
-            chainId: chain.id,
-            knownCaption: caption,
-          })
+          scheduleCommentAttach(bot, chain, maxMid, caption)
         }
-        if (keepPublished) {
-          published = 1
-          markForwarded(chain.id, msg, maxMid, null)
-          syncTgMetadataOnForwardedPost(chain.max_chat_id, maxMid, chain, msg)
-          void publishTelegramPostToVk({
-            maxChatId: chain.max_chat_id,
-            maxMid,
-            tgToken,
-            tgMessages: [msg],
-          }).catch((err: unknown) => {
-            logger.warn('[tgChain] VK publish (single) failed', { chainId: chain.id, maxMid, err })
-          })
-        } else {
-          logger.warn('[tgChain] post not marked forwarded — comment gate rollback, TG retry later', {
-            chainId: chain.id,
-            maxMessageMid: resultMid,
-            tgMessageId: msg.message_id,
-          })
-        }
+        void publishTelegramPostToVk({
+          maxChatId: chain.max_chat_id,
+          maxMid,
+          tgToken,
+          tgMessages: [msg],
+        }).catch((err: unknown) => {
+          logger.warn('[tgChain] VK publish (single) failed', { chainId: chain.id, maxMid, err })
+        })
       }
     }
 

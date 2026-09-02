@@ -2,6 +2,7 @@ import type { Bot } from '@maxhub/max-bot-api'
 import type { Message } from '@maxhub/max-bot-api/types'
 
 import { tryAttachCommentsToChannelPost, type AttachChannelCommentsResult } from './channelPostActions'
+import { scheduleCommentButtonRetry } from './commentButtonRetryQueue'
 import { resolveCanonicalChannelChatId } from './resolveChannelChatId'
 import { logger } from '../utils/logger'
 import { apiCallWithRetry } from '../utils/maxApiRetry'
@@ -71,7 +72,18 @@ async function tryDeleteMaxMessage(bot: Bot, messageMid: string): Promise<void> 
   }
 }
 
-/** Removes DB row(s) for this channel message and deletes MAX message(s) after a failed comment gate. */
+function keepPublishedAndRetryButton(chatId: number, messageMid: string, post: Post | null): true {
+  if (post && post.button_attach_pending !== true) {
+    postStore.savePost({ ...post, button_attach_pending: true })
+  }
+  scheduleCommentButtonRetry(chatId, messageMid)
+  return true
+}
+
+/**
+ * @deprecated Kept for admin/manual cleanup. Do not call after a live TG→MAX forward:
+ * deleting the MAX post caused republish storms and broke miniapp lookup.
+ */
 export async function rollbackFailedChannelPost(
   bot: Bot,
   chatId: number,
@@ -125,8 +137,9 @@ async function waitForVerifiedPost(
 }
 
 /**
- * After TG→MAX forward: attach button, verify Mini App lookup.
- * On failure deletes the MAX post and DB row so the TG message can be forwarded again.
+ * After TG→MAX forward: attach the comments button.
+ * Always keeps the published MAX post — a flaky button must not delete the post
+ * or trigger a republish storm (that froze the bot and stalled the miniapp).
  *
  * @param knownCaption — text that was actually sent with `sendMessageToChat` (album/single).
  *   Used when `getMessage` briefly returns media without text right after publish.
@@ -150,8 +163,13 @@ export async function attachAndVerifyCommentsForForwardedPost(
 
   let message = await loadChannelMessage(bot, chatId, mid)
   if (!message?.body?.mid) {
-    await tryDeleteMaxMessage(bot, mid)
-    return false
+    logger.warn('[tgChain] comment gate: MAX getMessage empty after publish — keep post, retry button', {
+      chainId: context?.chainId,
+      chatId,
+      messageMid: mid,
+    })
+    scheduleCommentButtonRetry(chatId, mid)
+    return true
   }
 
   if (knownText && isBlankPostText(message.body.text)) {
@@ -194,57 +212,51 @@ export async function attachAndVerifyCommentsForForwardedPost(
   }
 
   if (attachResult.ok && registered) {
-    logger.warn('[tgChain] comment gate verify failed after attach — retry reattach', {
+    logger.warn('[tgChain] comment gate verify lagged after attach — keep post', {
       chainId: context?.chainId,
       chatId,
       messageMid: mid,
       postId: registered.post_id,
     })
-    let messageRetry = await loadChannelMessage(bot, chatId, mid)
-    if (messageRetry?.body?.mid) {
-      if (knownText && isBlankPostText(messageRetry.body.text)) {
-        messageRetry = {
-          ...messageRetry,
-          body: {
-            ...messageRetry.body,
-            text: knownText,
-          },
-        }
-      }
-      const retryAttach = await tryAttachCommentsToChannelPost(bot, messageRetry, {
-        channelChatIdOverride: chatId,
-        skipAuthorAdminCheck: true,
-        source: 'tg_chain',
-        inlineOnly: true,
-        knownText,
-      })
-      const registeredRetry = await waitForVerifiedPost(chatId, mid, retryAttach)
-      if (
-        registeredRetry !== null &&
-        verifyPostCommentButtonReady(registeredRetry) &&
-        attachOutcomeOk(retryAttach)
-      ) {
-        logger.info('[tgChain] comment gate ok after reattach retry', {
-          chainId: context?.chainId,
-          chatId,
-          messageMid: mid,
-          postId: registeredRetry.post_id,
-        })
-        return true
-      }
-    }
+    return true
   }
 
-  logger.warn('[tgChain] comment gate failed — rollback MAX post', {
+  logger.info('[tgChain] comment gate: inline failed — one reply fallback', {
     chainId: context?.chainId,
     chatId,
     messageMid: mid,
     attachReason: attachResult.ok ? 'attached' : attachResult.reason,
-    hasRow: Boolean(registered),
-    rowPostId: registered?.post_id,
-    pending: registered?.button_attach_pending ?? null,
+  })
+  const fallbackResult = await tryAttachCommentsToChannelPost(bot, message, {
+    channelChatIdOverride: chatId,
+    skipAuthorAdminCheck: true,
+    source: 'tg_chain',
+    inlineOnly: false,
+    knownText,
+  })
+  const fallbackRegistered = await waitForVerifiedPost(chatId, mid, fallbackResult)
+  if (
+    fallbackRegistered !== null &&
+    (attachOutcomeOk(fallbackResult) || verifyPostCommentButtonReady(fallbackRegistered))
+  ) {
+    logger.info('[tgChain] comment gate ok after reply fallback', {
+      chainId: context?.chainId,
+      chatId,
+      messageMid: mid,
+      postId: fallbackRegistered.post_id,
+    })
+    return true
+  }
+
+  logger.warn('[tgChain] comment gate: button not ready — keep MAX post, retry attach', {
+    chainId: context?.chainId,
+    chatId,
+    messageMid: mid,
+    attachReason: fallbackResult.ok ? 'attached' : fallbackResult.reason,
+    hasRow: Boolean(fallbackRegistered),
+    rowPostId: fallbackRegistered?.post_id,
+    pending: fallbackRegistered?.button_attach_pending ?? null,
   })
 
-  await rollbackFailedChannelPost(bot, chatId, mid, registered?.post_id, registered)
-  return false
+  return keepPublishedAndRetryButton(chatId, mid, fallbackRegistered ?? registered)
 }

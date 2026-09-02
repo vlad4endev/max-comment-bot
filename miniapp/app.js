@@ -2359,6 +2359,18 @@
     function bootComments() {
       if (!hasPostContext || joinChannelId) return;
 
+      var uid =
+        getBridgeNumericUserId(user) ||
+        parseInt(mergedParams.get('user_id') || '', 10) ||
+        null;
+
+      if (!uid) {
+        showGate();
+        return;
+      }
+      if (window.__miniappCommentsBooted) return;
+      window.__miniappCommentsBooted = true;
+
       if (window.visualViewport) {
         var shellEl = document.querySelector('.shell')
         var commentsViewEl = document.getElementById('view-comments')
@@ -2403,16 +2415,6 @@
         window.visualViewport.addEventListener('resize', syncViewportLayout)
         window.visualViewport.addEventListener('scroll', syncViewportLayout)
         syncViewportLayout()
-      }
-
-      var uid =
-        getBridgeNumericUserId(user) ||
-        parseInt(mergedParams.get('user_id') || '', 10) ||
-        null;
-
-      if (!uid) {
-        showGate();
-        return;
       }
 
       function shouldSkipSubscribeGate() {
@@ -4199,6 +4201,81 @@
         });
       }
 
+      function applyLoadedPost(p) {
+        hidePostRecoveryCard();
+        hideBootError();
+        window.__miniappContentReady = true;
+        if (p.post_id && p.post_id !== postId) {
+          postId = p.post_id;
+          currentPostId = p.post_id;
+        }
+        if (!chatId && p.chat_id) {
+          chatId = String(p.chat_id);
+          params.set('chat_id', chatId);
+          mergedParams.set('chat_id', chatId);
+        }
+        setChannelHeader(p.channel_title, p.channel_avatar_url);
+        currentPostSnapshot = {
+          text: p.text || '',
+          photo_url: p.photo_url || null,
+          channel_title: p.channel_title || '',
+        };
+        postPreviewTextEl.textContent =
+          p.text && p.text.trim() ? normalizeDisplayText(p.text) : '\u00a0';
+        if (p.photo_url) {
+          postThumbEl.src = p.photo_url;
+          postThumbEl.classList.add('show');
+        } else {
+          postThumbEl.removeAttribute('src');
+          postThumbEl.classList.remove('show');
+        }
+        if (typeof p.comment_count === 'number') {
+          postCommentCount = p.comment_count;
+          updateBadgeFromCount(postCommentCount);
+        }
+        applyCommentsClosedUi(
+          !!p.comments_closed,
+          p.comments_closed
+            ? (p.comments_booked_by === 'vk'
+                ? 'Комментарии временно закрыты. Обсуждение ведётся во ВКонтакте.'
+                : 'Комментарии временно закрыты. Обсуждение ведётся в Telegram.')
+            : null,
+        );
+        setPostPreviewLink(p.channel_post_url || null);
+        setPostPreviewReady(true);
+        return true;
+      }
+
+      function isExpiredArchive(p) {
+        return !!(p && p.is_archived && p.archived_reason === 'expired');
+      }
+
+      function isMissingPostPayload(p) {
+        if (!p) return true;
+        if (p.error === 'post_not_found') return true;
+        if (p.is_archived && p.archived_reason === 'deleted') return true;
+        return false;
+      }
+
+      function fetchPostPayload() {
+        var ids = resolveLookupIds();
+        return fetch('/api/post/' + encodeURIComponent(ids.postId) + postApiQuery(), {
+          headers: miniappLookupHeaders(),
+        }).then(function (r) {
+          return parseApiJsonResponse(r).then(function (p) {
+            if (r.status === 404) {
+              var notFoundErr = new Error('post_not_found');
+              notFoundErr.code = 'post_not_found';
+              throw notFoundErr;
+            }
+            if (!r.ok) {
+              throw new Error((p && p.error) || 'Не удалось загрузить пост');
+            }
+            return p;
+          });
+        });
+      }
+
       function loadPost() {
         var ids = resolveLookupIds();
         if (!ids.postId) {
@@ -4215,80 +4292,53 @@
           messageMid: ids.messageMid || null,
           startParam: startParam || null,
         });
-        return fetch('/api/post/' + encodeURIComponent(ids.postId) + postApiQuery(), {
-          headers: miniappLookupHeaders(),
-        })
-          .then(function (r) {
-            return parseApiJsonResponse(r).then(function (p) {
-              if (r.status === 404) {
-                var notFoundErr = new Error('post_not_found');
-                notFoundErr.code = 'post_not_found';
-                throw notFoundErr;
+        var attempt = 0;
+        var maxAttempts = 3;
+        function runAttempt() {
+          return fetchPostPayload()
+            .then(function (p) {
+              if (isExpiredArchive(p)) {
+                showArchivedPage(p.ttl_days || 21);
+                return false;
               }
-              if (!r.ok) {
-                throw new Error((p && p.error) || 'Не удалось загрузить пост');
+              if (isMissingPostPayload(p)) {
+                if (attempt < maxAttempts - 1) {
+                  attempt += 1;
+                  postPreviewTextEl.textContent = 'Подключаем комментарии…';
+                  return new Promise(function (resolve) {
+                    window.setTimeout(function () {
+                      resolve(runAttempt());
+                    }, 450 * attempt);
+                  });
+                }
+                showPostRecoveryCard();
+                return false;
               }
-              return p;
+              return applyLoadedPost(p);
+            })
+            .catch(function (e) {
+              if (e && e.code === 'post_not_found' && attempt < maxAttempts - 1) {
+                attempt += 1;
+                postPreviewTextEl.textContent = 'Подключаем комментарии…';
+                return new Promise(function (resolve) {
+                  window.setTimeout(function () {
+                    resolve(runAttempt());
+                  }, 450 * attempt);
+                });
+              }
+              if (e && e.code === 'post_not_found') {
+                showPostRecoveryCard();
+                return false;
+              }
+              setErr(e, 'Не удалось загрузить комментарии');
+              postPreviewTextEl.textContent = '';
+              currentPostSnapshot = null;
+              setPostPreviewLink(null);
+              setPostPreviewReady(false);
+              return false;
             });
-          })
-          .then(function (p) {
-            if (p.is_archived || p.error === 'post_not_found') {
-              showArchivedPage(p.ttl_days || 21);
-              return false;
-            }
-            hidePostRecoveryCard();
-            if (p.post_id && p.post_id !== postId) {
-              postId = p.post_id;
-              currentPostId = p.post_id;
-            }
-            if (!chatId && p.chat_id) {
-              chatId = String(p.chat_id);
-              params.set('chat_id', chatId);
-              mergedParams.set('chat_id', chatId);
-            }
-            setChannelHeader(p.channel_title, p.channel_avatar_url);
-            currentPostSnapshot = {
-              text: p.text || '',
-              photo_url: p.photo_url || null,
-              channel_title: p.channel_title || '',
-            };
-            postPreviewTextEl.textContent =
-              p.text && p.text.trim() ? normalizeDisplayText(p.text) : '\u00a0';
-            if (p.photo_url) {
-              postThumbEl.src = p.photo_url;
-              postThumbEl.classList.add('show');
-            } else {
-              postThumbEl.removeAttribute('src');
-              postThumbEl.classList.remove('show');
-            }
-            if (typeof p.comment_count === 'number') {
-              postCommentCount = p.comment_count;
-              updateBadgeFromCount(postCommentCount);
-            }
-            applyCommentsClosedUi(
-              !!p.comments_closed,
-              p.comments_closed
-                ? (p.comments_booked_by === 'vk'
-                    ? 'Комментарии временно закрыты. Обсуждение ведётся во ВКонтакте.'
-                    : 'Комментарии временно закрыты. Обсуждение ведётся в Telegram.')
-                : null,
-            );
-            setPostPreviewLink(p.channel_post_url || null);
-            setPostPreviewReady(true);
-            return true;
-          })
-          .catch(function (e) {
-            if (e && e.code === 'post_not_found') {
-              showPostRecoveryCard();
-              return false;
-            }
-            setErr(e, 'Не удалось загрузить комментарии');
-            postPreviewTextEl.textContent = '';
-            currentPostSnapshot = null;
-            setPostPreviewLink(null);
-            setPostPreviewReady(false);
-            return false;
-          });
+        }
+        return runAttempt();
       }
 
       function refreshAdminStateFromServer() {
@@ -4721,11 +4771,27 @@
         tryReadyBridge(freshBridge);
         var freshUser = resolveBridgeUser(freshBridge);
         var freshUid = getBridgeNumericUserId(freshUser);
+        var freshStart = collectStartParam((freshBridge && freshBridge.initDataUnsafe) || {}, freshBridge);
+        if (freshStart && freshStart !== startParam) {
+          startParam = freshStart;
+        }
         if (freshUid != null) {
           window.clearInterval(homeUserRetryTimer);
           user = freshUser;
           mergedParams = buildMergedSearchParams(user, startParam);
-          bootHome();
+          postId = mergedParams.get('post_id');
+          chatId = mergedParams.get('chat_id');
+          joinChannelId = mergedParams.get('join_channel_id');
+          hasPostContext = !!(postId && chatId);
+          if (hasPostContext && !joinChannelId) {
+            viewHome.classList.add('hidden');
+            viewJoin.classList.add('hidden');
+            viewComments.classList.remove('hidden');
+            if (viewGate) viewGate.classList.add('hidden');
+            bootComments();
+          } else {
+            bootHome();
+          }
           return;
         }
         if (homeUserRetry >= 50) {
@@ -4737,6 +4803,36 @@
               : 'Не удалось определить профиль. Закройте приложение и откройте снова из бота MAX.';
           }
           syncHomeUserBadge(null);
+        }
+      }, 200);
+    }
+
+    if (!hasPostContext && !joinChannelId && (inMax || isLikelyMaxMiniapp() || inTelegram)) {
+      var lateStartRetry = 0;
+      var lateStartTimer = window.setInterval(function () {
+        lateStartRetry += 1;
+        var lateBridge = getWebAppBridge();
+        tryReadyBridge(lateBridge);
+        var lateStart = collectStartParam((lateBridge && lateBridge.initDataUnsafe) || {}, lateBridge);
+        if (lateStart) {
+          startParam = lateStart;
+          mergedParams = buildMergedSearchParams(user, startParam);
+          postId = mergedParams.get('post_id');
+          chatId = mergedParams.get('chat_id');
+          joinChannelId = mergedParams.get('join_channel_id');
+          hasPostContext = !!(postId && chatId);
+          if (hasPostContext && !joinChannelId) {
+            window.clearInterval(lateStartTimer);
+            viewHome.classList.add('hidden');
+            viewJoin.classList.add('hidden');
+            viewComments.classList.remove('hidden');
+            if (viewGate) viewGate.classList.add('hidden');
+            bootComments();
+            return;
+          }
+        }
+        if (lateStartRetry >= 40) {
+          window.clearInterval(lateStartTimer);
         }
       }, 200);
     }
@@ -4764,6 +4860,19 @@
           hideBootError()
         })
         .catch(function (e) {
+          if (window.__miniappContentReady) {
+            hideBootError()
+            return
+          }
+          var commentsView = document.getElementById('view-comments')
+          var homeView = document.getElementById('view-home')
+          if (
+            (commentsView && !commentsView.classList.contains('hidden')) ||
+            (homeView && !homeView.classList.contains('hidden'))
+          ) {
+            hideBootError()
+            return
+          }
           logMiniappError('preflight', e)
           showBootError(
             e,
@@ -4784,9 +4893,9 @@
       var preferTg = isMiniappTelegramRuntime();
       var likelyMax = isLikelyMaxMiniapp();
       var postContextHint = hasPostContextInLocation();
-      // TG: don't block UI for 10s — launch sooner and resolve user via homeUserRetry (like Max feel).
+      // Don't block the spinner for MAX bridge user — pick up startParam after launch.
       var hardDeadlineMs =
-        preferTg && !postContextHint ? 2500 : likelyMax ? 12000 : 3000;
+        preferTg && !postContextHint ? 2500 : likelyMax ? 2800 : 3000;
       try {
         var earlySp = new URLSearchParams(location.search);
         var earlyStart = String(earlySp.get('startapp') || earlySp.get('start_param') || '');
@@ -4814,7 +4923,7 @@
         tryReadyBridge(bridge);
         var likelyMaxNow = isLikelyMaxMiniapp();
         var likelyTg = isLikelyTelegramWebView();
-        var maxAttempts = likelyMaxNow ? 80 : likelyTg || preferTg ? 30 : 8;
+        var maxAttempts = likelyMaxNow ? 18 : likelyTg || preferTg ? 20 : 8;
         var user = resolveBridgeUser(bridge);
         var unsafe = (bridge && bridge.initDataUnsafe) || {};
         var sp = collectStartParam(unsafe, bridge);
@@ -4847,10 +4956,6 @@
           attempts < maxAttempts
         ) {
           window.setTimeout(run, 150);
-          return;
-        }
-        if (likelyMaxNow && !hasBridgeUser && !hasUrlUser && attempts >= maxAttempts) {
-          window.setTimeout(run, 200);
           return;
         }
         window.clearTimeout(hardDeadline);

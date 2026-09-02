@@ -399,7 +399,12 @@ async function resolveChannelBranding(
   const title = channelRegistry.getChannel(chatId)?.title?.trim() || 'Канал'
   let avatar_url: string | null = null
   try {
-    const chat = await bot.api.getChat(chatId)
+    const chat = await Promise.race([
+      bot.api.getChat(chatId),
+      new Promise<never>((_, reject) => {
+        setTimeout(() => reject(new Error('getChat timeout')), 800)
+      }),
+    ])
     const raw = chat.icon?.url
     if (typeof raw === 'string') {
       const trimmed = raw.trim()
@@ -664,9 +669,7 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
         (pairing.max_user_id != null && subscriberStore.hasSubscriber(pairing.max_user_id)) ||
         hasPriorActivity
 
-      if (isAdminParamValue(req.query.admin)) {
-        isAdmin = true
-      } else if (chatId !== null) {
+      if (chatId !== null) {
         const maxChatId = Math.abs(chatId)
         if (
           verifyTelegramMiniappAuth({
@@ -693,6 +696,7 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
             }
           }
         }
+        // ?admin=1 alone does NOT grant admin — only HMAC or live membership checks above.
       } else {
         for (const gateUserId of gateUserIds) {
           const adminChannels = await listChannelChatIdsWhereUserIsAdminCached(deps.bot, gateUserId)
@@ -1775,6 +1779,7 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
     chatIdRaw: number | null,
     messageMid: string | null,
     startParamRaw: string | null = null,
+    options?: { allowFeedScan?: boolean },
   ): Promise<Post | null> {
     const lookup = buildMiniappPostLookup(pathPostId, chatIdRaw, messageMid, startParamRaw)
     if (lookup.startParamUsed) {
@@ -1786,7 +1791,7 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
         messageMid: lookup.messageMid,
       })
     }
-    return resolveMiniappPostOpen(deps.bot, lookup, resolvePostForMiniApp)
+    return resolveMiniappPostOpen(deps.bot, lookup, resolvePostForMiniApp, options)
   }
 
   router.get('/post/:postId', async (req, res) => {
@@ -1814,9 +1819,10 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
     if (!post) {
       res.status(200).json({
         ok: false,
-        is_archived: true,
+        is_archived: false,
         error: 'post_not_found',
         archived_reason: 'deleted',
+        retryable: true,
         ttl_days: ARCHIVE_TTL_DAYS,
       })
       return
@@ -1876,6 +1882,7 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
       chatIdRaw,
       messageMid,
       startParamHeader,
+      { allowFeedScan: true },
     )
     if (!post) {
       res.status(404).json({ error: 'post not found' })

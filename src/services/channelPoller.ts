@@ -13,9 +13,11 @@ import { apiCallWithRetry, summarizeMaxApiError } from '../utils/maxApiRetry'
 import {
   loadChannelPostMessage,
   tryAttachCommentsToChannelPost,
+  isCommentAttachInFlight,
   type AttachChannelCommentsResult,
 } from './channelPostActions'
 import { isMiniAppOpenUrlConfigured, postStore, type Post } from './postStore'
+import { isChannelForwardBusy } from './channelForwardBusy'
 
 const MIN_POLL_INTERVAL_MS = 3_000
 /** Верхняя граница интервала опроса одного канала (стабильность важнее редкого глобального 30 с). */
@@ -32,6 +34,8 @@ const DISABLE_AFTER_ERRORS = 5
 
 const channelTimers = new Map<number, ReturnType<typeof setInterval>>()
 const errorCount = new Map<number, number>()
+/** Per-channel in-flight: skip tick if previous poll still running. */
+const channelPollInFlight = new Map<number, boolean>()
 let botRef: Bot | null = null
 let perChannelIntervalMs = PER_CHANNEL_CAP_MS
 
@@ -59,6 +63,9 @@ async function pollChannel(
     if (knownPost && knownPost.button_attach_pending !== true) {
       continue
     }
+    if (isCommentAttachInFlight(channel.chat_id, mid)) {
+      continue
+    }
     stats.candidates += 1
     const r = await tryAttachCommentsToChannelPost(bot, message, {
       botUserId: botUid,
@@ -84,13 +91,37 @@ async function pollChannel(
 }
 
 async function pollChannelSafe(bot: Bot, channel: ChannelRecord, botUid: number | undefined): Promise<void> {
+  if (isChannelForwardBusy(channel.chat_id)) {
+    logger.debug('channelPoller: skip while TG→MAX forward is in progress', {
+      chatId: channel.chat_id,
+    })
+    return
+  }
+  if (channelPollInFlight.get(channel.chat_id)) {
+    return
+  }
+  channelPollInFlight.set(channel.chat_id, true)
   try {
     await pollChannel(bot, channel, botUid)
     errorCount.delete(channel.chat_id)
   } catch (err: unknown) {
+    const summary = summarizeMaxApiError(err)
+    // Transient / rate-limit errors must not count toward DISABLE_AFTER_ERRORS —
+    // under load they would falsely deactivate healthy channels.
+    if (summary.kind === 'transient_network' || summary.kind === 'rate_limit') {
+      logger.warn('channelPoller: временная ошибка MAX API (счётчик отключения не растёт)', {
+        chatId: channel.chat_id,
+        title: channel.title,
+        kind: summary.kind,
+        status: summary.status,
+        message: summary.message,
+        cause: summary.cause,
+      })
+      return
+    }
+
     const count = (errorCount.get(channel.chat_id) ?? 0) + 1
     errorCount.set(channel.chat_id, count)
-    const summary = summarizeMaxApiError(err)
     const remainingUntilDisable = Math.max(0, DISABLE_AFTER_ERRORS - count)
     logger.error('channelPoller: не удалось опросить канал (MAX API)', {
       chatId: channel.chat_id,
@@ -102,12 +133,7 @@ async function pollChannelSafe(bot: Bot, channel: ChannelRecord, botUid: number 
       status: summary.status,
       message: summary.message,
       cause: summary.cause,
-      hint:
-        summary.kind === 'transient_network'
-          ? 'Сетевой сбой при запросе к MAX. Обычно проходит сам; ретраи внутри poll уже исчерпаны.'
-          : summary.kind === 'rate_limit'
-            ? 'MAX ограничил частоту запросов. Интервал опроса/нагрузка могут быть слишком высокими.'
-            : 'Проверьте права бота в канале и доступность platform-api.max.ru.',
+      hint: 'Проверьте права бота в канале и доступность platform-api.max.ru.',
     })
 
     if (count >= DISABLE_AFTER_ERRORS) {
@@ -126,12 +152,8 @@ async function pollChannelSafe(bot: Bot, channel: ChannelRecord, botUid: number 
       channelRegistry.deactivate(channel.chat_id)
       errorCount.delete(channel.chat_id)
       stopChannelTimer(channel.chat_id)
-      const networkHint =
-        summary.kind === 'transient_network'
-          ? `\nПоследняя ошибка: сеть/обрыв соединения (${summary.cause ?? summary.message}).`
-          : ''
       const notifyText =
-        `⚠️ CommentBot приостановил опрос канала «${title}» после ${count} ошибок MAX API.${networkHint}\n\n` +
+        `⚠️ CommentBot приостановил опрос канала «${title}» после ${count} ошибок MAX API.\n\n` +
         `Кнопки «Комментарии» могут не появляться на новых постах. Проверьте, что бот — администратор канала, ` +
         `и нажмите «Обновить кнопки» в админ-панели или добавьте бота в канал заново.`
       void notifyAllAdmins(bot, channel.chat_id, notifyText).catch((notifyErr: unknown) => {
@@ -141,6 +163,8 @@ async function pollChannelSafe(bot: Bot, channel: ChannelRecord, botUid: number 
         })
       })
     }
+  } finally {
+    channelPollInFlight.delete(channel.chat_id)
   }
 }
 
@@ -150,6 +174,7 @@ function stopChannelTimer(chatId: number): void {
     clearInterval(t)
     channelTimers.delete(chatId)
   }
+  channelPollInFlight.delete(chatId)
 }
 
 /**
