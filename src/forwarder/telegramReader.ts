@@ -5,13 +5,63 @@ import { logger } from '../utils/logger'
 
 const TG_API = 'https://api.telegram.org/bot'
 
+function collectErrorText(err: unknown): string {
+  const parts: string[] = []
+  let current: unknown = err
+  for (let i = 0; i < 5 && current != null; i += 1) {
+    if (typeof current === 'string') {
+      parts.push(current)
+      break
+    }
+    if (typeof current !== 'object') {
+      parts.push(String(current))
+      break
+    }
+    const record = current as {
+      name?: unknown
+      message?: unknown
+      code?: unknown
+      cause?: unknown
+      errors?: unknown
+    }
+    if (typeof record.name === 'string') parts.push(record.name)
+    if (typeof record.message === 'string') parts.push(record.message)
+    if (typeof record.code === 'string') parts.push(record.code)
+    if (Array.isArray(record.errors)) {
+      for (const nested of record.errors) {
+        parts.push(collectErrorText(nested))
+      }
+    }
+    current = record.cause
+  }
+  return parts.join(' ')
+}
+
+const TRANSIENT_NETWORK_RE =
+  /ETIMEDOUT|ECONNRESET|ECONNABORTED|ENOTFOUND|EAI_AGAIN|ENETUNREACH|ECONNREFUSED|EPIPE|EPROTO|ERR_CANCELED|UND_ERR_|socket hang up|other side closed|TLS handshake|canceled|aborted|AggregateError/i
+
+/** Таймаут/обрыв long-poll getUpdates — не авария, а пустой тик. */
 export function isTelegramGetUpdatesTimeoutError(err: unknown): boolean {
+  return isTelegramTransientNetworkError(err)
+}
+
+/** Временный сетевой сбой до Telegram (прокси, TLS, DNS) — цикл должен продолжить опрос. */
+export function isTelegramTransientNetworkError(err: unknown): boolean {
   if (axios.isCancel(err)) {
     return true
   }
   if (axios.isAxiosError(err)) {
     const code = err.code ?? ''
-    if (code === 'ERR_CANCELED' || code === 'ECONNABORTED' || code === 'ETIMEDOUT') {
+    if (
+      code === 'ERR_CANCELED' ||
+      code === 'ECONNABORTED' ||
+      code === 'ETIMEDOUT' ||
+      code === 'ECONNRESET' ||
+      code === 'ENOTFOUND' ||
+      code === 'EAI_AGAIN' ||
+      code === 'ENETUNREACH' ||
+      code === 'ECONNREFUSED'
+    ) {
       return true
     }
     if (err.name === 'CanceledError' || err.message === 'canceled') {
@@ -21,14 +71,14 @@ export function isTelegramGetUpdatesTimeoutError(err: unknown): boolean {
   if (err instanceof Error) {
     const name = err.name
     const msg = err.message.toLowerCase()
-    if (name === 'CanceledError' || name === 'AbortError') {
+    if (name === 'CanceledError' || name === 'AbortError' || name === 'AggregateError') {
       return true
     }
-    if (msg === 'canceled' || msg.includes('aborted')) {
+    if (msg === 'canceled' || msg.includes('aborted') || msg.includes('etimedout')) {
       return true
     }
   }
-  return false
+  return TRANSIENT_NETWORK_RE.test(collectErrorText(err))
 }
 
 export class TelegramGetUpdatesConflictError extends Error {

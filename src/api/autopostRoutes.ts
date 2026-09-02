@@ -10,9 +10,14 @@ import { logger } from '../utils/logger'
 import { buildTelegramLinkedChatsList } from '../services/integrationPlatformClient'
 import { integrationsStore } from '../services/integrationsStore'
 import {
-  computeNextRecurringAt,
+  computeNextOccurrence,
   extractRecurringTimeFromIso,
+  isoFromLocalDateTime,
+  normalizeDailyTimes,
+  parseHoursRange,
+  parseYmd,
 } from '../services/autopostSchedule'
+import { nextSlotForPost } from '../services/autopostGates'
 import {
   computeAutopostStats,
   createAutopost,
@@ -24,9 +29,11 @@ import {
   setAutopostStatus,
   updateAutopost,
   upsertPostChannel,
+  type AutopostCondition,
   type AutopostInlineButton,
   type AutopostInlineKeyboard,
   type AutopostMediaItem,
+  type AutopostOnFailure,
   type AutopostScheduleType,
   normalizeInlineKeyboard,
   normalizeAutopostTags,
@@ -285,32 +292,202 @@ function listMaxChannelsForAutopost(): {
     }))
 }
 
+function parseDailyTimes(raw: unknown, fallback?: string | null): string[] | null {
+  if (typeof raw === 'string' && raw.trim()) {
+    try {
+      return parseDailyTimes(JSON.parse(raw), fallback)
+    } catch {
+      return normalizeDailyTimes([raw], fallback)
+    }
+  }
+  const times = normalizeDailyTimes(raw, fallback)
+  return times.length ? times : null
+}
+
+function parseYmdBody(raw: unknown): string | null {
+  const s = parseNonEmptyString(raw)
+  if (!s) return null
+  return parseYmd(s) ? s.slice(0, 10) : null
+}
+
+function parseRepeatLimit(raw: unknown): number | null {
+  if (raw === undefined || raw === null || raw === '') return null
+  const n = typeof raw === 'number' ? raw : Number.parseInt(String(raw), 10)
+  if (!Number.isInteger(n) || n < 1) return null
+  return Math.min(n, 10_000)
+}
+
+function parseIntervalHours(raw: unknown): number | null {
+  if (raw === undefined || raw === null || raw === '') return null
+  const n = typeof raw === 'number' ? raw : Number.parseFloat(String(raw))
+  if (!Number.isFinite(n) || n < 0.25) return null
+  return Math.min(Math.round(n * 4) / 4, 24 * 30)
+}
+
+function parseOnFailure(raw: unknown): AutopostOnFailure {
+  if (raw === 'retry_15m' || raw === 'stop_series' || raw === 'notify' || raw === 'skip') return raw
+  return 'skip'
+}
+
+const CONDITION_TYPES: AutopostCondition['type'][] = [
+  'min_subscribers',
+  'max_posts_per_day',
+  'min_interval_hours',
+  'hours_range',
+  'weekdays_only',
+]
+
+function parseConditionsFromBody(body: Record<string, unknown>): AutopostCondition[] {
+  const raw = body.conditions
+  let parsed: unknown = raw
+  if (typeof raw === 'string' && raw.trim()) {
+    try {
+      parsed = JSON.parse(raw)
+    } catch {
+      parsed = []
+    }
+  }
+  const out: AutopostCondition[] = []
+  if (Array.isArray(parsed)) {
+    for (const item of parsed) {
+      if (typeof item !== 'object' || item === null) continue
+      const row = item as { id?: unknown; type?: unknown; operator?: unknown; value?: unknown }
+      if (typeof row.type !== 'string' || !CONDITION_TYPES.includes(row.type as AutopostCondition['type'])) continue
+      out.push({
+        id: typeof row.id === 'string' && row.id ? row.id : `c_${out.length + 1}`,
+        type: row.type as AutopostCondition['type'],
+        operator: row.operator === '<=' || row.operator === '=' ? row.operator : '>=',
+        value: row.value as string | number,
+      })
+    }
+  }
+  const hoursFrom = parseNonEmptyString(body.hours_from)
+  const hoursTo = parseNonEmptyString(body.hours_to)
+  if (hoursFrom && hoursTo && parseHoursRange(`${hoursFrom}-${hoursTo}`)) {
+    const existing = out.findIndex((c) => c.type === 'hours_range')
+    const cond: AutopostCondition = {
+      id: existing >= 0 ? out[existing].id : 'hours_range',
+      type: 'hours_range',
+      operator: '>=',
+      value: `${hoursFrom}-${hoursTo}`,
+    }
+    if (existing >= 0) out[existing] = cond
+    else out.push(cond)
+  }
+  const minInterval = parseIntervalHours(body.min_interval_hours)
+  if (minInterval) {
+    const existing = out.findIndex((c) => c.type === 'min_interval_hours')
+    const cond: AutopostCondition = {
+      id: existing >= 0 ? out[existing].id : 'min_interval',
+      type: 'min_interval_hours',
+      operator: '>=',
+      value: minInterval,
+    }
+    if (existing >= 0) out[existing] = cond
+    else out.push(cond)
+  }
+  const maxPerDay = parseRepeatLimit(body.max_posts_per_day)
+  if (maxPerDay) {
+    const existing = out.findIndex((c) => c.type === 'max_posts_per_day')
+    const cond: AutopostCondition = {
+      id: existing >= 0 ? out[existing].id : 'max_day',
+      type: 'max_posts_per_day',
+      operator: '<=',
+      value: maxPerDay,
+    }
+    if (existing >= 0) out[existing] = cond
+    else out.push(cond)
+  }
+  return out
+}
+
 function validateScheduleInput(body: Record<string, unknown>): {
   schedule_type: AutopostScheduleType
   scheduled_at: string
   recurring_time: string | null
   weekdays: number[] | null
+  daily_times: string[] | null
   timezone: string
+  start_date: string | null
+  end_date: string | null
+  repeat_limit: number | null
+  interval_hours: number | null
+  on_failure: AutopostOnFailure
+  conditions: AutopostCondition[]
 } {
   const timezone = parseNonEmptyString(body.timezone) ?? 'Europe/Moscow'
   const scheduleTypeRaw = parseNonEmptyString(body.schedule_type) ?? 'once'
   const schedule_type: AutopostScheduleType =
     scheduleTypeRaw === 'recurring' ? 'recurring' : 'once'
-  const scheduled_at = parseNonEmptyString(body.scheduled_at)
+  const start_date = parseYmdBody(body.start_date)
+  const end_date = parseYmdBody(body.end_date)
+  const repeat_limit = parseRepeatLimit(body.repeat_limit)
+  const interval_hours = parseIntervalHours(body.interval_hours)
+  const on_failure = parseOnFailure(body.on_failure)
+  const conditions = parseConditionsFromBody(body)
+
+  const scheduledLocal = parseNonEmptyString(body.scheduled_local)
+  let scheduled_at = parseNonEmptyString(body.scheduled_at)
+  if (scheduledLocal) {
+    scheduled_at = isoFromLocalDateTime(scheduledLocal, timezone)
+  }
   if (!scheduled_at || Number.isNaN(new Date(scheduled_at).getTime())) {
-    throw new Error('scheduled_at required (ISO datetime)')
+    throw new Error('scheduled_at required (ISO datetime or scheduled_local)')
   }
+
   if (schedule_type === 'once') {
-    return { schedule_type, scheduled_at, recurring_time: null, weekdays: null, timezone }
+    return {
+      schedule_type,
+      scheduled_at,
+      recurring_time: null,
+      weekdays: null,
+      daily_times: null,
+      timezone,
+      start_date: null,
+      end_date: null,
+      repeat_limit: null,
+      interval_hours: null,
+      on_failure,
+      conditions,
+    }
   }
+
   const recurring_time =
     parseNonEmptyString(body.recurring_time) ?? extractRecurringTimeFromIso(scheduled_at, timezone)
-  const weekdays = parseWeekdays(body.weekdays)
-  if (!weekdays?.length) {
+  const daily_times = parseDailyTimes(body.daily_times, recurring_time)
+  const weekdays = parseWeekdays(body.weekdays) ?? [0, 1, 2, 3, 4, 5, 6]
+  if (!weekdays.length) {
     throw new Error('weekdays required for recurring schedule (0=Sun … 6=Sat)')
   }
-  const nextAt = computeNextRecurringAt(recurring_time, weekdays, new Date(), timezone)
-  return { schedule_type, scheduled_at: nextAt, recurring_time, weekdays, timezone }
+  const hoursRange = parseHoursRange(conditions.find((c) => c.type === 'hours_range')?.value)
+  const nextAt = computeNextOccurrence({
+    recurringTime: recurring_time,
+    dailyTimes: daily_times,
+    weekdays,
+    timezone,
+    startDate: start_date,
+    endDate: end_date,
+    intervalHours: interval_hours,
+    hoursRange,
+    from: new Date(),
+  })
+  if (!nextAt) {
+    throw new Error('Нет ближайшего слота публикации — проверьте дни, время и дату окончания')
+  }
+  return {
+    schedule_type,
+    scheduled_at: nextAt,
+    recurring_time: (daily_times && daily_times[0]) || recurring_time,
+    weekdays,
+    daily_times,
+    timezone,
+    start_date,
+    end_date,
+    repeat_limit,
+    interval_hours,
+    on_failure,
+    conditions,
+  }
 }
 
 function parseAutopostStatus(raw: unknown): AutopostStatus | undefined {
@@ -340,16 +517,13 @@ async function publishAutopostNow(postId: string): Promise<{ ok: true; post: Aut
   }
   if (post.schedule_type === 'once') {
     markAutopostSent(post.id, { status: 'sent' })
-  } else if (post.recurring_time && post.weekdays?.length) {
-    const nextAt = computeNextRecurringAt(
-      post.recurring_time,
-      post.weekdays,
-      new Date(),
-      post.timezone,
-    )
-    markAutopostSent(post.id, { nextScheduledAt: nextAt, status: 'active' })
   } else {
-    markAutopostSent(post.id, { status: 'sent' })
+    const nextAt = nextSlotForPost(post, new Date())
+    if (nextAt) {
+      markAutopostSent(post.id, { nextScheduledAt: nextAt, status: 'active' })
+    } else {
+      markAutopostSent(post.id, { status: 'sent' })
+    }
   }
   const updated = getAutopostById(postId)
   if (!updated) {
@@ -449,8 +623,12 @@ export function createAutopostRouter(): express.Router {
   router.get('/stats', async (_req, res) => {
     try {
       const channels = await listTelegramChannelsForAutopost()
+      const maxChannels = listMaxChannelsForAutopost()
       const posts = listAutoposts()
-      res.json({ stats: computeAutopostStats(posts, channels.length), scheduler: getAutopostSchedulerStatus() })
+      res.json({
+        stats: computeAutopostStats(posts, channels.length + maxChannels.length),
+        scheduler: getAutopostSchedulerStatus(),
+      })
     } catch (err: unknown) {
       logger.error('GET /autoposts/stats failed', err)
       res.status(500).json({ error: 'Не удалось загрузить статистику' })
@@ -565,6 +743,11 @@ export function createAutopostRouter(): express.Router {
     }
     try {
       const body = isRecord(req.body) ? req.body : {}
+      const current = getAutopostById(id)
+      if (!current) {
+        res.status(404).json({ error: 'not found' })
+        return
+      }
       const patch: Parameters<typeof updateAutopost>[1] = {}
       if (body.text !== undefined) {
         patch.text = parseNonEmptyString(body.text) ?? ''
@@ -598,19 +781,34 @@ export function createAutopostRouter(): express.Router {
       ) {
         patch.media = mergeAutopostMedia(body, (req.files as Express.Multer.File[]) ?? [])
       }
-      if (body.schedule_type !== undefined || body.scheduled_at !== undefined) {
+      if (body.schedule_type !== undefined || body.scheduled_at !== undefined || body.scheduled_local !== undefined) {
         Object.assign(patch, validateScheduleInput(body))
+      } else {
+        if (body.on_failure !== undefined) patch.on_failure = parseOnFailure(body.on_failure)
+        if (body.repeat_limit !== undefined) patch.repeat_limit = parseRepeatLimit(body.repeat_limit)
+        if (body.interval_hours !== undefined) patch.interval_hours = parseIntervalHours(body.interval_hours)
+        if (body.start_date !== undefined) patch.start_date = parseYmdBody(body.start_date)
+        if (body.end_date !== undefined) patch.end_date = parseYmdBody(body.end_date)
+        if (
+          body.conditions !== undefined ||
+          body.hours_from !== undefined ||
+          body.min_interval_hours !== undefined ||
+          body.max_posts_per_day !== undefined
+        ) {
+          patch.conditions = parseConditionsFromBody(body)
+        }
+        if (body.daily_times !== undefined) {
+          patch.daily_times = parseDailyTimes(body.daily_times, current.recurring_time)
+        }
+        if (body.timezone !== undefined) {
+          patch.timezone = parseNonEmptyString(body.timezone) ?? current.timezone
+        }
       }
       if (body.status !== undefined) {
         const status = parseAutopostStatus(body.status)
         if (status) {
           patch.status = status
         }
-      }
-      const current = getAutopostById(id)
-      if (!current) {
-        res.status(404).json({ error: 'not found' })
-        return
       }
       const nextMedia = patch.media ?? current.media
       const nextPlatform = patch.platform ?? current.platform
@@ -663,22 +861,22 @@ export function createAutopostRouter(): express.Router {
       return
     }
     let scheduled_at = current.scheduled_at
-    if (current.schedule_type === 'recurring' && current.recurring_time && current.weekdays?.length) {
-      scheduled_at = computeNextRecurringAt(
-        current.recurring_time,
-        current.weekdays,
-        new Date(),
-        current.timezone,
-      )
+    if (current.schedule_type === 'recurring') {
+      const nextAt = nextSlotForPost(current, new Date())
+      if (!nextAt) {
+        res.status(400).json({ error: 'Нет следующего слота — проверьте дату окончания и дни недели' })
+        return
+      }
+      scheduled_at = nextAt
     } else if (new Date(scheduled_at).getTime() <= Date.now()) {
-      res.status(400).json({ error: 'scheduled_at in the past; update schedule first' })
-      return
+      scheduled_at = new Date().toISOString()
     }
     const row = updateAutopost(id, { status: 'active', scheduled_at })
     if (!row) {
       res.status(404).json({ error: 'not found' })
       return
     }
+    triggerAutopostTick()
     res.json({ ok: true, post: row })
   })
 

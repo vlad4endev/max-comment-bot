@@ -5,11 +5,16 @@
 (function () {
   'use strict';
 
-  var AP_UI_BUILD = '20260619-publish-fix-v10';
+  var AP_UI_BUILD = '20260817-flex-v1';
   var AP_TAG_COLORS = ['#7F77DD', '#1D9E75', '#BA7517', '#3B82F6', '#EC4899', '#EF4444', '#6B7280', '#EAB308'];
   var AP_DEFAULT_TZ = (typeof Intl !== 'undefined' && Intl.DateTimeFormat)
     ? (Intl.DateTimeFormat().resolvedOptions().timeZone || 'Europe/Moscow')
     : 'Europe/Moscow';
+  var AP_TIMEZONES = [
+    'Europe/Kaliningrad', 'Europe/Moscow', 'Europe/Samara', 'Asia/Yekaterinburg',
+    'Asia/Omsk', 'Asia/Krasnoyarsk', 'Asia/Irkutsk', 'Asia/Yakutsk',
+    'Asia/Vladivostok', 'Asia/Magadan', 'Asia/Kamchatka', 'UTC', 'Europe/Kyiv', 'Asia/Almaty',
+  ];
   var API_BASE = '/api/admin';
   var CHANNEL_COLORS = ['#534AB7', '#1D9E75', '#BA7517', '#7F77DD', '#3B82F6', '#EC4899'];
   var WEEKDAY_LABELS = ['Вс', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб'];
@@ -22,6 +27,7 @@
     templates: [],
     channelsHint: null,
     stats: null,
+    scheduler: null,
     filters: { search: '', channelId: '', status: '', scheduleType: '', tag: '', from: '', to: '' },
     postsPage: 1,
     postsPerPage: 15,
@@ -205,6 +211,34 @@
       day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit',
     });
   }
+  function fmtDateTimeTz(iso, tz) {
+    if (!iso) return '—';
+    var t = Date.parse(iso);
+    if (!Number.isFinite(t)) return String(iso);
+    try {
+      return new Date(t).toLocaleString('ru-RU', {
+        timeZone: tz || AP_DEFAULT_TZ,
+        day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit',
+      });
+    } catch (_e) {
+      return fmtDateTime(iso);
+    }
+  }
+  function partsInZone(iso, tz) {
+    var d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return null;
+    var fmt = new Intl.DateTimeFormat('en-CA', {
+      timeZone: tz || AP_DEFAULT_TZ,
+      year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', hour12: false,
+    });
+    var map = {};
+    fmt.formatToParts(d).forEach(function (p) { map[p.type] = p.value; });
+    return {
+      date: (map.year || '') + '-' + (map.month || '') + '-' + (map.day || ''),
+      time: (map.hour || '12') + ':' + (map.minute || '00'),
+    };
+  }
   function fmtDateInput(d) {
     var y = d.getFullYear();
     var m = String(d.getMonth() + 1).padStart(2, '0');
@@ -217,6 +251,60 @@
     var d = new Date(t);
     var now = new Date();
     return d.getDate() === now.getDate() && d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
+  }
+  function isOverdue(p) {
+    if (!p || p.status !== 'active') return false;
+    var t = Date.parse(p.scheduled_at);
+    return Number.isFinite(t) && t < Date.now() - 2 * 60 * 1000;
+  }
+  function conditionSummary(p) {
+    var bits = [];
+    if (p.interval_hours) bits.push('каждые ' + p.interval_hours + ' ч');
+    if (p.daily_times && p.daily_times.length > 1) bits.push(p.daily_times.join(', '));
+    else if (p.recurring_time) bits.push(p.recurring_time);
+    if (p.start_date || p.end_date) {
+      bits.push((p.start_date || '…') + ' → ' + (p.end_date || '∞'));
+    }
+    if (p.repeat_limit) bits.push('лимит ' + p.repeat_limit);
+    (p.conditions || []).forEach(function (c) {
+      if (c.type === 'hours_range') bits.push('окно ' + c.value);
+      if (c.type === 'min_interval_hours') bits.push('пауза ' + c.value + ' ч');
+      if (c.type === 'max_posts_per_day') bits.push('≤' + c.value + '/день');
+    });
+    return bits.length ? bits.join(' · ') : '—';
+  }
+  function condValue(conditions, type) {
+    var row = (conditions || []).find(function (c) { return c.type === type; });
+    return row ? row.value : '';
+  }
+  function splitHoursRange(value) {
+    var m = String(value || '').match(/(\d{1,2}:\d{2}|\d{1,2})\s*[-–]\s*(\d{1,2}:\d{2}|\d{1,2})/);
+    if (!m) return { from: '', to: '' };
+    function norm(s) { return s.indexOf(':') >= 0 ? s : (String(s).padStart(2, '0') + ':00'); }
+    return { from: norm(m[1]), to: norm(m[2]) };
+  }
+  function tzOptionsHtml(selected) {
+    var list = AP_TIMEZONES.slice();
+    if (selected && list.indexOf(selected) < 0) list.unshift(selected);
+    if (AP_DEFAULT_TZ && list.indexOf(AP_DEFAULT_TZ) < 0) list.unshift(AP_DEFAULT_TZ);
+    return list.map(function (tz) {
+      return '<option value="' + esc(tz) + '"' + (tz === selected ? ' selected' : '') + '>' + esc(tz) + '</option>';
+    }).join('');
+  }
+  function postActionButtons(p, compact) {
+    var html = '';
+    html += '<button type="button" class="btn btn-ghost btn-sm" data-ap-edit="' + esc(p.id) + '">' + (compact ? 'Изм.' : 'Редактировать') + '</button>';
+    if (p.status === 'active' || p.status === 'draft' || p.status === 'paused' || p.status === 'failed') {
+      html += '<button type="button" class="btn btn-ghost btn-sm" data-ap-now="' + esc(p.id) + '" title="Опубликовать сейчас">Сейчас</button>';
+    }
+    if (p.status === 'active') {
+      html += '<button type="button" class="btn btn-ghost btn-sm" data-ap-pause="' + esc(p.id) + '">Пауза</button>';
+    } else if (p.status === 'paused' || p.status === 'failed' || p.status === 'draft') {
+      html += '<button type="button" class="btn btn-ghost btn-sm" data-ap-resume="' + esc(p.id) + '">Запустить</button>';
+    }
+    html += '<button type="button" class="btn btn-ghost btn-sm" data-ap-dup="' + esc(p.id) + '">Копия</button>';
+    html += '<button type="button" class="btn btn-danger btn-sm" data-ap-del="' + esc(p.id) + '">Удалить</button>';
+    return html;
   }
   function truncate(s, n) {
     s = String(s || '').trim();
@@ -275,6 +363,19 @@
   function apiPatch(path, body) {
     return fetch(API_BASE + path, {
       method: 'PATCH', credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body || {}),
+    }).then(function (r) {
+      if (r.status === 401) throw new Error('auth');
+      return r.json().then(function (j) {
+        if (!r.ok) throw new Error((j && j.error) || (j && j.message) || 'Ошибка');
+        return j;
+      });
+    });
+  }
+  function apiPostJson(path, body) {
+    return fetch(API_BASE + path, {
+      method: 'POST', credentials: 'same-origin',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body || {}),
     }).then(function (r) {
@@ -392,7 +493,7 @@
   }
 
   function statusLabel(status) {
-    var m = { active: 'Активен', sent: 'Отправлен', paused: 'Пауза', failed: 'Ошибка' };
+    var m = { active: 'Активен', sent: 'Отправлен', paused: 'Пауза', failed: 'Ошибка', draft: 'Черновик' };
     return m[status] || status;
   }
 
@@ -439,37 +540,81 @@
 
   function renderMetricsRow(stats) {
     var s = stats || {};
+    var sch = state.scheduler || {};
+    var failed = (state.posts || []).filter(function (p) { return p.status === 'failed'; }).length;
+    var overdue = (state.posts || []).filter(isOverdue).length;
     return '<div class="ap-metrics">' +
-      '<div class="ap-metric"><div class="label">Запланировано</div><div class="value">' + (s.scheduledCount || 0) + '</div></div>' +
+      '<div class="ap-metric"><div class="label">В очереди</div><div class="value">' + (s.scheduledCount || 0) + '</div></div>' +
       '<div class="ap-metric"><div class="label">Активных серий</div><div class="value">' + (s.activeSeries || 0) + '</div></div>' +
       '<div class="ap-metric"><div class="label">Успешных отправок</div><div class="value">' + (s.successRate != null ? s.successRate + '%' : '—') + '</div></div>' +
-      '<div class="ap-metric"><div class="label">Подключённых каналов</div><div class="value">' + (s.connectedChannels || state.channels.length) + '</div></div>' +
+      '<div class="ap-metric' + (failed || overdue || sch.running === false ? ' ap-metric--warn' : '') + '"><div class="label">Планировщик</div><div class="value">' +
+      (sch.running === false ? 'стоп' : (failed ? failed + ' ошиб.' : (overdue ? overdue + ' ждут' : 'OK'))) +
+      '</div></div>' +
       '</div>';
   }
 
+  function renderSchedulerBar() {
+    var sch = state.scheduler || {};
+    var running = sch.running !== false;
+    var failed = (state.posts || []).filter(function (p) { return p.status === 'failed'; });
+    var overdue = (state.posts || []).filter(isOverdue);
+    var html = '<div class="ap-health ' + (running && !failed.length && !overdue.length ? 'ok' : 'warn') + '">';
+    html += '<span class="ap-health-dot"></span>';
+    html += running
+      ? 'Планировщик работает · проверка каждые ' + Math.round((sch.tickMs || 15000) / 1000) + ' с'
+      : 'Планировщик не запущен — посты не уйдут, пока не перезапустите бота';
+    if (sch.lastTickAt) html += ' · последний проход ' + esc(fmtTime(sch.lastTickAt));
+    html += '</div>';
+    if (failed.length) {
+      html += '<div class="ap-alert ap-alert--danger"><div><strong>' + failed.length + ' публикаций с ошибкой</strong>';
+      html += '<div class="text-sm">' + esc(truncate(failed[0].last_error || 'Неизвестная ошибка', 140)) + '</div></div>';
+      html += '<div class="ap-alert-actions">';
+      html += '<button type="button" class="btn btn-ghost btn-sm" data-ap-edit="' + esc(failed[0].id) + '">Исправить</button>';
+      html += '<button type="button" class="btn btn-ghost btn-sm" data-ap-now="' + esc(failed[0].id) + '">Повторить сейчас</button>';
+      html += '<button type="button" class="btn btn-ghost btn-sm" data-ap-resume="' + esc(failed[0].id) + '">В очередь</button>';
+      html += '</div></div>';
+    }
+    if (overdue.length) {
+      html += '<div class="ap-alert"><div><strong>' + overdue.length + ' постов просрочены</strong>';
+      html += '<div class="text-sm">Время наступило, но публикация ещё в очереди. Можно отправить вручную.</div></div>';
+      html += '<button type="button" class="btn btn-ghost btn-sm" data-ap-now="' + esc(overdue[0].id) + '">Отправить ближайший</button></div>';
+    }
+    return html;
+  }
+
   function renderUpcomingList() {
-    var today = state.posts.filter(function (p) {
-      return p.status === 'active' && isToday(p.scheduled_at);
+    var upcoming = state.posts.filter(function (p) {
+      return p.status === 'active' || p.status === 'draft';
     }).sort(function (a, b) {
       return Date.parse(a.scheduled_at) - Date.parse(b.scheduled_at);
-    });
-    if (!today.length) {
-      return '<div class="ap-empty"><i data-lucide="calendar-off"></i><h4>Нет постов на сегодня</h4>' +
-        '<p>Запланируйте публикацию или создайте серию</p>' +
+    }).slice(0, 24);
+    if (!upcoming.length) {
+      return '<div class="ap-empty"><i data-lucide="calendar-off"></i><h4>Очередь пуста</h4>' +
+        '<p>Запланируйте разовую публикацию, серию по дням или интервал</p>' +
         '<button type="button" class="ap-btn-primary" style="width:auto;display:inline-block" data-ap-new-post>Создать пост</button></div>';
     }
     var html = '';
-    today.forEach(function (p) {
+    var lastDay = '';
+    upcoming.forEach(function (p) {
+      var parts = partsInZone(p.scheduled_at, p.timezone || AP_DEFAULT_TZ);
+      if (parts && parts.date !== lastDay) {
+        lastDay = parts.date;
+        var pretty = isToday(p.scheduled_at) ? 'Сегодня' : parts.date;
+        html += '<div class="ap-day-label">' + esc(pretty) + '</div>';
+      }
       var ci = state.channels.findIndex(function (c) { return String(c.id) === String(p.target_channel_id); });
       var color = channelColor(p.target_channel_id, ci);
-      html += '<div class="ap-upcoming-item">';
+      html += '<div class="ap-upcoming-item' + (isOverdue(p) ? ' overdue' : '') + (p.status === 'draft' ? ' draft' : '') + '">';
       html += '<span class="ap-upcoming-time">' + esc(fmtTime(p.scheduled_at)) + '</span>';
       html += '<span class="ap-upcoming-stripe" style="background:' + color + '"></span>';
-      html += '<span class="ap-upcoming-text" title="' + esc(p.text) + '">' + esc(truncate(p.text || '—', 60)) + '</span>';
-      html += renderPostTagsHtml(p.tags, false);
-      html += '<span class="ap-upcoming-channel">' + esc(postChannelName(p)) + '</span>';
-      html += '<button type="button" class="ap-menu-btn" data-ap-menu="' + esc(p.id) + '" title="Действия"><i data-lucide="more-vertical"></i></button>';
+      html += '<div class="ap-upcoming-main"><span class="ap-upcoming-text" title="' + esc(p.text) + '">' + esc(truncate(p.text || '—', 70)) + '</span>';
+      html += '<div class="ap-upcoming-meta">' + renderPostTagsHtml(p.tags, false);
+      html += '<span class="ap-upcoming-channel">' + esc(postChannelName(p)) + ' · ' + esc(platformLabel(p.platform || 'telegram')) + '</span></div></div>';
+      html += '<div class="ap-upcoming-actions">' + postActionButtons(p, true) + '</div>';
       html += '</div>';
+      if (p.last_error && p.status !== 'sent') {
+        html += '<div class="ap-upcoming-error">' + esc(truncate(p.last_error, 160)) + '</div>';
+      }
     });
     return html;
   }
@@ -509,29 +654,26 @@
   function renderSeriesTable() {
     var series = state.posts.filter(function (p) { return p.schedule_type === 'recurring'; });
     if (!series.length) {
-      return '<div class="ap-empty"><i data-lucide="repeat"></i><h4>Нет активных серий</h4><p>Создайте повторяющийся пост</p></div>';
+      return '<div class="ap-empty"><i data-lucide="repeat"></i><h4>Нет серий</h4><p>Ежедневно, по дням недели или каждые N часов</p></div>';
     }
     var html = '<div class="ap-table-wrap"><table class="ap-table"><thead><tr>' +
-      '<th>Название</th><th>Канал</th><th>Дни</th><th>Время</th><th>Условия</th><th>Статус</th><th>Действия</th></tr></thead><tbody>';
+      '<th>Название</th><th>Канал</th><th>Дни</th><th>Расписание</th><th>Следующий слот</th><th>Статус</th><th>Действия</th></tr></thead><tbody>';
     series.forEach(function (p) {
-      var days = (p.weekdays || []).map(function (d) { return WEEKDAY_LABELS[d]; }).join(', ');
-      var dot = p.status === 'active' ? 'active' : p.status === 'paused' ? 'paused' : 'draft';
+      var days = p.interval_hours
+        ? 'интервал'
+        : ((p.weekdays || []).length >= 7 ? 'ежедневно' : (p.weekdays || []).map(function (d) { return WEEKDAY_LABELS[d]; }).join(', '));
       html += '<tr>';
       html += '<td>' + esc(truncate(p.text || 'Без названия', 40)) + '</td>';
       html += '<td>' + esc(postChannelName(p)) + '</td>';
       html += '<td>' + esc(days || '—') + '</td>';
-      html += '<td class="mono">' + esc(p.recurring_time || '—') + '</td>';
-      html += '<td class="muted">—</td>';
-      html += '<td><span class="ap-status-dot ' + dot + '"></span>' + esc(statusLabel(p.status)) + '</td>';
-      html += '<td class="ap-actions">';
-      html += '<button type="button" class="btn btn-ghost btn-sm" data-ap-edit="' + esc(p.id) + '">Редактировать</button>';
-      if (p.status === 'active') {
-        html += '<button type="button" class="btn btn-ghost btn-sm" data-ap-pause="' + esc(p.id) + '">Пауза</button>';
-      } else if (p.status === 'paused' || p.status === 'failed') {
-        html += '<button type="button" class="btn btn-ghost btn-sm" data-ap-resume="' + esc(p.id) + '">Старт</button>';
+      html += '<td class="text-sm">' + esc(conditionSummary(p)) + '</td>';
+      html += '<td class="mono text-sm">' + (p.status === 'active' ? esc(fmtDateTimeTz(p.scheduled_at, p.timezone)) : '—') + '</td>';
+      html += '<td><span class="ap-status-dot ' + statusDotClass(p.status) + '"></span>' + esc(statusLabel(p.status));
+      if (p.last_error && p.status === 'failed') {
+        html += '<div class="ap-error-hint" title="' + esc(p.last_error) + '">' + esc(truncate(p.last_error, 48)) + '</div>';
       }
-      html += '<button type="button" class="btn btn-danger btn-sm" data-ap-del="' + esc(p.id) + '">Удалить</button>';
-      html += '</td></tr>';
+      html += '</td>';
+      html += '<td class="ap-actions">' + postActionButtons(p, true) + '</td></tr>';
     });
     html += '</tbody></table></div>';
     return html;
@@ -539,8 +681,9 @@
 
   function renderSchedulePage() {
     return renderMetricsRow(state.stats) +
+      renderSchedulerBar() +
       '<div class="ap-grid-2">' +
-      '<div class="ap-card"><h3>Ближайшие посты сегодня</h3>' + renderUpcomingList() + '</div>' +
+      '<div class="ap-card"><h3>Очередь публикаций</h3>' + renderUpcomingList() + '</div>' +
       '<div class="ap-card"><h3>Быстрый постинг</h3>' + renderQuickForm() + '</div>' +
       '</div>' +
       '<div class="ap-card"><h3>Серии</h3>' + renderSeriesTable() + '</div>';
@@ -562,6 +705,7 @@
       '<option value="paused"' + (state.filters.status === 'paused' ? ' selected' : '') + '>Пауза</option>' +
       '<option value="sent"' + (state.filters.status === 'sent' ? ' selected' : '') + '>Отправлен</option>' +
       '<option value="failed"' + (state.filters.status === 'failed' ? ' selected' : '') + '>Ошибка</option>' +
+      '<option value="draft"' + (state.filters.status === 'draft' ? ' selected' : '') + '>Черновик</option>' +
       '</select>' +
       '<select class="select" id="apFilterType">' +
       '<option value="">Все типы</option>' +
@@ -633,14 +777,14 @@
       html += '<td style="max-width:220px" title="' + esc(p.text) + '">' + esc(truncate(p.text || '—', 50)) + '</td>';
       html += '<td style="min-width:120px">' + renderPostTagsHtml(p.tags, true) + '</td>';
       html += '<td><span class="ap-channel-dot" style="background:' + color + ';display:inline-block;vertical-align:middle"></span> ' + esc(postChannelName(p)) + '</td>';
-      html += '<td class="mono text-sm">' + esc(fmtDateTime(p.scheduled_at)) + '</td>';
+      html += '<td class="mono text-sm">' + esc(fmtDateTimeTz(p.scheduled_at, p.timezone));
+      if (p.last_error && p.status === 'failed') {
+        html += '<div class="ap-error-hint" title="' + esc(p.last_error) + '">' + esc(truncate(p.last_error, 40)) + '</div>';
+      }
+      html += '</td>';
       html += '<td><span class="ap-badge ' + typeBadge + '">' + typeLabel + '</span></td>';
       html += '<td><span class="ap-status-dot ' + statusDotClass(p.status) + '"></span>' + esc(statusLabel(p.status)) + '</td>';
-      html += '<td class="ap-actions">';
-      html += '<button type="button" class="btn btn-ghost btn-sm" data-ap-edit="' + esc(p.id) + '">Редактировать</button>';
-      html += '<button type="button" class="btn btn-ghost btn-sm" data-ap-dup="' + esc(p.id) + '">Дублировать</button>';
-      html += '<button type="button" class="btn btn-danger btn-sm" data-ap-del="' + esc(p.id) + '">Удалить</button>';
-      html += '</td></tr>';
+      html += '<td class="ap-actions">' + postActionButtons(p, true) + '</td></tr>';
     });
     html += '</tbody></table></div>';
     html += '<div class="ap-pagination">';
@@ -794,19 +938,23 @@
       : (initPlatformChannels[0] ? [String(initPlatformChannels[0].id)] : []);
     var today = fmtDateInput(new Date());
     var schedType = 'once';
-    if (p.schedule_type === 'recurring') {
+    if (p.interval_hours) {
+      schedType = 'interval';
+    } else if (p.schedule_type === 'recurring') {
       var wds = p.weekdays || [];
       schedType = wds.length >= 7 ? 'daily' : 'weekly';
     }
     var onceDate = today;
     var onceTime = '12:00';
+    var tz = p.timezone || AP_DEFAULT_TZ;
     if (p.scheduled_at && p.schedule_type !== 'recurring') {
-      var sd = new Date(p.scheduled_at);
-      if (Number.isFinite(sd.getTime())) {
-        onceDate = fmtDateInput(sd);
-        onceTime = String(sd.getHours()).padStart(2, '0') + ':' + String(sd.getMinutes()).padStart(2, '0');
+      var localParts = partsInZone(p.scheduled_at, tz);
+      if (localParts) {
+        onceDate = localParts.date;
+        onceTime = localParts.time;
       }
     }
+    var hoursRange = splitHoursRange(condValue(p.conditions, 'hours_range'));
 
     var backdrop = document.createElement('div');
     backdrop.className = 'ap-modal-backdrop';
@@ -840,7 +988,8 @@
       '<span class="ap-modal-build">' + esc(AP_UI_BUILD) + '</span>' +
       '<div class="ap-modal-footer-actions">' +
       '<button type="button" class="btn btn-ghost" data-ap-modal-close>Отмена</button>' +
-      '<button type="button" class="btn btn-ghost" data-ap-save-draft>Сохранить как черновик</button>' +
+      '<button type="button" class="btn btn-ghost" data-ap-save-draft>Черновик</button>' +
+      '<button type="button" class="btn btn-ghost" data-ap-publish-now>Опубликовать сейчас</button>' +
       '<button type="button" class="ap-topbar-btn" data-ap-submit-post>Запланировать ▶</button>' +
       '</div></div>';
 
@@ -854,16 +1003,24 @@
       scheduleType: schedType,
       onceDate: onceDate,
       onceTime: onceTime,
-      dailyTimes: p.recurring_time ? [p.recurring_time] : ['09:00'],
+      dailyTimes: (p.daily_times && p.daily_times.length)
+        ? p.daily_times.slice()
+        : (p.recurring_time ? [p.recurring_time] : ['09:00']),
       weekdays: p.weekdays && p.weekdays.length ? p.weekdays.slice() : [1, 2, 3, 4, 5],
-      startDate: '',
-      endDate: '',
-      conditions: [],
+      startDate: p.start_date || '',
+      endDate: p.end_date || '',
+      timezone: tz,
+      intervalHours: p.interval_hours || 6,
+      repeatLimit: p.repeat_limit || '',
+      hoursFrom: hoursRange.from || '',
+      hoursTo: hoursRange.to || '',
+      minIntervalHours: condValue(p.conditions, 'min_interval_hours') || '',
+      maxPostsPerDay: condValue(p.conditions, 'max_posts_per_day') || '',
       mediaFiles: buildMediaFilesFromPost(p),
       inlineRows: inlineRowsFromPost(p),
       tags: normalizeTagList(p.tags || []),
       tagDraftColor: AP_TAG_COLORS[0],
-      onFailure: 'skip',
+      onFailure: p.on_failure || 'skip',
     };
 
     function showModalStatus(msg, type) {
@@ -913,10 +1070,29 @@
         var picked = [];
         qsa('.apmodal_wd:checked', body).forEach(function (cb) { picked.push(Number(cb.value)); });
         modalState.weekdays = picked;
+      } else if (st === 'interval') {
+        var intEl = qs('#apModalInterval', body);
+        if (intEl) modalState.intervalHours = Number(intEl.value) || 6;
+        var iStart = qs('#apModalIStart', body);
+        var iEnd = qs('#apModalIEnd', body);
+        if (iStart) modalState.startDate = iStart.value;
+        if (iEnd) modalState.endDate = iEnd.value;
       }
       snapshotInlineRowsFromDom(body);
       var onFail = qs('#apOnFailure', body);
       if (onFail) modalState.onFailure = onFail.value;
+      var tzEl = qs('#apTimezone', body);
+      if (tzEl) modalState.timezone = tzEl.value || AP_DEFAULT_TZ;
+      var limitEl = qs('#apRepeatLimit', body);
+      if (limitEl) modalState.repeatLimit = limitEl.value;
+      var hf = qs('#apHoursFrom', body);
+      var ht = qs('#apHoursTo', body);
+      if (hf) modalState.hoursFrom = hf.value;
+      if (ht) modalState.hoursTo = ht.value;
+      var mi = qs('#apMinInterval', body);
+      if (mi) modalState.minIntervalHours = mi.value;
+      var md = qs('#apMaxDay', body);
+      if (md) modalState.maxPostsPerDay = md.value;
       var activePlatform = qs('[data-ap-platform].active', body);
       if (activePlatform) {
         modalState.platform = activePlatform.getAttribute('data-ap-platform') === 'max' ? 'max' : 'telegram';
@@ -1218,17 +1394,18 @@
         '<textarea class="textarea hidden" id="apModalText" rows="4">' + esc(modalState.text) + '</textarea>' +
         '<div class="ap-char-count"><span id="apCharCount">0</span> символов · <span class="muted">Telegram & MAX HTML</span></div></section>' +
         '<section class="ap-form-section" id="apSecSchedule"><h3>Расписание</h3>' +
-        '<div class="ap-schedule-types" id="apModalSchedTypes">' +
-        '<button type="button" class="ap-schedule-type' + (st === 'once' ? ' active' : '') + '" data-mst="once">📅 Разово</button>' +
-        '<button type="button" class="ap-schedule-type' + (st === 'daily' ? ' active' : '') + '" data-mst="daily">🔄 Ежедневно</button>' +
-        '<button type="button" class="ap-schedule-type' + (st === 'weekly' ? ' active' : '') + '" data-mst="weekly">🗓 По дням</button>' +
+        '<div class="ap-schedule-types ap-schedule-types-4" id="apModalSchedTypes">' +
+        '<button type="button" class="ap-schedule-type' + (st === 'once' ? ' active' : '') + '" data-mst="once">Разово</button>' +
+        '<button type="button" class="ap-schedule-type' + (st === 'daily' ? ' active' : '') + '" data-mst="daily">Ежедневно</button>' +
+        '<button type="button" class="ap-schedule-type' + (st === 'weekly' ? ' active' : '') + '" data-mst="weekly">По дням</button>' +
+        '<button type="button" class="ap-schedule-type' + (st === 'interval' ? ' active' : '') + '" data-mst="interval">Интервал</button>' +
         '</div>' +
         '<div id="apModalOnce" class="ap-schedule-panel' + (st !== 'once' ? ' hidden' : '') + '">' +
         '<div class="form-row"><div class="form-group"><label>Дата</label><input type="date" class="input" id="apModalDate" value="' + esc(modalState.onceDate) + '"/></div>' +
         '<div class="form-group"><label>Время</label><input type="time" class="input" id="apModalTime" value="' + esc(modalState.onceTime) + '"/></div></div></div>' +
         '<div id="apModalDaily" class="ap-schedule-panel' + (st !== 'daily' ? ' hidden' : '') + '">' +
-        '<label>Время публикации</label><div class="ap-time-chips" id="apDailyChips"></div>' +
-        '<button type="button" class="btn btn-ghost btn-sm" id="apAddDailyTime">+ Ещё время</button>' +
+        '<label>Времена публикации</label><div class="ap-time-chips" id="apDailyChips"></div>' +
+        '<div class="ap-time-add"><input type="time" class="input" id="apNewDailyTime" value="14:00"/><button type="button" class="btn btn-ghost btn-sm" id="apAddDailyTime">+ Добавить время</button></div>' +
         '<div class="form-row"><div class="form-group"><label>Дата начала</label><input type="date" class="input" id="apModalStart" value="' + esc(modalState.startDate) + '"/></div>' +
         '<div class="form-group"><label>Дата окончания</label><input type="date" class="input" id="apModalEnd" value="' + esc(modalState.endDate) + '"/></div></div></div>' +
         '<div id="apModalWeekly" class="ap-schedule-panel' + (st !== 'weekly' ? ' hidden' : '') + '">' +
@@ -1236,6 +1413,25 @@
         '<div class="form-group"><label>Время</label><input type="time" class="input" id="apModalWeeklyTime" value="' + esc(modalState.dailyTimes[0] || '09:00') + '"/></div>' +
         '<div class="form-row"><div class="form-group"><label>Дата начала</label><input type="date" class="input" id="apModalWStart" value="' + esc(modalState.startDate) + '"/></div>' +
         '<div class="form-group"><label>Дата окончания</label><input type="date" class="input" id="apModalWEnd" value="' + esc(modalState.endDate) + '"/></div></div></div>' +
+        '<div id="apModalInterval" class="ap-schedule-panel' + (st !== 'interval' ? ' hidden' : '') + '">' +
+        '<div class="form-group"><label>Повторять каждые (часы)</label><input type="number" class="input" id="apModalInterval" min="1" max="720" step="1" value="' + esc(String(modalState.intervalHours || 6)) + '"/></div>' +
+        '<div class="form-row"><div class="form-group"><label>Дата начала</label><input type="date" class="input" id="apModalIStart" value="' + esc(modalState.startDate) + '"/></div>' +
+        '<div class="form-group"><label>Дата окончания</label><input type="date" class="input" id="apModalIEnd" value="' + esc(modalState.endDate) + '"/></div></div></div>' +
+        '<details class="ap-advanced"' + (modalState.hoursFrom || modalState.repeatLimit || modalState.minIntervalHours ? ' open' : '') + '>' +
+        '<summary>Гибкие условия и часовой пояс</summary>' +
+        '<div class="form-group"><label>Часовой пояс</label><select class="select" id="apTimezone">' + tzOptionsHtml(modalState.timezone) + '</select></div>' +
+        '<div class="form-row"><div class="form-group"><label>Публиковать с</label><input type="time" class="input" id="apHoursFrom" value="' + esc(modalState.hoursFrom) + '"/></div>' +
+        '<div class="form-group"><label>до</label><input type="time" class="input" id="apHoursTo" value="' + esc(modalState.hoursTo) + '"/></div></div>' +
+        '<div class="form-row"><div class="form-group"><label>Мин. пауза между постами (ч)</label><input type="number" class="input" id="apMinInterval" min="0" step="0.5" placeholder="нет" value="' + esc(String(modalState.minIntervalHours || '')) + '"/></div>' +
+        '<div class="form-group"><label>Макс. постов в канал за день</label><input type="number" class="input" id="apMaxDay" min="1" placeholder="без лимита" value="' + esc(String(modalState.maxPostsPerDay || '')) + '"/></div></div>' +
+        '<div class="form-row"><div class="form-group"><label>Лимит повторов серии</label><input type="number" class="input" id="apRepeatLimit" min="1" placeholder="без лимита" value="' + esc(String(modalState.repeatLimit || '')) + '"/></div>' +
+        '<div class="form-group"><label>При ошибке отправки</label><select class="select" id="apOnFailure">' +
+        '<option value="skip"' + (modalState.onFailure === 'skip' ? ' selected' : '') + '>Пропустить слот и продолжить</option>' +
+        '<option value="retry_15m"' + (modalState.onFailure === 'retry_15m' ? ' selected' : '') + '>Повторить через 15 минут</option>' +
+        '<option value="stop_series"' + (modalState.onFailure === 'stop_series' ? ' selected' : '') + '>Остановить серию</option>' +
+        '<option value="notify"' + (modalState.onFailure === 'notify' ? ' selected' : '') + '>Остановить и показать ошибку</option>' +
+        '</select></div></div>' +
+        '</details>' +
         '</section>' +
         '<section class="ap-form-section" id="apSecMedia"><h3>Медиа и кнопка</h3>' +
         '<div class="ap-dropzone" id="apDropzone">Нажмите или перетащите фото/видео<br><span class="text-sm muted">До 10 файлов</span></div>' +
@@ -1317,7 +1513,7 @@
             b.classList.toggle('active', b === btn);
           });
           qsa('.ap-schedule-panel', body).forEach(function (p) { p.classList.add('hidden'); });
-          var panelId = { once: 'apModalOnce', daily: 'apModalDaily', weekly: 'apModalWeekly' }[modalState.scheduleType];
+          var panelId = { once: 'apModalOnce', daily: 'apModalDaily', weekly: 'apModalWeekly', interval: 'apModalInterval' }[modalState.scheduleType];
           var panel = panelId ? qs('#' + panelId, body) : null;
           if (panel) panel.classList.remove('hidden');
         });
@@ -1341,9 +1537,11 @@
       var addTime = qs('#apAddDailyTime', body);
       if (addTime) {
         addTime.addEventListener('click', function () {
-          var t = prompt('Время (ЧЧ:ММ)', '14:00');
+          var inp = qs('#apNewDailyTime', body);
+          var t = inp && inp.value;
           if (t && /^\d{1,2}:\d{2}$/.test(t)) {
-            modalState.dailyTimes.push(t);
+            if (modalState.dailyTimes.indexOf(t) < 0) modalState.dailyTimes.push(t);
+            modalState.dailyTimes.sort();
             renderDailyChips();
           }
         });
@@ -1366,7 +1564,7 @@
         });
       });
 
-      qsa('#apModalDate, #apModalTime, #apModalStart, #apModalEnd, #apModalWeeklyTime, #apModalWStart, #apModalWEnd', body).forEach(function (el) {
+      qsa('#apModalDate, #apModalTime, #apModalStart, #apModalEnd, #apModalWeeklyTime, #apModalWStart, #apModalWEnd, #apModalInterval, #apModalIStart, #apModalIEnd, #apTimezone, #apOnFailure, #apHoursFrom, #apHoursTo, #apMinInterval, #apMaxDay, #apRepeatLimit', body).forEach(function (el) {
         el.addEventListener('change', snapshotFromDom);
       });
 
@@ -1441,13 +1639,53 @@
       state.editingId = null;
     }
 
-    function submitPost(asDraft) {
+    function appendScheduleFields(fd, asDraft) {
+      var st = modalState.scheduleType;
+      fd.append('timezone', modalState.timezone || AP_DEFAULT_TZ);
+      fd.append('status', asDraft ? 'draft' : 'active');
+      fd.append('on_failure', modalState.onFailure || 'skip');
+      if (modalState.repeatLimit) fd.append('repeat_limit', String(modalState.repeatLimit));
+      if (modalState.hoursFrom && modalState.hoursTo) {
+        fd.append('hours_from', modalState.hoursFrom);
+        fd.append('hours_to', modalState.hoursTo);
+      }
+      if (modalState.minIntervalHours) fd.append('min_interval_hours', String(modalState.minIntervalHours));
+      if (modalState.maxPostsPerDay) fd.append('max_posts_per_day', String(modalState.maxPostsPerDay));
+      if (st === 'once') {
+        fd.append('schedule_type', 'once');
+        fd.append('scheduled_local', modalState.onceDate + 'T' + (modalState.onceTime || '12:00'));
+        fd.append('scheduled_at', new Date(modalState.onceDate + 'T' + (modalState.onceTime || '12:00')).toISOString());
+      } else if (st === 'interval') {
+        fd.append('schedule_type', 'recurring');
+        fd.append('interval_hours', String(modalState.intervalHours || 6));
+        fd.append('weekdays', JSON.stringify([0, 1, 2, 3, 4, 5, 6]));
+        fd.append('recurring_time', modalState.dailyTimes[0] || '09:00');
+        fd.append('scheduled_at', new Date().toISOString());
+        if (modalState.startDate) fd.append('start_date', modalState.startDate);
+        if (modalState.endDate) fd.append('end_date', modalState.endDate);
+      } else {
+        fd.append('schedule_type', 'recurring');
+        var times = st === 'weekly'
+          ? [modalState.dailyTimes[0] || '09:00']
+          : (modalState.dailyTimes.length ? modalState.dailyTimes.slice() : ['09:00']);
+        var weekdays = st === 'weekly' ? modalState.weekdays.slice() : [0, 1, 2, 3, 4, 5, 6];
+        fd.append('recurring_time', times[0]);
+        fd.append('daily_times', JSON.stringify(times));
+        fd.append('weekdays', JSON.stringify(weekdays));
+        fd.append('scheduled_at', new Date().toISOString());
+        if (modalState.startDate) fd.append('start_date', modalState.startDate);
+        if (modalState.endDate) fd.append('end_date', modalState.endDate);
+      }
+    }
+
+    function submitPost(asDraft, publishNow) {
       snapshotFromDom();
       hideModalStatus();
       var text = (modalState.text || '').trim();
       var textEmpty = window.ApTextEditor ? window.ApTextEditor.isEmpty(text) : !text;
       var submitBtn = qs('[data-ap-submit-post]', modal);
       var draftBtn = qs('[data-ap-save-draft]', modal);
+      var nowBtn = qs('[data-ap-publish-now]', modal);
       if (!modalState.channels.length) {
         showModalStatus('Выберите хотя бы один канал', 'error');
         var sec = qs('#apSecChannels', modal);
@@ -1468,7 +1706,7 @@
       }
 
       var st = modalState.scheduleType;
-      if (st === 'once' && !modalState.onceDate) {
+      if (!publishNow && st === 'once' && !modalState.onceDate) {
         showModalStatus('Укажите дату публикации', 'error');
         var secSched = qs('#apSecSchedule', modal);
         if (secSched) secSched.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -1483,6 +1721,7 @@
 
       if (submitBtn) { submitBtn.disabled = true; submitBtn.textContent = 'Сохранение…'; }
       if (draftBtn) draftBtn.disabled = true;
+      if (nowBtn) nowBtn.disabled = true;
       var promises = modalState.channels.map(function (channelId) {
         var fd = new FormData();
         fd.append('target_channel_id', channelId);
@@ -1490,28 +1729,16 @@
         var ch = state.channels.find(function (c) { return String(c.id) === channelId; });
         if (ch) fd.append('channel_title', channelLabel(ch));
         fd.append('text', text);
-        if (st === 'once') {
-          fd.append('schedule_type', 'once');
-          fd.append('scheduled_at', new Date(modalState.onceDate + 'T' + (modalState.onceTime || '12:00')).toISOString());
-        } else {
-          fd.append('schedule_type', 'recurring');
-          var time = st === 'weekly'
-            ? (modalState.dailyTimes[0] || '09:00')
-            : (modalState.dailyTimes[0] || '09:00');
-          var weekdays = st === 'weekly'
-            ? modalState.weekdays.slice()
-            : [0, 1, 2, 3, 4, 5, 6];
-          fd.append('recurring_time', time);
-          fd.append('weekdays', JSON.stringify(weekdays));
-          var probe = new Date();
-          var parts = time.split(':');
-          probe.setHours(Number(parts[0]), Number(parts[1]), 0, 0);
-          fd.append('scheduled_at', probe.toISOString());
+        appendScheduleFields(fd, asDraft);
+        if (publishNow) {
+          fd.set('status', 'draft');
+          if (!state.editingId) {
+            fd.set('schedule_type', 'once');
+            fd.set('scheduled_at', new Date().toISOString());
+          }
         }
         fd.append('inline_buttons', JSON.stringify(keyboard || []));
         fd.append('tags', JSON.stringify(normalizeTagList(modalState.tags)));
-        fd.append('timezone', AP_DEFAULT_TZ);
-        fd.append('status', asDraft ? 'draft' : 'active');
         fd.append('existing_media', JSON.stringify(existingMediaPayload(modalState.mediaFiles)));
         modalState.mediaFiles.forEach(function (m) {
           var file = fileFromMediaEntry(m);
@@ -1531,8 +1758,16 @@
       });
 
       Promise.all(promises)
+        .then(function (results) {
+          if (!publishNow) return results;
+          return Promise.all(results.map(function (r) {
+            var id = r && r.post && r.post.id;
+            if (!id) return r;
+            return apiPostJson('/autoposts/' + encodeURIComponent(id) + '/publish-now', {});
+          }));
+        })
         .then(function () {
-          toast(asDraft ? 'Черновик сохранён' : 'Пост запланирован', 'success');
+          toast(publishNow ? 'Опубликовано' : (asDraft ? 'Черновик сохранён' : 'Пост запланирован'), 'success');
           closeModal();
           loadAndRender();
         })
@@ -1543,6 +1778,7 @@
         .finally(function () {
           if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = 'Запланировать ▶'; }
           if (draftBtn) draftBtn.disabled = false;
+          if (nowBtn) nowBtn.disabled = false;
         });
     }
 
@@ -1561,8 +1797,12 @@
         document.removeEventListener('keydown', onEsc);
       }
     });
-    qs('[data-ap-submit-post]', modal).addEventListener('click', function () { submitPost(false); });
-    qs('[data-ap-save-draft]', modal).addEventListener('click', function () { submitPost(true); });
+    qs('[data-ap-submit-post]', modal).addEventListener('click', function () { submitPost(false, false); });
+    qs('[data-ap-save-draft]', modal).addEventListener('click', function () { submitPost(true, false); });
+    var publishNowBtn = qs('[data-ap-publish-now]', modal);
+    if (publishNowBtn) {
+      publishNowBtn.addEventListener('click', function () { submitPost(false, true); });
+    }
 
     renderModalForm();
     refreshIcons(modal);
@@ -1625,6 +1865,16 @@
         var id = btn.getAttribute('data-ap-edit');
         var post = state.posts.find(function (p) { return p.id === id; });
         if (post) openPostModal(post);
+      });
+    });
+    qsa('[data-ap-now]', root).forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var id = btn.getAttribute('data-ap-now');
+        confirmDlg('Опубликовать сейчас?', 'Пост уйдёт в канал сразу, не дожидаясь расписания.', function () {
+          apiPostJson('/autoposts/' + encodeURIComponent(id) + '/publish-now', {})
+            .then(function () { toast('Опубликовано', 'success'); loadAndRender(); })
+            .catch(function (e) { toast(e.message, 'error'); });
+        });
       });
     });
     qsa('[data-ap-dup]', root).forEach(function (btn) {
@@ -1701,6 +1951,7 @@
             fd.append('schedule_type', 'once');
             var d = qs('#apQuickDate', root).value;
             var t = qs('#apQuickTime', root).value;
+            fd.append('scheduled_local', d + 'T' + t);
             fd.append('scheduled_at', new Date(d + 'T' + t).toISOString());
           } else {
             fd.append('schedule_type', 'recurring');
@@ -1821,6 +2072,7 @@
       state.channels = results[1].channels || [];
       state.channelsHint = results[1].hint || null;
       state.stats = results[2].stats || null;
+      state.scheduler = results[2].scheduler || null;
       renderShell();
     }).catch(function (err) {
       if (err && err.message === 'auth') return;

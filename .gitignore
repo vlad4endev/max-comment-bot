@@ -18,3 +18,6 @@ bin/hysteria.exe
 bin/hysteria-*
 data/backups/
 miniapp/uploads/
+deploy/wireguard/wgtg.conf
+deploy/wireguard/server.conf
+deploy/wireguard/*.key

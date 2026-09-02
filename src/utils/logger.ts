@@ -90,6 +90,45 @@ const CYAN = '\x1b[36m'
 
 const isDevelopment = process.env.NODE_ENV === 'development'
 
+const BOT_TOKEN_IN_URL_RE = /\/bot\d+:[A-Za-z0-9_-]+\//g
+
+function redactSecrets(value: string): string {
+  return value.replace(BOT_TOKEN_IN_URL_RE, '/bot***/')
+}
+
+function sanitizeLogExtra(extra: unknown): unknown {
+  if (extra == null) {
+    return extra
+  }
+  if (typeof extra === 'string') {
+    return redactSecrets(extra)
+  }
+  if (typeof extra !== 'object') {
+    return extra
+  }
+  const record = extra as {
+    isAxiosError?: boolean
+    name?: unknown
+    message?: unknown
+    code?: unknown
+    response?: { status?: unknown }
+    err?: unknown
+    cause?: { code?: unknown; name?: unknown }
+  }
+  if (record.isAxiosError === true || record.name === 'AxiosError' || record.name === 'AggregateError') {
+    return {
+      name: record.name,
+      message: typeof record.message === 'string' ? redactSecrets(record.message) : record.message,
+      code: record.code ?? record.cause?.code ?? null,
+      status: record.response?.status ?? null,
+    }
+  }
+  if (record.err != null) {
+    return { ...record, err: sanitizeLogExtra(record.err) }
+  }
+  return extra
+}
+
 export class Logger {
   /**
    * @example logger.info('Бот запущен')
@@ -133,10 +172,11 @@ export class Logger {
   ): void {
     const timestamp = new Date().toISOString()
     const header = `${color}${timestamp} [${level}] ${message}${RESET}`
-    pushAdminLogLine(serializeAdminLogLine(level, message, extra))
+    pushAdminLogLine(serializeAdminLogLine(level, message, extra !== undefined ? sanitizeLogExtra(extra) : extra))
 
-    if (extra !== undefined) {
-      write(header, extra)
+    const safeExtra = extra !== undefined ? sanitizeLogExtra(extra) : undefined
+    if (safeExtra !== undefined) {
+      write(header, safeExtra)
     } else {
       write(header)
     }
@@ -147,7 +187,7 @@ export class Logger {
           ts: timestamp,
           level: normalizedLevel,
           message,
-          ...(extra !== undefined ? { extra } : {}),
+          ...(safeExtra !== undefined ? { extra: safeExtra } : {}),
         })
       } catch {
         /* never break logging due to listener errors */

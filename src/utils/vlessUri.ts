@@ -432,6 +432,10 @@ export function buildXrayHysteriaOutbound(parsed: ParsedHysteria2): Record<strin
   }
 }
 
+function hostLooksLikeIp(host: string): boolean {
+  return /^\d{1,3}(?:\.\d{1,3}){3}$/.test(host) || (host.includes(':') && !host.includes('.'))
+}
+
 export function buildHysteriaClientYaml(parsed: ParsedHysteria2, socksPort: number): string {
   const lines = [
     `server: ${JSON.stringify(parsed.server)}`,
@@ -443,7 +447,8 @@ export function buildHysteriaClientYaml(parsed: ParsedHysteria2, socksPort: numb
   if (parsed.sni) {
     tlsLines.push(`  sni: ${JSON.stringify(parsed.sni)}`)
   }
-  if (parsed.insecure) {
+  const insecure = parsed.insecure || (!parsed.sni && hostLooksLikeIp(parsed.host))
+  if (insecure) {
     tlsLines.push('  insecure: true')
   }
   if (parsed.pinSHA256) {

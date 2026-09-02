@@ -246,11 +246,23 @@
 
 .ap-upcoming-item {
   display: grid;
-  grid-template-columns: auto 4px 1fr auto auto;
+  grid-template-columns: auto 4px minmax(0, 1fr) auto;
   gap: 0.65rem;
   align-items: center;
   padding: 0.65rem 0;
   border-bottom: 1px solid var(--ap-border);
+}
+
+.ap-upcoming-item.overdue {
+  background: rgba(239, 68, 68, 0.06);
+  margin: 0 -0.75rem;
+  padding-left: 0.75rem;
+  padding-right: 0.75rem;
+  border-radius: 8px;
+}
+
+.ap-upcoming-item.draft {
+  opacity: 0.78;
 }
 
 .ap-upcoming-item:last-child {
@@ -289,6 +301,16 @@
   grid-template-columns: repeat(3, 1fr);
   gap: 0.5rem;
   margin-bottom: 0.85rem;
+}
+
+.ap-schedule-types-4 {
+  grid-template-columns: repeat(4, 1fr);
+}
+
+@media (max-width: 720px) {
+  .ap-schedule-types-4 {
+    grid-template-columns: repeat(2, 1fr);
+  }
 }
 
 .ap-schedule-type {
@@ -1557,7 +1579,7 @@ body.ap-modal-open .sidebar {
   display: inline-flex;
   gap: 0.35rem;
   padding: 0.25rem;
-  background: #222228;
+  background: var(--bg-elevated, var(--bg-hover));
   border: 1px solid var(--ap-border, var(--border));
   border-radius: 10px;
 }
@@ -1568,7 +1590,7 @@ body.ap-modal-open .sidebar {
   border: 1px solid transparent;
   border-radius: 8px;
   background: transparent;
-  color: #b8b8c0;
+  color: var(--text-secondary);
   font-size: 0.85rem;
   font-weight: 600;
   cursor: pointer;
@@ -1582,7 +1604,7 @@ body.ap-modal-open .sidebar {
 .ap-platform-tab.active {
   background: var(--accent-muted);
   border-color: var(--accent-border);
-  color: #e8e6ff;
+  color: var(--text-primary);
 }
 
 .ap-platform-hint {
@@ -1608,4 +1630,125 @@ body.ap-modal-open .sidebar {
 .ap-platform-max {
   background: rgba(29, 158, 117, 0.18);
   color: #6ee7b7;
+}
+
+.ap-health {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.7rem 0.95rem;
+  border-radius: 10px;
+  border: 1px solid var(--ap-border);
+  background: var(--ap-card);
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+  margin-bottom: 1rem;
+}
+
+.ap-health-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--success);
+  flex-shrink: 0;
+}
+
+.ap-health.warn .ap-health-dot {
+  background: var(--warning);
+}
+
+.ap-health.warn {
+  border-color: color-mix(in srgb, var(--warning) 45%, var(--ap-border));
+}
+
+.ap-alert {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  padding: 0.85rem 1rem;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--warning) 50%, var(--ap-border));
+  background: color-mix(in srgb, var(--warning) 10%, var(--ap-card));
+  margin-bottom: 0.75rem;
+}
+
+.ap-alert--danger {
+  border-color: color-mix(in srgb, var(--danger) 50%, var(--ap-border));
+  background: color-mix(in srgb, var(--danger) 10%, var(--ap-card));
+}
+
+.ap-alert-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.ap-day-label {
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  padding: 0.65rem 0 0.2rem;
+}
+
+.ap-upcoming-main {
+  min-width: 0;
+}
+
+.ap-upcoming-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  align-items: center;
+  margin-top: 0.15rem;
+}
+
+.ap-upcoming-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.2rem;
+  justify-content: flex-end;
+}
+
+.ap-upcoming-error,
+.ap-error-hint {
+  font-size: 0.72rem;
+  color: var(--danger);
+  margin: 0 0 0.35rem;
+}
+
+.ap-metric--warn .value {
+  color: var(--warning);
+}
+
+.ap-time-add {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin-bottom: 0.75rem;
+}
+
+.ap-time-add .input {
+  max-width: 140px;
+}
+
+.ap-advanced {
+  margin-top: 0.85rem;
+  padding: 0.65rem 0.85rem;
+  border: 1px dashed var(--ap-border);
+  border-radius: 10px;
+}
+
+.ap-advanced summary {
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+}
+
+.ap-advanced[open] summary {
+  margin-bottom: 0.75rem;
 }

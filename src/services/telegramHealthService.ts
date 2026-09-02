@@ -9,6 +9,7 @@ import { logger } from '../utils/logger'
 import { sendAdminAlert } from '../utils/alertService'
 import { telegramAxios } from '../utils/telegramAxios'
 import { isTelegramUnauthorizedError } from '../utils/telegramSyncErrors'
+import { isTelegramTransientNetworkError } from '../forwarder/telegramReader'
 import { integrationsStore } from './integrationsStore'
 import { resolveTelegramBotToken } from './resolveTelegramBotToken'
 import { reportTelegramUnauthorized } from './telegramSyncAlertService'
@@ -173,7 +174,7 @@ export async function probeTelegramBotApi(token?: string): Promise<TelegramHealt
       } else {
         void sendAdminAlert(
           'tg_api_down',
-          'Telegram Bot API недоступен — перенос постов и комментариев остановлен',
+          'Telegram Bot API временно недоступен — опрос постов продолжается',
           { error: description },
         )
       }
@@ -203,10 +204,14 @@ export async function probeTelegramBotApi(token?: string): Promise<TelegramHealt
     lastSnapshot = snapshot
     if (isTelegramUnauthorizedError(errorText)) {
       void reportTelegramUnauthorized({ method: 'getMe', description: errorText })
+    } else if (isTelegramTransientNetworkError(err)) {
+      logger.warn('[telegramHealth] Telegram API timeout — forwarding loop keeps polling', {
+        error: errorText,
+      })
     } else {
       void sendAdminAlert(
         'tg_api_down',
-        'Telegram Bot API недоступен — перенос постов и комментариев остановлен',
+        'Telegram Bot API временно недоступен — опрос постов продолжается',
         { error: errorText },
       )
     }
@@ -260,9 +265,12 @@ export async function assertTelegramBotApiOnStartup(): Promise<void> {
     integrations_token_preview: sources.integrations_token_preview,
     reader_token_preview: sources.reader_token_preview,
   })
+  if (snapshot.error && isTelegramTransientNetworkError(new Error(snapshot.error))) {
+    return
+  }
   void sendAdminAlert(
     'tg_api_down',
-    'Telegram Bot API недоступен — перенос постов и комментариев остановлен',
+    'Telegram Bot API временно недоступен — опрос постов продолжается',
     { error: snapshot.error, active_source: sources.active_source },
   )
 }

@@ -1,7 +1,18 @@
-# Сборка TypeScript
-FROM node:22-alpine AS builder
+# Сборка TypeScript. NODE_IMAGE можно подменить зеркалом, если Docker Hub недоступен.
+ARG NODE_IMAGE=node:22-alpine
+FROM ${NODE_IMAGE} AS builder
 
 ARG GIT_COMMIT=unknown
+
+# Node 17+ предпочитает IPv6; в Docker это часто зависает ~100с, npm падает с "Exit handler never called"
+ENV NODE_OPTIONS=--dns-result-order=ipv4first \
+    NPM_CONFIG_FETCH_RETRIES=5 \
+    NPM_CONFIG_FETCH_RETRY_MINTIMEOUT=20000 \
+    NPM_CONFIG_FETCH_RETRY_MAXTIMEOUT=120000 \
+    NPM_CONFIG_FETCH_TIMEOUT=600000 \
+    NPM_CONFIG_AUDIT=false \
+    NPM_CONFIG_FUND=false \
+    NPM_CONFIG_UPDATE_NOTIFIER=false
 
 # better-sqlite3: на Alpine нет готовых prebuild — нужен node-gyp (python + toolchain)
 RUN apk add --no-cache python3 make g++
@@ -9,7 +20,7 @@ RUN apk add --no-cache python3 make g++
 WORKDIR /app
 
 COPY package.json package-lock.json ./
-RUN npm ci
+RUN npm ci --no-audit --no-fund
 
 COPY tsconfig.json ./
 COPY src ./src
@@ -18,7 +29,8 @@ COPY src ./src
 RUN echo "build commit: ${GIT_COMMIT}" && npm run build && npm prune --omit=dev
 
 # Продакшен-рантайм
-FROM node:22-alpine AS production
+ARG NODE_IMAGE=node:22-alpine
+FROM ${NODE_IMAGE} AS production
 
 ARG GIT_COMMIT=unknown
 

@@ -6,7 +6,36 @@
 # Данные: ./data → /app/data (posts.json, comments.json, channels.json)
 # Сборка и запуск: docker compose up -d --build
 # Логи: docker compose logs -f bot
+# Telegram через отдельный WireGuard (не трогает чужой wg0 на хосте):
+#   COMPOSE_PROFILES=telegram-vpn и TELEGRAM_PROXY_URL=socks5://wg-telegram:1080 в .env
+#   см. deploy/wireguard/README.md
 services:
+  # Клиент wgtg + SOCKS :1080. Профиль telegram-vpn, чтобы локально не требовал /dev/net/tun.
+  wg-telegram:
+    profiles: ['telegram-vpn']
+    build:
+      context: ./deploy/wireguard
+      dockerfile: Dockerfile
+    image: max-comment-bot-wg-telegram:latest
+    restart: unless-stopped
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun
+    sysctls:
+      - net.ipv4.conf.all.src_valid_mark=1
+      - net.ipv6.conf.all.disable_ipv6=1
+    volumes:
+      - ./deploy/wireguard:/config:ro
+    expose:
+      - '1080'
+    healthcheck:
+      test: ['CMD-SHELL', 'wg show wgtg >/dev/null 2>&1 && nc -z 127.0.0.1 1080']
+      interval: 15s
+      timeout: 5s
+      retries: 8
+      start_period: 25s
+
   redis:
     image: redis:7-alpine
     restart: unless-stopped
@@ -36,6 +65,8 @@ services:
       REDIS_URL: redis://redis:6379
     volumes:
       - ./data:/app/data
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
     # HOST:PORT → контейнер слушает API_PORT (или PORT). Не смешивайте разные значения без правки проброса.
     ports:
       - "${PORT:-3000}:${API_PORT:-${PORT:-3000}}"

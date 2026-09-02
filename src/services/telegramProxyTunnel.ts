@@ -166,19 +166,46 @@ export function isHysteriaAvailable(): boolean {
   return findHysteriaBinary() !== null
 }
 
-function waitForLocalPort(port: number, timeoutMs: number, label: string): Promise<void> {
+function waitForLocalPort(
+  port: number,
+  timeoutMs: number,
+  label: string,
+  child?: ChildProcess,
+  getLogs?: () => string,
+): Promise<void> {
   const started = Date.now()
   return new Promise((resolve, reject) => {
+    let settled = false
+    const finish = (err?: Error) => {
+      if (settled) return
+      settled = true
+      if (err) reject(err)
+      else resolve()
+    }
+    const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
+      const logs = getLogs?.().trim()
+      finish(
+        new Error(
+          `${label} вышел до SOCKS (code=${code ?? 'null'} signal=${signal ?? 'null'})${logs ? `: ${logs}` : ''}`,
+        ),
+      )
+    }
+    child?.once('exit', onExit)
     const tryOnce = (): void => {
+      if (settled) return
       const socket = net.connect({ host: '127.0.0.1', port })
       socket.once('connect', () => {
         socket.end()
-        resolve()
+        child?.off('exit', onExit)
+        finish()
       })
       socket.once('error', () => {
         socket.destroy()
+        if (settled) return
         if (Date.now() - started > timeoutMs) {
-          reject(new Error(`${label} не открыл локальный SOCKS-порт`))
+          child?.off('exit', onExit)
+          const logs = getLogs?.().trim()
+          finish(new Error(`${label} не открыл локальный SOCKS-порт${logs ? `: ${logs}` : ''}`))
           return
         }
         setTimeout(tryOnce, 120)
@@ -205,16 +232,20 @@ async function stopProcess(child: ChildProcess | null): Promise<void> {
   })
 }
 
-function attachLogs(child: ChildProcess, tag: string, socksPort: number): void {
-  child.stderr?.on('data', (buf: Buffer) => {
+function attachLogs(child: ChildProcess, tag: string, socksPort: number): () => string {
+  const chunks: string[] = []
+  const take = (buf: Buffer) => {
     const text = buf.toString('utf8').trim()
-    if (text) {
-      logger.warn(`[${tag}]`, { text: text.slice(0, 400) })
-    }
-  })
+    if (!text) return
+    chunks.push(text.slice(0, 400))
+    logger.warn(`[${tag}]`, { text: text.slice(0, 400) })
+  }
+  child.stdout?.on('data', take)
+  child.stderr?.on('data', take)
   child.on('exit', (code, signal) => {
     logger.info(`[${tag}] process exited`, { code, signal, port: socksPort })
   })
+  return () => chunks.join('\n').slice(-800)
 }
 
 async function spawnXray(
@@ -232,9 +263,9 @@ async function spawnXray(
   const child = spawn(bin, ['run', '-c', configPath], {
     stdio: ['ignore', 'pipe', 'pipe'],
   })
-  attachLogs(child, 'xray', socksPort)
+  const getXrayLogs = attachLogs(child, 'xray', socksPort)
   try {
-    await waitForLocalPort(socksPort, 8000, 'xray-core')
+    await waitForLocalPort(socksPort, 8000, 'xray-core', child, getXrayLogs)
   } catch (err) {
     await stopProcess(child)
     if (parsed.kind === 'hysteria2') {
@@ -264,22 +295,29 @@ async function spawnHysteriaClient(
   const dir = dirname(configPath)
   await mkdir(dir, { recursive: true })
   await writeFile(configPath, buildHysteriaClientYaml(parsed, socksPort), 'utf8')
+  logger.info('[telegramProxy] hysteria config written', {
+    server: parsed.server,
+    hasAuth: Boolean(parsed.auth),
+    sni: parsed.sni || null,
+    socksPort,
+  })
   const tryArgs = [
-    ['-c', configPath],
     ['client', '-c', configPath],
+    ['-c', configPath],
   ]
   let lastError: Error | null = null
   for (const args of tryArgs) {
     const child = spawn(bin, args, {
       stdio: ['ignore', 'pipe', 'pipe'],
     })
-    attachLogs(child, 'hysteria', socksPort)
+    const getLogs = attachLogs(child, 'hysteria', socksPort)
     try {
-      await waitForLocalPort(socksPort, 12_000, 'hysteria')
+      await waitForLocalPort(socksPort, 12_000, 'hysteria', child, getLogs)
       return child
     } catch (err) {
       await stopProcess(child)
       lastError = err instanceof Error ? err : new Error(String(err))
+      logger.warn('[telegramProxy] hysteria spawn failed', { args, error: lastError.message })
     }
   }
   throw lastError ?? new Error('hysteria не открыл локальный SOCKS-порт')

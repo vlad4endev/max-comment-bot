@@ -89,7 +89,7 @@ async function handleDiscussionSendForbidden(
     chainId: target.chainId,
     chainTitle: chainTitle(target.chainId),
     threadChatId: target.threadChatId,
-    err,
+    error: errText,
     suggestion,
   })
   await sendAdminAlert(

@@ -60,15 +60,42 @@ if [[ "${LOCAL_HEAD}" == "${GIT_COMMIT}" && "${DEPLOY_FORCE_REBUILD:-}" != "1" ]
   echo "==> git HEAD не изменился — для пересборки образа всё равно пробуем build (GIT_COMMIT в Dockerfile)"
 fi
 
-echo "==> docker compose build & recreate"
-docker compose down
+ensure_node_base_image() {
+  if docker image inspect node:22-alpine >/dev/null 2>&1; then
+    echo "==> node:22-alpine уже есть локально — pull не нужен"
+    return 0
+  fi
+  echo "==> нет node:22-alpine — пробую mirror.gcr.io"
+  if docker pull mirror.gcr.io/library/node:22-alpine; then
+    docker tag mirror.gcr.io/library/node:22-alpine node:22-alpine
+    return 0
+  fi
+  echo "==> GCR недоступен — пробую Docker Hub" >&2
+  docker pull node:22-alpine
+}
+
+echo "==> docker compose build (бот не останавливаем, пока образ не готов)"
+ensure_node_base_image
 BUILD_FLAGS=(--build-arg "GIT_COMMIT=${GIT_COMMIT}")
+if docker compose build --help 2>/dev/null | grep -q -- '--pull'; then
+  BUILD_FLAGS+=(--pull never)
+fi
 if [[ "${DEPLOY_NO_CACHE:-}" == "1" ]]; then
   BUILD_FLAGS+=(--no-cache)
   echo "==> DEPLOY_NO_CACHE=1 — полная пересборка образа"
 fi
 docker compose build "${BUILD_FLAGS[@]}" bot
-docker compose up -d --force-recreate
+echo "==> пересоздаю только контейнер бота"
+if ! docker compose up -d --force-recreate --no-deps bot; then
+  echo "==> recreate не удался — поднимаю предыдущий контейнер" >&2
+  docker compose up -d || true
+  exit 1
+fi
+docker compose up -d redis >/dev/null 2>&1 || true
+if docker compose config --services 2>/dev/null | grep -qx wg-telegram; then
+  echo "==> поднимаю wg-telegram (профиль telegram-vpn)"
+  docker compose up -d --build wg-telegram || true
+fi
 
 echo "==> статус контейнера:"
 docker compose ps

@@ -113,7 +113,7 @@ function forwardJobKey(chain: TgChainRecord, messages: TgMessage[]): string {
   if (first && gid) {
     return `${chain.id}:${first.chat.id}:${gid}`
   }
-  return forwardKey(chain, messages)
+  return forwardKey(chain.id, messages)
 }
 
 function persistForwardJob(
@@ -1539,7 +1539,7 @@ function startTokenPollLoop(tgToken: string): { stop: () => void } {
         logger.error('[tgChain] loop error', { err, tokenHint: tgToken.slice(-6) })
         await sendAdminAlert(
           'forwarder_crash',
-          'Форвардер упал с ошибкой — перенос постов и комментариев может быть остановлен',
+          'Форвардер получил ошибку и продолжает опрос — перенос не остановлен',
           {
             error: String(err),
           },
@@ -1630,7 +1630,7 @@ function startTgChainWatchdog(): void {
           })
           await sendAdminAlert(
             `chain_silent:${chain.id}`,
-            `Цепочка «${chain.max_title}» молчит ${Math.round(silentMs / 60000)} мин — перенос постов остановлен`,
+            `Цепочка «${chain.max_title}» молчит ${Math.round(silentMs / 60000)} мин — перезапускаю опрос`,
             {
               chainId: chain.id,
               title: chain.max_title,

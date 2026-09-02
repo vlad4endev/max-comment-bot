@@ -66,6 +66,7 @@ export interface AutopostRecord {
   start_date: string | null
   end_date: string | null
   repeat_limit: number | null
+  interval_hours: number | null
   on_failure: AutopostOnFailure
   conditions: AutopostCondition[]
   last_sent_at: string | null
@@ -95,6 +96,7 @@ export interface CreateAutopostInput {
   start_date?: string | null
   end_date?: string | null
   repeat_limit?: number | null
+  interval_hours?: number | null
   on_failure?: AutopostOnFailure
   conditions?: AutopostCondition[]
   status?: AutopostStatus
@@ -119,6 +121,7 @@ export interface UpdateAutopostInput {
   start_date?: string | null
   end_date?: string | null
   repeat_limit?: number | null
+  interval_hours?: number | null
   on_failure?: AutopostOnFailure
   conditions?: AutopostCondition[]
   status?: AutopostStatus
@@ -155,6 +158,7 @@ interface AutopostDbRow {
   start_date: string | null
   end_date: string | null
   repeat_limit: number | null
+  interval_hours: number | null
   on_failure: string
   conditions_json: string
   tags_json: string
@@ -373,6 +377,7 @@ function rowToRecord(row: AutopostDbRow): AutopostRecord {
     start_date: row.start_date,
     end_date: row.end_date,
     repeat_limit: row.repeat_limit,
+    interval_hours: typeof row.interval_hours === 'number' && row.interval_hours > 0 ? row.interval_hours : null,
     on_failure: parseOnFailure(row.on_failure || 'skip'),
     conditions: parseConditions(row.conditions_json),
     last_sent_at: row.last_sent_at,
@@ -492,10 +497,12 @@ export function listAutopostsFiltered(filters: AutopostListFilters = {}): Autopo
   if (filters.status) posts = posts.filter((p) => p.status === filters.status)
   if (filters.platform) posts = posts.filter((p) => p.platform === filters.platform)
   if (filters.channelId) {
-    const abs = String(Math.abs(Number.parseInt(filters.channelId, 10) || 0))
+    const want = String(filters.channelId)
+    const wantAbs = String(Math.abs(Number.parseInt(want, 10) || 0))
     posts = posts.filter((p) => {
+      if (String(p.target_channel_id) === want) return true
       const rowAbs = String(Math.abs(Number.parseInt(p.target_channel_id, 10) || 0))
-      return rowAbs === abs && abs !== '0'
+      return wantAbs !== '0' && rowAbs === wantAbs
     })
   }
   if (filters.scheduleType) posts = posts.filter((p) => p.schedule_type === filters.scheduleType)
@@ -637,12 +644,12 @@ export function createAutopost(input: CreateAutopostInput): AutopostRecord {
         id, platform, target_channel_id, channel_title, series_id, text, media_json,
         inline_button_json, inline_buttons_json, tags_json, status, schedule_type, scheduled_at, recurring_time,
         weekdays_json, daily_times_json, timezone, start_date, end_date, repeat_limit,
-        on_failure, conditions_json, last_sent_at, last_error, sent_count, created_at, updated_at
+        interval_hours, on_failure, conditions_json, last_sent_at, last_error, sent_count, created_at, updated_at
       ) VALUES (
         ?, ?, ?, ?, ?, ?, ?,
         ?, ?, ?, ?, ?, ?, ?,
         ?, ?, ?, ?, ?, ?,
-        ?, ?, NULL, NULL, 0, ?, ?
+        ?, ?, ?, NULL, NULL, 0, ?, ?
       )`,
     )
     .run(
@@ -666,6 +673,7 @@ export function createAutopost(input: CreateAutopostInput): AutopostRecord {
       input.start_date ?? null,
       input.end_date ?? null,
       input.repeat_limit ?? null,
+      input.interval_hours ?? null,
       input.on_failure ?? 'skip',
       JSON.stringify(input.conditions ?? []),
       now,
@@ -706,6 +714,7 @@ export function updateAutopost(id: string, patch: UpdateAutopostInput): Autopost
     start_date: patch.start_date !== undefined ? patch.start_date : current.start_date,
     end_date: patch.end_date !== undefined ? patch.end_date : current.end_date,
     repeat_limit: patch.repeat_limit !== undefined ? patch.repeat_limit : current.repeat_limit,
+    interval_hours: patch.interval_hours !== undefined ? patch.interval_hours : current.interval_hours,
     on_failure: patch.on_failure ?? current.on_failure,
     conditions: patch.conditions !== undefined ? patch.conditions : current.conditions,
     status: patch.status ?? current.status,
@@ -729,7 +738,7 @@ export function updateAutopost(id: string, patch: UpdateAutopostInput): Autopost
         target_channel_id = ?, channel_title = ?, series_id = ?,
         status = ?, schedule_type = ?, scheduled_at = ?,
         recurring_time = ?, weekdays_json = ?, daily_times_json = ?, timezone = ?,
-        start_date = ?, end_date = ?, repeat_limit = ?,
+        start_date = ?, end_date = ?, repeat_limit = ?, interval_hours = ?,
         on_failure = ?, conditions_json = ?, platform_message_id = ?,
         updated_at = ?
        WHERE id = ?`,
@@ -754,6 +763,7 @@ export function updateAutopost(id: string, patch: UpdateAutopostInput): Autopost
       next.start_date,
       next.end_date,
       next.repeat_limit,
+      next.interval_hours,
       next.on_failure,
       JSON.stringify(next.conditions),
       next.platform_message_id,
@@ -791,11 +801,31 @@ export function markAutopostSent(
   return getAutopostById(id)
 }
 
-export function markAutopostFailed(id: string, error: string): AutopostRecord | null {
+export function markAutopostFailed(
+  id: string,
+  error: string,
+  opts?: { nextScheduledAt?: string; keepActive?: boolean },
+): AutopostRecord | null {
   const current = getAutopostById(id)
   if (!current) return null
   const now = new Date().toISOString()
   const trimmedError = error.slice(0, 2000)
+
+  if (opts?.keepActive && opts.nextScheduledAt) {
+    getPostsDb()
+      .prepare(
+        `UPDATE autoposts SET status = 'active', scheduled_at = ?, last_error = ?, updated_at = ? WHERE id = ?`,
+      )
+      .run(opts.nextScheduledAt, trimmedError, now, id)
+    logPostPublish({
+      autopost_id: id,
+      platform: current.platform,
+      target_channel_id: current.target_channel_id,
+      status: 'skipped',
+      message: `${trimmedError}; next ${opts.nextScheduledAt}`,
+    })
+    return getAutopostById(id)
+  }
 
   if (current.on_failure === 'retry_15m') {
     const retryAt = new Date(Date.now() + 15 * 60_000).toISOString()
@@ -825,6 +855,89 @@ export function markAutopostFailed(id: string, error: string): AutopostRecord | 
     message: error,
   })
   return getAutopostById(id)
+}
+
+export function rescheduleAutopost(
+  id: string,
+  nextScheduledAt: string,
+  message?: string,
+): AutopostRecord | null {
+  const current = getAutopostById(id)
+  if (!current) return null
+  const now = new Date().toISOString()
+  getPostsDb()
+    .prepare(
+      `UPDATE autoposts SET status = 'active', scheduled_at = ?, last_error = NULL, updated_at = ? WHERE id = ?`,
+    )
+    .run(nextScheduledAt, now, id)
+  if (message) {
+    logPostPublish({
+      autopost_id: id,
+      platform: current.platform,
+      target_channel_id: current.target_channel_id,
+      status: 'skipped',
+      message,
+    })
+  }
+  return getAutopostById(id)
+}
+
+export function completeAutopost(id: string, reason: string): AutopostRecord | null {
+  const current = getAutopostById(id)
+  if (!current) return null
+  const now = new Date().toISOString()
+  const status: AutopostStatus = current.schedule_type === 'once' ? 'sent' : 'paused'
+  getPostsDb()
+    .prepare(`UPDATE autoposts SET status = ?, last_error = ?, updated_at = ? WHERE id = ?`)
+    .run(status, reason.slice(0, 2000), now, id)
+  logPostPublish({
+    autopost_id: id,
+    platform: current.platform,
+    target_channel_id: current.target_channel_id,
+    status: 'skipped',
+    message: reason,
+  })
+  return getAutopostById(id)
+}
+
+export function getPostChannel(platform: PostPlatform, id: string): PostChannelRecord | null {
+  const row = getPostsDb()
+    .prepare('SELECT * FROM post_channels WHERE platform = ? AND id = ?')
+    .get(platform, id) as
+    | {
+        id: string
+        platform: string
+        title: string | null
+        username: string | null
+        color: string | null
+        is_active: number
+        subscribers_count: number
+      }
+    | undefined
+  if (!row) return null
+  return {
+    id: row.id,
+    platform: row.platform === 'max' ? 'max' : 'telegram',
+    title: row.title,
+    username: row.username,
+    color: row.color,
+    is_active: row.is_active === 1,
+    subscribers_count: row.subscribers_count,
+  }
+}
+
+export function countSuccessfulPublishesSince(
+  platform: PostPlatform,
+  channelId: string,
+  sinceIso: string,
+): number {
+  const row = getPostsDb()
+    .prepare(
+      `SELECT COUNT(*) AS n FROM post_publish_log
+       WHERE platform = ? AND target_channel_id = ? AND status = 'success' AND created_at >= ?`,
+    )
+    .get(platform, channelId, sinceIso) as { n: number } | undefined
+  return row?.n ?? 0
 }
 
 export function deleteAutopost(id: string): boolean {

@@ -1,0 +1,13 @@
+# Клиент на skypath. Интерфейс wgtg — не трогает чужой wg0 на хосте.
+# Скопируйте в wgtg.conf (файл в .gitignore).
+[Interface]
+Address = 10.0.0.2/32
+PrivateKey = REPLACE_CLIENT_PRIVATE_KEY
+MTU = 1420
+
+[Peer]
+PublicKey = REPLACE_SERVER_PUBLIC_KEY
+Endpoint = 130.49.161.246:32510
+# Только Telegram. Не ставьте 0.0.0.0/0.
+AllowedIPs = 149.154.160.0/20, 91.108.0.0/16, 91.105.192.0/23, 185.76.151.0/24, 95.161.64.0/20
+PersistentKeepalive = 25

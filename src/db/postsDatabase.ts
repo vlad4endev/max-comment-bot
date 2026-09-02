@@ -93,6 +93,7 @@ function initPostsSchema(db: Database.Database): void {
       start_date            TEXT,
       end_date              TEXT,
       repeat_limit          INTEGER,
+      interval_hours        INTEGER,
       on_failure            TEXT NOT NULL DEFAULT 'skip'
                             CHECK (on_failure IN ('skip', 'retry_15m', 'stop_series', 'notify')),
       conditions_json       TEXT NOT NULL DEFAULT '[]',
@@ -151,6 +152,7 @@ function migrateAutopostsColumns(db: Database.Database): void {
     ['start_date', 'TEXT'],
     ['end_date', 'TEXT'],
     ['repeat_limit', 'INTEGER'],
+    ['interval_hours', 'INTEGER'],
     ['on_failure', "TEXT NOT NULL DEFAULT 'skip'"],
     ['conditions_json', "TEXT NOT NULL DEFAULT '[]'"],
     ['platform_message_id', 'TEXT'],

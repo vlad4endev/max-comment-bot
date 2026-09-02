@@ -41,6 +41,18 @@ export function extractTelegramErrorText(err: unknown): string {
         }
       }
     }
+    const code = err.code?.trim()
+    const cause = err.cause
+    const causeCode =
+      cause && typeof cause === 'object' && 'code' in cause
+        ? String((cause as { code?: unknown }).code || '').trim()
+        : ''
+    const parts = [err.message.trim(), code, causeCode].filter(
+      (part): part is string => Boolean(part && part.length > 0),
+    )
+    if (parts.length > 0) {
+      return [...new Set(parts)].join(' ')
+    }
   }
   if (err instanceof Error && err.message.trim()) {
     return err.message.trim()

@@ -1,0 +1,18 @@
+# Сервер WireGuard на зарубежном VPS. Отдельный интерфейс от чужого wg0.
+# ListenPort 51821 и подсеть 10.77.77.0/24 — не пересекаются с типичным 51820 / 10.8.0.0 / 10.66.66.0
+#
+# 1) Подставьте ключи из scripts/wg-telegram-genkeys.sh
+# 2) Замените eth0 на внешний интерфейс: ip route | awk '/default/ {print $5; exit}'
+# 3) Положите как /etc/wireguard/wgtg.conf и: systemctl enable --now wg-quick@wgtg
+
+[Interface]
+Address = 10.77.77.1/24
+ListenPort = 51821
+PrivateKey = REPLACE_SERVER_PRIVATE_KEY
+
+PostUp = iptables -A FORWARD -i %i -j ACCEPT; iptables -A FORWARD -o %i -j ACCEPT; iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
+PostDown = iptables -D FORWARD -i %i -j ACCEPT; iptables -D FORWARD -o %i -j ACCEPT; iptables -t nat -D POSTROUTING -o eth0 -j MASQUERADE
+
+[Peer]
+PublicKey = REPLACE_CLIENT_PUBLIC_KEY
+AllowedIPs = 10.77.77.2/32

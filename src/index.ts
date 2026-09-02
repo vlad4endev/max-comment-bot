@@ -366,3 +366,12 @@ process.on('uncaughtException', (err: unknown) => {
     process.exit(1)
   })
 })
+
+process.on('unhandledRejection', (reason: unknown) => {
+  logger.error('unhandledRejection', reason)
+  void sendAdminAlert(
+    'unhandled_rejection',
+    'Необработанная ошибка в фоне — перенос продолжается',
+    { error: reason instanceof Error ? reason.message : String(reason) },
+  )
+})
