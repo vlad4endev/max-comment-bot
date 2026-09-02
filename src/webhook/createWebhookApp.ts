@@ -56,6 +56,18 @@ function looksLikeUpdate(body: unknown): body is Update {
 /**
  * Express-приложение: GET /health, статика Mini App (`/miniapp`), REST `/api`, опционально POST webhook.
  */
+function isMiniappRequest(req: express.Request): boolean {
+  const url = String(req.originalUrl || req.url || '')
+  return url === '/miniapp' || url.startsWith('/miniapp?') || url.startsWith('/miniapp/')
+}
+
+function applyMiniappHtmlHeaders(res: express.Response): void {
+  res.setHeader('Content-Type', 'text/html; charset=utf-8')
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate, no-transform')
+  res.setHeader('Pragma', 'no-cache')
+  res.setHeader('Expires', '0')
+}
+
 export function createHttpApp(options: HttpAppOptions): express.Express {
   const app = express()
   app.disable('x-powered-by')
@@ -64,6 +76,14 @@ export function createHttpApp(options: HttpAppOptions): express.Express {
       threshold: 1024,
       filter: (req, res) => {
         if (req.headers['x-no-compression']) {
+          return false
+        }
+        // MAX WebView historically mishandles gzip and shows «техническая заминка».
+        if (isMiniappRequest(req)) {
+          return false
+        }
+        const ua = String(req.headers['user-agent'] || '')
+        if (/MAX|maxmessenger|ru\.max/i.test(ua)) {
           return false
         }
         return compression.filter(req, res)
@@ -177,8 +197,8 @@ export function createHttpApp(options: HttpAppOptions): express.Express {
 
   const miniappRoot = join(process.cwd(), 'miniapp')
   const miniappIndex = join(miniappRoot, 'index.html')
-  /** Без редиректа на `/miniapp/` — WebView MAX/Telegram иногда не следует за 301. */
-  app.get('/miniapp', (_req, res) => {
+  const sendMiniappIndex = (res: express.Response): void => {
+    applyMiniappHtmlHeaders(res)
     res.sendFile(miniappIndex, (err) => {
       if (err) {
         logger.error('/miniapp: sendFile failed', err)
@@ -187,6 +207,13 @@ export function createHttpApp(options: HttpAppOptions): express.Express {
         }
       }
     })
+  }
+  /** Без редиректа на `/miniapp/` — WebView MAX/Telegram иногда не следует за 301. */
+  app.get('/miniapp', (_req, res) => {
+    sendMiniappIndex(res)
+  })
+  app.get('/miniapp/', (_req, res) => {
+    sendMiniappIndex(res)
   })
   app.use(
     '/miniapp',
@@ -196,10 +223,10 @@ export function createHttpApp(options: HttpAppOptions): express.Express {
       redirect: false,
       setHeaders(res, filePath) {
         if (filePath.endsWith('.html')) {
-          res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate')
-          res.setHeader('Pragma', 'no-cache')
-          res.setHeader('Expires', '0')
+          applyMiniappHtmlHeaders(res)
+          return
         }
+        res.setHeader('Cache-Control', 'public, max-age=0, must-revalidate, no-transform')
       },
     }),
   )

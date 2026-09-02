@@ -1,4 +1,5 @@
     window.__apiBase = String(location.origin || '').replace(/\/+$/, '')
+    window.__miniappAppJsLoaded = true
     window.__tgScriptPromise = null
 
     function loadTelegramWebAppScript() {
