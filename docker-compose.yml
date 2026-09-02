@@ -16,7 +16,9 @@ services:
     build:
       context: ./deploy/wireguard
       dockerfile: Dockerfile
+      pull: false
     image: max-comment-bot-wg-telegram:latest
+    pull_policy: never
     restart: unless-stopped
     cap_add:
       - NET_ADMIN
@@ -38,6 +40,7 @@ services:
 
   redis:
     image: redis:7-alpine
+    pull_policy: missing
     restart: unless-stopped
     command: redis-server --save 60 1000 --appendonly yes
     volumes:
@@ -52,9 +55,11 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      pull: false
       args:
         GIT_COMMIT: ${GIT_COMMIT:-unknown}
     image: max-comment-bot:latest
+    pull_policy: never
     restart: unless-stopped
     depends_on:
       - redis
