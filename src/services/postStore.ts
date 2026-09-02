@@ -520,7 +520,7 @@ export class PostStore {
       })
     }
 
-    if (!usesReplyUi && warnMissingSnapshot) {
+    if (!usesReplyUi && warnMissingSnapshot && !postLooksTextOnly(fresh)) {
       return tryAttachFallback('no_media_snapshot')
     }
     if (!usesReplyUi && media.length > 0 && !canMergeKeyboardWithMedia(media.length)) {
@@ -732,6 +732,17 @@ export function mediaAttachmentRequestsFromMessageBody(
     .map((a) => a as unknown as AttachmentRequest)
 }
 
+/** True when the post row has no media hints — keyboard-only edit is preferred over a reply stub. */
+function postLooksTextOnly(post: Post): boolean {
+  if (post.photo_url?.trim()) {
+    return false
+  }
+  if (Array.isArray(post.media_attachments) && post.media_attachments.length > 0) {
+    return false
+  }
+  return true
+}
+
 /**
  * Resolves media to send with `editMessage` on the original channel post: prefers {@link Post.media_attachments},
  * otherwise loads the message via {@link Bot.api.getMessage} or {@link Bot.api.getMessages}.
@@ -739,7 +750,9 @@ export function mediaAttachmentRequestsFromMessageBody(
  * Empty `media_attachments: []` is treated as missing (refetch) — a stale empty snapshot must not
  * suppress live media and pair with a blank caption edit.
  *
- * @returns `warnMissingSnapshot` true when the post had no cached media and the API did not yield a usable attachment list (fetch failure or empty `body.attachments`).
+ * @returns `warnMissingSnapshot` true only when the live message could not be loaded (fetch failure /
+ * missing message). A successfully loaded text-only post (`attachments` empty) is **not** a missing
+ * snapshot — keyboard-only `editMessage` is safe and preferred over a reply stub.
  */
 async function resolveChannelPostMediaForEdit(
   bot: Bot,
@@ -765,8 +778,9 @@ async function resolveChannelPostMediaForEdit(
     return { media: [], warnMissingSnapshot: true }
   }
   const raw = original.body.attachments
+  // Text-only / no media: empty attachments are normal — allow keyboard-only edit on the original.
   if (!raw || raw.length === 0) {
-    return { media: [], warnMissingSnapshot: true }
+    return { media: [], warnMissingSnapshot: false }
   }
   return { media: mediaAttachmentRequestsFromMessageBody(raw), warnMissingSnapshot: false }
 }
@@ -856,8 +870,12 @@ export async function attachCommentButtonToChannelPost(
     }
   }
 
-  if (!existingUiMid && warnMissingSnapshot) {
-    logger.warn('commentButton: пропускаем inline edit без снимка медиа, используем reply fallback', {
+  // Skip inline edit only when we could not load the live message AND the post may have media.
+  // Text-only posts must still try editMessage with the keyboard (not a separate reply stub).
+  const skipInlineForMissingSnapshot =
+    Boolean(!existingUiMid && warnMissingSnapshot && !postLooksTextOnly(post))
+  if (skipInlineForMissingSnapshot) {
+    logger.warn('commentButton: нет live-снимка медиа-поста — пробуем reply fallback (edit небезопасен)', {
       ...logBase,
     })
     if (logCtx?.inlineOnly) {
@@ -866,7 +884,12 @@ export async function attachCommentButtonToChannelPost(
       })
       return false
     }
-  } else if (mergeMediaInEdit) {
+  } else if (warnMissingSnapshot && postLooksTextOnly(post)) {
+    logger.info('commentButton: нет live-снимка, но пост без медиа — пробуем keyboard-only edit', {
+      ...logBase,
+    })
+  }
+  if (!skipInlineForMissingSnapshot && mergeMediaInEdit) {
     const attachments: AttachmentRequest[] =
       media.length > 0 ? [...media, keyboard] : [keyboard]
     const safeEditText = await resolveSafeChannelPostEditText(bot, post, editText, logBase)

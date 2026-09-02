@@ -221,11 +221,40 @@ export async function attachAndVerifyCommentsForForwardedPost(
     return true
   }
 
-  logger.info('[tgChain] comment gate: inline failed — one reply fallback', {
+  // Media/caption often lag right after TG→MAX publish — retry inline once before reply stub.
+  await new Promise((resolve) => setTimeout(resolve, 1_200))
+  logger.info('[tgChain] comment gate: inline retry after short delay', {
     chainId: context?.chainId,
     chatId,
     messageMid: mid,
     attachReason: attachResult.ok ? 'attached' : attachResult.reason,
+  })
+  const retryInline = await tryAttachCommentsToChannelPost(bot, message, {
+    channelChatIdOverride: chatId,
+    skipAuthorAdminCheck: true,
+    source: 'tg_chain',
+    inlineOnly: true,
+    knownText,
+  })
+  const retryRegistered = await waitForVerifiedPost(chatId, mid, retryInline)
+  if (
+    retryRegistered !== null &&
+    (attachOutcomeOk(retryInline) || verifyPostCommentButtonReady(retryRegistered))
+  ) {
+    logger.info('[tgChain] comment gate ok after delayed inline retry', {
+      chainId: context?.chainId,
+      chatId,
+      messageMid: mid,
+      postId: retryRegistered.post_id,
+    })
+    return true
+  }
+
+  logger.info('[tgChain] comment gate: inline failed — one reply fallback', {
+    chainId: context?.chainId,
+    chatId,
+    messageMid: mid,
+    attachReason: retryInline.ok ? 'attached' : retryInline.reason,
   })
   const fallbackResult = await tryAttachCommentsToChannelPost(bot, message, {
     channelChatIdOverride: chatId,
