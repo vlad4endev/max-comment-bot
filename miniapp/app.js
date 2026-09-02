@@ -4168,6 +4168,24 @@
         if (tgSig && /^[a-f0-9]{64}$/i.test(String(tgSig))) {
           hdr['X-Miniapp-Tg-Sig'] = String(tgSig).toLowerCase();
         }
+        // Signed WebApp initData when available (MAX or Telegram).
+        try {
+          var initRaw =
+            (bridge && typeof bridge.initData === 'string' && bridge.initData.trim()) ||
+            (window.WebApp &&
+              typeof window.WebApp.initData === 'string' &&
+              window.WebApp.initData.trim()) ||
+            (window.Telegram &&
+              window.Telegram.WebApp &&
+              typeof window.Telegram.WebApp.initData === 'string' &&
+              window.Telegram.WebApp.initData.trim()) ||
+            '';
+          if (initRaw) {
+            // Headers must be ASCII; initData is URL-encoded ASCII.
+            var initSafe = String(initRaw).replace(/[^\x20-\x7E]/g, '');
+            if (initSafe) hdr['X-Miniapp-Init-Data'] = initSafe;
+          }
+        } catch (eInit) {}
         return hdr;
       }
 
@@ -4433,6 +4451,7 @@
         });
         return fetch('/api/upload-photos', {
           method: 'POST',
+          headers: miniappLookupHeaders(),
           body: fd,
         })
           .then(function (r) {
@@ -4486,7 +4505,10 @@
               }
               return fetch('/api/reply', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: Object.assign(
+                  { 'Content-Type': 'application/json' },
+                  miniappLookupHeaders(),
+                ),
                 body: JSON.stringify({
                   comment_id: replyContext.comment_id,
                   post_id: replyContext.post_id,

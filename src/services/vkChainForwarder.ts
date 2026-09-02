@@ -175,6 +175,8 @@ let botRef: Bot | null = null
 let commentPollTimer: NodeJS.Timeout | null = null
 let maxToVkSyncTimer: NodeJS.Timeout | null = null
 let started = false
+let vkCommentsSyncInFlight = false
+let maxToVkSyncInFlight = false
 /** Защита от гонки при повторном вызове для одного и того же MAX mid. */
 const inflightVkPublish = new Set<string>()
 
@@ -566,25 +568,41 @@ export function startVkChainForwarder(): void {
   })
 
   commentPollTimer = setInterval(() => {
-    void syncAllVkCommentsToMax().catch((err: unknown) => {
-      logger.error('[vkChain] syncAllVkCommentsToMax error', err)
-      void sendAdminAlert(
-        'vk_comment_sync',
-        'Сбой синхронизации комментариев VK→MAX — перенос комментариев может быть остановлен',
-        { error: err instanceof Error ? err.message : String(err) },
-      )
-    })
+    if (vkCommentsSyncInFlight) {
+      return
+    }
+    vkCommentsSyncInFlight = true
+    void syncAllVkCommentsToMax()
+      .catch((err: unknown) => {
+        logger.error('[vkChain] syncAllVkCommentsToMax error', err)
+        void sendAdminAlert(
+          'vk_comment_sync',
+          'Сбой синхронизации комментариев VK→MAX — перенос комментариев может быть остановлен',
+          { error: err instanceof Error ? err.message : String(err) },
+        )
+      })
+      .finally(() => {
+        vkCommentsSyncInFlight = false
+      })
   }, VK_COMMENT_POLL_INTERVAL_MS)
 
   maxToVkSyncTimer = setInterval(() => {
-    void syncMaxCommentsToVk().catch((err: unknown) => {
-      logger.error('[vkChain] syncMaxCommentsToVk error', err)
-      void sendAdminAlert(
-        'vk_max_comment_sync',
-        'Сбой синхронизации комментариев MAX→VK — перенос комментариев может быть остановлен',
-        { error: err instanceof Error ? err.message : String(err) },
-      )
-    })
+    if (maxToVkSyncInFlight) {
+      return
+    }
+    maxToVkSyncInFlight = true
+    void syncMaxCommentsToVk()
+      .catch((err: unknown) => {
+        logger.error('[vkChain] syncMaxCommentsToVk error', err)
+        void sendAdminAlert(
+          'vk_max_comment_sync',
+          'Сбой синхронизации комментариев MAX→VK — перенос комментариев может быть остановлен',
+          { error: err instanceof Error ? err.message : String(err) },
+        )
+      })
+      .finally(() => {
+        maxToVkSyncInFlight = false
+      })
   }, VK_MAX_TO_VK_SYNC_INTERVAL_MS)
 
   const activeChains = listVkChainsSync().filter((c) => c.active)

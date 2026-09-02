@@ -1,4 +1,5 @@
 import { join } from 'node:path'
+import { monitorEventLoopDelay } from 'node:perf_hooks'
 
 import type { Bot } from '@maxhub/max-bot-api'
 import type { Update } from '@maxhub/max-bot-api/types'
@@ -24,6 +25,19 @@ const MAX_SECRET_HEADER = 'x-max-bot-api-secret'
 
 /** Корень `admin-panel/` рядом с `dist/` (в Docker: `/app/admin-panel`). */
 const adminPanelRoot = join(__dirname, '..', '..', 'admin-panel')
+
+/** Soft event-loop lag probe for /health (does not affect HTTP status). */
+const eventLoopDelay = monitorEventLoopDelay({ resolution: 20 })
+eventLoopDelay.enable()
+
+function currentEventLoopLagMs(): number {
+  // mean is in nanoseconds
+  const meanNs = eventLoopDelay.mean
+  if (!Number.isFinite(meanNs) || meanNs < 0) {
+    return 0
+  }
+  return Math.round(meanNs / 1e6)
+}
 
 export interface HttpAppOptions {
   bot: Bot
@@ -107,6 +121,7 @@ export function createHttpApp(options: HttpAppOptions): express.Express {
       memory: {
         heapUsedMb: Math.round(process.memoryUsage().heapUsed / 1024 / 1024),
       },
+      eventLoopLagMs: currentEventLoopLagMs(),
       timestamp: new Date().toISOString(),
     })
   })

@@ -274,7 +274,14 @@ export class PostStore {
 
   getPostsByChatId(chatId: number): Post[] {
     const rows = this.getStatements().listByChatId.all(chatId) as { data: string }[]
-    return rows.map((row) => this.parsePost(row.data))
+    const out: Post[] = []
+    for (const row of rows) {
+      const post = this.parsePost(row.data)
+      if (post) {
+        out.push(post)
+      }
+    }
+    return out
   }
 
   findPostByChannelMessage(chatId: number, messageMid: string): Post | null {
@@ -562,8 +569,16 @@ export class PostStore {
     }
   }
 
-  private parsePost(raw: string): Post {
-    return JSON.parse(raw) as Post
+  private parsePost(raw: string): Post | null {
+    try {
+      return JSON.parse(raw) as Post
+    } catch (err: unknown) {
+      logger.warn('postStore: corrupt posts.data row skipped', {
+        err: err instanceof Error ? err.message : String(err),
+        preview: raw.slice(0, 80),
+      })
+      return null
+    }
   }
 
   private getStatements(): NonNullable<PostStore['statements']> {

@@ -6,7 +6,7 @@
  * logger.debug('Переменные окружения загружены')
  */
 
-import { existsSync, renameSync, statSync } from 'node:fs'
+import { existsSync, openSync, readSync, closeSync, renameSync, statSync } from 'node:fs'
 import { appendFile, mkdir } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { serializeAdminLogLine } from './adminLogFormat'
@@ -14,6 +14,8 @@ import { serializeAdminLogLine } from './adminLogFormat'
 const RUNTIME_LOG_PATH = join(process.cwd(), 'data', 'runtime.log')
 const MAX_LOG_SIZE = 50 * 1024 * 1024
 const ADMIN_LOG_BUFFER_MAX = 500
+/** Max bytes to read from the end of runtime.log for admin/log analysis. */
+const RUNTIME_LOG_TAIL_BYTES = 512 * 1024
 const adminLogLines: string[] = []
 type LoggerLevel = 'INFO' | 'WARN' | 'ERROR' | 'DEBUG'
 type LoggerListener = (event: {
@@ -80,6 +82,48 @@ export function subscribeLoggerEvents(listener: LoggerListener): () => void {
 export function getAdminLogTail(maxLines: number): string[] {
   const n = Math.min(Math.max(1, maxLines), adminLogLines.length)
   return adminLogLines.slice(-n)
+}
+
+/**
+ * Reads only the last ~512KB of data/runtime.log and returns up to maxLines
+ * non-empty lines. Avoids loading a multi‑MB log into memory.
+ */
+export function readRuntimeLogTailLines(maxLines = 500): string[] {
+  const capped = Math.min(Math.max(1, maxLines), 2000)
+  try {
+    if (!existsSync(RUNTIME_LOG_PATH)) {
+      return []
+    }
+    const size = statSync(RUNTIME_LOG_PATH).size
+    if (size <= 0) {
+      return []
+    }
+    const readSize = Math.min(size, RUNTIME_LOG_TAIL_BYTES)
+    const fd = openSync(RUNTIME_LOG_PATH, 'r')
+    try {
+      const buf = Buffer.alloc(readSize)
+      readSync(fd, buf, 0, readSize, size - readSize)
+      let text = buf.toString('utf8')
+      if (size > readSize) {
+        const firstNl = text.indexOf('\n')
+        if (firstNl >= 0) {
+          text = text.slice(firstNl + 1)
+        }
+      }
+      return text
+        .split(/\r?\n/)
+        .filter((l) => l.trim() !== '')
+        .slice(-capped)
+    } finally {
+      closeSync(fd)
+    }
+  } catch {
+    return []
+  }
+}
+
+export function getRuntimeLogPath(): string {
+  return RUNTIME_LOG_PATH
 }
 
 const RESET = '\x1b[0m'

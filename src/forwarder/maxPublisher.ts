@@ -8,6 +8,12 @@ import { prepareMessengerHtmlText } from '../utils/messengerHtml'
 
 /** Официальный API MAX (как в @maxhub/max-bot-api). Старый botapi.max.ru/messages/sendMessage даёт 404. */
 const MAX_API = 'https://platform-api.max.ru'
+/** Таймаут отправки сообщения (мс). */
+const MAX_MESSAGE_TIMEOUT_MS = 20_000
+/** Таймаут слота uploads + загрузки файла (мс). */
+const MAX_UPLOAD_TIMEOUT_MS = 120_000
+/** Таймаут скачивания внешнего медиа перед upload (мс). */
+const MAX_DOWNLOAD_TIMEOUT_MS = 60_000
 
 function maxAuthHeaders(token: string): Record<string, string> {
   return { Authorization: token.trim() }
@@ -24,6 +30,7 @@ async function postMessage(
       ...maxAuthHeaders(token),
       'Content-Type': 'application/json',
     },
+    timeout: MAX_MESSAGE_TIMEOUT_MS,
   })
 }
 
@@ -37,12 +44,16 @@ async function uploadBufferToMax(
   const slot = await axios.post<{ url: string; token?: string }>(`${MAX_API}/uploads`, null, {
     params: { type },
     headers: maxAuthHeaders(token),
+    timeout: MAX_UPLOAD_TIMEOUT_MS,
   })
   const uploadUrl = slot.data.url
   const uploadToken = slot.data.token
   const form = new FormData()
   form.append('data', buffer, { filename, contentType })
-  await axios.post(uploadUrl, form, { headers: form.getHeaders() })
+  await axios.post(uploadUrl, form, {
+    headers: form.getHeaders(),
+    timeout: MAX_UPLOAD_TIMEOUT_MS,
+  })
   if (!uploadToken) {
     throw new Error('MAX upload: missing token in uploads response')
   }
@@ -200,7 +211,10 @@ export async function sendPhotoToMax(
   photoUrl: string,
   caption: string,
 ): Promise<void> {
-  const response = await axios.get(photoUrl, { responseType: 'arraybuffer' })
+  const response = await axios.get(photoUrl, {
+    responseType: 'arraybuffer',
+    timeout: MAX_DOWNLOAD_TIMEOUT_MS,
+  })
   const buffer = Buffer.from(response.data)
   const uploadToken = await uploadBufferToMax(
     token,
@@ -221,7 +235,10 @@ export async function sendVideoToMax(
   videoUrl: string,
   caption: string,
 ): Promise<void> {
-  const response = await axios.get(videoUrl, { responseType: 'arraybuffer' })
+  const response = await axios.get(videoUrl, {
+    responseType: 'arraybuffer',
+    timeout: MAX_DOWNLOAD_TIMEOUT_MS,
+  })
   const buffer = Buffer.from(response.data)
   const name = guessFilenameFromUrl(videoUrl, 'video.mp4')
   const ext = path.extname(name).toLowerCase()
@@ -242,7 +259,10 @@ export async function sendDocumentToMax(
   caption: string,
   options?: { filename?: string; contentType?: string },
 ): Promise<void> {
-  const response = await axios.get(documentUrl, { responseType: 'arraybuffer' })
+  const response = await axios.get(documentUrl, {
+    responseType: 'arraybuffer',
+    timeout: MAX_DOWNLOAD_TIMEOUT_MS,
+  })
   const buffer = Buffer.from(response.data)
   const name = options?.filename ?? guessFilenameFromUrl(documentUrl, 'file.bin')
   const contentType = options?.contentType ?? 'application/octet-stream'

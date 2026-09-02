@@ -557,6 +557,7 @@ export async function publishChannelImportJob(
 }
 
 let workerStarted = false
+let importTickInFlight = false
 
 export function startChannelImportWorker(): void {
   if (workerStarted) {
@@ -564,8 +565,16 @@ export function startChannelImportWorker(): void {
   }
   workerStarted = true
   setInterval(() => {
-    void tickChannelImportJobs().catch((err: unknown) => {
-      logger.error('[channelImport] tick', err)
-    })
+    if (importTickInFlight) {
+      return
+    }
+    importTickInFlight = true
+    void tickChannelImportJobs()
+      .catch((err: unknown) => {
+        logger.error('[channelImport] tick', err)
+      })
+      .finally(() => {
+        importTickInFlight = false
+      })
   }, 2000)
 }

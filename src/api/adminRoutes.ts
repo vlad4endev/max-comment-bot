@@ -1,6 +1,4 @@
 import { createReadStream } from 'node:fs'
-import { readFile } from 'node:fs/promises'
-import { join } from 'node:path'
 
 import type { Bot } from '@maxhub/max-bot-api'
 import type { ChatMember } from '@maxhub/max-bot-api/types'
@@ -95,7 +93,7 @@ import {
   testLogAiConnection,
   type LogAnalysisFocus,
 } from '../services/logAnalysisService'
-import { getAdminLogTail, logger } from '../utils/logger'
+import { getAdminLogTail, logger, readRuntimeLogTailLines } from '../utils/logger'
 import {
   BackupBusyError,
   createBackup,
@@ -109,8 +107,6 @@ import {
   resetScoredWordsToDefault,
 } from '../db/seedAntispamScoredWords'
 import type { ScoredWordsByScore } from '../db/seedAntispamScoredWords'
-
-const RUNTIME_LOG_PATH = join(process.cwd(), 'data', 'runtime.log')
 
 export interface AdminRouterDeps {
   bot: Bot
@@ -377,15 +373,7 @@ const REL_COMMENT_NOTIFY = 'Уведомления о комментариях'
 const REL_CHANNEL_SUBSCRIBER = 'Подписчик канала'
 
 function latestUsernameFromComments(userId: number): string | null {
-  for (const c of commentStore.listAllCommentsNewestFirst()) {
-    if (c.user_id === userId) {
-      const u = c.username.trim()
-      if (u !== '') {
-        return u
-      }
-    }
-  }
-  return null
+  return commentStore.latestUsernameForUser(userId)
 }
 
 async function resolveDisplayNameFromMax(
@@ -942,7 +930,7 @@ export function createAdminRouter(deps: AdminRouterDeps): express.Router {
     const ownerId = config.ownerUserId
     const links = channelNotifyLinkStore.getAllLinks().filter((link) => link.user_id === userId)
     const channelsWithAdminRole = channelRegistry.getAllChannels().filter((channel) => channel.type === 'channel')
-    const commentsRaw = commentStore.listAllCommentsNewestFirst().filter((c) => c.user_id === userId)
+    const commentsRaw = commentStore.listCommentsByUserId(userId)
 
     const channelLinksById = new Map<number, { title: string | null; relations: Set<string> }>()
     function addChannelRelation(chatId: number, title: string | null, relation: string): void {
@@ -1196,10 +1184,9 @@ export function createAdminRouter(deps: AdminRouterDeps): express.Router {
 
     let lines = getAdminLogTail(500)
     try {
-      const file = await readFile(RUNTIME_LOG_PATH, 'utf8')
-      const fromFile = file.split(/\r?\n/).filter((l) => l.trim() !== '')
+      const fromFile = readRuntimeLogTailLines(500)
       if (fromFile.length > lines.length) {
-        lines = fromFile.slice(-500)
+        lines = fromFile
       }
     } catch {
       /* use memory */

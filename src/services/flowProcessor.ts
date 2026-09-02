@@ -42,6 +42,7 @@ interface FetchFlowPostsResult {
 export class FlowProcessor {
   private bot: Bot | null = null
   private pollers = new Map<string, NodeJS.Timeout>()
+  private flowInFlight = new Set<string>()
   private started = false
   private emptyTickCount = new Map<string, number>()
   /** Однократное предупреждение: поток TG→MAX дублирует активную связку. */
@@ -92,37 +93,45 @@ export class FlowProcessor {
   }
 
   private async processFlowSafe(flowId: string): Promise<void> {
-    const flow = integrationsStore.getFlow(flowId)
-    if (!flow || !flow.enabled) return
-    if (this.isFlowSupersededByTgChain(flow)) {
-      if (!this.supersededByTgChainLogged.has(flow.id)) {
-        this.supersededByTgChainLogged.add(flow.id)
-        logger.warn(
-          'flowProcessor: поток TG→MAX пропущен — та же пара уже обслуживается tgChainForwarder (связка в админке). Отключите поток в Интеграциях или связку, чтобы не дублировать.',
+    if (this.flowInFlight.has(flowId)) {
+      return
+    }
+    this.flowInFlight.add(flowId)
+    try {
+      const flow = integrationsStore.getFlow(flowId)
+      if (!flow || !flow.enabled) return
+      if (this.isFlowSupersededByTgChain(flow)) {
+        if (!this.supersededByTgChainLogged.has(flow.id)) {
+          this.supersededByTgChainLogged.add(flow.id)
+          logger.warn(
+            'flowProcessor: поток TG→MAX пропущен — та же пара уже обслуживается tgChainForwarder (связка в админке). Отключите поток в Интеграциях или связку, чтобы не дублировать.',
+            {
+              flowId: flow.id,
+              flowName: flow.name,
+              source: flow.source.channelUsername ?? flow.source.channelId,
+              destination: flow.destination.channelId,
+            },
+          )
+        }
+        return
+      }
+      try {
+        await this.processFlow(flow)
+      } catch (err: unknown) {
+        logger.error('flowProcessor: error', { flowId: flow.id, err })
+        await integrationsStore.updateFlowStats(flow.id, { incrementErrors: 1 })
+        await sendAdminAlert(
+          `flow_error:${flow.id}`,
+          'Сбой потока переноса постов — публикация может быть остановлена',
           {
             flowId: flow.id,
             flowName: flow.name,
-            source: flow.source.channelUsername ?? flow.source.channelId,
-            destination: flow.destination.channelId,
+            error: err instanceof Error ? err.message : String(err),
           },
         )
       }
-      return
-    }
-    try {
-      await this.processFlow(flow)
-    } catch (err: unknown) {
-      logger.error('flowProcessor: error', { flowId: flow.id, err })
-      await integrationsStore.updateFlowStats(flow.id, { incrementErrors: 1 })
-      await sendAdminAlert(
-        `flow_error:${flow.id}`,
-        'Сбой потока переноса постов — публикация может быть остановлена',
-        {
-          flowId: flow.id,
-          flowName: flow.name,
-          error: err instanceof Error ? err.message : String(err),
-        },
-      )
+    } finally {
+      this.flowInFlight.delete(flowId)
     }
   }
 
@@ -158,6 +167,7 @@ export class FlowProcessor {
   private stopPollers(): void {
     for (const timer of this.pollers.values()) clearInterval(timer)
     this.pollers.clear()
+    this.flowInFlight.clear()
   }
 
   async runFlowOnce(flowId: string): Promise<FlowTickResult> {

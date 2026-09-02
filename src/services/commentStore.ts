@@ -416,6 +416,8 @@ export class CommentStore {
     listByChannelChatIdAdminSearch: Database.Statement
     countByChannelChatId: Database.Statement
     aggregateByUser: Database.Statement
+    latestUsernameByUserId: Database.Statement
+    listByUserIdNewest: Database.Statement
     upsert: Database.Statement
     getSyncMeta: Database.Statement
     findByTgCommentId: Database.Statement
@@ -727,6 +729,29 @@ export class CommentStore {
    */
   listAllCommentsNewestFirst(): Comment[] {
     const rows = this.getStatements().listAllNewest.all() as CommentStorageRow[]
+    const out: Comment[] = []
+    for (const row of rows) {
+      const c = commentFromStorageRow(row)
+      if (c) {
+        out.push(c)
+      }
+    }
+    return out
+  }
+
+  /** Latest non-empty username for a user (indexed by user_id + ORDER BY timestamp). */
+  latestUsernameForUser(userId: number): string | null {
+    const row = this.getStatements().latestUsernameByUserId.get(userId) as
+      | { username: string | null }
+      | undefined
+    const u = row?.username?.trim()
+    return u ? u : null
+  }
+
+  /** Comments for one user, newest first (admin user card). */
+  listCommentsByUserId(userId: number, limit = 500): Comment[] {
+    const capped = Math.min(Math.max(1, limit), 2000)
+    const rows = this.getStatements().listByUserIdNewest.all(userId, capped) as CommentStorageRow[]
     const out: Comment[] = []
     for (const row of rows) {
       const c = commentFromStorageRow(row)
@@ -1168,6 +1193,18 @@ export class CommentStore {
            ) AS latest_avatar_url
          FROM comments c
          GROUP BY c.user_id`,
+      ),
+      latestUsernameByUserId: db.prepare(
+        `SELECT username FROM comments
+         WHERE user_id = ? AND username IS NOT NULL AND TRIM(username) != ''
+         ORDER BY timestamp DESC
+         LIMIT 1`,
+      ),
+      listByUserIdNewest: db.prepare(
+        `SELECT ${storageFields} FROM comments
+         WHERE user_id = ?
+         ORDER BY timestamp DESC
+         LIMIT ?`,
       ),
       upsert: db.prepare(
         `INSERT OR REPLACE INTO comments (

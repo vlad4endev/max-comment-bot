@@ -250,12 +250,18 @@ export function startMaxCommentSync(bot: Bot, options: SyncOptions = {}): () => 
     }
   }
 
+  let syncing = false
+
   async function syncOnce(): Promise<void> {
+    if (syncing) {
+      return
+    }
     if (isTelegramApiPaused()) {
       logger.debug('[maxCommentSync] skipped: Telegram API pause active')
       return
     }
 
+    syncing = true
     try {
       const chains = listTgChainsSync().filter((c) => c.active && c.forward_comments)
       const perChain = Math.max(3, Math.ceil(batchSize / Math.max(chains.length, 1)))
@@ -338,6 +344,8 @@ export function startMaxCommentSync(bot: Bot, options: SyncOptions = {}): () => 
         'Сбой синхронизации комментариев MAX→Telegram — перенос комментариев может быть остановлен',
         { error: err instanceof Error ? err.message : String(err) },
       )
+    } finally {
+      syncing = false
     }
   }
 

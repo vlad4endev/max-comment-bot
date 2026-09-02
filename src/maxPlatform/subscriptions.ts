@@ -1,4 +1,5 @@
 const PLATFORM_API = 'https://platform-api.max.ru'
+const SUBSCRIPTION_TIMEOUT_MS = 20_000
 
 /**
  * Типы апдейтов для webhook и long polling: базовые + события участия бота в чатах.
@@ -38,6 +39,7 @@ export async function setWebhookSubscription(options: SetWebhookOptions): Promis
       'Content-Type': 'application/json',
     },
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(SUBSCRIPTION_TIMEOUT_MS),
   })
 
   const raw = await res.text()
@@ -67,6 +69,7 @@ export async function deleteWebhookSubscription(
   const res = await fetch(u.href, {
     method: 'DELETE',
     headers: { Authorization: token },
+    signal: AbortSignal.timeout(SUBSCRIPTION_TIMEOUT_MS),
   })
 
   const raw = await res.text()

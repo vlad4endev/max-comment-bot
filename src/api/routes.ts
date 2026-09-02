@@ -8,6 +8,7 @@ import express from 'express'
 import multer from 'multer'
 
 import { config, getTelegramToken } from '../config'
+import { verifyWebAppInitData } from '../utils/webAppInitData'
 import { getDb } from '../db/database'
 import { listTelegramChatAdministrators } from '../services/integrationPlatformClient'
 import { buildBotJoinUrl } from '../utils/deeplink'
@@ -185,6 +186,45 @@ function isTelegramMiniappPlatform(req: express.Request): boolean {
   return raw === 'telegram' || raw === 'tg'
 }
 
+/**
+ * When WebView sends signed initData, bind user_id from it.
+ * If initData is absent or invalid, returns null (caller keeps body user_id).
+ */
+function resolveVerifiedMiniappUserId(req: express.Request): number | null {
+  const bodyInit =
+    isRecord(req.body) ? parseNonEmptyString(req.body.init_data) : null
+  const initData =
+    parseHeaderString(req.headers['x-miniapp-init-data']) ?? bodyInit
+  if (!initData) {
+    return null
+  }
+  const isTelegram = isTelegramMiniappPlatform(req)
+  const token = isTelegram ? getTelegramToken() : config.BOT_TOKEN
+  const verified = verifyWebAppInitData(initData, token)
+  return verified?.userId ?? null
+}
+
+/** Upload / mutating miniapp routes require a client identity hint. */
+function hasMiniappClientIdentity(req: express.Request): boolean {
+  if (parseHeaderString(req.headers['x-miniapp-user-id'])) {
+    return true
+  }
+  if (parseHeaderString(req.headers['x-miniapp-start-param'])) {
+    return true
+  }
+  if (
+    parseHeaderString(req.headers['x-miniapp-tg-uid']) &&
+    parseHeaderString(req.headers['x-miniapp-tg-exp']) &&
+    parseHeaderString(req.headers['x-miniapp-tg-sig'])
+  ) {
+    return true
+  }
+  if (parseHeaderString(req.headers['x-miniapp-init-data'])) {
+    return true
+  }
+  return false
+}
+
 function parseTelegramChatIdQuery(value: unknown): string | null {
   const raw = parseNonEmptyString(value)
   if (!raw || !/^-?\d+$/.test(raw)) {
@@ -216,14 +256,6 @@ function parseBoolean(value: unknown): boolean | null {
     return false
   }
   return null
-}
-
-function isAdminParamValue(value: unknown): boolean {
-  if (value == null) {
-    return false
-  }
-  const normalized = String(value).trim().toLowerCase()
-  return normalized === '1' || normalized === 'true' || normalized === 'yes'
 }
 
 function isChannelAdminOrOwnerMember(m: ChatMember): boolean {
@@ -1956,6 +1988,10 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
   })
 
   router.post('/upload-photos', (req, res) => {
+    if (!hasMiniappClientIdentity(req)) {
+      res.status(401).json({ error: 'miniapp identity required' })
+      return
+    }
     miniappPhotoUpload.array('photos', MAX_UPLOAD_FILES)(req, res, (err: unknown) => {
       if (err instanceof Error) {
         res.status(400).json({ error: err.message || 'Ошибка загрузки фото' })
@@ -1982,7 +2018,8 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
     const chatId = parseNonZeroInt(body.chat_id)
     const messageMid = parseNonEmptyString(body.message_mid)
     const startParamHeader = parseNonEmptyString(req.headers['x-miniapp-start-param'])
-    const userId = parsePositiveInt(body.user_id)
+    const verifiedUserId = resolveVerifiedMiniappUserId(req)
+    const userId = verifiedUserId ?? parsePositiveInt(body.user_id)
     const username = parseNonEmptyString(body.username)
     const text = normalizeUserFacingText(parseOptionalString(body.text))
     const photoUrls = parsePhotoUrls(body.photo_urls)
@@ -2124,7 +2161,8 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
     const commentId = parseNonEmptyString(body.comment_id)
     const postId = parseNonEmptyString(body.post_id)
     const chatId = parseNonZeroInt(body.chat_id)
-    const replierUserId = parsePositiveInt(body.user_id)
+    const verifiedUserId = resolveVerifiedMiniappUserId(req)
+    const replierUserId = verifiedUserId ?? parsePositiveInt(body.user_id)
     const adminText = normalizeUserFacingText(parseOptionalString(body.admin_text))
     const replyPhotoUrls = parsePhotoUrls(body.photo_urls)
     if (!commentId || !postId || !chatId || !replierUserId || (adminText === '' && replyPhotoUrls.length === 0)) {
