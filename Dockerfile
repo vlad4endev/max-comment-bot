@@ -4,8 +4,12 @@ FROM ${NODE_IMAGE} AS builder
 
 ARG GIT_COMMIT=unknown
 
-# Node 17+ предпочитает IPv6; в Docker это часто зависает ~100с, npm падает с "Exit handler never called"
+# Node 17+ предпочитает IPv6; в Docker это часто зависает ~100с, npm падает с "Exit handler never called".
+# registry.npmjs.org / nodejs.org с skypath дают TLS timeout; npmmirror отвечает.
 ENV NODE_OPTIONS=--dns-result-order=ipv4first \
+    NPM_CONFIG_REGISTRY=https://registry.npmmirror.com \
+    npm_config_nodedir=/usr/local \
+    npm_config_disturl=https://cdn.npmmirror.com/binaries/node \
     NPM_CONFIG_FETCH_RETRIES=5 \
     NPM_CONFIG_FETCH_RETRY_MINTIMEOUT=20000 \
     NPM_CONFIG_FETCH_RETRY_MAXTIMEOUT=120000 \
