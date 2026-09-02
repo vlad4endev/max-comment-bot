@@ -3,6 +3,7 @@ import axios from 'axios'
 import { listTgChainsSync, type TgChainRecord } from '../api/adminPanelState'
 import {
   getTelegramUpdatesWithIds,
+  isTelegramGetUpdatesTimeoutError,
   TelegramGetUpdatesConflictError,
   type TgMessage,
 } from '../forwarder/telegramReader'
@@ -15,8 +16,7 @@ import {
   resolveTgCommentAuthor,
 } from '../utils/commentSyncFilter'
 import { logger } from '../utils/logger'
-import { assertTelegramPollingReady } from './channelImportService'
-import { ensureTelegramPollingMode } from './integrationPlatformClient'
+import { ensureTelegramPollingMode, invalidateTelegramPollingModeCache } from './integrationPlatformClient'
 import { resolveDiscussionChatId } from './postCommentMappingStore'
 import { resolveCanonicalChannelChatId } from './resolveChannelChatId'
 import {
@@ -155,6 +155,40 @@ async function buildDiscussionChainMap(antispamToken: string): Promise<Map<numbe
   return map
 }
 
+const DISCUSSION_MAP_TTL_MS = 5 * 60_000
+let discussionMapCache: { at: number; token: string; map: Map<number, TgChainRecord[]> } | null = null
+
+async function getCachedDiscussionChainMap(token: string): Promise<Map<number, TgChainRecord[]>> {
+  if (
+    discussionMapCache &&
+    discussionMapCache.token === token &&
+    Date.now() - discussionMapCache.at < DISCUSSION_MAP_TTL_MS
+  ) {
+    return discussionMapCache.map
+  }
+  const map = await buildDiscussionChainMap(token)
+  discussionMapCache = { at: Date.now(), token, map }
+  return map
+}
+
+function antispamTokenConflictsWithForwarder(token: string): boolean {
+  const trimmed = token.trim()
+  if (!trimmed) {
+    return false
+  }
+  const main = resolveTelegramBotToken()
+  if (main && trimmed === main) {
+    return true
+  }
+  for (const chain of listTgChainsSync()) {
+    const chainToken = chain.bot_token?.trim()
+    if (chainToken && chainToken === trimmed) {
+      return true
+    }
+  }
+  return false
+}
+
 function pickChainForDiscussion(chains: TgChainRecord[]): TgChainRecord | null {
   return chains[0] ?? null
 }
@@ -164,15 +198,11 @@ export async function runTelegramAntispamBotOnce(): Promise<boolean> {
   if (!token) {
     return false
   }
-
-  await ensureTelegramPollingMode(token)
-  const pollErr = await assertTelegramPollingReady(token)
-  if (pollErr) {
-    logger.warn('[antispamBot] polling not ready', { err: pollErr })
+  if (antispamTokenConflictsWithForwarder(token)) {
     return false
   }
 
-  const discussionMap = await buildDiscussionChainMap(token)
+  const discussionMap = await getCachedDiscussionChainMap(token)
   if (discussionMap.size === 0) {
     return false
   }
@@ -185,10 +215,12 @@ export async function runTelegramAntispamBotOnce(): Promise<boolean> {
     })
   } catch (err: unknown) {
     if (err instanceof TelegramGetUpdatesConflictError) {
+      invalidateTelegramPollingModeCache(token)
       await sleep(10_000)
       return false
     }
     if (axios.isAxiosError(err) && err.response?.status === 409) {
+      invalidateTelegramPollingModeCache(token)
       logger.warn('[antispamBot] 409 conflict — waiting 10s')
       await sleep(10_000)
       return false
@@ -261,10 +293,18 @@ export function startTelegramAntispamBotPoller(): () => void {
     logger.info('[antispamBot] TG_ANTISPAM_BOT_TOKEN not set — antispam via main CommentBot')
     return () => {}
   }
+  const token = resolveTelegramAntispamBotToken()
+  if (antispamTokenConflictsWithForwarder(token)) {
+    logger.warn(
+      '[antispamBot] TG_ANTISPAM_BOT_TOKEN совпадает с ботом пересылки — отдельный getUpdates отключён, антиспам идёт в handleTgComment',
+    )
+    return () => {}
+  }
   if (pollerStarted) {
     return () => {}
   }
   pollerStarted = true
+  void ensureTelegramPollingMode(token)
 
   let stopped = false
   const loop = async () => {
@@ -283,6 +323,10 @@ export function startTelegramAntispamBotPoller(): () => void {
         if (axios.isAxiosError(err) && err.response?.status === 409) {
           logger.warn('[antispamBot] 409 conflict — waiting 10s')
           await sleep(10_000)
+          continue
+        }
+        if (isTelegramGetUpdatesTimeoutError(err)) {
+          logger.debug('[antispamBot] getUpdates idle timeout, retrying')
           continue
         }
         logger.error('[antispamBot] loop error', { err })

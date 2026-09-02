@@ -4,6 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 
 import { resolveTelegramBotToken } from './resolveTelegramBotToken'
+import { isTelegramPollingModeCached } from './integrationPlatformClient'
 import { getDb } from '../db/database'
 import {
   getTelegramUpdatesWithIds,
@@ -98,6 +99,9 @@ export async function assertTelegramPollingReady(tgToken: string): Promise<strin
   if (!tgToken) {
     return 'Не задан TG_READER_BOT_TOKEN (или TG_TOKEN в интеграции)'
   }
+  if (isTelegramPollingModeCached(tgToken)) {
+    return null
+  }
   try {
     const { data } = await axios.get<{ ok: boolean; result?: { url?: string } }>(
       `${TG_API}${tgToken}/getWebhookInfo`,
@@ -108,7 +112,7 @@ export async function assertTelegramPollingReady(tgToken: string): Promise<strin
       return `У бота включён webhook (${url}) — getUpdates пустой. Отключите webhook (deleteWebhook) для reader-бота.`
     }
   } catch {
-    /* ignore probe errors */
+    /* timeout/proxy: не блокируем getUpdates */
   }
   return null
 }

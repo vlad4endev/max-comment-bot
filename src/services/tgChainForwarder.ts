@@ -11,11 +11,11 @@ import {
   TelegramGetUpdatesConflictError,
   getTgFileUrl,
   getTelegramUpdatesWithIds,
+  isTelegramGetUpdatesTimeoutError,
   type TgMessage,
 } from '../forwarder/telegramReader'
 import { listTgChainsSync, updateTgChain, type TgChainRecord } from '../api/adminPanelState'
-import { assertTelegramPollingReady } from './channelImportService'
-import { ensureTelegramPollingMode } from './integrationPlatformClient'
+import { ensureTelegramPollingMode, invalidateTelegramPollingModeCache } from './integrationPlatformClient'
 import { attachAndVerifyCommentsForForwardedPost } from './channelPostPublishGate'
 import { postStore } from './postStore'
 import { resolveCanonicalChannelChatId } from './resolveChannelChatId'
@@ -341,13 +341,6 @@ export async function syncMainTelegramBotDiscoveryUpdates(
   if (timeoutSec === 0 && isTelegramGetUpdatesOwnedByForwarder(tgToken)) {
     return 0
   }
-  await ensureTelegramPollingMode(tgToken)
-  const pollErr = await assertTelegramPollingReady(tgToken)
-  if (pollErr) {
-    logger.warn('[tgChain] main bot discovery poll skipped', { err: pollErr })
-    return 0
-  }
-
   let offset = getReaderOffset(tgToken)
   const maxPages = options?.maxPages ?? 8
   let processed = 0
@@ -1375,13 +1368,6 @@ async function runTgChainsForToken(tgToken: string): Promise<boolean> {
     return receivedAny
   }
 
-  await ensureTelegramPollingMode(tgToken)
-  const pollErr = await assertTelegramPollingReady(tgToken)
-  if (pollErr) {
-    logger.warn('[tgChain] telegram polling not ready', { err: pollErr, chainIds: group.map((c) => c.id) })
-    return receivedAny
-  }
-
   const offset = getReaderOffset(tgToken)
   const includeMiniappBotUpdates = isMainTelegramBotToken(tgToken)
   const includeDiscussionMessages = group.some((c) => c.forward_comments)
@@ -1398,10 +1384,12 @@ async function runTgChainsForToken(tgToken: string): Promise<boolean> {
     })
   } catch (err: unknown) {
     if (err instanceof TelegramGetUpdatesConflictError) {
+      invalidateTelegramPollingModeCache(tgToken)
       await sleep(10_000)
       return receivedAny
     }
     if (axios.isAxiosError(err) && err.response?.status === 409) {
+      invalidateTelegramPollingModeCache(tgToken)
       logger.warn('[tgChain] 409 conflict — another instance may be running, waiting 10s')
       await sleep(10_000)
       return receivedAny
@@ -1471,6 +1459,7 @@ async function restartTokenPollLoop(tgToken: string): Promise<void> {
 function startTokenPollLoop(tgToken: string): { stop: () => void } {
   let stopped = false
   setTelegramGetUpdatesOwner(tgToken, true)
+  void ensureTelegramPollingMode(tgToken)
   for (const chain of listActiveForwardChains()) {
     if (resolveTgToken(chain) === tgToken) {
       touchChainActivity(chain.id)
@@ -1490,13 +1479,21 @@ function startTokenPollLoop(tgToken: string): { stop: () => void } {
         }
       } catch (err: unknown) {
         if (err instanceof TelegramGetUpdatesConflictError) {
+          invalidateTelegramPollingModeCache(tgToken)
           logger.warn('[tgChain] 409 conflict — another instance may be running, waiting 10s')
           await sleep(10_000)
           continue
         }
         if (axios.isAxiosError(err) && err.response?.status === 409) {
+          invalidateTelegramPollingModeCache(tgToken)
           logger.warn('[tgChain] 409 conflict — another instance may be running, waiting 10s')
           await sleep(10_000)
+          continue
+        }
+        if (isTelegramGetUpdatesTimeoutError(err)) {
+          logger.debug('[tgChain] getUpdates idle timeout, retrying', {
+            tokenHint: tgToken.slice(-6),
+          })
           continue
         }
         logger.error('[tgChain] loop error', { err, tokenHint: tgToken.slice(-6) })

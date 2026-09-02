@@ -1,9 +1,35 @@
 import axios from 'axios'
 
-import { telegramAxios } from '../utils/telegramAxios'
+import { telegramAxios, telegramPollAxios } from '../utils/telegramAxios'
 import { logger } from '../utils/logger'
 
 const TG_API = 'https://api.telegram.org/bot'
+
+export function isTelegramGetUpdatesTimeoutError(err: unknown): boolean {
+  if (axios.isCancel(err)) {
+    return true
+  }
+  if (axios.isAxiosError(err)) {
+    const code = err.code ?? ''
+    if (code === 'ERR_CANCELED' || code === 'ECONNABORTED' || code === 'ETIMEDOUT') {
+      return true
+    }
+    if (err.name === 'CanceledError' || err.message === 'canceled') {
+      return true
+    }
+  }
+  if (err instanceof Error) {
+    const name = err.name
+    const msg = err.message.toLowerCase()
+    if (name === 'CanceledError' || name === 'AbortError') {
+      return true
+    }
+    if (msg === 'canceled' || msg.includes('aborted')) {
+      return true
+    }
+  }
+  return false
+}
 
 export class TelegramGetUpdatesConflictError extends Error {
   constructor(message: string) {
@@ -65,7 +91,7 @@ export async function getTgUpdates(token: string, offset: number = 0): Promise<T
   const url = `${TG_API}${token}/getUpdates?offset=${offset}&timeout=10&allowed_updates=["channel_post"]`
   for (let attempt = 0; attempt < 5; attempt++) {
     try {
-      const res = await telegramAxios.get(url)
+      const res = await telegramPollAxios.get(url)
       const updates = res.data?.result || []
       return updates
         .filter((u: any) => u.channel_post)
@@ -112,10 +138,10 @@ export async function getTelegramUpdatesWithIds(
   } else if (options?.includeDiscussionMessages) {
     allowed.push('message')
   }
-  const requestTimeoutMs = Math.max(20_000, (timeoutSec + 8) * 1000)
+  const requestTimeoutMs = Math.max(25_000, (timeoutSec + 20) * 1000)
   for (let attempt = 0; attempt < 5; attempt++) {
     try {
-      const res = await telegramAxios.get(`${TG_API}${token}/getUpdates`, {
+      const res = await telegramPollAxios.get(`${TG_API}${token}/getUpdates`, {
         params: {
           offset,
           timeout: timeoutSec,
@@ -139,6 +165,9 @@ export async function getTelegramUpdatesWithIds(
           raw: u as Record<string, unknown>,
         }))
     } catch (err: unknown) {
+      if (isTelegramGetUpdatesTimeoutError(err)) {
+        return []
+      }
       if (axios.isAxiosError(err) && err.response?.status === 409) {
         logger.warn('[tgChain] 409 conflict — another instance may be running, waiting 10s', {
           offset,

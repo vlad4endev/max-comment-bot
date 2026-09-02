@@ -180,23 +180,65 @@ async function finalizeTelegramLinkedChatsList(options: {
 }
 
 /** Webhook блокирует getUpdates — для опроса и обнаружения чатов нужен polling. */
+const TELEGRAM_POLLING_MODE_TTL_MS = 30 * 60_000
+const TELEGRAM_POLLING_PROBE_BACKOFF_MS = 60_000
+const telegramPollingModeOkUntil = new Map<string, number>()
+const telegramPollingProbeBackoffUntil = new Map<string, number>()
+
+export function isTelegramPollingModeCached(token: string): boolean {
+  const until = telegramPollingModeOkUntil.get(token.trim()) ?? 0
+  return Date.now() < until
+}
+
+export function invalidateTelegramPollingModeCache(token?: string): void {
+  if (!token) {
+    telegramPollingModeOkUntil.clear()
+    telegramPollingProbeBackoffUntil.clear()
+    return
+  }
+  const trimmed = token.trim()
+  telegramPollingModeOkUntil.delete(trimmed)
+  telegramPollingProbeBackoffUntil.delete(trimmed)
+}
+
+function markTelegramPollingModeOk(token: string): void {
+  const trimmed = token.trim()
+  telegramPollingModeOkUntil.set(trimmed, Date.now() + TELEGRAM_POLLING_MODE_TTL_MS)
+  telegramPollingProbeBackoffUntil.delete(trimmed)
+}
+
 export async function ensureTelegramPollingMode(token: string): Promise<void> {
+  const trimmed = token.trim()
+  if (!trimmed) {
+    return
+  }
+  if (isTelegramPollingModeCached(trimmed)) {
+    return
+  }
+  const backoffUntil = telegramPollingProbeBackoffUntil.get(trimmed) ?? 0
+  if (Date.now() < backoffUntil) {
+    return
+  }
   try {
     const { data } = await httpGet<{
       ok: boolean
       result?: { url?: string }
-    }>(`${TG_API}/bot${token}/getWebhookInfo`, { timeout: 10_000 })
+    }>(`${TG_API}/bot${trimmed}/getWebhookInfo`, { timeout: 10_000 })
     const url = data.result?.url?.trim()
     if (!data.ok || !url) {
+      markTelegramPollingModeOk(trimmed)
       return
     }
-    await httpGet(`${TG_API}/bot${token}/deleteWebhook`, {
+    await httpGet(`${TG_API}/bot${trimmed}/deleteWebhook`, {
       params: { drop_pending_updates: false },
       timeout: 15_000,
     })
+    markTelegramPollingModeOk(trimmed)
     logger.info('ensureTelegramPollingMode: webhook снят для getUpdates', { hadUrl: url })
   } catch (err: unknown) {
-    logger.warn('ensureTelegramPollingMode failed', err)
+    telegramPollingProbeBackoffUntil.set(trimmed, Date.now() + TELEGRAM_POLLING_PROBE_BACKOFF_MS)
+    const code = axios.isAxiosError(err) ? err.code ?? err.message : String(err)
+    logger.warn('ensureTelegramPollingMode failed', { code })
   }
 }
 

@@ -25,6 +25,8 @@ export interface GramJsSocksProxy {
 
 let httpAgent: HttpAgent | undefined
 let httpsAgent: HttpAgent | undefined
+let pollHttpAgent: HttpAgent | undefined
+let pollHttpsAgent: HttpAgent | undefined
 let changeHandler: (() => void) | null = null
 
 export function setTelegramProxyChangeHandler(handler: () => void): void {
@@ -36,6 +38,14 @@ export function getTelegramProxyAgents(): { httpAgent: HttpAgent; httpsAgent: Ht
     return null
   }
   return { httpAgent, httpsAgent }
+}
+
+/** Отдельные агенты только для getUpdates — исходящие sendMessage не делят с ними сокет. */
+export function getTelegramPollProxyAgents(): { httpAgent: HttpAgent; httpsAgent: HttpAgent } | null {
+  if (!pollHttpAgent || !pollHttpsAgent) {
+    return getTelegramProxyAgents()
+  }
+  return { httpAgent: pollHttpAgent, httpsAgent: pollHttpsAgent }
 }
 
 function socksAgentFor(record: TelegramProxyRecord, host: string, port: number): HttpAgent {
@@ -119,6 +129,8 @@ export function describeActiveProxyRuntime(): {
 export async function applyTelegramProxyRuntime(): Promise<void> {
   httpAgent = undefined
   httpsAgent = undefined
+  pollHttpAgent = undefined
+  pollHttpsAgent = undefined
   await stopMainVlessTunnel()
 
   const state = telegramProxyStore.getState()
@@ -134,16 +146,25 @@ export async function applyTelegramProxyRuntime(): Promise<void> {
       const parsed = parseTunnelUri(active.uri)
       await startMainVlessTunnel(parsed, state.localSocksPort)
       const agent = socksAgentFor(active, '127.0.0.1', state.localSocksPort)
+      const pollAgent = socksAgentFor(active, '127.0.0.1', state.localSocksPort)
       httpAgent = agent
       httpsAgent = agent
+      pollHttpAgent = pollAgent
+      pollHttpsAgent = pollAgent
     } else if (active.kind === 'socks5') {
       const agent = socksAgentFor(active, active.host, active.port)
+      const pollAgent = socksAgentFor(active, active.host, active.port)
       httpAgent = agent
       httpsAgent = agent
+      pollHttpAgent = pollAgent
+      pollHttpsAgent = pollAgent
     } else {
       const agent = httpProxyAgentFor(active)
+      const pollAgent = httpProxyAgentFor(active)
       httpAgent = agent
       httpsAgent = agent
+      pollHttpAgent = pollAgent
+      pollHttpsAgent = pollAgent
     }
     logger.info('[telegramProxy] applied', {
       kind: active.kind,
@@ -153,6 +174,8 @@ export async function applyTelegramProxyRuntime(): Promise<void> {
   } catch (err: unknown) {
     httpAgent = undefined
     httpsAgent = undefined
+    pollHttpAgent = undefined
+    pollHttpsAgent = undefined
     logger.error('[telegramProxy] failed to apply, falling back to direct', err)
   }
   notifyChanged()
