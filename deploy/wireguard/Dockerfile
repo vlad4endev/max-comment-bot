@@ -3,7 +3,8 @@
 ARG ALPINE_IMAGE=alpine:3.21
 FROM ${ALPINE_IMAGE}
 
-RUN apk add --no-cache \
+COPY scripts/alpine-apk-add.sh /tmp/alpine-apk-add.sh
+RUN sh /tmp/alpine-apk-add.sh \
     bash \
     wireguard-tools \
     iptables \
@@ -11,7 +12,7 @@ RUN apk add --no-cache \
     microsocks \
     curl
 
-COPY entrypoint.sh /entrypoint.sh
+COPY deploy/wireguard/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
 EXPOSE 1080

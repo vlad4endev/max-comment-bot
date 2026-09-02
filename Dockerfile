@@ -15,7 +15,8 @@ ENV NODE_OPTIONS=--dns-result-order=ipv4first \
     NPM_CONFIG_UPDATE_NOTIFIER=false
 
 # better-sqlite3: на Alpine нет готовых prebuild — нужен node-gyp (python + toolchain)
-RUN apk add --no-cache python3 make g++
+COPY scripts/alpine-apk-add.sh /tmp/alpine-apk-add.sh
+RUN sh /tmp/alpine-apk-add.sh python3 make g++
 
 WORKDIR /app
 
@@ -38,7 +39,8 @@ WORKDIR /app
 
 ENV NODE_ENV=production
 
-RUN apk add --no-cache curl
+COPY scripts/alpine-apk-add.sh /tmp/alpine-apk-add.sh
+RUN sh /tmp/alpine-apk-add.sh curl
 
 COPY package.json package-lock.json ./
 COPY --from=builder /app/node_modules ./node_modules

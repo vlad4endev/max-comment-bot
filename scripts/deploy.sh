@@ -72,24 +72,36 @@ if [[ "${LOCAL_HEAD:-}" == "${GIT_COMMIT}" && "${DEPLOY_FORCE_REBUILD:-}" != "1"
   echo "==> git HEAD не изменился — для пересборки образа всё равно пробуем build (GIT_COMMIT в Dockerfile)"
 fi
 
-ensure_node_base_image() {
-  if docker image inspect node:22-alpine >/dev/null 2>&1; then
-    echo "==> node:22-alpine уже есть локально — pull не нужен"
+# Docker Hub с skypath часто даёт TLS timeout — library-образы берём с зеркал.
+ensure_library_image() {
+  local image="$1"
+  if docker image inspect "${image}" >/dev/null 2>&1; then
+    echo "==> ${image} уже есть локально — pull не нужен"
     return 0
   fi
-  echo "==> нет node:22-alpine — пробую mirror.gcr.io"
-  if docker pull mirror.gcr.io/library/node:22-alpine; then
-    docker tag mirror.gcr.io/library/node:22-alpine node:22-alpine
-    return 0
-  fi
-  echo "==> GCR недоступен — пробую Docker Hub" >&2
-  docker pull node:22-alpine
+  local src
+  for src in "mirror.gcr.io/library/${image}" "public.ecr.aws/docker/library/${image}"; do
+    echo "==> нет ${image} — пробую ${src}"
+    if docker pull "${src}"; then
+      docker tag "${src}" "${image}"
+      return 0
+    fi
+  done
+  echo "==> зеркала недоступны — пробую Docker Hub" >&2
+  docker pull "${image}"
+}
+
+# COMPOSE_PROFILES=telegram-vpn в .env иначе любой up пытается собрать alpine:3.21 с Hub.
+compose_core() {
+  COMPOSE_PROFILES= command docker compose "$@"
 }
 
 echo "==> docker build max-comment-bot:latest (бот не останавливаем, пока образ не готов)"
-ensure_node_base_image
-# compose build --pull is boolean; "--pull never" becomes service name "never".
-# Собираем Dockerfile напрямую — локальный node:22-alpine, без compose build.
+ensure_library_image node:22-alpine
+ensure_library_image redis:7-alpine || true
+# BuildKit ходит в Hub за metadata FROM, даже если образ уже локальный.
+export DOCKER_BUILDKIT=0
+export COMPOSE_DOCKER_CLI_BUILD=0
 BUILD_ARGS=(--build-arg "GIT_COMMIT=${GIT_COMMIT}" -t max-comment-bot:latest)
 if [[ "${DEPLOY_NO_CACHE:-}" == "1" ]]; then
   BUILD_ARGS+=(--no-cache)
@@ -98,21 +110,25 @@ fi
 echo "==> docker build ${BUILD_ARGS[*]} ."
 command docker build "${BUILD_ARGS[@]}" .
 
-echo "==> пересоздаю только контейнер бота"
+echo "==> пересоздаю только контейнер бота (без профиля telegram-vpn)"
 UP_ARGS=(-d --force-recreate --no-deps --no-build)
-if docker compose up --help 2>/dev/null | grep -Eq -- '--pull[[:space:]].*never'; then
-  UP_ARGS+=(--pull never)
-fi
-echo "==> docker compose up ${UP_ARGS[*]} bot"
-if ! command docker compose up "${UP_ARGS[@]}" bot; then
+echo "==> COMPOSE_PROFILES= docker compose up ${UP_ARGS[*]} bot"
+if ! compose_core up "${UP_ARGS[@]}" bot; then
   echo "==> recreate не удался — поднимаю предыдущий контейнер" >&2
-  command docker compose up -d || true
+  compose_core up -d --no-build bot redis || true
   exit 1
 fi
-docker compose up -d redis >/dev/null 2>&1 || true
-if docker compose config --services 2>/dev/null | grep -qx wg-telegram; then
-  echo "==> поднимаю wg-telegram (профиль telegram-vpn)"
-  docker compose up -d --build wg-telegram || true
+compose_core up -d --no-build redis >/dev/null 2>&1 || true
+
+if docker compose --profile telegram-vpn config --services 2>/dev/null | grep -qx wg-telegram; then
+  echo "==> поднимаю wg-telegram отдельно (alpine с зеркала, не Docker Hub)"
+  if ensure_library_image alpine:3.21 \
+    && command docker build -f deploy/wireguard/Dockerfile -t max-comment-bot-wg-telegram:latest .; then
+    command docker compose --profile telegram-vpn up -d --no-build wg-telegram || true
+  else
+    echo "==> wg-telegram не собран — бот уже должен быть жив" >&2
+    echo "==> socks5://wg-telegram:1080 не заработает, пока alpine:3.21 не скачается с зеркала" >&2
+  fi
 fi
 
 echo "==> статус контейнера:"
