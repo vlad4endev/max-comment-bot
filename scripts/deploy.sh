@@ -76,10 +76,10 @@ ensure_node_base_image() {
 
 echo "==> docker compose build (бот не останавливаем, пока образ не готов)"
 ensure_node_base_image
+# compose build --pull is a boolean (always pull). "--pull never" is buildx syntax
+# and compose treats "never" as a service name → "no such service: never".
+# Without --pull, the local node:22-alpine from ensure_node_base_image is used.
 BUILD_FLAGS=(--build-arg "GIT_COMMIT=${GIT_COMMIT}")
-if docker compose build --help 2>/dev/null | grep -q -- '--pull'; then
-  BUILD_FLAGS+=(--pull never)
-fi
 if [[ "${DEPLOY_NO_CACHE:-}" == "1" ]]; then
   BUILD_FLAGS+=(--no-cache)
   echo "==> DEPLOY_NO_CACHE=1 — полная пересборка образа"
