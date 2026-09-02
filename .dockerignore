@@ -9,3 +9,8 @@ npm-debug.log*
 coverage
 .vscode
 .idea
+data
+data.backup.*
+*.tar.gz
+*.bak-*
+docker-compose.yml.bak-*
