@@ -148,11 +148,11 @@ export async function getTgUpdates(token: string, offset: number = 0): Promise<T
         .map((u: any) => u.channel_post)
     } catch (err: unknown) {
       if (axios.isAxiosError(err) && err.response?.status === 409) {
-        logger.warn('[tgChain] 409 conflict — another instance may be running, waiting 10s', {
+        logger.warn('[tgChain] 409 conflict — another instance may be running, waiting 2.5s', {
           offset,
           attempt,
         })
-        await new Promise((r) => setTimeout(r, 10_000))
+        await new Promise((r) => setTimeout(r, 2_500))
         continue
       }
       throw err
@@ -183,12 +183,33 @@ export async function getTgFileUrl(token: string, fileId: string): Promise<strin
   }
 }
 
+function combineAbortSignals(...signals: AbortSignal[]): AbortSignal {
+  const controller = new AbortController()
+  const onAbort = () => {
+    if (!controller.signal.aborted) {
+      controller.abort()
+    }
+  }
+  for (const signal of signals) {
+    if (signal.aborted) {
+      onAbort()
+      return controller.signal
+    }
+    signal.addEventListener('abort', onAbort, { once: true })
+  }
+  return controller.signal
+}
+
 /** Сырые апдейты с `update_id` — для корректного offset при опросе. */
 export async function getTelegramUpdatesWithIds(
   token: string,
   offset: number,
   timeoutSec: number = 0,
-  options?: { includeMiniappBotUpdates?: boolean; includeDiscussionMessages?: boolean },
+  options?: {
+    includeMiniappBotUpdates?: boolean
+    includeDiscussionMessages?: boolean
+    signal?: AbortSignal
+  },
 ): Promise<TgChannelUpdate[]> {
   const allowed = ['channel_post', 'edited_channel_post', 'edited_message']
   if (options?.includeMiniappBotUpdates) {
@@ -198,7 +219,14 @@ export async function getTelegramUpdatesWithIds(
   }
   const requestTimeoutMs = Math.max(25_000, (timeoutSec + 20) * 1000)
   for (let attempt = 0; attempt < 5; attempt++) {
+    if (options?.signal?.aborted) {
+      return []
+    }
     try {
+      const timeoutSignal = AbortSignal.timeout(requestTimeoutMs)
+      const signal = options?.signal
+        ? combineAbortSignals(timeoutSignal, options.signal)
+        : timeoutSignal
       const res = await telegramPollAxios.get(`${TG_API}${token}/getUpdates`, {
         params: {
           offset,
@@ -207,7 +235,7 @@ export async function getTelegramUpdatesWithIds(
           allowed_updates: JSON.stringify(allowed),
         },
         timeout: requestTimeoutMs,
-        signal: AbortSignal.timeout(requestTimeoutMs),
+        signal,
       })
       const updates = res.data?.result || []
       return updates
@@ -223,15 +251,15 @@ export async function getTelegramUpdatesWithIds(
           raw: u as Record<string, unknown>,
         }))
     } catch (err: unknown) {
-      if (isTelegramGetUpdatesTimeoutError(err)) {
+      if (options?.signal?.aborted || isTelegramGetUpdatesTimeoutError(err)) {
         return []
       }
       if (axios.isAxiosError(err) && err.response?.status === 409) {
-        logger.warn('[tgChain] 409 conflict — another instance may be running, waiting 10s', {
+        logger.warn('[tgChain] 409 conflict — another instance may be running, waiting 2.5s', {
           offset,
           attempt,
         })
-        await new Promise((r) => setTimeout(r, 10_000))
+        await new Promise((r) => setTimeout(r, 2_500))
         continue
       }
       throw err

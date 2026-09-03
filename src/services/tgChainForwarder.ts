@@ -177,6 +177,12 @@ function enqueueForward(chain: TgChainRecord, messages: TgMessage[], tgToken: st
   scheduleForwardJob(chain, messages, tgToken, jobKey)
 }
 
+function leftoverUnforwarded(chainId: string, jobKey: string, fallback: TgMessage[]): TgMessage[] {
+  const job = getForwardQueueJob(jobKey)
+  const latest = job ? parseForwardQueueMessages(job.payload) : fallback
+  return latest.filter((m) => !isAlreadyForwarded(chainId, m.message_id))
+}
+
 function scheduleForwardJob(
   chain: TgChainRecord,
   messages: TgMessage[],
@@ -187,29 +193,38 @@ function scheduleForwardJob(
     return
   }
   if (messages.every((m) => isAlreadyForwarded(chain.id, m.message_id))) {
-    deleteForwardQueueJob(jobKey)
+    const leftover = leftoverUnforwarded(chain.id, jobKey, messages)
+    if (leftover.length === 0) {
+      deleteForwardQueueJob(jobKey)
+    }
     return
   }
   inFlightForwardKeys.add(jobKey)
   enqueueChannelWork(chain.max_chat_id, async () => {
+    let leftover: TgMessage[] = []
     try {
-      const ok = await processChainMessageGroup(chain, messages, tgToken)
-      if (ok) {
+      const job = getForwardQueueJob(jobKey)
+      const latest = job ? parseForwardQueueMessages(job.payload) : messages
+      const toProcess = latest.length > 0 ? latest : messages
+      const ok = await processChainMessageGroup(chain, toProcess, tgToken)
+      leftover = leftoverUnforwarded(chain.id, jobKey, toProcess)
+      if (leftover.length === 0) {
         deleteForwardQueueJob(jobKey)
-      } else {
+      } else if (!ok) {
+        leftover = []
         const lastError = 'MAX publish incomplete'
         const attempts = bumpForwardQueueRetry(jobKey, lastError)
         logger.warn('[tgChain] forward queued for retry', {
           chainId: chain.id,
           jobKey,
-          messageIds: messages.map((m) => m.message_id),
+          messageIds: toProcess.map((m) => m.message_id),
           attempts,
           lastError,
         })
         recordTgMaxRetry({
           chainId: chain.id,
           title: chainTitle(chain),
-          messageIds: messages.map((m) => m.message_id),
+          messageIds: toProcess.map((m) => m.message_id),
           error: lastError,
           attempts,
           queueDepth: countForwardQueueJobs(),
@@ -222,12 +237,13 @@ function scheduleForwardJob(
               chainId: chain.id,
               title: chain.max_title,
               jobKey,
-              messageIds: messages.map((m) => m.message_id),
+              messageIds: toProcess.map((m) => m.message_id),
             },
           )
         }
       }
     } catch (err: unknown) {
+      leftover = []
       const lastError = errorText(err)
       const attempts = bumpForwardQueueRetry(jobKey, err)
       logger.warn('[tgChain] forward queued for retry', {
@@ -258,6 +274,10 @@ function scheduleForwardJob(
       }
     } finally {
       inFlightForwardKeys.delete(jobKey)
+    }
+    if (leftover.length > 0) {
+      persistForwardJob(chain, leftover, tgToken, Date.now())
+      scheduleForwardJob(chain, leftover, tgToken, jobKey)
     }
   })
 }
@@ -298,7 +318,11 @@ function scheduleInboundComment(
     try {
       const result = await handleTgComment(message, chain, bot, discussionChatId)
       if (result === 'retry') {
-        const attempts = bumpCommentInboundRetry(jobKey, 'waiting for post mapping')
+        const attempts = bumpCommentInboundRetry(
+          jobKey,
+          'waiting for post mapping',
+          COMMENT_MAPPING_RETRY_MS,
+        )
         if (attempts >= 3) {
           recordCommentRetry({
             chainId: chain.id,
@@ -751,6 +775,10 @@ function markForwarded(
          tg_payload = excluded.tg_payload`,
     )
     .run(chainId, message.message_id, maxMid, mediaGroupId, chunkIndex, payload)
+
+  if (maxMid && maxMid !== TG_FORWARD_SKIPPED_MID) {
+    nudgeCommentInboundJobs(chainId)
+  }
 
   // Синхронизация комментариев: дублируем маппинг в post_comment_mapping
   if (maxMid) {
@@ -1420,6 +1448,7 @@ async function processChainMessageGroup(
       chain.forwarded_today = forwardedToday
       touchChainActivity(chain.id)
       await updateTgChain(chain.id, { forwarded_today: forwardedToday })
+      drainDueCommentJobs()
     }
     const remaining = pending.filter((m) => !isAlreadyForwarded(chain.id, m.message_id))
     const tgDateSec = pending[0]?.date
@@ -1599,7 +1628,7 @@ async function dispatchChannelUpdatesToChains(tgToken: string, batch: TgChannelU
   }
 }
 
-async function runTgChainsForToken(tgToken: string): Promise<boolean> {
+async function runTgChainsForToken(tgToken: string, abortSignal?: AbortSignal): Promise<boolean> {
   let receivedAny = flushReadyAlbums(tgToken)
   if (!botRef) {
     logger.warn('[tgChain] MAX bot not set — skip tick')
@@ -1632,17 +1661,18 @@ async function runTgChainsForToken(tgToken: string): Promise<boolean> {
     batch = await getTelegramUpdatesWithIds(tgToken, offset, timeoutSec, {
       includeMiniappBotUpdates,
       includeDiscussionMessages,
+      signal: abortSignal,
     })
   } catch (err: unknown) {
     if (err instanceof TelegramGetUpdatesConflictError) {
       invalidateTelegramPollingModeCache(tgToken)
-      await sleep(10_000)
+      await sleep(TG_GETUPDATES_CONFLICT_WAIT_MS)
       return receivedAny
     }
     if (axios.isAxiosError(err) && err.response?.status === 409) {
       invalidateTelegramPollingModeCache(tgToken)
-      logger.warn('[tgChain] 409 conflict — another instance may be running, waiting 10s')
-      await sleep(10_000)
+      logger.warn('[tgChain] 409 conflict — another instance may be running, waiting 2.5s')
+      await sleep(TG_GETUPDATES_CONFLICT_WAIT_MS)
       return receivedAny
     }
     throw err
@@ -1709,6 +1739,7 @@ async function restartTokenPollLoop(tgToken: string): Promise<void> {
 
 function startTokenPollLoop(tgToken: string): { stop: () => void } {
   let stopped = false
+  const pollAbort = new AbortController()
   setTelegramGetUpdatesOwner(tgToken, true)
   void ensureTelegramPollingMode(tgToken)
   for (const chain of listActiveForwardChains()) {
@@ -1719,7 +1750,10 @@ function startTokenPollLoop(tgToken: string): { stop: () => void } {
   const loop = async () => {
     while (!stopped) {
       try {
-        const hadUpdates = await runTgChainsForToken(tgToken)
+        const hadUpdates = await runTgChainsForToken(tgToken, pollAbort.signal)
+        if (stopped) {
+          break
+        }
         if (!hadUpdates) {
           const albumDelayMs = getAlbumBufferDelayMs(Date.now(), tgToken)
           if (albumDelayMs === null) {
@@ -1729,16 +1763,19 @@ function startTokenPollLoop(tgToken: string): { stop: () => void } {
           }
         }
       } catch (err: unknown) {
+        if (stopped || pollAbort.signal.aborted) {
+          break
+        }
         if (err instanceof TelegramGetUpdatesConflictError) {
           invalidateTelegramPollingModeCache(tgToken)
-          logger.warn('[tgChain] 409 conflict — another instance may be running, waiting 10s')
-          await sleep(10_000)
+          logger.warn('[tgChain] 409 conflict — another instance may be running, waiting 2.5s')
+          await sleep(TG_GETUPDATES_CONFLICT_WAIT_MS)
           continue
         }
         if (axios.isAxiosError(err) && err.response?.status === 409) {
           invalidateTelegramPollingModeCache(tgToken)
-          logger.warn('[tgChain] 409 conflict — another instance may be running, waiting 10s')
-          await sleep(10_000)
+          logger.warn('[tgChain] 409 conflict — another instance may be running, waiting 2.5s')
+          await sleep(TG_GETUPDATES_CONFLICT_WAIT_MS)
           continue
         }
         if (isTelegramGetUpdatesTimeoutError(err)) {
@@ -1763,6 +1800,7 @@ function startTokenPollLoop(tgToken: string): { stop: () => void } {
   return {
     stop: () => {
       stopped = true
+      pollAbort.abort()
       setTelegramGetUpdatesOwner(tgToken, false)
     },
   }
@@ -1797,7 +1835,7 @@ function startForwarderLoop(): void {
       drainDueCommentJobs()
       maybeLogForwardQueueHealth()
     }
-  }, 2_000)
+  }, TG_QUEUE_DRAIN_MS)
   drainDueForwardJobs()
   drainDueCommentJobs()
   globalForwarderHandle = {

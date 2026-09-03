@@ -11,6 +11,7 @@ import {
   getTgFileUrl,
   type TgMessage,
 } from '../forwarder/telegramReader'
+import { isTelegramGetUpdatesOwnedByForwarder } from './telegramGetUpdatesOwner'
 import {
   sendDocumentFileToMax,
   sendDocumentToMax,
@@ -317,6 +318,16 @@ async function ingestScanBatchForJobs(
   jobs: ChannelImportJobRow[],
   tgToken: string,
 ): Promise<void> {
+  if (isTelegramGetUpdatesOwnedByForwarder(tgToken)) {
+    logger.warn('[channelImport] skip getUpdates — live forwarder owns this token')
+    for (const job of jobs) {
+      const fresh = getChannelImportJob(job.id)
+      if (fresh) {
+        updateJobAfterBatch(fresh, false)
+      }
+    }
+    return
+  }
   const offset = getImportReaderOffset()
   const batch = await getTelegramUpdatesWithIds(tgToken, offset, 0)
   let nextOffset = offset
