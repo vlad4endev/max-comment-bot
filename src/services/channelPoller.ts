@@ -241,16 +241,14 @@ function messageTimestampMs(message: Message): number {
   return ts > 1e12 ? ts : ts * 1000
 }
 
-function messageTimestampSec(message: Message): number {
-  return Math.floor(messageTimestampMs(message) / 1000)
-}
-
 function isWithinLookbackMs(atMs: number, cutoffMs: number): boolean {
   return atMs >= cutoffMs
 }
 
 /**
  * Сообщения канала за окно lookback (пагинация GET /messages, newest-first).
+ * MAX `from`/`to` — Unix timestamp в миллисекундах; `to` должен быть меньше `from`.
+ * https://dev.max.ru/docs-api/methods/GET/messages
  */
 export async function fetchChannelMessagesSince(
   bot: Bot,
@@ -266,17 +264,19 @@ export async function fetchChannelMessagesSince(
     options?.maxPages && Number.isFinite(options.maxPages)
       ? Math.max(1, Math.min(100, Math.floor(options.maxPages)))
       : REFRESH_MAX_PAGES
-  const cutoffSec = Math.floor(cutoffMs / 1000)
   const collected: Message[] = []
-  let pageFrom: number | undefined
+  /** Верхняя граница (`from`): сообщения с t ≤ from. */
+  let pageFromMs: number | undefined
 
   for (let page = 0; page < maxPages; page += 1) {
-    const extra: { count: number; to: number; from?: number } = {
-      count: pageSize,
-      to: cutoffSec,
+    const fromMs = pageFromMs ?? Date.now()
+    if (cutoffMs >= fromMs) {
+      break
     }
-    if (pageFrom !== undefined) {
-      extra.from = pageFrom
+    const extra: { count: number; from: number; to: number } = {
+      count: pageSize,
+      from: fromMs,
+      to: cutoffMs,
     }
 
     const { messages: batch } = await apiCallWithRetry(() => bot.api.getMessages(chatId, extra))
@@ -294,14 +294,15 @@ export async function fetchChannelMessagesSince(
     }
 
     const oldest = batch[batch.length - 1]
-    if (reachedOlderThanWindow || batch.length < pageSize) {
+    if (!oldest || reachedOlderThanWindow || batch.length < pageSize) {
       break
     }
 
-    pageFrom = messageTimestampSec(oldest)
-    if (pageFrom <= cutoffSec) {
+    const oldestMs = messageTimestampMs(oldest)
+    if (oldestMs <= cutoffMs) {
       break
     }
+    pageFromMs = oldestMs - 1
   }
 
   return collected

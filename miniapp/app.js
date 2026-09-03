@@ -2567,6 +2567,7 @@
       var postRecoveryUiVisible = false;
       var postArchivedUiVisible = false;
       var postRecoveryInFlight = false;
+      var postRecoveryAutoTried = false;
       var lastCommentsSnapshot = null;
       var commentsClosed = false;
 
@@ -2838,23 +2839,38 @@
       }
 
       function refreshMissingPost() {
+        return recoverMissingPost({ fromCard: true });
+      }
+
+      function recoverMissingPost(options) {
+        options = options || {};
+        var fromCard = !!options.fromCard;
         if (postRecoveryInFlight) return Promise.resolve(false);
         var btn = document.getElementById('postRecoveryRefreshBtn');
         var ids = resolveLookupIds();
         if (!ids.postId) {
-          setPostRecoveryStatus(
-            'Не удалось определить пост. Откройте комментарии ещё раз из кнопки под публикацией.',
-            true,
-          );
+          if (fromCard) {
+            setPostRecoveryStatus(
+              'Не удалось определить пост. Откройте комментарии ещё раз из кнопки под публикацией.',
+              true,
+            );
+          } else {
+            setErr('Не удалось определить пост');
+          }
           return Promise.resolve(false);
         }
 
         postRecoveryInFlight = true;
+        postRecoveryAutoTried = true;
         if (btn) {
           btn.disabled = true;
           btn.textContent = 'Обновляю…';
         }
-        setPostRecoveryStatus('Пинаю MAX аккуратно, чтобы вернуть именно этот пост…', false);
+        if (fromCard) {
+          setPostRecoveryStatus('Пинаю MAX аккуратно, чтобы вернуть именно этот пост…', false);
+        } else {
+          postPreviewTextEl.textContent = 'Ищу пост в канале…';
+        }
 
         return fetch('/api/post/' + encodeURIComponent(ids.postId) + '/refresh' + postApiQuery(), {
           method: 'POST',
@@ -2887,16 +2903,27 @@
               params.set('message_mid', String(data.message_mid));
               mergedParams.set('message_mid', String(data.message_mid));
             }
-            setPostRecoveryStatus('Нашёл следы поста, перезагружаю страницу комментариев…', false);
-            return loadPost().then(function (ok) {
+            if (fromCard) {
+              setPostRecoveryStatus('Нашёл следы поста, перезагружаю страницу комментариев…', false);
+            } else {
+              postPreviewTextEl.textContent = 'Нашёл пост, открываю комментарии…';
+            }
+            return loadPost({ allowAutoRecover: false }).then(function (ok) {
               if (!ok) {
                 throw new Error('Почти получилось, но пост ещё не прогрузился. Нажмите «Обновить» ещё раз.');
               }
-              return loadComments(true);
+              if (fromCard) {
+                return loadComments(true).then(function () {
+                  return true;
+                });
+              }
+              return true;
             });
           })
           .catch(function (e) {
-            setPostRecoveryStatus(e, true);
+            if (fromCard) {
+              setPostRecoveryStatus(e, true);
+            }
             return false;
           })
           .finally(function () {
@@ -4294,7 +4321,9 @@
         });
       }
 
-      function loadPost() {
+      function loadPost(options) {
+        options = options || {};
+        var allowAutoRecover = options.allowAutoRecover !== false;
         var ids = resolveLookupIds();
         if (!ids.postId) {
           setErr('Не удалось определить пост');
@@ -4311,7 +4340,19 @@
           startParam: startParam || null,
         });
         var attempt = 0;
-        var maxAttempts = 3;
+        var maxAttempts = 2;
+        function handleMissingPost() {
+          if (allowAutoRecover && !postRecoveryAutoTried && !postRecoveryInFlight) {
+            postPreviewTextEl.textContent = 'Ищу пост в канале…';
+            return recoverMissingPost({ fromCard: false }).then(function (ok) {
+              if (ok) return true;
+              showPostRecoveryCard();
+              return false;
+            });
+          }
+          showPostRecoveryCard();
+          return false;
+        }
         function runAttempt() {
           return fetchPostPayload()
             .then(function (p) {
@@ -4329,8 +4370,7 @@
                     }, 450 * attempt);
                   });
                 }
-                showPostRecoveryCard();
-                return false;
+                return handleMissingPost();
               }
               return applyLoadedPost(p);
             })
@@ -4345,8 +4385,7 @@
                 });
               }
               if (e && e.code === 'post_not_found') {
-                showPostRecoveryCard();
-                return false;
+                return handleMissingPost();
               }
               setErr(e, 'Не удалось загрузить комментарии');
               postPreviewTextEl.textContent = '';

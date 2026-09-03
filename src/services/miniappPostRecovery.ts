@@ -19,7 +19,7 @@ export interface MiniappPostLookup {
 /** Only when a new post row may still be committing (has message_mid in link). */
 const RACE_RETRY_MS = 400
 const FEED_SCAN_LOOKBACK_MS = 7 * 24 * 60 * 60 * 1000
-const FEED_SCAN_MAX_PAGES = 10
+const FEED_SCAN_MAX_PAGES = 20
 
 function sleepMs(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
@@ -144,6 +144,24 @@ export async function recoverPostByPostIdInChannelFeed(
   } catch (err: unknown) {
     logger.warn('miniappPostRecovery: getMessages failed', { chatId: canonical, postId: id, err })
     return null
+  }
+
+  if (messages.length === 0) {
+    try {
+      const { messages: latest } = await bot.api.getMessages(canonical, { count: 100 })
+      messages = latest
+      logger.warn('miniappPostRecovery: windowed feed empty, fallback to latest 100', {
+        chatId: canonical,
+        postId: id,
+        latestCount: latest.length,
+      })
+    } catch (err: unknown) {
+      logger.warn('miniappPostRecovery: latest-100 fallback failed', {
+        chatId: canonical,
+        postId: id,
+        err,
+      })
+    }
   }
 
   for (const message of messages) {
