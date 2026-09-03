@@ -93,7 +93,12 @@ const TG_CHAIN_IDLE_MS = 40
 const MAX_SEND_INTERVAL_MS = 350
 const TG_CHAIN_MAX_API_RETRIES = 6
 /** Буферизация Telegram-альбомов по media_group_id (тишина после последнего кадра). */
-const TG_ALBUM_BUFFER_MS = 1_800
+const TG_ALBUM_BUFFER_MS = 3_200
+/** Один кадр с media_group_id почти наверняка неполный альбом — ждём остальные. */
+const TG_ALBUM_SINGLE_FRAME_EXTRA_MS = 4_500
+const PHOTO_UPLOAD_ATTEMPTS = 3
+/** MAX часто отвечает attachment.not.ready, если слать сразу после upload. */
+const ALBUM_ATTACH_SETTLE_MS = 700
 /** Пауза при 409 getUpdates — короткий retry, без 10с простоя. */
 const TG_GETUPDATES_CONFLICT_WAIT_MS = 2_500
 /** Как часто снимать due-задачи постов/комментариев с очереди. */
@@ -154,6 +159,7 @@ type BufferedAlbum = {
   tgToken: string
   messages: TgMessage[]
   flushAt: number
+  singleFrameWaitUsed?: boolean
 }
 const albumBuffer = new Map<string, BufferedAlbum>()
 
@@ -232,6 +238,9 @@ function scheduleForwardJob(
   jobKey: string,
 ): void {
   if (inFlightForwardKeys.has(jobKey)) {
+    return
+  }
+  if (albumBuffer.has(jobKey)) {
     return
   }
   if (messages.every((m) => isAlreadyForwarded(chain.id, m.message_id))) {
@@ -447,6 +456,7 @@ function drainDueCommentJobs(): void {
 }
 
 function drainDueForwardJobs(): void {
+  flushReadyAlbums()
   const chains = new Map(listTgChainsSync().map((c) => [c.id, c]))
   for (const job of listDueForwardQueueJobs()) {
     try {
@@ -462,6 +472,9 @@ function drainDueForwardJobs(): void {
       const messages = parseForwardQueueMessages(job.payload)
       if (messages.length === 0) {
         deleteForwardQueueJob(job.job_key)
+        continue
+      }
+      if (albumBuffer.has(job.job_key)) {
         continue
       }
       scheduleForwardJob(chain, messages, job.tg_token, job.job_key)
@@ -934,13 +947,25 @@ function takeReadyAlbumEntries(now: number = Date.now(), tgToken?: string): Buff
   const ready: BufferedAlbum[] = []
   for (const [key, entry] of albumBuffer.entries()) {
     if (tgToken && entry.tgToken !== tgToken) continue
-    if (entry.flushAt <= now) {
-      ready.push(entry)
-      albumBuffer.delete(key)
+    if (entry.flushAt > now) continue
+    const onlyOneFrame = entry.messages.length === 1 && Boolean(entry.messages[0]?.media_group_id)
+    if (onlyOneFrame && !entry.singleFrameWaitUsed) {
+      entry.singleFrameWaitUsed = true
+      entry.flushAt = now + TG_ALBUM_SINGLE_FRAME_EXTRA_MS
+      persistForwardJob(entry.chain, entry.messages, entry.tgToken, entry.flushAt)
+      continue
     }
+    ready.push(entry)
+    albumBuffer.delete(key)
   }
   ready.sort((a, b) => a.messages[0]!.message_id - b.messages[0]!.message_id)
   return ready
+}
+
+function albumExpectedMediaCount(messages: TgMessage[]): number {
+  return messages.filter(
+    (m) => Boolean(m.photo?.length) || Boolean(m.video?.file_id) || Boolean(m.document?.file_id),
+  ).length
 }
 
 function chunkAlbumMessages(messages: TgMessage[]): TgMessage[][] {
@@ -1068,23 +1093,52 @@ async function uploadTgPhotoAttachment(
   bot: Bot,
   tgToken: string,
   fileId: string,
+  opts?: { requireToken?: boolean },
 ): Promise<ImageAttachmentRequest | null> {
-  const url = await getTgFileUrl(tgToken, fileId)
-  if (!url) {
-    logger.warn('[tgChain] photo: no TG file url', { fileIdSuffix: fileId.slice(-8) })
-    return null
+  const requireToken = opts?.requireToken === true
+  let lastErr: unknown
+  let lastUrl: string | null = null
+  for (let attempt = 1; attempt <= PHOTO_UPLOAD_ATTEMPTS; attempt += 1) {
+    const url = await getTgFileUrl(tgToken, fileId)
+    if (!url) {
+      lastErr = new Error('no TG file url')
+      logger.warn('[tgChain] photo: no TG file url', {
+        fileIdSuffix: fileId.slice(-8),
+        attempt,
+      })
+      if (attempt < PHOTO_UPLOAD_ATTEMPTS) {
+        await sleep(400 * attempt)
+      }
+      continue
+    }
+    lastUrl = url
+    try {
+      const fileBuf = await downloadTgFileBuffer(url)
+      const token = await uploadImageBufferToMax(bot, fileBuf, url)
+      return { type: 'image', payload: { token } }
+    } catch (err: unknown) {
+      lastErr = err
+      logger.warn('[tgChain] binary image upload failed', {
+        fileIdSuffix: fileId.slice(-8),
+        attempt,
+        err,
+      })
+      if (attempt < PHOTO_UPLOAD_ATTEMPTS) {
+        await sleep(400 * attempt)
+      }
+    }
   }
-  try {
-    const fileBuf = await downloadTgFileBuffer(url)
-    const token = await uploadImageBufferToMax(bot, fileBuf, url)
-    return { type: 'image', payload: { token } }
-  } catch (err: unknown) {
+  if (requireToken) {
+    throw lastErr instanceof Error ? lastErr : new Error('photo upload failed')
+  }
+  if (lastUrl) {
     logger.warn('[tgChain] binary image upload failed, fallback to url', {
       fileIdSuffix: fileId.slice(-8),
-      err,
+      err: lastErr,
     })
-    return { type: 'image', payload: { url } }
+    return { type: 'image', payload: { url: lastUrl } }
   }
+  return null
 }
 
 function mergeAlbumImageAttachments(images: ImageAttachmentRequest[]): AttachmentRequest[] {
@@ -1102,7 +1156,7 @@ function mergeAlbumImageAttachments(images: ImageAttachmentRequest[]): Attachmen
   return out
 }
 
-/** Загружает все фото альбома для одного поста MAX. */
+/** Загружает все фото альбома для одного поста MAX. URL-fallback запрещён — MAX тогда оставляет одно фото. */
 async function buildAlbumImageAttachments(
   bot: Bot,
   photoMessages: TgMessage[],
@@ -1110,24 +1164,64 @@ async function buildAlbumImageAttachments(
 ): Promise<AttachmentRequest[]> {
   const uploaded = await Promise.all(
     photoMessages.map((msg) =>
-      albumUploadLimit(async (): Promise<ImageAttachmentRequest | null> => {
-        try {
-          if (!msg.photo?.length) return null
-          const largest = msg.photo[msg.photo.length - 1]!
-          return await uploadTgPhotoAttachment(bot, tgToken, largest.file_id)
-        } catch (err: unknown) {
-          logger.warn('[tgChain] album photo upload threw', {
-            messageId: msg.message_id,
-            err,
-          })
-          return null
+      albumUploadLimit(async (): Promise<ImageAttachmentRequest> => {
+        if (!msg.photo?.length) {
+          throw new Error(`album photo missing on message ${msg.message_id}`)
         }
+        const largest = msg.photo[msg.photo.length - 1]!
+        const att = await uploadTgPhotoAttachment(bot, tgToken, largest.file_id, {
+          requireToken: true,
+        })
+        if (!att) {
+          throw new Error(`album photo upload failed (${msg.message_id})`)
+        }
+        const token = tokenFromUnknown(att.payload)
+        if (!token) {
+          throw new Error(`album photo has no MAX token (${msg.message_id})`)
+        }
+        return { type: 'image', payload: { token } }
       }),
     ),
   )
-  return mergeAlbumImageAttachments(
-    uploaded.filter((att): att is ImageAttachmentRequest => att !== null),
-  )
+  return mergeAlbumImageAttachments(uploaded)
+}
+
+async function uploadAlbumExtraAttachment(
+  bot: Bot,
+  msg: TgMessage,
+  tgToken: string,
+): Promise<AttachmentRequest> {
+  let lastErr: unknown
+  for (let attempt = 1; attempt <= PHOTO_UPLOAD_ATTEMPTS; attempt += 1) {
+    try {
+      if (msg.video?.file_id) {
+        const url = await getTgFileUrl(tgToken, msg.video.file_id)
+        if (!url) throw new Error(`no TG video url (${msg.message_id})`)
+        const videoBuf = await downloadTgFileBuffer(url)
+        const video = await maxApi(() => bot.api.uploadVideo({ source: videoBuf }))
+        return video.toJson() as AttachmentRequest
+      }
+      if (msg.document?.file_id) {
+        const url = await getTgFileUrl(tgToken, msg.document.file_id)
+        if (!url) throw new Error(`no TG document url (${msg.message_id})`)
+        const fileBuf = await downloadTgFileBuffer(url)
+        const file = await maxApi(() => bot.api.uploadFile({ source: fileBuf }))
+        return file.toJson() as AttachmentRequest
+      }
+      throw new Error(`album extra media missing on message ${msg.message_id}`)
+    } catch (err: unknown) {
+      lastErr = err
+      logger.warn('[tgChain] album extra media upload failed', {
+        messageId: msg.message_id,
+        attempt,
+        err,
+      })
+      if (attempt < PHOTO_UPLOAD_ATTEMPTS) {
+        await sleep(400 * attempt)
+      }
+    }
+  }
+  throw lastErr instanceof Error ? lastErr : new Error('album extra media upload failed')
 }
 
 async function buildAlbumAttachments(
@@ -1136,54 +1230,28 @@ async function buildAlbumAttachments(
   tgToken: string,
 ): Promise<AttachmentRequest[]> {
   const photoMessages = messages.filter((m) => m.photo && m.photo.length > 0)
+  const extraMedia = messages.filter(
+    (m) => !m.photo?.length && (m.video?.file_id || m.document?.file_id),
+  )
+  const expected = albumExpectedMediaCount(messages)
   const attachments: AttachmentRequest[] = []
 
-  const imageAtts = await buildAlbumImageAttachments(bot, photoMessages, tgToken)
-  attachments.push(...imageAtts)
-
-  if (photoMessages.length > 0 && imageAtts.length === 0) {
-    logger.error('[tgChain] album: photos failed to upload', {
-      photoCount: photoMessages.length,
-      uploaded: 0,
-      messageIds: messages.map((m) => m.message_id),
-    })
-    return []
+  if (photoMessages.length > 0) {
+    const imageAtts = await buildAlbumImageAttachments(bot, photoMessages, tgToken)
+    attachments.push(...imageAtts)
   }
 
-  const extraMedia = messages.filter((m) => !m.photo?.length && (m.video?.file_id || m.document?.file_id))
-  const extraAtts = await Promise.all(
-    extraMedia.map((msg) =>
-      albumUploadLimit(async (): Promise<AttachmentRequest | null> => {
-        if (msg.video?.file_id) {
-          const url = await getTgFileUrl(tgToken, msg.video.file_id)
-          if (!url) return null
-          try {
-            const videoBuf = await downloadTgFileBuffer(url)
-            const video = await maxApi(() => bot.api.uploadVideo({ source: videoBuf }))
-            return video.toJson() as AttachmentRequest
-          } catch (err: unknown) {
-            logger.warn('[tgChain] album video skipped', { messageId: msg.message_id, err })
-            return null
-          }
-        }
-        if (msg.document?.file_id) {
-          const url = await getTgFileUrl(tgToken, msg.document.file_id)
-          if (!url) return null
-          try {
-            const fileBuf = await downloadTgFileBuffer(url)
-            const file = await maxApi(() => bot.api.uploadFile({ source: fileBuf }))
-            return file.toJson() as AttachmentRequest
-          } catch (err: unknown) {
-            logger.warn('[tgChain] album document skipped', { messageId: msg.message_id, err })
-            return null
-          }
-        }
-        return null
-      }),
-    ),
-  )
-  for (const att of extraAtts) {
-    if (att) attachments.push(att)
+  if (extraMedia.length > 0) {
+    const extraAtts = await Promise.all(
+      extraMedia.map((msg) => albumUploadLimit(() => uploadAlbumExtraAttachment(bot, msg, tgToken))),
+    )
+    attachments.push(...extraAtts)
+  }
+
+  if (attachments.length !== expected) {
+    throw new Error(
+      `MAX album incomplete: uploaded ${attachments.length}/${expected} (${messages.map((m) => m.message_id).join(', ')})`,
+    )
   }
 
   return attachments
@@ -1237,17 +1305,19 @@ async function forwardAlbumToMax(
   const chatId = resolveCanonicalChannelChatId(maxChatId) ?? maxChatId
   const messageText = caption.trim() || '\u00a0'
   const attachments = await buildAlbumAttachments(bot, messages, tgToken)
+  const expected = albumExpectedMediaCount(messages)
 
-  if (attachments.length === 0) {
+  if (attachments.length === 0 || attachments.length !== expected) {
     throw new Error(
-      `MAX album: no attachments uploaded (${messages.map((m) => m.message_id).join(', ')})`,
+      `MAX album: uploaded ${attachments.length}/${expected} (${messages.map((m) => m.message_id).join(', ')})`,
     )
   }
 
+  await sleep(ALBUM_ATTACH_SETTLE_MS)
   await throttleMaxChatSend(chatId)
   const sent = await maxApi(() =>
     bot.api.sendMessageToChat(chatId, messageText, {
-      attachments: attachments.length > 0 ? attachments : undefined,
+      attachments,
     }),
   )
   return sent.body?.mid ?? null

@@ -72,6 +72,11 @@ export function collectErrorText(err: unknown, maxDepth = 4): string {
 const TRANSIENT_NETWORK_RE =
   /ECONNRESET|ECONNREFUSED|ETIMEDOUT|ENOTFOUND|EPIPE|EAI_AGAIN|socket hang up|network|fetch failed|other side closed|UND_ERR_|aborted|Client network socket disconnected|prematurely closed|TLS connection|EPROTO/i
 
+/** MAX rejects send if the just-uploaded file token is not processed yet. */
+export function isMaxAttachmentNotReadyError(err: unknown): boolean {
+  return /attachment\.not\.ready|attachment not ready/i.test(collectErrorText(err))
+}
+
 /** MAX `errors.too-many-chat-messages` and similar send throttling. */
 export function isMaxRateLimitError(err: unknown): boolean {
   if (getApiErrorStatus(err) === 429) {
@@ -82,6 +87,9 @@ export function isMaxRateLimitError(err: unknown): boolean {
 
 /** Transient server-side / network errors that are safe to retry (5xx, undici socket drops). */
 export function isMaxTransientError(err: unknown): boolean {
+  if (isMaxAttachmentNotReadyError(err)) {
+    return true
+  }
   const status = getApiErrorStatus(err)
   if (status !== undefined && status >= 500 && status < 600) {
     return true
@@ -108,6 +116,9 @@ export function summarizeMaxApiError(err: unknown): MaxApiErrorSummary {
     cause = collectErrorText(err.cause, 3) || undefined
   }
 
+  if (isMaxAttachmentNotReadyError(err)) {
+    return { kind: 'transient_network', status, message, cause, retryable: true }
+  }
   if (isMaxRateLimitError(err)) {
     return { kind: 'rate_limit', status, message, cause, retryable: true }
   }
@@ -146,7 +157,12 @@ export async function apiCallWithRetry<T>(fn: () => Promise<T>, retries = 5): Pr
       lastErr = err
       const summary = summarizeMaxApiError(err)
       if (summary.retryable && i < retries - 1) {
-        const base = summary.kind === 'rate_limit' ? 2_000 : 500
+        const base =
+          summary.kind === 'rate_limit'
+            ? 2_000
+            : isMaxAttachmentNotReadyError(err)
+              ? 1_200
+              : 500
         const delay = Math.min(2 ** i * base + Math.random() * 500, 30_000)
         logger.warn('MAX API: временная ошибка, повтор запроса', {
           attempt: i + 1,
