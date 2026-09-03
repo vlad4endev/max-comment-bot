@@ -198,11 +198,20 @@ function pushUniqueId(ids: number[], value: number | undefined | null): void {
   ids.push(value)
 }
 
-function collectChannelMsgIdFromForward(source: {
+/** ID поста в TG-канале из авто-репоста в discussion group. */
+export function resolveChannelMsgIdFromThreadRoot(root: {
   forward_origin?: { message_id?: number }
   forward_from_message_id?: number
 }): number | null {
-  return resolveChannelMsgIdFromThreadRoot(source)
+  const fromOrigin = root.forward_origin?.message_id
+  if (typeof fromOrigin === 'number' && fromOrigin > 0) {
+    return fromOrigin
+  }
+  const fromForward = root.forward_from_message_id
+  if (typeof fromForward === 'number' && fromForward > 0) {
+    return fromForward
+  }
+  return null
 }
 
 /** Id треда в группе и id поста в канале — чтобы найти post_comment_mapping. */
@@ -216,29 +225,14 @@ export function collectCommentMappingHints(message: TgMessage): {
   const root = resolveThreadRootMessage(message)
   pushUniqueId(threadMsgIds, root?.message_id)
   pushUniqueId(threadMsgIds, message.reply_to_message?.message_id)
-  pushUniqueId(channelMsgIds, collectChannelMsgIdFromForward(message))
+  pushUniqueId(channelMsgIds, resolveChannelMsgIdFromThreadRoot(message))
   if (message.reply_to_message) {
-    pushUniqueId(channelMsgIds, collectChannelMsgIdFromForward(message.reply_to_message))
+    pushUniqueId(channelMsgIds, resolveChannelMsgIdFromThreadRoot(message.reply_to_message))
   }
   if (root) {
-    pushUniqueId(channelMsgIds, collectChannelMsgIdFromForward(root))
+    pushUniqueId(channelMsgIds, resolveChannelMsgIdFromThreadRoot(root))
   }
   return { threadMsgIds, channelMsgIds }
-}
-
-/** ID поста в TG-канале из авто-репоста в discussion group. */
-export function resolveChannelMsgIdFromThreadRoot(
-  root: NonNullable<TgMessage['reply_to_message']>,
-): number | null {
-  const fromOrigin = root.forward_origin?.message_id
-  if (typeof fromOrigin === 'number' && fromOrigin > 0) {
-    return fromOrigin
-  }
-  const fromForward = root.forward_from_message_id
-  if (typeof fromForward === 'number' && fromForward > 0) {
-    return fromForward
-  }
-  return null
 }
 
 export function resolveTgCommentAuthor(
