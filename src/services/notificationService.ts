@@ -8,6 +8,7 @@ import type { Comment } from './commentStore'
 import { commentStore } from './commentStore'
 import { subscriberStore } from './subscriberStore'
 import { buildMiniAppUrl, isMiniAppOpenUrlConfigured, postStore } from './postStore'
+import { resolveCanonicalChannelChatId } from './resolveChannelChatId'
 import { stateManager } from './stateManager'
 import { logger } from '../utils/logger'
 
@@ -75,24 +76,28 @@ function isChannelAdminOrOwner(member: ChatMember): boolean {
  * Вызывает {@link Bot.api.getChatAdmins} → `GET chats/{chat_id}/members/admins`.
  */
 export async function getChannelAdmins(bot: Bot, chatId: number): Promise<number[]> {
-  try {
-    const { members } = await bot.api.getChatAdmins(chatId)
-    const ids = members.filter(isChannelAdminOrOwner).map((m) => m.user_id)
-    const unique = [...new Set(ids)]
-    if (unique.length === 0) {
-      logger.warn('getChannelAdmins: список админов пуст, используем ADMIN_CHAT_ID', {
-        chatId,
+  const canonical = resolveCanonicalChannelChatId(chatId) ?? chatId
+  const attempts = canonical === chatId ? [canonical] : [canonical, chatId]
+  for (const id of attempts) {
+    try {
+      const { members } = await bot.api.getChatAdmins(id)
+      const ids = members.filter(isChannelAdminOrOwner).map((m) => m.user_id)
+      const unique = [...new Set(ids)]
+      if (unique.length > 0) {
+        return unique
+      }
+    } catch (err) {
+      logger.warn('getChannelAdmins: не удалось получить админов', {
+        chatId: id,
+        err,
       })
-      return [config.ADMIN_CHAT_ID]
     }
-    return unique
-  } catch (err) {
-    logger.warn('getChannelAdmins: не удалось получить админов, fallback на ADMIN_CHAT_ID', {
-      chatId,
-      err,
-    })
-    return [config.ADMIN_CHAT_ID]
   }
+  logger.warn('getChannelAdmins: список админов пуст, используем OWNER / ADMIN_CHAT_ID', {
+    chatId,
+    canonical,
+  })
+  return [...new Set([config.ownerUserId, config.ADMIN_CHAT_ID].filter((id) => id !== 0))]
 }
 
 function isFallbackAdminChatRecipient(recipientId: number): boolean {
@@ -194,6 +199,12 @@ export async function collectAdminNotifyRecipientIds(bot: Bot, channelChatId: nu
   for (const userId of admins) {
     recipients.add(userId)
   }
+  if (config.ownerUserId > 0) {
+    recipients.add(config.ownerUserId)
+  }
+  if (config.ADMIN_CHAT_ID !== 0) {
+    recipients.add(config.ADMIN_CHAT_ID)
+  }
   logger.info('notifyAllAdmins: recipients', {
     chatId: channelChatId,
     linked,
@@ -235,19 +246,29 @@ export async function notifyAdminsNewMiniappComment(
     postId: string
   },
 ): Promise<void> {
-  if (!isMiniAppOpenUrlConfigured()) {
-    logger.warn('notifyAdminsNewMiniappComment: BOT_NICKNAME / MINI_APP_URL not set for Mini App links')
-    return
+  const miniAppReady = isMiniAppOpenUrlConfigured()
+  if (!miniAppReady) {
+    logger.warn('notifyAdminsNewMiniappComment: BOT_NICKNAME / MINI_APP_URL not set — sending text without Mini App button')
   }
-  const openUrl = buildMiniAppUrl(
-    input.postId,
-    input.channelChatId,
-    { admin: '1' },
-    resolveMessageMidForPostId(input.postId),
-  )
-  const keyboard = Keyboard.inlineKeyboard([
-    [Keyboard.button.link('💬 Открыть комментарии', openUrl)],
-  ])
+  const extra: SendMessageExtra | undefined = miniAppReady
+    ? {
+        attachments: [
+          Keyboard.inlineKeyboard([
+            [
+              Keyboard.button.link(
+                '💬 Открыть комментарии',
+                buildMiniAppUrl(
+                  input.postId,
+                  input.channelChatId,
+                  { admin: '1' },
+                  resolveMessageMidForPostId(input.postId),
+                ),
+              ),
+            ],
+          ]),
+        ],
+      }
+    : undefined
   const postExcerpt = preview80(input.postText)
   const textPart = input.commentText.trim()
   const photoCount = Array.isArray(input.commentPhotoUrls) ? input.commentPhotoUrls.length : 0
@@ -266,9 +287,20 @@ export async function notifyAdminsNewMiniappComment(
   commentStore.saveNotificationText(input.commentId, message)
 
   const recipientIds = await collectAdminNotifyRecipientIds(bot, input.channelChatId)
-  const sent = await deliverAdminNotifications(bot, input.channelChatId, recipientIds, message, {
-    attachments: [keyboard],
-  })
+  const sent = await deliverAdminNotifications(
+    bot,
+    input.channelChatId,
+    recipientIds,
+    message,
+    extra,
+  )
+  if (recipientIds.length > 0 && sent.length === 0) {
+    logger.warn('notifyAdminsNewMiniappComment: no MAX DM delivered', {
+      commentId: input.commentId,
+      channelChatId: input.channelChatId,
+      recipientIds,
+    })
+  }
   for (const { admin_id, message_mid } of sent) {
     commentStore.saveNotificationMid(input.commentId, admin_id, message_mid)
   }

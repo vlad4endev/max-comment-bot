@@ -17,6 +17,7 @@ import {
   notifyUserAboutMiniappReply,
   syncAdminCommentNotification,
 } from './notificationService'
+import { notifyAdminsAboutNewComment } from './commentAdminNotify'
 import { syncTelegramAdminCommentNotification } from './telegramAdminNotificationService'
 import { channelRegistry } from './channelRegistry'
 import {
@@ -461,6 +462,26 @@ export async function handleTgComment(
       if (updatedPost) {
         void postStore.updateButtonCaption(bot, updatedPost)
       }
+    }
+
+    const channelTitle =
+      channelRegistry.getChannel(maxChatId)?.title?.trim() || chain.max_title?.trim() || 'Канал'
+    try {
+      await notifyAdminsAboutNewComment(bot, {
+        commentId: saved.comment_id,
+        channelChatId: maxChatId,
+        postText: post.text,
+        channelTitle,
+        username: authorName,
+        commentText: text,
+        postId: post.post_id,
+        messageMid: post.message_mid,
+      })
+    } catch (err: unknown) {
+      logger.warn('[tgCommentSync] notify admins failed', {
+        commentId: saved.comment_id,
+        err,
+      })
     }
 
     logger.info('[tgCommentSync] synced TG comment to miniapp', {

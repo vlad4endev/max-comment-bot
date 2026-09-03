@@ -29,12 +29,9 @@ import { evaluateComment } from '../services/antispamService'
 import type { Comment } from '../services/commentStore'
 import { commentStore } from '../services/commentStore'
 import { subscriberStore } from '../services/subscriberStore'
-import {
-  notifyAdminsNewMiniappComment,
-  notifyUserAboutMiniappReply,
-  syncAdminCommentNotification,
-} from '../services/notificationService'
-import { notifyTelegramAdminsNewMiniappComment, syncTelegramAdminCommentNotification } from '../services/telegramAdminNotificationService'
+import { notifyUserAboutMiniappReply, syncAdminCommentNotification } from '../services/notificationService'
+import { notifyAdminsAboutNewComment } from '../services/commentAdminNotify'
+import { syncTelegramAdminCommentNotification } from '../services/telegramAdminNotificationService'
 import {
   syncAdminReplyToTelegramThread,
   syncMaxCommentToTelegramThread,
@@ -2110,23 +2107,9 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
 
     const channelTitle = channelRegistry.getChannel(chatId)?.title ?? '—'
     try {
-      await notifyAdminsNewMiniappComment(deps.bot, {
+      await notifyAdminsAboutNewComment(deps.bot, {
         commentId: saved.comment_id,
         channelChatId: chatId,
-        postText: post.text,
-        channelTitle,
-        username: saveUsername,
-        commentText: text,
-        commentPhotoUrls: photoUrls,
-        postId,
-      })
-    } catch (err: unknown) {
-      logger.warn('POST /api/comment: notify admins failed', { err })
-    }
-    try {
-      await notifyTelegramAdminsNewMiniappComment(deps.bot, {
-        commentId: saved.comment_id,
-        maxChannelChatId: chatId,
         postText: post.text,
         channelTitle,
         username: saveUsername,
@@ -2136,7 +2119,7 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
         messageMid: post.message_mid,
       })
     } catch (err: unknown) {
-      logger.warn('POST /api/comment: TG notify admins failed', { err })
+      logger.warn('POST /api/comment: notify admins failed', { err })
     }
 
     res.json({

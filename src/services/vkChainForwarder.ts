@@ -16,6 +16,8 @@ import type { TgMessage } from '../forwarder/telegramReader'
 import { getTgFileUrl } from '../forwarder/telegramReader'
 import { evaluateComment } from './antispamService'
 import { commentStore } from './commentStore'
+import { channelRegistry } from './channelRegistry'
+import { notifyAdminsAboutNewComment } from './commentAdminNotify'
 import {
   claimAndPropagateCommentsBooking,
   isCommentSyncBlockedByBooking,
@@ -495,6 +497,27 @@ async function syncVkCommentsForChain(chain: VkChainRecord): Promise<void> {
           await postStore.updateButtonCaption(bot, updatedPost).catch((err: unknown) => {
             logger.warn('[vkChain] updateButtonCaption failed', { commentId: saved.comment_id, err })
           })
+        }
+      }
+
+      if (bot) {
+        const channelTitle =
+          channelRegistry.getChannel(mapping.maxChatId)?.title?.trim() ||
+          chain.max_title?.trim() ||
+          'Канал'
+        try {
+          await notifyAdminsAboutNewComment(bot, {
+            commentId: saved.comment_id,
+            channelChatId: mapping.maxChatId,
+            postText: post.text,
+            channelTitle,
+            username,
+            commentText: vkComment.text,
+            postId: post.post_id,
+            messageMid: post.message_mid,
+          })
+        } catch (err: unknown) {
+          logger.warn('[vkChain] notify admins failed', { commentId: saved.comment_id, err })
         }
       }
 

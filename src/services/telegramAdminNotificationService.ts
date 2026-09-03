@@ -1,5 +1,6 @@
 import type { Bot } from '@maxhub/max-bot-api'
 
+import { config } from '../config'
 import { ensureAdminPanelStateLoaded } from '../api/adminPanelState'
 import { logger } from '../utils/logger'
 import { withTelegramMiniappPlatform } from '../utils/telegramMiniAppUrl'
@@ -12,7 +13,6 @@ import { integrationsStore } from './integrationsStore'
 import { listTelegramChatAdministrators } from './integrationPlatformClient'
 import { resolveTelegramBotToken } from './resolveTelegramBotToken'
 import { buildTelegramMiniappUrl } from './telegramMiniappAuth'
-import { telegramBotUserStore } from './telegramBotUserStore'
 import { telegramChannelNotifyLinkStore } from './telegramChannelNotifyLinkStore'
 import { callTelegramBotApi } from '../utils/telegramRateLimiter'
 
@@ -67,9 +67,46 @@ function hasTelegramLinkForMaxChat(maxChatId: number): boolean {
 
 function mapMaxUserToTelegramRecipient(maxUserId: number, recipients: Set<number>): void {
   const pairing = profilePairingForPlatformUser('max', maxUserId)
-  if (pairing.tg_user_id != null && telegramBotUserStore.hasStarted(pairing.tg_user_id)) {
+  if (pairing.tg_user_id != null) {
     recipients.add(pairing.tg_user_id)
   }
+}
+
+function numericTelegramChatIdVariants(raw: string): string[] {
+  const trimmed = raw.trim()
+  if (!/^-?\d+$/.test(trimmed)) {
+    return []
+  }
+  const n = Number.parseInt(trimmed, 10)
+  if (!Number.isInteger(n) || n === 0) {
+    return []
+  }
+  const abs = Math.abs(n)
+  return [...new Set([trimmed, String(n), String(abs), String(-abs)])]
+}
+
+function telegramNotifyLinkLookupIds(maxChannelChatId: number): string[] {
+  const ids = new Set<string>()
+  for (const raw of resolveTelegramSourceChannelsForMaxChat(maxChannelChatId)) {
+    const trimmed = raw.trim()
+    if (!trimmed) {
+      continue
+    }
+    ids.add(trimmed)
+    for (const variant of numericTelegramChatIdVariants(trimmed)) {
+      ids.add(variant)
+    }
+  }
+  for (const chain of listTgChainsForMaxChannel(maxChannelChatId)) {
+    const tgChannelId = chain.tg_channel_id?.trim()
+    if (tgChannelId) {
+      ids.add(tgChannelId)
+      for (const variant of numericTelegramChatIdVariants(tgChannelId)) {
+        ids.add(variant)
+      }
+    }
+  }
+  return [...ids]
 }
 
 /**
@@ -89,9 +126,10 @@ export async function collectTelegramAdminNotifyRecipientIds(
   for (const maxUserId of maxAdmins) {
     mapMaxUserToTelegramRecipient(maxUserId, recipients)
   }
+  mapMaxUserToTelegramRecipient(config.ownerUserId, recipients)
 
   for (const chain of listTgChainsForMaxChannel(maxChannelChatId)) {
-    if (chain.tg_user_id != null && telegramBotUserStore.hasStarted(chain.tg_user_id)) {
+    if (chain.tg_user_id != null) {
       recipients.add(chain.tg_user_id)
     }
     if (chain.max_user_id != null) {
@@ -100,18 +138,23 @@ export async function collectTelegramAdminNotifyRecipientIds(
   }
 
   const token = resolveTelegramBotToken()
-  for (const tgChannelId of resolveTelegramSourceChannelsForMaxChat(maxChannelChatId)) {
+  for (const tgChannelId of telegramNotifyLinkLookupIds(maxChannelChatId)) {
     for (const tgUserId of telegramChannelNotifyLinkStore.getUserIdsForChannel(tgChannelId)) {
-      if (telegramBotUserStore.hasStarted(tgUserId)) {
-        recipients.add(tgUserId)
+      recipients.add(tgUserId)
+    }
+  }
+  if (token) {
+    const adminLookupIds = new Set(resolveTelegramSourceChannelsForMaxChat(maxChannelChatId))
+    for (const chain of listTgChainsForMaxChannel(maxChannelChatId)) {
+      const tgChannelId = chain.tg_channel_id?.trim()
+      if (tgChannelId) {
+        adminLookupIds.add(tgChannelId)
       }
     }
-    if (token) {
+    for (const tgChannelId of adminLookupIds) {
       const admins = await listTelegramChatAdministrators(token, tgChannelId)
       for (const admin of admins) {
-        if (admin.startedBot) {
-          recipients.add(admin.userId)
-        }
+        recipients.add(admin.userId)
       }
     }
   }
@@ -256,12 +299,6 @@ export async function notifyTelegramAdminsNewMiniappComment(
     logger.debug('notifyTelegramAdminsNewMiniappComment: TG token not configured')
     return
   }
-  if (!hasTelegramLinkForMaxChat(input.maxChannelChatId)) {
-    logger.debug('notifyTelegramAdminsNewMiniappComment: no TG link for MAX channel', {
-      maxChannelChatId: input.maxChannelChatId,
-    })
-    return
-  }
 
   const message = buildNewCommentNotificationMessage(input)
   commentStore.saveNotificationText(input.commentId, message)
@@ -272,6 +309,7 @@ export async function notifyTelegramAdminsNewMiniappComment(
       commentId: input.commentId,
       maxChannelChatId: input.maxChannelChatId,
       tgChannels: resolveTelegramSourceChannelsForMaxChat(input.maxChannelChatId),
+      hasTelegramLink: hasTelegramLinkForMaxChat(input.maxChannelChatId),
     })
     return
   }
