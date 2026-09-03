@@ -177,6 +177,57 @@ async function resolveThreadViaMtproto(
   }
 }
 
+const discussionRootChannelCache = new Map<string, number | null>()
+
+/**
+ * Достаёт id поста канала из авто-репоста в группе обсуждения (fwd_from.channel_post).
+ * Нужно, когда в апдейте комментария нет forward_origin — только message_thread_id.
+ */
+export async function resolveChannelMsgIdFromDiscussionRoot(
+  discussionChatId: number,
+  threadMsgId: number,
+): Promise<number | null> {
+  const cacheKey = `${discussionChatId}:${threadMsgId}`
+  if (discussionRootChannelCache.has(cacheKey)) {
+    return discussionRootChannelCache.get(cacheKey) ?? null
+  }
+  if (!isMtprotoSessionReady()) {
+    return null
+  }
+  const client = await connectTelegramUserClient()
+  try {
+    const peer = await resolveTelegramChannelEntity(client, String(discussionChatId))
+    const messages = await client.getMessages(peer, { ids: threadMsgId })
+    const raw = messages[0]
+    if (!(raw instanceof Api.Message) || !(raw.fwdFrom instanceof Api.MessageFwdHeader)) {
+      discussionRootChannelCache.set(cacheKey, null)
+      return null
+    }
+    const channelPost = raw.fwdFrom.channelPost
+    if (typeof channelPost !== 'number' || channelPost <= 0) {
+      discussionRootChannelCache.set(cacheKey, null)
+      return null
+    }
+    discussionRootChannelCache.set(cacheKey, channelPost)
+    logger.info('[discussionThreadResolver] recovered channel msg from discussion root', {
+      discussionChatId,
+      threadMsgId,
+      channelPost,
+    })
+    return channelPost
+  } catch (err: unknown) {
+    logger.warn('[discussionThreadResolver] get discussion root failed', {
+      discussionChatId,
+      threadMsgId,
+      err,
+    })
+    discussionRootChannelCache.set(cacheKey, null)
+    return null
+  } finally {
+    await disconnectTelegramUserClient(client)
+  }
+}
+
 /**
  * Дополняет post_comment_mapping полями треда обсуждения, если они ещё не заданы.
  * @returns mapping с заполненными thread id или null, если восстановить не удалось

@@ -132,16 +132,24 @@ export function deleteForwardQueueJob(jobKey: string): void {
   getDb().prepare('DELETE FROM tg_chain_forward_queue WHERE job_key = ?').run(jobKey)
 }
 
-export function listDueForwardQueueJobs(limit = 40): TgChainForwardQueueJob[] {
+/** По сколько due-задач брать с каждой связки за один drain, чтобы одна очередь не забивала остальные. */
+const DEFAULT_DUE_JOBS_PER_CHAIN = 6
+
+export function listDueForwardQueueJobs(limitPerChain = DEFAULT_DUE_JOBS_PER_CHAIN): TgChainForwardQueueJob[] {
   return getDb()
     .prepare(
       `SELECT job_key, chain_id, tg_token, payload, attempts, next_retry_at, last_error, created_at
-       FROM tg_chain_forward_queue
-       WHERE next_retry_at <= ?
-       ORDER BY created_at ASC
-       LIMIT ?`,
+       FROM (
+         SELECT
+           job_key, chain_id, tg_token, payload, attempts, next_retry_at, last_error, created_at,
+           ROW_NUMBER() OVER (PARTITION BY chain_id ORDER BY created_at ASC) AS rn
+         FROM tg_chain_forward_queue
+         WHERE next_retry_at <= ?
+       ) AS due
+       WHERE rn <= ?
+       ORDER BY created_at ASC`,
     )
-    .all(Date.now(), limit) as TgChainForwardQueueJob[]
+    .all(Date.now(), limitPerChain) as TgChainForwardQueueJob[]
 }
 
 function summarizeQueueRows(
@@ -211,6 +219,18 @@ export function summarizeForwardQueueByChain(): Map<string, ChainQueueSummary> {
     )
     .all() as Array<{ chain_id: string; attempts: number; last_error: string | null; created_at: number }>
   return summarizeQueueRows(rows)
+}
+
+export function chainForwardQueueContainsMessage(chainId: string, tgMessageId: number): boolean {
+  const rows = getDb()
+    .prepare(`SELECT payload FROM tg_chain_forward_queue WHERE chain_id = ?`)
+    .all(chainId) as Array<{ payload: string }>
+  for (const row of rows) {
+    if (parseForwardQueueMessages(row.payload).some((msg) => msg.message_id === tgMessageId)) {
+      return true
+    }
+  }
+  return false
 }
 
 export function countForwardQueueJobs(): number {
@@ -317,16 +337,21 @@ export function deleteCommentInboundJob(jobKey: string): void {
   getDb().prepare('DELETE FROM tg_comment_inbound_queue WHERE job_key = ?').run(jobKey)
 }
 
-export function listDueCommentInboundJobs(limit = 40): TgCommentInboundJob[] {
+export function listDueCommentInboundJobs(limitPerChain = DEFAULT_DUE_JOBS_PER_CHAIN): TgCommentInboundJob[] {
   return getDb()
     .prepare(
       `SELECT job_key, chain_id, discussion_chat_id, payload, attempts, last_error, created_at
-       FROM tg_comment_inbound_queue
-       WHERE next_retry_at <= ?
-       ORDER BY created_at ASC
-       LIMIT ?`,
+       FROM (
+         SELECT
+           job_key, chain_id, discussion_chat_id, payload, attempts, last_error, created_at,
+           ROW_NUMBER() OVER (PARTITION BY chain_id ORDER BY created_at ASC) AS rn
+         FROM tg_comment_inbound_queue
+         WHERE next_retry_at <= ?
+       ) AS due
+       WHERE rn <= ?
+       ORDER BY created_at ASC`,
     )
-    .all(Date.now(), limit) as TgCommentInboundJob[]
+    .all(Date.now(), limitPerChain) as TgCommentInboundJob[]
 }
 
 export function listCommentInboundJobViews(limit = 80): CommentQueueJobView[] {

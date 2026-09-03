@@ -1,3 +1,5 @@
+import { AsyncLocalStorage } from 'node:async_hooks'
+
 import axios from 'axios'
 import FormData from 'form-data'
 import pLimit from 'p-limit'
@@ -100,19 +102,53 @@ const TG_QUEUE_DRAIN_MS = 400
 const TG_ALBUM_MAX_MEDIA_PER_POST = 10
 const MEDIA_DOWNLOAD_TIMEOUT_MS = 45_000
 const MEDIA_MAX_BYTES = 32 * 1024 * 1024
-const ALBUM_UPLOAD_CONCURRENCY = 4
-const MEDIA_DOWNLOAD_CONCURRENCY = 3
+/** Глобальный потолок, чтобы все связки вместе не забили сеть. */
+const GLOBAL_ALBUM_UPLOAD_CONCURRENCY = 8
+const GLOBAL_MEDIA_DOWNLOAD_CONCURRENCY = 8
+/** На одну связку — отдельно, чтобы тяжёлый альбом не стопорил остальные. */
+const CHAIN_ALBUM_UPLOAD_CONCURRENCY = 3
+const CHAIN_MEDIA_DOWNLOAD_CONCURRENCY = 2
 /** Глобальный зазор между send в MAX — чтобы пачка каналов не ловила 429. */
 const GLOBAL_MAX_SEND_INTERVAL_MS = 200
-const albumUploadLimit = pLimit(ALBUM_UPLOAD_CONCURRENCY)
-const mediaDownloadLimit = pLimit(MEDIA_DOWNLOAD_CONCURRENCY)
+/** getUpdates long-poll 25с; если тик не вернулся дольше — перезапуск только этого токена. */
+const TOKEN_POLL_STALE_MS = 90_000
+const globalAlbumUploadLimit = pLimit(GLOBAL_ALBUM_UPLOAD_CONCURRENCY)
+const globalMediaDownloadLimit = pLimit(GLOBAL_MEDIA_DOWNLOAD_CONCURRENCY)
+
+type ChainWorkStore = { chainId: string }
+const chainWorkContext = new AsyncLocalStorage<ChainWorkStore>()
+const chainAlbumLimits = new Map<string, ReturnType<typeof pLimit>>()
+const chainMediaLimits = new Map<string, ReturnType<typeof pLimit>>()
+
+function limitForChain(
+  cache: Map<string, ReturnType<typeof pLimit>>,
+  concurrency: number,
+  chainId: string | undefined,
+): ReturnType<typeof pLimit> | null {
+  if (!chainId) {
+    return null
+  }
+  let limit = cache.get(chainId)
+  if (!limit) {
+    limit = pLimit(concurrency)
+    cache.set(chainId, limit)
+  }
+  return limit
+}
+
+function albumUploadLimit<T>(fn: () => Promise<T>): Promise<T> {
+  const chainId = chainWorkContext.getStore()?.chainId
+  const chainLimit = limitForChain(chainAlbumLimits, CHAIN_ALBUM_UPLOAD_CONCURRENCY, chainId)
+  return globalAlbumUploadLimit(() => (chainLimit ? chainLimit(fn) : fn()))
+}
 
 const lastMaxSendAt = new Map<number, number>()
 let lastGlobalMaxSendAt = 0
-const channelWorkTails = new Map<number, Promise<void>>()
+const chainWorkTails = new Map<string, Promise<void>>()
 const commentWorkTails = new Map<string, Promise<void>>()
 const inFlightForwardKeys = new Set<string>()
 const inFlightCommentKeys = new Set<string>()
+const tokenLastPollAt = new Map<string, number>()
 type BufferedAlbum = {
   chain: TgChainRecord
   tgToken: string
@@ -121,11 +157,12 @@ type BufferedAlbum = {
 }
 const albumBuffer = new Map<string, BufferedAlbum>()
 
-function enqueueChannelWork(maxChatId: number, work: () => Promise<void>): void {
-  const prev = channelWorkTails.get(maxChatId) ?? Promise.resolve()
-  const next = prev.then(work, work)
-  channelWorkTails.set(
-    maxChatId,
+function enqueueChainWork(chainId: string, work: () => Promise<void>): void {
+  const prev = chainWorkTails.get(chainId) ?? Promise.resolve()
+  const run = (): Promise<void> => chainWorkContext.run({ chainId }, work)
+  const next = prev.then(run, run)
+  chainWorkTails.set(
+    chainId,
     next.then(
       () => undefined,
       () => undefined,
@@ -205,7 +242,7 @@ function scheduleForwardJob(
     return
   }
   inFlightForwardKeys.add(jobKey)
-  enqueueChannelWork(chain.max_chat_id, async () => {
+  enqueueChainWork(chain.id, async () => {
     let leftover: TgMessage[] = []
     try {
       const job = getForwardQueueJob(jobKey)
@@ -287,9 +324,10 @@ function scheduleForwardJob(
   })
 }
 
-function enqueueCommentWork(queueKey: string, work: () => Promise<void>): void {
+function enqueueCommentWork(queueKey: string, chainId: string, work: () => Promise<void>): void {
   const prev = commentWorkTails.get(queueKey) ?? Promise.resolve()
-  const next = prev.then(work, work)
+  const run = (): Promise<void> => chainWorkContext.run({ chainId }, work)
+  const next = prev.then(run, run)
   commentWorkTails.set(
     queueKey,
     next.then(
@@ -319,7 +357,7 @@ function scheduleInboundComment(
     )
     return
   }
-  enqueueCommentWork(`${chain.id}:${discussionChatId}`, async () => {
+  enqueueCommentWork(`${chain.id}:${discussionChatId}`, chain.id, async () => {
     try {
       const result = await handleTgComment(message, chain, bot, discussionChatId)
       if (result === 'retry') {
@@ -382,42 +420,58 @@ function scheduleInboundComment(
 function drainDueCommentJobs(): void {
   const chains = new Map(listTgChainsSync().map((c) => [c.id, c]))
   for (const job of listDueCommentInboundJobs()) {
-    const chain = chains.get(job.chain_id)
-    if (!chain) {
-      deleteCommentInboundJob(job.job_key)
-      continue
+    try {
+      const chain = chains.get(job.chain_id)
+      if (!chain) {
+        deleteCommentInboundJob(job.job_key)
+        continue
+      }
+      if (!chain.active || !chain.forward_comments) {
+        bumpCommentInboundRetry(job.job_key, 'chain inactive or comments off')
+        continue
+      }
+      const message = parseInboundCommentMessage(job.payload)
+      if (!message) {
+        deleteCommentInboundJob(job.job_key)
+        continue
+      }
+      scheduleInboundComment(chain, message, job.discussion_chat_id, job.job_key)
+    } catch (err: unknown) {
+      logger.error('[tgChain] drain comment job failed — other chains continue', {
+        chainId: job.chain_id,
+        jobKey: job.job_key,
+        err,
+      })
     }
-    if (!chain.active || !chain.forward_comments) {
-      bumpCommentInboundRetry(job.job_key, 'chain inactive or comments off')
-      continue
-    }
-    const message = parseInboundCommentMessage(job.payload)
-    if (!message) {
-      deleteCommentInboundJob(job.job_key)
-      continue
-    }
-    scheduleInboundComment(chain, message, job.discussion_chat_id, job.job_key)
   }
 }
 
 function drainDueForwardJobs(): void {
   const chains = new Map(listTgChainsSync().map((c) => [c.id, c]))
   for (const job of listDueForwardQueueJobs()) {
-    const chain = chains.get(job.chain_id)
-    if (!chain) {
-      deleteForwardQueueJob(job.job_key)
-      continue
+    try {
+      const chain = chains.get(job.chain_id)
+      if (!chain) {
+        deleteForwardQueueJob(job.job_key)
+        continue
+      }
+      if (!chain.active || !chain.forward_posts) {
+        bumpForwardQueueRetry(job.job_key, 'chain inactive or posts off')
+        continue
+      }
+      const messages = parseForwardQueueMessages(job.payload)
+      if (messages.length === 0) {
+        deleteForwardQueueJob(job.job_key)
+        continue
+      }
+      scheduleForwardJob(chain, messages, job.tg_token, job.job_key)
+    } catch (err: unknown) {
+      logger.error('[tgChain] drain forward job failed — other chains continue', {
+        chainId: job.chain_id,
+        jobKey: job.job_key,
+        err,
+      })
     }
-    if (!chain.active || !chain.forward_posts) {
-      bumpForwardQueueRetry(job.job_key, 'chain inactive or posts off')
-      continue
-    }
-    const messages = parseForwardQueueMessages(job.payload)
-    if (messages.length === 0) {
-      deleteForwardQueueJob(job.job_key)
-      continue
-    }
-    scheduleForwardJob(chain, messages, job.tg_token, job.job_key)
   }
 }
 
@@ -425,16 +479,21 @@ async function downloadTgFileBuffer(
   url: string,
   timeoutMs: number = MEDIA_DOWNLOAD_TIMEOUT_MS,
 ): Promise<Buffer> {
-  return mediaDownloadLimit(async () => {
-    const res = await telegramAxios.get<ArrayBuffer>(url, {
-      responseType: 'arraybuffer',
-      timeout: timeoutMs,
-      maxContentLength: MEDIA_MAX_BYTES,
-      maxBodyLength: MEDIA_MAX_BYTES,
-    })
-    const buf = Buffer.from(res.data)
-    await new Promise<void>((resolve) => setImmediate(resolve))
-    return buf
+  const chainId = chainWorkContext.getStore()?.chainId
+  const chainLimit = limitForChain(chainMediaLimits, CHAIN_MEDIA_DOWNLOAD_CONCURRENCY, chainId)
+  return globalMediaDownloadLimit(async () => {
+    const download = async (): Promise<Buffer> => {
+      const res = await telegramAxios.get<ArrayBuffer>(url, {
+        responseType: 'arraybuffer',
+        timeout: timeoutMs,
+        maxContentLength: MEDIA_MAX_BYTES,
+        maxBodyLength: MEDIA_MAX_BYTES,
+      })
+      const buf = Buffer.from(res.data)
+      await new Promise<void>((resolve) => setImmediate(resolve))
+      return buf
+    }
+    return chainLimit ? chainLimit(download) : download()
   })
 }
 
@@ -571,7 +630,6 @@ function scheduleCommentAttach(
 
 /** Время последней активности long-poll / пересылки по chain_id. */
 const chainLastActivity = new Map<string, number>()
-const chainRestartCount = new Map<string, number>()
 const activeForwarders = new Map<string, { stop: () => void }>()
 
 let globalForwarderHandle: { stop: () => void } | null = null
@@ -1560,88 +1618,136 @@ async function dispatchChannelUpdatesToChains(tgToken: string, batch: TgChannelU
   const discussionChatByChain = new Map<string, number | null>()
   if (discussionMessages.length > 0) {
     const commentChains = group.filter((c) => c.forward_comments)
-    await Promise.all(
+    const resolved = await Promise.allSettled(
       commentChains.map(async (chain) => {
-        discussionChatByChain.set(chain.id, await resolveDiscussionChatId(tgToken, chain))
+        const discussionChatId = await resolveDiscussionChatId(tgToken, chain)
+        return { chainId: chain.id, discussionChatId }
       }),
     )
+    for (const result of resolved) {
+      if (result.status === 'fulfilled') {
+        discussionChatByChain.set(result.value.chainId, result.value.discussionChatId)
+        continue
+      }
+      logger.warn('[tgChain] resolveDiscussionChatId failed', { err: result.reason })
+    }
   }
 
-  for (const chain of group) {
-    const sourceKey = chainSourceKey(chain)
-    const forChain = channelPosts.filter((m) => telegramMessageMatchesTgChain(m.chat, chain))
-    if (channelPosts.length > 0 && forChain.length === 0) {
-      logger.debug('[tgChain] channel_post batch did not match chain', {
-        chainId: chain.id,
-        sourceKey,
-        tg_channel_id: chain.tg_channel_id ?? null,
-        tg_username: chain.tg_username ?? null,
-        sampleChatId: channelPosts[0]?.chat?.id,
-        sampleUsername: channelPosts[0]?.chat?.username ?? null,
-      })
-    }
-    if (forChain.length > 0) {
-      const first = forChain[0]
-      const tgDateSec = first?.date
-      recordTgMaxReceived({
-        chainId: chain.id,
-        title: chainTitle(chain),
-        messageIds: forChain.map((m) => m.message_id),
-        lagMs:
-          typeof tgDateSec === 'number' && Number.isFinite(tgDateSec)
-            ? Date.now() - tgDateSec * 1000
-            : undefined,
-      })
-    }
-    const chainGroups = groupChannelPostsForForward(forChain)
-    for (const msgs of chainGroups) {
-      const isMediaGroup = msgs.length > 1 || Boolean(msgs[0]?.media_group_id)
-      if (isMediaGroup) {
-        for (const msg of msgs) {
-          queueAlbumMessage(chain, tgToken, msg)
-        }
-        continue
-      }
-      enqueueForward(chain, msgs, tgToken)
-    }
-
-    const editedForChain = editedChannelPosts.filter((m) =>
-      telegramMessageMatchesTgChain(m.chat, chain),
-    )
-    for (const edited of editedForChain) {
-      enqueueChannelWork(chain.max_chat_id, () => processEditedChainMessage(chain, edited, tgToken))
-    }
-    const editedMessagesForChain = editedMessages.filter((m) =>
-      telegramMessageMatchesTgChain(m.chat, chain),
-    )
-    for (const edited of editedMessagesForChain) {
-      enqueueChannelWork(chain.max_chat_id, () => processEditedChainMessage(chain, edited, tgToken))
-    }
-
-    if (chain.forward_comments && discussionMessages.length > 0) {
-      const discussionChatId = discussionChatByChain.get(chain.id) ?? null
-      if (discussionChatId == null) {
-        continue
-      }
-      for (const msg of discussionMessages) {
-        if (msg.chat.id !== discussionChatId) {
-          continue
-        }
-        if (isDiscussionAutoForward(msg)) {
-          handleDiscussionAutoForward(msg, chain.id)
-          continue
-        }
-        if (!msg.reply_to_message && !(typeof msg.message_thread_id === 'number' && msg.message_thread_id > 0)) {
-          continue
-        }
-        const jobKey = upsertCommentInboundJob({
-          chainId: chain.id,
-          discussionChatId,
-          message: msg,
+  await Promise.all(
+    group.map(async (chain) => {
+      try {
+        await dispatchUpdatesForChain(chain, tgToken, {
+          channelPosts,
+          editedChannelPosts,
+          editedMessages,
+          discussionMessages,
+          discussionChatId: discussionChatByChain.get(chain.id) ?? null,
         })
-        scheduleInboundComment(chain, msg, discussionChatId, jobKey)
+      } catch (err: unknown) {
+        logger.error('[tgChain] dispatch failed for chain — others continue', {
+          chainId: chain.id,
+          title: chain.max_title,
+          err,
+        })
+        void sendAdminAlert(
+          `dispatch:${chain.id}`,
+          `Сбой разбора апдейтов связки «${chainTitle(chain)}» — остальные связки продолжают работу`,
+          {
+            chainId: chain.id,
+            title: chain.max_title,
+            error: errorText(err),
+          },
+        )
       }
+    }),
+  )
+}
+
+async function dispatchUpdatesForChain(
+  chain: TgChainRecord,
+  tgToken: string,
+  batch: {
+    channelPosts: TgMessage[]
+    editedChannelPosts: TgMessage[]
+    editedMessages: TgMessage[]
+    discussionMessages: TgMessage[]
+    discussionChatId: number | null
+  },
+): Promise<void> {
+  const sourceKey = chainSourceKey(chain)
+  const forChain = batch.channelPosts.filter((m) => telegramMessageMatchesTgChain(m.chat, chain))
+  if (batch.channelPosts.length > 0 && forChain.length === 0) {
+    logger.debug('[tgChain] channel_post batch did not match chain', {
+      chainId: chain.id,
+      sourceKey,
+      tg_channel_id: chain.tg_channel_id ?? null,
+      tg_username: chain.tg_username ?? null,
+      sampleChatId: batch.channelPosts[0]?.chat?.id,
+      sampleUsername: batch.channelPosts[0]?.chat?.username ?? null,
+    })
+  }
+  if (forChain.length > 0) {
+    const first = forChain[0]
+    const tgDateSec = first?.date
+    recordTgMaxReceived({
+      chainId: chain.id,
+      title: chainTitle(chain),
+      messageIds: forChain.map((m) => m.message_id),
+      lagMs:
+        typeof tgDateSec === 'number' && Number.isFinite(tgDateSec)
+          ? Date.now() - tgDateSec * 1000
+          : undefined,
+    })
+  }
+  const chainGroups = groupChannelPostsForForward(forChain)
+  for (const msgs of chainGroups) {
+    const isMediaGroup = msgs.length > 1 || Boolean(msgs[0]?.media_group_id)
+    if (isMediaGroup) {
+      for (const msg of msgs) {
+        queueAlbumMessage(chain, tgToken, msg)
+      }
+      continue
     }
+    enqueueForward(chain, msgs, tgToken)
+  }
+
+  const editedForChain = batch.editedChannelPosts.filter((m) =>
+    telegramMessageMatchesTgChain(m.chat, chain),
+  )
+  for (const edited of editedForChain) {
+    enqueueChainWork(chain.id, () => processEditedChainMessage(chain, edited, tgToken))
+  }
+  const editedMessagesForChain = batch.editedMessages.filter((m) =>
+    telegramMessageMatchesTgChain(m.chat, chain),
+  )
+  for (const edited of editedMessagesForChain) {
+    enqueueChainWork(chain.id, () => processEditedChainMessage(chain, edited, tgToken))
+  }
+
+  if (!chain.forward_comments || batch.discussionMessages.length === 0) {
+    return
+  }
+  const discussionChatId = batch.discussionChatId
+  if (discussionChatId == null) {
+    return
+  }
+  for (const msg of batch.discussionMessages) {
+    if (msg.chat.id !== discussionChatId) {
+      continue
+    }
+    if (isDiscussionAutoForward(msg)) {
+      handleDiscussionAutoForward(msg, chain.id)
+      continue
+    }
+    if (!msg.reply_to_message && !(typeof msg.message_thread_id === 'number' && msg.message_thread_id > 0)) {
+      continue
+    }
+    const jobKey = upsertCommentInboundJob({
+      chainId: chain.id,
+      discussionChatId,
+      message: msg,
+    })
+    scheduleInboundComment(chain, msg, discussionChatId, jobKey)
   }
 }
 
@@ -1702,7 +1808,14 @@ async function runTgChainsForToken(tgToken: string, abortSignal?: AbortSignal): 
   }
 
   // Сначала очередь постов, потом миниапп: иначе callback/FLOOD_WAIT держит getUpdates.
-  await dispatchChannelUpdatesToChains(tgToken, batch)
+  try {
+    await dispatchChannelUpdatesToChains(tgToken, batch)
+  } catch (err: unknown) {
+    logger.error('[tgChain] dispatch batch failed — offset still advances, next tick continues', {
+      tokenHint: tgToken.slice(-6),
+      err,
+    })
+  }
 
   if (includeMiniappBotUpdates) {
     const rawUpdates = batch
@@ -1758,6 +1871,7 @@ function startTokenPollLoop(tgToken: string): { stop: () => void } {
   let stopped = false
   const pollAbort = new AbortController()
   setTelegramGetUpdatesOwner(tgToken, true)
+  tokenLastPollAt.set(tgToken, Date.now())
   void ensureTelegramPollingMode(tgToken)
   for (const chain of listActiveForwardChains()) {
     if (resolveTgToken(chain) === tgToken) {
@@ -1768,6 +1882,7 @@ function startTokenPollLoop(tgToken: string): { stop: () => void } {
     while (!stopped) {
       try {
         const hadUpdates = await runTgChainsForToken(tgToken, pollAbort.signal)
+        tokenLastPollAt.set(tgToken, Date.now())
         if (stopped) {
           break
         }
@@ -1780,6 +1895,7 @@ function startTokenPollLoop(tgToken: string): { stop: () => void } {
           }
         }
       } catch (err: unknown) {
+        tokenLastPollAt.set(tgToken, Date.now())
         if (stopped || pollAbort.signal.aborted) {
           break
         }
@@ -1874,39 +1990,28 @@ function startTgChainWatchdog(): void {
   setInterval(() => {
     void (async () => {
       const now = Date.now()
-      const silentThresholdMs = 2 * 60 * 1000
-
-      for (const chain of listTgChainsSync()) {
-        if (!chain.forward_posts || !chain.active) continue
-
-        const lastSeen = chainLastActivity.get(chain.id)
-        if (!lastSeen) continue
-
-        const silentMs = now - lastSeen
-        if (silentMs > silentThresholdMs) {
-          const restarts = chainRestartCount.get(chain.id) ?? 0
-          const token = resolveTgToken(chain)
-          if (!token) {
-            continue
-          }
-          logger.warn('[tgChain] watchdog: chain silent, restarting token poll', {
-            chainId: chain.id,
-            title: chain.max_title,
-            silentMinutes: Math.round(silentMs / 60000),
-            restartCount: restarts + 1,
-          })
-          await sendAdminAlert(
-            `chain_silent:${chain.id}`,
-            `Цепочка «${chain.max_title}» молчит ${Math.round(silentMs / 60000)} мин — перезапускаю опрос`,
-            {
-              chainId: chain.id,
-              title: chain.max_title,
-            },
-          )
-          chainRestartCount.set(chain.id, restarts + 1)
-          chainLastActivity.set(chain.id, now)
-          await restartTokenPollLoop(token)
+      const staleTokens: string[] = []
+      for (const token of tokenLoops.keys()) {
+        const lastPoll = tokenLastPollAt.get(token)
+        if (lastPoll == null) {
+          continue
         }
+        if (now - lastPoll > TOKEN_POLL_STALE_MS) {
+          staleTokens.push(token)
+        }
+      }
+      for (const token of staleTokens) {
+        const silentMs = now - (tokenLastPollAt.get(token) ?? now)
+        logger.warn('[tgChain] watchdog: token poll stale, restarting this token only', {
+          tokenHint: token.slice(-6),
+          silentMs,
+        })
+        await sendAdminAlert(
+          `token_poll_stale:${token.slice(-8)}`,
+          'Опрос Telegram завис — перезапускаю только этот токен, остальные связки не трогаю',
+          { tokenHint: token.slice(-6), silentMs },
+        )
+        await restartTokenPollLoop(token)
       }
     })().catch((err: unknown) => {
       logger.warn('[tgChain] watchdog error', { err })
@@ -1920,6 +2025,8 @@ export function getTgChainForwarderRuntime(): {
   in_flight_comments: number
   album_buffer: number
   channel_work_queues: number
+  chain_work_queues: number
+  comment_work_queues: number
   last_activity: Record<string, number>
 } {
   const last_activity: Record<string, number> = {}
@@ -1931,7 +2038,9 @@ export function getTgChainForwarderRuntime(): {
     in_flight_forwards: inFlightForwardKeys.size,
     in_flight_comments: inFlightCommentKeys.size,
     album_buffer: albumBuffer.size,
-    channel_work_queues: channelWorkTails.size,
+    channel_work_queues: chainWorkTails.size,
+    chain_work_queues: chainWorkTails.size,
+    comment_work_queues: commentWorkTails.size,
     last_activity,
   }
 }
@@ -1973,6 +2082,6 @@ export function startTgChainForwarder(): void {
   if (loopStarted) return
   loopStarted = true
   startTgChainWatchdog()
-  logger.info('[tgChain] forwarder started (per-token long-poll, async publish)')
+  logger.info('[tgChain] forwarder started (per-chain workers, per-token long-poll)')
   startForwarderLoop()
 }

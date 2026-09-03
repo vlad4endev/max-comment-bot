@@ -25,11 +25,13 @@ import {
   findMappingByThreadMsgId,
   isChannelPostSkippedForForward,
   linkThreadMessageToChannelPost,
+  listRecentUnmappedForwarded,
   type PostCommentMappingRow,
 } from './postCommentMappingStore'
 import { postStore } from './postStore'
 import type { Post } from './postStore'
 import { claimAndPropagateCommentsBooking } from './commentsBookingService'
+import { ensurePostFromChannelMessage } from './channelPostActions'
 import {
   isTelegramAntispamBotConfigured,
   tryBlockTelegramCommentByAntispam,
@@ -37,6 +39,11 @@ import {
 import { resolveCanonicalChannelChatId } from './resolveChannelChatId'
 import { resolveTelegramBotToken } from './resolveTelegramBotToken'
 import { isCommentSynced, markCommentSynced } from '../utils/commentSyncGuard'
+import { chainForwardQueueContainsMessage } from './tgChainForwardQueue'
+import {
+  ensurePostThreadMapping,
+  resolveChannelMsgIdFromDiscussionRoot,
+} from './telegramDiscussionThreadResolver'
 import {
   isMaxAdminReplyInTelegram,
   isMaxCommentInTelegram,
@@ -191,6 +198,92 @@ async function handleTgReplyToMaxComment(
 
 export type TgCommentHandleResult = 'ok' | 'retry' | 'skip'
 
+const inboundThreadRepairTried = new Set<string>()
+const ensurePostTried = new Set<string>()
+
+function lookupPostCommentMapping(
+  chainId: string,
+  hints: { threadMsgIds: number[]; channelMsgIds: number[] },
+  discussionChatId: number,
+): PostCommentMappingRow | null {
+  for (const threadId of hints.threadMsgIds) {
+    const byThread = findMappingByThreadMsgId(chainId, threadId)
+    if (byThread?.max_mid) {
+      return byThread
+    }
+  }
+  for (const channelMsgId of hints.channelMsgIds) {
+    const byChannel =
+      findMappingByTgMsgId(chainId, channelMsgId) ??
+      ensureMappingFromForwarded(chainId, channelMsgId)
+    if (!byChannel?.max_mid) {
+      continue
+    }
+    const threadMsgId = hints.threadMsgIds[0]
+    if (threadMsgId) {
+      linkThreadMessageToChannelPost(chainId, channelMsgId, discussionChatId, threadMsgId)
+      return findMappingByTgMsgId(chainId, channelMsgId) ?? byChannel
+    }
+    return byChannel
+  }
+  return null
+}
+
+async function recoverPostCommentMapping(
+  chain: TgChainRecord,
+  hints: { threadMsgIds: number[]; channelMsgIds: number[] },
+  discussionChatId: number,
+): Promise<PostCommentMappingRow | null> {
+  let mapping = lookupPostCommentMapping(chain.id, hints, discussionChatId)
+  if (mapping?.max_mid) {
+    return mapping
+  }
+
+  if (hints.channelMsgIds.length === 0 && hints.threadMsgIds[0]) {
+    const channelMsgId = await resolveChannelMsgIdFromDiscussionRoot(
+      discussionChatId,
+      hints.threadMsgIds[0],
+    )
+    if (channelMsgId) {
+      hints.channelMsgIds.push(channelMsgId)
+      mapping = lookupPostCommentMapping(chain.id, hints, discussionChatId)
+      if (mapping?.max_mid) {
+        return mapping
+      }
+    }
+  }
+
+  const repairKey = `${chain.id}:${hints.threadMsgIds.join(',')}`
+  if (!inboundThreadRepairTried.has(repairKey)) {
+    inboundThreadRepairTried.add(repairKey)
+    for (const row of listRecentUnmappedForwarded(chain.id, 8)) {
+      try {
+        await ensurePostThreadMapping(row.maxMid)
+      } catch (err: unknown) {
+        logger.warn('[tgCommentSync] ensurePostThreadMapping during inbound repair failed', {
+          chainId: chain.id,
+          maxMid: row.maxMid,
+          err,
+        })
+      }
+    }
+    mapping = lookupPostCommentMapping(chain.id, hints, discussionChatId)
+  }
+  return mapping
+}
+
+function resolvePostFromMapping(maxChatId: number, mapping: PostCommentMappingRow | null): Post | null {
+  const maxMid = mapping?.max_mid?.trim()
+  if (!maxMid) {
+    return null
+  }
+  return (
+    postStore.findPostByChannelMessage(maxChatId, maxMid) ??
+    postStore.findPost(maxMid, maxChatId) ??
+    postStore.findByMessageMid(maxMid)
+  )
+}
+
 /**
  * Комментарий в TG discussion group → комментарий в miniapp.
  */
@@ -239,41 +332,18 @@ export async function handleTgComment(
       return 'skip'
     }
 
-    let mapping: PostCommentMappingRow | null = null
-    for (const threadId of hints.threadMsgIds) {
-      const byThread = findMappingByThreadMsgId(chain.id, threadId)
-      if (byThread?.max_mid) {
-        mapping = byThread
-        break
-      }
-    }
-    if (!mapping?.max_mid) {
-      for (const channelMsgId of hints.channelMsgIds) {
-        const byChannel =
-          findMappingByTgMsgId(chain.id, channelMsgId) ??
-          ensureMappingFromForwarded(chain.id, channelMsgId)
-        if (!byChannel?.max_mid) {
-          continue
-        }
-        mapping = byChannel
-        const threadMsgId = hints.threadMsgIds[0]
-        if (threadMsgId) {
-          linkThreadMessageToChannelPost(chain.id, channelMsgId, message.chat.id, threadMsgId)
-          mapping = findMappingByTgMsgId(chain.id, channelMsgId) ?? byChannel
-        }
-        logger.info('[tgCommentSync] linked thread via channel msg fallback', {
-          chainId: chain.id,
-          channelMsgId,
-          threadMsgId: threadMsgId ?? null,
-        })
-        break
-      }
+    const mapping = await recoverPostCommentMapping(chain, hints, discussionChatId)
+    if (mapping && hints.threadMsgIds[0] && mapping.tg_msg_id) {
+      linkThreadMessageToChannelPost(
+        chain.id,
+        mapping.tg_msg_id,
+        message.chat.id,
+        hints.threadMsgIds[0],
+      )
     }
 
     const maxChatId = resolveCanonicalChannelChatId(chain.max_chat_id) ?? chain.max_chat_id
-    let post: Post | null = mapping?.max_mid
-      ? postStore.findPostByChannelMessage(maxChatId, mapping.max_mid)
-      : null
+    let post = resolvePostFromMapping(maxChatId, mapping)
 
     const directReplyId = message.reply_to_message?.message_id ?? threadRootMsgId
     if (!post) {
@@ -282,13 +352,30 @@ export async function handleTgComment(
         post = postStore.getPost(parentComment.post_id)
       }
     }
+    if (!post && mapping?.max_mid && !ensurePostTried.has(mapping.max_mid)) {
+      ensurePostTried.add(mapping.max_mid)
+      post = await ensurePostFromChannelMessage(bot, maxChatId, mapping.max_mid)
+      if (post) {
+        logger.info('[tgCommentSync] recovered MAX post for inbound comment', {
+          chainId: chain.id,
+          tgCommentId,
+          maxMid: mapping.max_mid,
+          postId: post.post_id,
+        })
+      }
+    }
     if (!post) {
+      const queued = hints.channelMsgIds.some((id) =>
+        chainForwardQueueContainsMessage(chain.id, id),
+      )
       logger.debug('[tgCommentSync] no post mapping for thread', {
         chainId: chain.id,
         threadRootMsgId,
         tgCommentId,
         threadMsgIds: hints.threadMsgIds,
         channelMsgIds: hints.channelMsgIds,
+        hasMapping: Boolean(mapping?.max_mid),
+        queued,
       })
       return 'retry'
     }

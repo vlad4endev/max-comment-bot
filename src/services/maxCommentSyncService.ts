@@ -7,7 +7,9 @@
 
 import type { Bot } from '@maxhub/max-bot-api'
 
-import { listTgChainsSync } from '../api/adminPanelState'
+import pLimit from 'p-limit'
+
+import { listTgChainsSync, type TgChainRecord } from '../api/adminPanelState'
 import { getDb } from '../db/database'
 import { commentStore } from './commentStore'
 import { postStore } from './postStore'
@@ -39,6 +41,10 @@ const THREAD_REPAIR_PER_CYCLE = 3
 const BOOTSTRAP_REPAIR_LOOKBACK_MS = 30 * 24 * 60 * 60 * 1000
 const HOURLY_REPAIR_MS = 60 * 60 * 1000
 const DAILY_STALE_PURGE_MS = 24 * 60 * 60 * 1000
+/** Сколько связок одновременно гоняем MAX→TG, чтобы одна не блокировала остальные. */
+const CHAIN_SYNC_CONCURRENCY = 4
+const chainSyncLimit = pLimit(CHAIN_SYNC_CONCURRENCY)
+const chainSyncing = new Set<string>()
 
 function countPendingCommentsForChain(chainId: string): number {
   const row = getDb()
@@ -101,38 +107,47 @@ async function bootstrapRepairOnStartup(): Promise<void> {
   const chains = listTgChainsSync().filter((c) => c.active && c.forward_comments)
   const lookbackIso = new Date(Date.now() - BOOTSTRAP_REPAIR_LOOKBACK_MS).toISOString()
 
-  for (const chain of chains) {
-    const postsNeedRepair = db
-      .prepare(
-        `SELECT DISTINCT p.message_mid, m.tg_msg_id
-         FROM comments c
-         JOIN posts p ON p.post_id = c.post_id
-         JOIN post_comment_mapping m ON m.max_mid = p.message_mid AND m.chain_id = ?
-         WHERE (c.tg_comment_id IS NULL OR c.tg_comment_id = 0)
-           AND (c.source IS NULL OR c.source = 'max')
-           AND (m.tg_thread_msg_id IS NULL OR m.tg_thread_msg_id = 0)
-           AND p.timestamp > ?
-         LIMIT 50`,
-      )
-      .all(chain.id, lookbackIso) as Array<{ message_mid: string; tg_msg_id: number }>
+  await Promise.all(
+    chains.map(async (chain) => {
+      try {
+        const postsNeedRepair = db
+          .prepare(
+            `SELECT DISTINCT p.message_mid, m.tg_msg_id
+             FROM comments c
+             JOIN posts p ON p.post_id = c.post_id
+             JOIN post_comment_mapping m ON m.max_mid = p.message_mid AND m.chain_id = ?
+             WHERE (c.tg_comment_id IS NULL OR c.tg_comment_id = 0)
+               AND (c.source IS NULL OR c.source = 'max')
+               AND (m.tg_thread_msg_id IS NULL OR m.tg_thread_msg_id = 0)
+               AND p.timestamp > ?
+             LIMIT 50`,
+          )
+          .all(chain.id, lookbackIso) as Array<{ message_mid: string; tg_msg_id: number }>
 
-    if (postsNeedRepair.length > 0) {
-      logger.info('[maxCommentSync] bootstrap: repairing threads for pending comments', {
-        chainId: chain.id,
-        count: postsNeedRepair.length,
-      })
-      await repairThreadMappings(chain.id, postsNeedRepair)
-    }
+        if (postsNeedRepair.length > 0) {
+          logger.info('[maxCommentSync] bootstrap: repairing threads for pending comments', {
+            chainId: chain.id,
+            count: postsNeedRepair.length,
+          })
+          await repairThreadMappings(chain.id, postsNeedRepair)
+        }
 
-    const pendingCount = countPendingCommentsForChain(chain.id)
-    if (pendingCount > 100) {
-      await sendAdminAlert(
-        `comments_pending:${chain.id}`,
-        `${pendingCount} комментариев не синхронизированы — перенос комментариев застопорился`,
-        { chainId: chain.id, pendingCount },
-      )
-    }
-  }
+        const pendingCount = countPendingCommentsForChain(chain.id)
+        if (pendingCount > 100) {
+          await sendAdminAlert(
+            `comments_pending:${chain.id}`,
+            `${pendingCount} комментариев не синхронизированы — перенос комментариев застопорился`,
+            { chainId: chain.id, pendingCount },
+          )
+        }
+      } catch (err: unknown) {
+        logger.warn('[maxCommentSync] bootstrap: chain failed — others continue', {
+          chainId: chain.id,
+          err,
+        })
+      }
+    }),
+  )
 }
 
 function purgeStaleUndeliverableOnStartup(): void {
@@ -250,47 +265,20 @@ export function startMaxCommentSync(bot: Bot, options: SyncOptions = {}): () => 
     }
   }
 
-  let syncing = false
-
-  async function syncOnce(): Promise<void> {
-    if (syncing) {
+  async function syncChainOnce(chain: TgChainRecord, perChain: number): Promise<void> {
+    if (chainSyncing.has(chain.id)) {
       return
     }
-    if (isTelegramApiPaused()) {
-      logger.debug('[maxCommentSync] skipped: Telegram API pause active')
-      return
-    }
-
-    syncing = true
+    chainSyncing.add(chain.id)
     try {
-      const chains = listTgChainsSync().filter((c) => c.active && c.forward_comments)
-      const perChain = Math.max(3, Math.ceil(batchSize / Math.max(chains.length, 1)))
-
-      const pendingComments: ReturnType<typeof commentStore.listCommentsPendingMaxToTelegram> = []
-      const pendingReplies: typeof pendingComments = []
-      const seenCommentIds = new Set<string>()
-      const seenReplyIds = new Set<string>()
-      for (const chain of chains) {
-        const chatId = chain.max_chat_id
-        for (const comment of commentStore.listCommentsPendingMaxToTelegramForChat(chatId, perChain)) {
-          if (seenCommentIds.has(comment.comment_id)) continue
-          seenCommentIds.add(comment.comment_id)
-          pendingComments.push(comment)
-        }
-        for (const comment of commentStore.listCommentsPendingTelegramThreadReplyForChat(chatId, perChain)) {
-          if (seenReplyIds.has(comment.comment_id)) continue
-          seenReplyIds.add(comment.comment_id)
-          pendingReplies.push(comment)
-        }
-      }
-
-      if (pendingComments.length === 0 && pendingReplies.length === 0 && chains.length === 0) {
-        const fallbackComments = commentStore.listCommentsPendingMaxToTelegram(batchSize)
-        const fallbackReplies = commentStore.listCommentsPendingTelegramThreadReply(batchSize)
-        pendingComments.push(...fallbackComments)
-        pendingReplies.push(...fallbackReplies)
-      }
-
+      const pendingComments = commentStore.listCommentsPendingMaxToTelegramForChat(
+        chain.max_chat_id,
+        perChain,
+      )
+      const pendingReplies = commentStore.listCommentsPendingTelegramThreadReplyForChat(
+        chain.max_chat_id,
+        perChain,
+      )
       const messageMids: string[] = []
       for (const comment of [...pendingComments, ...pendingReplies]) {
         const post = postStore.getPost(comment.post_id)
@@ -324,29 +312,43 @@ export function startMaxCommentSync(bot: Bot, options: SyncOptions = {}): () => 
         await syncAdminReplyToTelegramThread(bot, comment, post)
       }
 
-      for (const chain of listTgChainsSync()) {
-        if (!chain.active || !chain.forward_comments) {
-          continue
-        }
-        const pendingCount = countPendingCommentsForChain(chain.id)
-        if (pendingCount > 100) {
-          await sendAdminAlert(
-            `comments_pending:${chain.id}`,
-            `${pendingCount} комментариев не синхронизированы — перенос комментариев застопорился`,
-            { chainId: chain.id, pendingCount },
-          )
-        }
+      const pendingCount = countPendingCommentsForChain(chain.id)
+      if (pendingCount > 100) {
+        await sendAdminAlert(
+          `comments_pending:${chain.id}`,
+          `${pendingCount} комментариев не синхронизированы — перенос комментариев застопорился`,
+          { chainId: chain.id, pendingCount },
+        )
       }
     } catch (err: unknown) {
-      logger.error('[maxCommentSync] polling error', err)
+      logger.error('[maxCommentSync] chain polling error — others continue', {
+        chainId: chain.id,
+        err,
+      })
       void sendAdminAlert(
-        'comment_sync_loop',
-        'Сбой синхронизации комментариев MAX→Telegram — перенос комментариев может быть остановлен',
-        { error: err instanceof Error ? err.message : String(err) },
+        `comment_sync_loop:${chain.id}`,
+        `Сбой синхронизации комментариев MAX→Telegram у связки «${chain.max_title ?? chain.id}» — остальные связки продолжают работу`,
+        { chainId: chain.id, error: err instanceof Error ? err.message : String(err) },
       )
     } finally {
-      syncing = false
+      chainSyncing.delete(chain.id)
     }
+  }
+
+  async function syncOnce(): Promise<void> {
+    if (isTelegramApiPaused()) {
+      logger.debug('[maxCommentSync] skipped: Telegram API pause active')
+      return
+    }
+
+    const chains = listTgChainsSync().filter((c) => c.active && c.forward_comments)
+    const perChain = Math.max(3, Math.ceil(batchSize / Math.max(chains.length, 1)))
+
+    if (chains.length === 0) {
+      return
+    }
+
+    await Promise.all(chains.map((chain) => chainSyncLimit(() => syncChainOnce(chain, perChain))))
   }
 
   const timer = setInterval(() => {
@@ -354,7 +356,7 @@ export function startMaxCommentSync(bot: Bot, options: SyncOptions = {}): () => 
   }, intervalMs)
   void syncOnce()
 
-  logger.info('[maxCommentSync] started', { intervalMs, batchSize })
+  logger.info('[maxCommentSync] started', { intervalMs, batchSize, chainConcurrency: CHAIN_SYNC_CONCURRENCY })
 
   return () => {
     clearInterval(timer)

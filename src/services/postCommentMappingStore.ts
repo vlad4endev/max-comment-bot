@@ -533,6 +533,27 @@ export async function resolveDiscussionChatId(
   }
 }
 
+export function listRecentUnmappedForwarded(
+  chainId: string,
+  limit = 8,
+): Array<{ tgMsgId: number; maxMid: string }> {
+  return getDb()
+    .prepare(
+      `SELECT f.tg_message_id AS tgMsgId, f.max_message_mid AS maxMid
+       FROM tg_chain_forwarded f
+       LEFT JOIN post_comment_mapping m
+         ON m.chain_id = f.chain_id AND m.tg_msg_id = f.tg_message_id
+       WHERE f.chain_id = ?
+         AND f.max_message_mid IS NOT NULL
+         AND TRIM(f.max_message_mid) != ''
+         AND f.max_message_mid != ?
+         AND (m.tg_thread_msg_id IS NULL OR m.tg_thread_msg_id = 0)
+       ORDER BY f.tg_message_id DESC
+       LIMIT ?`,
+    )
+    .all(chainId, SKIPPED_MAX_MID, limit) as Array<{ tgMsgId: number; maxMid: string }>
+}
+
 /**
  * Раньше проставлял tg_thread_chat_id без tg_thread_msg_id — из-за этого
  * findMappingByMaxMid выбирал «битую» строку. Thread id задаётся через

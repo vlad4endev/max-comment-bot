@@ -8,6 +8,7 @@
  */
 
 import axios from 'axios'
+import pLimit from 'p-limit'
 import type { Bot } from '@maxhub/max-bot-api'
 
 import { listVkChainsSync, updateVkChain, type VkChainRecord } from '../api/adminPanelState'
@@ -32,6 +33,7 @@ import { vkPostMappingStore } from './vkPostMappingStore'
 import { isCommentSynced, markCommentSynced } from '../utils/commentSyncGuard'
 import { logger } from '../utils/logger'
 import { sendAdminAlert } from '../utils/alertService'
+import { recordVkFail, recordVkSuccess, vkChainDisplayName } from './chainTransferLog'
 
 const VK_COMMENT_POLL_INTERVAL_MS = 3_000
 const VK_MAX_TO_VK_SYNC_INTERVAL_MS = 2_000
@@ -175,10 +177,11 @@ let botRef: Bot | null = null
 let commentPollTimer: NodeJS.Timeout | null = null
 let maxToVkSyncTimer: NodeJS.Timeout | null = null
 let started = false
-let vkCommentsSyncInFlight = false
-let maxToVkSyncInFlight = false
 /** Защита от гонки при повторном вызове для одного и того же MAX mid. */
 const inflightVkPublish = new Set<string>()
+const vkCommentChainSyncing = new Set<string>()
+const maxToVkChainSyncing = new Set<string>()
+const vkChainSyncLimit = pLimit(4)
 
 export function setVkChainForwarderBot(bot: Bot): void {
   botRef = bot
@@ -230,14 +233,27 @@ export async function publishTelegramPostToVk(input: TelegramPostToVkInput): Pro
   }
 
   const caption = exactTelegramPostText(tgMessages)
-  for (const chain of chains) {
-    await publishTelegramPostToVkChain(chain, {
-      maxChatId: input.maxChatId,
-      maxMid: mid,
-      tgToken,
-      tgMessages,
-      caption,
-    })
+  const results = await Promise.allSettled(
+    chains.map((chain) =>
+      publishTelegramPostToVkChain(chain, {
+        maxChatId: input.maxChatId,
+        maxMid: mid,
+        tgToken,
+        tgMessages,
+        caption,
+      }),
+    ),
+  )
+  for (let i = 0; i < results.length; i += 1) {
+    const result = results[i]
+    const chain = chains[i]
+    if (result?.status === 'rejected' && chain) {
+      logger.error('[vkChain] publish failed for chain — others continue', {
+        chainId: chain.id,
+        maxMid: mid,
+        err: result.reason,
+      })
+    }
   }
 }
 
@@ -338,9 +354,11 @@ async function publishTelegramPostToVkChain(
       attachments.length > 0 ? attachments : undefined,
     )
     if (vkPostId == null) {
-      logger.warn('[vkChain] publishVkWallPost returned null', {
+      recordVkFail({
         chainId: chain.id,
+        title: vkChainDisplayName(chain),
         maxMid,
+        error: 'VK API вернул пустой post id',
       })
       return
     }
@@ -355,27 +373,25 @@ async function publishTelegramPostToVkChain(
     await updateVkChain(chain.id, {
       forwarded_today: (chain.forwarded_today ?? 0) + 1,
     })
-    logger.info('[vkChain] Telegram post published to VK', {
+    recordVkSuccess({
       chainId: chain.id,
+      title: vkChainDisplayName(chain),
       maxMid,
       vkPostId,
-      groupId: chain.vk_group_id,
-      attachmentCount: attachments.length,
-      captionLen: caption.length,
-      tgMessages: tgMessages.length,
     })
   } catch (err: unknown) {
     await updateVkChain(chain.id, {
       errors_today: (chain.errors_today ?? 0) + 1,
     })
-    logger.error('[vkChain] failed to publish Telegram post to VK', {
+    recordVkFail({
       chainId: chain.id,
+      title: vkChainDisplayName(chain),
       maxMid,
-      err,
+      error: err instanceof Error ? err.message : String(err),
     })
     void sendAdminAlert(
       `vk_publish_failed:${chain.id}`,
-      'Не удалось опубликовать пост в VK — перенос постов заблокирован',
+      'Не удалось опубликовать пост в VK у этой связки — остальные связки продолжают работу',
       {
         chainId: chain.id,
         maxMid,
@@ -494,13 +510,26 @@ async function syncVkCommentsForChain(chain: VkChainRecord): Promise<void> {
 
 async function syncAllVkCommentsToMax(): Promise<void> {
   const chains = listVkChainsSync().filter((c) => c.active && c.sync_comments)
-  for (const chain of chains) {
-    try {
-      await syncVkCommentsForChain(chain)
-    } catch (err: unknown) {
-      logger.error('[vkChain] syncVkCommentsForChain failed', { chainId: chain.id, err })
-    }
-  }
+  await Promise.all(
+    chains.map((chain) =>
+      vkChainSyncLimit(async () => {
+        if (vkCommentChainSyncing.has(chain.id)) {
+          return
+        }
+        vkCommentChainSyncing.add(chain.id)
+        try {
+          await syncVkCommentsForChain(chain)
+        } catch (err: unknown) {
+          logger.error('[vkChain] syncVkCommentsForChain failed — others continue', {
+            chainId: chain.id,
+            err,
+          })
+        } finally {
+          vkCommentChainSyncing.delete(chain.id)
+        }
+      }),
+    ),
+  )
 }
 
 // ── Синхронизация MAX miniapp-комментариев → VK ──────────────────────────────
@@ -509,7 +538,30 @@ async function syncMaxCommentsToVk(): Promise<void> {
   const chains = listVkChainsSync().filter((c) => c.active && c.sync_comments)
   if (chains.length === 0) return
 
-  const pendingComments = commentStore.listCommentsPendingMaxToTelegram(30)
+  await Promise.all(
+    chains.map((chain) =>
+      vkChainSyncLimit(async () => {
+        if (maxToVkChainSyncing.has(chain.id)) {
+          return
+        }
+        maxToVkChainSyncing.add(chain.id)
+        try {
+          await syncMaxCommentsToVkForChain(chain)
+        } catch (err: unknown) {
+          logger.error('[vkChain] syncMaxCommentsToVk failed — others continue', {
+            chainId: chain.id,
+            err,
+          })
+        } finally {
+          maxToVkChainSyncing.delete(chain.id)
+        }
+      }),
+    ),
+  )
+}
+
+async function syncMaxCommentsToVkForChain(chain: VkChainRecord): Promise<void> {
+  const pendingComments = commentStore.listCommentsPendingMaxToTelegramForChat(chain.max_chat_id, 30)
 
   for (const comment of pendingComments) {
     const post = postStore.getPost(comment.post_id)
@@ -519,40 +571,38 @@ async function syncMaxCommentsToVk(): Promise<void> {
       continue
     }
 
-    for (const chain of chains) {
-      if (Math.abs(chain.max_chat_id) !== Math.abs(post.chat_id)) continue
+    if (Math.abs(chain.max_chat_id) !== Math.abs(post.chat_id)) continue
 
-      const mapping = vkPostMappingStore
-        .listByChain(chain.id)
-        .find((m) => m.maxMid === post.message_mid)
-      if (!mapping) continue
+    const mapping = vkPostMappingStore
+      .listByChain(chain.id)
+      .find((m) => m.maxMid === post.message_mid)
+    if (!mapping) continue
 
-      const guardKey = `vk-reply:${chain.id}:${comment.comment_id}`
-      if (isCommentSynced(guardKey)) continue
+    const guardKey = `vk-reply:${chain.id}:${comment.comment_id}`
+    if (isCommentSynced(guardKey)) continue
 
-      const commentText = comment.text?.trim()
-      if (!commentText) {
-        markCommentSynced(guardKey)
-        continue
-      }
-
-      const vkCommentId = await publishVkWallComment(
-        chain.vk_token,
-        chain.vk_group_id,
-        mapping.vkPostId,
-        commentText,
-      )
-
+    const commentText = comment.text?.trim()
+    if (!commentText) {
       markCommentSynced(guardKey)
+      continue
+    }
 
-      if (vkCommentId != null) {
-        logger.info('[vkChain] synced MAX comment to VK', {
-          chainId: chain.id,
-          commentId: comment.comment_id,
-          vkCommentId,
-          vkPostId: mapping.vkPostId,
-        })
-      }
+    const vkCommentId = await publishVkWallComment(
+      chain.vk_token,
+      chain.vk_group_id,
+      mapping.vkPostId,
+      commentText,
+    )
+
+    markCommentSynced(guardKey)
+
+    if (vkCommentId != null) {
+      logger.info('[vkChain] synced MAX comment to VK', {
+        chainId: chain.id,
+        commentId: comment.comment_id,
+        vkCommentId,
+        vkPostId: mapping.vkPostId,
+      })
     }
   }
 }
@@ -568,41 +618,25 @@ export function startVkChainForwarder(): void {
   })
 
   commentPollTimer = setInterval(() => {
-    if (vkCommentsSyncInFlight) {
-      return
-    }
-    vkCommentsSyncInFlight = true
-    void syncAllVkCommentsToMax()
-      .catch((err: unknown) => {
-        logger.error('[vkChain] syncAllVkCommentsToMax error', err)
-        void sendAdminAlert(
-          'vk_comment_sync',
-          'Сбой синхронизации комментариев VK→MAX — перенос комментариев может быть остановлен',
-          { error: err instanceof Error ? err.message : String(err) },
-        )
-      })
-      .finally(() => {
-        vkCommentsSyncInFlight = false
-      })
+    void syncAllVkCommentsToMax().catch((err: unknown) => {
+      logger.error('[vkChain] syncAllVkCommentsToMax error', err)
+      void sendAdminAlert(
+        'vk_comment_sync',
+        'Сбой синхронизации комментариев VK→MAX — остальные связки продолжают работу',
+        { error: err instanceof Error ? err.message : String(err) },
+      )
+    })
   }, VK_COMMENT_POLL_INTERVAL_MS)
 
   maxToVkSyncTimer = setInterval(() => {
-    if (maxToVkSyncInFlight) {
-      return
-    }
-    maxToVkSyncInFlight = true
-    void syncMaxCommentsToVk()
-      .catch((err: unknown) => {
-        logger.error('[vkChain] syncMaxCommentsToVk error', err)
-        void sendAdminAlert(
-          'vk_max_comment_sync',
-          'Сбой синхронизации комментариев MAX→VK — перенос комментариев может быть остановлен',
-          { error: err instanceof Error ? err.message : String(err) },
-        )
-      })
-      .finally(() => {
-        maxToVkSyncInFlight = false
-      })
+    void syncMaxCommentsToVk().catch((err: unknown) => {
+      logger.error('[vkChain] syncMaxCommentsToVk error', err)
+      void sendAdminAlert(
+        'vk_max_comment_sync',
+        'Сбой синхронизации комментариев MAX→VK — остальные связки продолжают работу',
+        { error: err instanceof Error ? err.message : String(err) },
+      )
+    })
   }, VK_MAX_TO_VK_SYNC_INTERVAL_MS)
 
   const activeChains = listVkChainsSync().filter((c) => c.active)
