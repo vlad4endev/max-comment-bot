@@ -1,4 +1,5 @@
 import axios from 'axios'
+import FormData from 'form-data'
 import pLimit from 'p-limit'
 import type { Bot } from '@maxhub/max-bot-api'
 import type { AttachmentRequest, ImageAttachmentRequest } from '@maxhub/max-bot-api/types'
@@ -44,15 +45,33 @@ import { publishTelegramPostToVk } from './vkChainForwarder'
 import {
   bumpCommentInboundRetry,
   bumpForwardQueueRetry,
+  COMMENT_MAPPING_RETRY_MS,
   deleteCommentInboundJob,
   deleteForwardQueueJob,
+  getForwardQueueJob,
   listDueCommentInboundJobs,
   listDueForwardQueueJobs,
+  nudgeCommentInboundJobs,
   parseForwardQueueMessages,
   parseInboundCommentMessage,
   upsertCommentInboundJob,
   upsertForwardQueueJob,
+  countForwardQueueJobs,
+  countCommentInboundJobs,
+  summarizeForwardQueueByChain,
+  summarizeCommentQueueByChain,
 } from './tgChainForwardQueue'
+import {
+  recordCommentRetry,
+  recordQueueSnapshot,
+  recordTgMaxFail,
+  recordTgMaxPartial,
+  recordTgMaxReceived,
+  recordTgMaxRetry,
+  recordTgMaxSkip,
+  recordTgMaxSuccess,
+  tgChainDisplayName,
+} from './chainTransferLog'
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
@@ -67,7 +86,11 @@ const TG_CHAIN_IDLE_MS = 40
 const MAX_SEND_INTERVAL_MS = 350
 const TG_CHAIN_MAX_API_RETRIES = 6
 /** Буферизация Telegram-альбомов по media_group_id (тишина после последнего кадра). */
-const TG_ALBUM_BUFFER_MS = 450
+const TG_ALBUM_BUFFER_MS = 1_800
+/** Пауза при 409 getUpdates — короткий retry, без 10с простоя. */
+const TG_GETUPDATES_CONFLICT_WAIT_MS = 2_500
+/** Как часто снимать due-задачи постов/комментариев с очереди. */
+const TG_QUEUE_DRAIN_MS = 400
 /** Telegram media group ограничен 10 элементами. */
 const TG_ALBUM_MAX_MEDIA_PER_POST = 10
 const MEDIA_DOWNLOAD_TIMEOUT_MS = 45_000
@@ -135,6 +158,17 @@ function persistForwardJob(
   return jobKey
 }
 
+function chainTitle(chain: TgChainRecord): string {
+  return tgChainDisplayName(chain)
+}
+
+function errorText(err: unknown): string {
+  if (err instanceof Error && err.message.trim()) {
+    return err.message
+  }
+  return String(err ?? 'forward failed')
+}
+
 function enqueueForward(chain: TgChainRecord, messages: TgMessage[], tgToken: string): void {
   if (messages.length === 0) {
     return
@@ -163,11 +197,22 @@ function scheduleForwardJob(
       if (ok) {
         deleteForwardQueueJob(jobKey)
       } else {
-        const attempts = bumpForwardQueueRetry(jobKey, 'MAX publish incomplete')
+        const lastError = 'MAX publish incomplete'
+        const attempts = bumpForwardQueueRetry(jobKey, lastError)
         logger.warn('[tgChain] forward queued for retry', {
           chainId: chain.id,
           jobKey,
           messageIds: messages.map((m) => m.message_id),
+          attempts,
+          lastError,
+        })
+        recordTgMaxRetry({
+          chainId: chain.id,
+          title: chainTitle(chain),
+          messageIds: messages.map((m) => m.message_id),
+          error: lastError,
+          attempts,
+          queueDepth: countForwardQueueJobs(),
         })
         if (attempts >= 6) {
           void sendAdminAlert(
@@ -183,11 +228,21 @@ function scheduleForwardJob(
         }
       }
     } catch (err: unknown) {
+      const lastError = errorText(err)
       const attempts = bumpForwardQueueRetry(jobKey, err)
-      logger.error('[tgChain] forward job failed, will retry', {
+      logger.warn('[tgChain] forward queued for retry', {
         chainId: chain.id,
         jobKey,
-        err,
+        messageIds: messages.map((m) => m.message_id),
+        attempts,
+        lastError,
+      })
+      recordTgMaxFail({
+        chainId: chain.id,
+        title: chainTitle(chain),
+        messageIds: messages.map((m) => m.message_id),
+        error: lastError,
+        attempts,
       })
       if (attempts >= 6) {
         void sendAdminAlert(
@@ -197,7 +252,7 @@ function scheduleForwardJob(
             chainId: chain.id,
             title: chain.max_title,
             jobKey,
-            error: err instanceof Error ? err.message : String(err),
+            error: lastError,
           },
         )
       }
@@ -243,12 +298,28 @@ function scheduleInboundComment(
     try {
       const result = await handleTgComment(message, chain, bot, discussionChatId)
       if (result === 'retry') {
-        bumpCommentInboundRetry(jobKey, 'waiting for post mapping')
+        const attempts = bumpCommentInboundRetry(jobKey, 'waiting for post mapping')
+        if (attempts >= 3) {
+          recordCommentRetry({
+            chainId: chain.id,
+            title: chainTitle(chain),
+            messageId: message.message_id,
+            error: 'waiting for post mapping',
+            attempts,
+          })
+        }
         return
       }
       deleteCommentInboundJob(jobKey)
     } catch (err: unknown) {
       const attempts = bumpCommentInboundRetry(jobKey, err)
+      recordCommentRetry({
+        chainId: chain.id,
+        title: chainTitle(chain),
+        messageId: message.message_id,
+        error: errorText(err),
+        attempts,
+      })
       if (attempts >= 8) {
         void sendAdminAlert(
           `comment_stuck:${chain.id}`,
@@ -323,6 +394,119 @@ async function downloadTgFileBuffer(
     const buf = Buffer.from(res.data)
     await new Promise<void>((resolve) => setImmediate(resolve))
     return buf
+  })
+}
+
+function compactUnknown(value: unknown, maxLen = 240): string {
+  try {
+    const text = JSON.stringify(value)
+    if (!text) return String(value)
+    return text.length > maxLen ? `${text.slice(0, maxLen)}…` : text
+  } catch {
+    return String(value)
+  }
+}
+
+function tokenFromUploadUrl(url: string): string | null {
+  try {
+    const parsed = new URL(url)
+    for (const key of ['token', 'tk', 'upload_token']) {
+      const value = parsed.searchParams.get(key)?.trim()
+      if (value) return value
+    }
+  } catch {
+    /* ignore */
+  }
+  return null
+}
+
+function tokenFromUnknown(value: unknown): string | null {
+  if (typeof value === 'string' && value.trim()) return value.trim()
+  if (!value || typeof value !== 'object') return null
+  const record = value as Record<string, unknown>
+  if (typeof record.token === 'string' && record.token.trim()) return record.token.trim()
+  if (record.photos && typeof record.photos === 'object') {
+    const entries = Object.values(record.photos as Record<string, unknown>)
+    for (let i = entries.length - 1; i >= 0; i -= 1) {
+      const token = tokenFromUnknown(entries[i])
+      if (token) return token
+    }
+  }
+  if (record.payload && typeof record.payload === 'object') {
+    return tokenFromUnknown(record.payload)
+  }
+  return null
+}
+
+function guessImageUploadMeta(
+  url: string,
+  buffer: Buffer,
+): { filename: string; contentType: string } {
+  const magic = buffer.subarray(0, 12)
+  if (magic.length >= 3 && magic[0] === 0x47 && magic[1] === 0x49 && magic[2] === 0x46) {
+    return { filename: 'photo.gif', contentType: 'image/gif' }
+  }
+  if (magic.length >= 8 && magic[0] === 0x89 && magic[1] === 0x50 && magic[2] === 0x4e && magic[3] === 0x47) {
+    return { filename: 'photo.png', contentType: 'image/png' }
+  }
+  if (
+    magic.length >= 12 &&
+    magic[0] === 0x52 &&
+    magic[1] === 0x49 &&
+    magic[2] === 0x46 &&
+    magic[3] === 0x46 &&
+    magic[8] === 0x57 &&
+    magic[9] === 0x45 &&
+    magic[10] === 0x42 &&
+    magic[11] === 0x50
+  ) {
+    return { filename: 'photo.webp', contentType: 'image/webp' }
+  }
+  const fromPath = url.split('/').pop()?.split('?')[0]
+  if (fromPath && /\.(jpe?g|png|gif|webp|heic|bmp|tiff?)$/i.test(fromPath)) {
+    const ext = fromPath.slice(fromPath.lastIndexOf('.') + 1).toLowerCase()
+    const contentType =
+      ext === 'png'
+        ? 'image/png'
+        : ext === 'gif'
+          ? 'image/gif'
+          : ext === 'webp'
+            ? 'image/webp'
+            : ext === 'heic'
+              ? 'image/heic'
+              : ext === 'bmp'
+                ? 'image/bmp'
+                : ext.startsWith('tif')
+                  ? 'image/tiff'
+                  : 'image/jpeg'
+    return { filename: fromPath, contentType }
+  }
+  return { filename: 'photo.jpg', contentType: 'image/jpeg' }
+}
+
+/**
+ * Upload a TG photo buffer to MAX with a real image filename.
+ * The official SDK names Buffer uploads with a UUID (no extension), and MAX
+ * then returns `File extension is forbidden` without throwing — albums became empty.
+ */
+async function uploadImageBufferToMax(bot: Bot, buffer: Buffer, url: string): Promise<string> {
+  const { filename, contentType } = guessImageUploadMeta(url, buffer)
+  return maxApi(async () => {
+    const slot = await bot.api.raw.uploads.getUploadUrl({ type: 'image' })
+    const form = new FormData()
+    form.append('data', buffer, { filename, contentType })
+    const uploaded = await axios.post<unknown>(slot.url, form, {
+      headers: form.getHeaders(),
+      timeout: MEDIA_DOWNLOAD_TIMEOUT_MS,
+      maxContentLength: MEDIA_MAX_BYTES,
+      maxBodyLength: MEDIA_MAX_BYTES,
+    })
+    const token =
+      tokenFromUnknown(uploaded.data) ??
+      (typeof slot.token === 'string' && slot.token.trim() ? slot.token.trim() : null) ??
+      tokenFromUploadUrl(slot.url)
+    if (token) return token
+    throw new Error(`MAX image upload: no token (${compactUnknown(uploaded.data)})`)
   })
 }
 
@@ -704,28 +888,17 @@ async function forwardOneTgMessageToMax(
 
   if (msg.photo && msg.photo.length > 0) {
     const largest = msg.photo[msg.photo.length - 1]
-    const url = await getTgFileUrl(tgToken, largest.file_id)
-    if (url) {
-      let image: { toJson(): unknown }
-      try {
-        const fileBuf = await downloadTgFileBuffer(url)
-        image = await maxApi(() => bot.api.uploadImage({ source: fileBuf }))
-      } catch (err: unknown) {
-        logger.warn('[tgChain] binary photo upload failed, fallback to url', {
-          messageId: msg.message_id,
-          err,
-        })
-        image = await maxApi(() => bot.api.uploadImage({ url }))
-      }
+    const image = await uploadTgPhotoAttachment(bot, tgToken, largest.file_id)
+    if (image) {
       await throttleMaxChatSend(chatId)
       const sent = await maxApi(() =>
         bot.api.sendMessageToChat(chatId, messageText, {
-          attachments: [image.toJson() as AttachmentRequest],
+          attachments: [image],
         }),
       )
       return sent.body?.mid ?? null
     }
-    logger.warn('[tgChain] photo forward skipped: no TG file url', { messageId: msg.message_id })
+    logger.warn('[tgChain] photo forward skipped: upload failed', { messageId: msg.message_id })
   }
   if (msg.video?.file_id) {
     const url = await getTgFileUrl(tgToken, msg.video.file_id)
@@ -769,65 +942,58 @@ async function forwardOneTgMessageToMax(
       }
     }
   }
-  if (!hasMedia && caption.trim()) {
+  // Text-only posts, or media upload failed: still publish caption so the queue does not stall.
+  // (Previously `!hasMedia` blocked caption after video/doc failure — log said "sending caption" but returned null.)
+  if (caption.trim()) {
     await throttleMaxChatSend(chatId)
     const sent = await maxApi(() => bot.api.sendMessageToChat(chatId, caption.trim()))
     return sent.body?.mid ?? null
   }
+  if (hasMedia) {
+    logger.warn('[tgChain] media forward failed and caption empty — nothing to publish', {
+      messageId: msg.message_id,
+      hasPhoto: Boolean(msg.photo?.length),
+      hasVideo: Boolean(msg.video?.file_id),
+      hasDocument: Boolean(msg.document?.file_id),
+    })
+  }
   return null
 }
 
-/** Загружает одно TG-фото в MAX (тот же путь, что и для одиночного поста — через URL). */
+/** Загружает одно TG-фото в MAX и возвращает token-based вложение для альбома. */
 async function uploadTgPhotoAttachment(
   bot: Bot,
   tgToken: string,
   fileId: string,
 ): Promise<ImageAttachmentRequest | null> {
   const url = await getTgFileUrl(tgToken, fileId)
-  if (!url) return null
-  let uploaded: { toJson(): unknown } | null = null
-  try {
-    // Prefer binary upload so MAX returns token-based image payloads.
-    // Those can be safely merged into one album attachment (`payload.photos`).
-    const fileBuf = await downloadTgFileBuffer(url)
-    uploaded = await maxApi(() => bot.api.uploadImage({ source: fileBuf }))
-  } catch (err: unknown) {
-    logger.warn('[tgChain] album: binary image upload failed, fallback to url upload', {
-      fileId,
-      err,
-    })
-    uploaded = await maxApi(() => bot.api.uploadImage({ url }))
-  }
-  const json = uploaded.toJson() as ImageAttachmentRequest
-  if (json.type !== 'image' || !json.payload) {
+  if (!url) {
+    logger.warn('[tgChain] photo: no TG file url', { fileIdSuffix: fileId.slice(-8) })
     return null
   }
-  const { token, url: imageUrl, photos } = json.payload
-  if (token || imageUrl || (photos && Object.keys(photos).length > 0)) {
-    return json
+  try {
+    const fileBuf = await downloadTgFileBuffer(url)
+    const token = await uploadImageBufferToMax(bot, fileBuf, url)
+    return { type: 'image', payload: { token } }
+  } catch (err: unknown) {
+    logger.warn('[tgChain] binary image upload failed, fallback to url', {
+      fileIdSuffix: fileId.slice(-8),
+      err,
+    })
+    return { type: 'image', payload: { url } }
   }
-  return null
 }
 
 function mergeAlbumImageAttachments(images: ImageAttachmentRequest[]): AttachmentRequest[] {
   const out: AttachmentRequest[] = []
   for (const img of images) {
-    const payload = img.payload
-    if (!payload) continue
-    if (payload.token) {
-      out.push({ type: 'image', payload: { token: payload.token } })
+    const token = tokenFromUnknown(img.payload)
+    if (token) {
+      out.push({ type: 'image', payload: { token } })
       continue
     }
-    if (payload.url) {
-      out.push({ type: 'image', payload: { url: payload.url } })
-      continue
-    }
-    if (payload.photos) {
-      for (const photo of Object.values(payload.photos)) {
-        if (photo?.token) {
-          out.push({ type: 'image', payload: { token: photo.token } })
-        }
-      }
+    if (img.payload?.url) {
+      out.push({ type: 'image', payload: { url: img.payload.url } })
     }
   }
   return out
@@ -842,9 +1008,17 @@ async function buildAlbumImageAttachments(
   const uploaded = await Promise.all(
     photoMessages.map((msg) =>
       albumUploadLimit(async (): Promise<ImageAttachmentRequest | null> => {
-        if (!msg.photo?.length) return null
-        const largest = msg.photo[msg.photo.length - 1]!
-        return uploadTgPhotoAttachment(bot, tgToken, largest.file_id)
+        try {
+          if (!msg.photo?.length) return null
+          const largest = msg.photo[msg.photo.length - 1]!
+          return await uploadTgPhotoAttachment(bot, tgToken, largest.file_id)
+        } catch (err: unknown) {
+          logger.warn('[tgChain] album photo upload threw', {
+            messageId: msg.message_id,
+            err,
+          })
+          return null
+        }
       }),
     ),
   )
@@ -867,6 +1041,7 @@ async function buildAlbumAttachments(
   if (photoMessages.length > 0 && imageAtts.length === 0) {
     logger.error('[tgChain] album: photos failed to upload', {
       photoCount: photoMessages.length,
+      uploaded: 0,
       messageIds: messages.map((m) => m.message_id),
     })
     return []
@@ -918,10 +1093,8 @@ async function buildSingleMessageAttachments(
 ): Promise<AttachmentRequest[]> {
   if (msg.photo && msg.photo.length > 0) {
     const largest = msg.photo[msg.photo.length - 1]
-    const url = await getTgFileUrl(tgToken, largest.file_id)
-    if (!url) return []
-    const image = await maxApi(() => bot.api.uploadImage({ url }))
-    return [image.toJson() as AttachmentRequest]
+    const image = await uploadTgPhotoAttachment(bot, tgToken, largest!.file_id)
+    return image ? [image] : []
   }
   if (msg.video?.file_id) {
     const url = await getTgFileUrl(tgToken, msg.video.file_id)
@@ -963,7 +1136,9 @@ async function forwardAlbumToMax(
   const attachments = await buildAlbumAttachments(bot, messages, tgToken)
 
   if (attachments.length === 0) {
-    return null
+    throw new Error(
+      `MAX album: no attachments uploaded (${messages.map((m) => m.message_id).join(', ')})`,
+    )
   }
 
   await throttleMaxChatSend(chatId)
@@ -1147,11 +1322,11 @@ async function processChainMessageGroup(
     }
     if (isTgPostTooOldForForward(chain, m)) {
       markForwarded(chain.id, m, TG_FORWARD_SKIPPED_MID, null)
-      logger.info('[tgChain] skip old TG post (before forward_posts_since)', {
+      recordTgMaxSkip({
         chainId: chain.id,
-        tgMessageId: m.message_id,
-        tgDate: m.date ?? null,
-        forwardPostsSince: chain.forward_posts_since ?? chain.created_at,
+        title: chainTitle(chain),
+        messageId: m.message_id,
+        reason: 'пост старше даты начала переноса',
       })
       return false
     }
@@ -1245,42 +1420,42 @@ async function processChainMessageGroup(
       chain.forwarded_today = forwardedToday
       touchChainActivity(chain.id)
       await updateTgChain(chain.id, { forwarded_today: forwardedToday })
-      const tgDateSec = pending[0]?.date
-      logger.info('[tgChain] forwarded', {
-        chainId: chain.id,
-        from: chainSourceKey(chain),
-        to: chain.max_chat_id,
-        published,
-        album: isAlbum,
-        maxMessageMid: resultMid,
-        photoCount: isAlbum ? pending.filter((m) => m.photo?.length).length : undefined,
-        messageIds: pending.map((m) => m.message_id),
-        lagMs:
-          typeof tgDateSec === 'number' && Number.isFinite(tgDateSec)
-            ? Date.now() - tgDateSec * 1000
-            : undefined,
-      })
     }
     const remaining = pending.filter((m) => !isAlreadyForwarded(chain.id, m.message_id))
-    return remaining.length === 0
-  } catch (err: unknown) {
-    const axiosDetail =
-      axios.isAxiosError(err) && err.response
-        ? { status: err.response.status, data: err.response.data }
+    const tgDateSec = pending[0]?.date
+    const lagMs =
+      typeof tgDateSec === 'number' && Number.isFinite(tgDateSec)
+        ? Date.now() - tgDateSec * 1000
         : undefined
-    logger.error('[tgChain] forward failed', {
-      chainId: chain.id,
-      from: chainSourceKey(chain),
-      to: chain.max_chat_id,
-      messageIds: pending.map((m) => m.message_id),
-      err,
-      axiosDetail,
-    })
-    const errorsToday = chain.errors_today + 1
-    chain.errors_today = errorsToday
-    await updateTgChain(chain.id, { errors_today: errorsToday })
-    return false
-  }
+    if (remaining.length > 0 && published > 0) {
+      recordTgMaxPartial({
+        chainId: chain.id,
+        title: chainTitle(chain),
+        messageIds: pending.map((m) => m.message_id),
+        published,
+        remaining: remaining.length,
+      })
+    } else if (published > 0) {
+      recordTgMaxSuccess({
+        chainId: chain.id,
+        title: chainTitle(chain),
+        messageIds: pending.map((m) => m.message_id),
+        published,
+        album: isAlbum,
+        maxMid: resultMid,
+        lagMs,
+      })
+    }
+    return remaining.length === 0
+    } catch (err: unknown) {
+      const errorsToday = chain.errors_today + 1
+      chain.errors_today = errorsToday
+      await updateTgChain(chain.id, { errors_today: errorsToday })
+      if (axios.isAxiosError(err) && err.response?.status) {
+        throw new Error(`HTTP ${err.response.status}: ${errorText(err)}`, { cause: err })
+      }
+      throw err
+    }
 }
 
 function flushReadyAlbums(tgToken?: string): boolean {
@@ -1362,8 +1537,9 @@ async function dispatchChannelUpdatesToChains(tgToken: string, batch: TgChannelU
     if (forChain.length > 0) {
       const first = forChain[0]
       const tgDateSec = first?.date
-      logger.info('[tgChain] received', {
+      recordTgMaxReceived({
         chainId: chain.id,
+        title: chainTitle(chain),
         messageIds: forChain.map((m) => m.message_id),
         lagMs:
           typeof tgDateSec === 'number' && Number.isFinite(tgDateSec)
@@ -1619,6 +1795,7 @@ function startForwarderLoop(): void {
       syncTokenPollLoops()
       drainDueForwardJobs()
       drainDueCommentJobs()
+      maybeLogForwardQueueHealth()
     }
   }, 2_000)
   drainDueForwardJobs()
@@ -1680,6 +1857,61 @@ function startTgChainWatchdog(): void {
       logger.warn('[tgChain] watchdog error', { err })
     })
   }, 30 * 1000)
+}
+
+export function getTgChainForwarderRuntime(): {
+  poll_loops: number
+  in_flight_forwards: number
+  in_flight_comments: number
+  album_buffer: number
+  channel_work_queues: number
+  last_activity: Record<string, number>
+} {
+  const last_activity: Record<string, number> = {}
+  for (const [chainId, ts] of chainLastActivity) {
+    last_activity[chainId] = ts
+  }
+  return {
+    poll_loops: tokenLoops.size,
+    in_flight_forwards: inFlightForwardKeys.size,
+    in_flight_comments: inFlightCommentKeys.size,
+    album_buffer: albumBuffer.size,
+    channel_work_queues: channelWorkTails.size,
+    last_activity,
+  }
+}
+
+let lastQueueHealthLogAt = 0
+let lastQueueNonEmpty = false
+
+function maybeLogForwardQueueHealth(): void {
+  const now = Date.now()
+  if (now - lastQueueHealthLogAt < 30_000) {
+    return
+  }
+  const postCount = countForwardQueueJobs()
+  const commentCount = countCommentInboundJobs()
+  const queueEmpty = postCount === 0 && commentCount === 0
+  if (queueEmpty && !lastQueueNonEmpty) {
+    return
+  }
+  lastQueueHealthLogAt = now
+  lastQueueNonEmpty = !queueEmpty
+  const postSummary = [...summarizeForwardQueueByChain().values()]
+  const commentSummary = [...summarizeCommentQueueByChain().values()]
+  const oldestCreated = [...postSummary, ...commentSummary]
+    .map((s) => s.oldestCreatedAt)
+    .filter((n): n is number => n != null && n > 0)
+  const oldestWaitMs = oldestCreated.length > 0 ? now - Math.min(...oldestCreated) : null
+  const stuck =
+    postSummary.filter((s) => s.maxAttempts >= 6).reduce((n, s) => n + s.count, 0) +
+    commentSummary.filter((s) => s.maxAttempts >= 8).reduce((n, s) => n + s.count, 0)
+  recordQueueSnapshot({
+    posts: postCount,
+    comments: commentCount,
+    oldestWaitMs,
+    stuck,
+  })
 }
 
 export function startTgChainForwarder(): void {

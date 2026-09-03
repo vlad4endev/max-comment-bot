@@ -9,13 +9,68 @@ export type TgChainForwardQueueJob = {
   attempts: number
   next_retry_at: number
   last_error: string | null
+  created_at: number
 }
 
-const MAX_RETRY_DELAY_MS = 5 * 60_000
+export type ForwardQueueJobView = {
+  job_key: string
+  chain_id: string
+  attempts: number
+  next_retry_at: number
+  last_error: string | null
+  created_at: number
+  message_ids: number[]
+}
+
+export type CommentQueueJobView = {
+  job_key: string
+  chain_id: string
+  attempts: number
+  next_retry_at: number
+  last_error: string | null
+  created_at: number
+  message_id: number | null
+}
+
+export type ChainQueueSummary = {
+  count: number
+  oldestCreatedAt: number | null
+  maxAttempts: number
+  lastError: string | null
+}
+
+const MAX_RETRY_DELAY_MS = 30_000
+/** Комментарий ждёт маппинг поста — не разгонять backoff до минут. */
+export const COMMENT_MAPPING_RETRY_MS = 500
 
 export function retryDelayMs(attempts: number): number {
-  const exp = Math.min(Math.max(attempts, 0), 8)
-  return Math.min(2_000 * 2 ** exp, MAX_RETRY_DELAY_MS)
+  const exp = Math.min(Math.max(attempts, 1), 5)
+  return Math.min(1_000 * 2 ** (exp - 1), MAX_RETRY_DELAY_MS)
+}
+
+export function mergeForwardQueueMessages(
+  existing: TgMessage[],
+  incoming: TgMessage[],
+): TgMessage[] {
+  const byId = new Map<number, TgMessage>()
+  for (const msg of existing) {
+    byId.set(msg.message_id, msg)
+  }
+  for (const msg of incoming) {
+    byId.set(msg.message_id, msg)
+  }
+  return [...byId.values()].sort((a, b) => a.message_id - b.message_id)
+}
+
+export function getForwardQueueJob(jobKey: string): TgChainForwardQueueJob | null {
+  const row = getDb()
+    .prepare(
+      `SELECT job_key, chain_id, tg_token, payload, attempts, next_retry_at, last_error, created_at
+       FROM tg_chain_forward_queue
+       WHERE job_key = ?`,
+    )
+    .get(jobKey) as TgChainForwardQueueJob | undefined
+  return row ?? null
 }
 
 export function upsertForwardQueueJob(input: {
@@ -25,6 +80,10 @@ export function upsertForwardQueueJob(input: {
   messages: TgMessage[]
   nextRetryAt: number
 }): void {
+  const existing = getForwardQueueJob(input.jobKey)
+  const messages = existing
+    ? mergeForwardQueueMessages(parseForwardQueueMessages(existing.payload), input.messages)
+    : input.messages
   getDb()
     .prepare(
       `INSERT INTO tg_chain_forward_queue
@@ -40,7 +99,7 @@ export function upsertForwardQueueJob(input: {
       input.jobKey,
       input.chainId,
       input.tgToken,
-      JSON.stringify(input.messages),
+      JSON.stringify(messages),
       input.nextRetryAt,
       Date.now(),
     )
@@ -69,13 +128,96 @@ export function deleteForwardQueueJob(jobKey: string): void {
 export function listDueForwardQueueJobs(limit = 40): TgChainForwardQueueJob[] {
   return getDb()
     .prepare(
-      `SELECT job_key, chain_id, tg_token, payload, attempts, next_retry_at, last_error
+      `SELECT job_key, chain_id, tg_token, payload, attempts, next_retry_at, last_error, created_at
        FROM tg_chain_forward_queue
        WHERE next_retry_at <= ?
        ORDER BY created_at ASC
        LIMIT ?`,
     )
     .all(Date.now(), limit) as TgChainForwardQueueJob[]
+}
+
+function summarizeQueueRows(
+  rows: Array<{ chain_id: string; attempts: number; last_error: string | null; created_at: number }>,
+): Map<string, ChainQueueSummary> {
+  const byChain = new Map<string, ChainQueueSummary>()
+  for (const row of rows) {
+    const prev = byChain.get(row.chain_id)
+    if (!prev) {
+      byChain.set(row.chain_id, {
+        count: 1,
+        oldestCreatedAt: row.created_at,
+        maxAttempts: row.attempts,
+        lastError: row.last_error,
+      })
+      continue
+    }
+    prev.count += 1
+    if (prev.oldestCreatedAt == null || row.created_at < prev.oldestCreatedAt) {
+      prev.oldestCreatedAt = row.created_at
+    }
+    if (row.attempts > prev.maxAttempts) {
+      prev.maxAttempts = row.attempts
+      if (row.last_error) {
+        prev.lastError = row.last_error
+      }
+    } else if (!prev.lastError && row.last_error) {
+      prev.lastError = row.last_error
+    }
+  }
+  return byChain
+}
+
+export function listForwardQueueJobViews(limit = 80): ForwardQueueJobView[] {
+  const rows = getDb()
+    .prepare(
+      `SELECT job_key, chain_id, payload, attempts, next_retry_at, last_error, created_at
+       FROM tg_chain_forward_queue
+       ORDER BY created_at ASC
+       LIMIT ?`,
+    )
+    .all(limit) as Array<{
+    job_key: string
+    chain_id: string
+    payload: string
+    attempts: number
+    next_retry_at: number
+    last_error: string | null
+    created_at: number
+  }>
+  return rows.map((row) => ({
+    job_key: row.job_key,
+    chain_id: row.chain_id,
+    attempts: row.attempts,
+    next_retry_at: row.next_retry_at,
+    last_error: row.last_error,
+    created_at: row.created_at,
+    message_ids: parseForwardQueueMessages(row.payload).map((m) => m.message_id),
+  }))
+}
+
+export function summarizeForwardQueueByChain(): Map<string, ChainQueueSummary> {
+  const rows = getDb()
+    .prepare(
+      `SELECT chain_id, attempts, last_error, created_at
+       FROM tg_chain_forward_queue`,
+    )
+    .all() as Array<{ chain_id: string; attempts: number; last_error: string | null; created_at: number }>
+  return summarizeQueueRows(rows)
+}
+
+export function countForwardQueueJobs(): number {
+  const row = getDb()
+    .prepare('SELECT COUNT(*) AS n FROM tg_chain_forward_queue')
+    .get() as { n: number }
+  return row.n
+}
+
+export function countCommentInboundJobs(): number {
+  const row = getDb()
+    .prepare('SELECT COUNT(*) AS n FROM tg_comment_inbound_queue')
+    .get() as { n: number }
+  return row.n
 }
 
 export function parseForwardQueueMessages(payload: string): TgMessage[] {
@@ -102,6 +244,8 @@ export type TgCommentInboundJob = {
   discussion_chat_id: number
   payload: string
   attempts: number
+  last_error: string | null
+  created_at: number
 }
 
 export function upsertCommentInboundJob(input: {
@@ -130,20 +274,36 @@ export function upsertCommentInboundJob(input: {
   return jobKey
 }
 
-export function bumpCommentInboundRetry(jobKey: string, err: unknown): number {
+export function bumpCommentInboundRetry(
+  jobKey: string,
+  err: unknown,
+  delayMs?: number,
+): number {
   const row = getDb()
     .prepare('SELECT attempts FROM tg_comment_inbound_queue WHERE job_key = ?')
     .get(jobKey) as { attempts: number } | undefined
   const attempts = (row?.attempts ?? 0) + 1
   const lastError = err instanceof Error ? err.message.slice(0, 500) : String(err ?? 'retry').slice(0, 500)
+  const waitMs = delayMs ?? retryDelayMs(attempts)
   getDb()
     .prepare(
       `UPDATE tg_comment_inbound_queue
        SET attempts = ?, next_retry_at = ?, last_error = ?
        WHERE job_key = ?`,
     )
-    .run(attempts, Date.now() + retryDelayMs(attempts), lastError, jobKey)
+    .run(attempts, Date.now() + waitMs, lastError, jobKey)
   return attempts
+}
+
+export function nudgeCommentInboundJobs(chainId: string): number {
+  const result = getDb()
+    .prepare(
+      `UPDATE tg_comment_inbound_queue
+       SET next_retry_at = ?
+       WHERE chain_id = ?`,
+    )
+    .run(Date.now(), chainId)
+  return result.changes
 }
 
 export function deleteCommentInboundJob(jobKey: string): void {
@@ -153,13 +313,51 @@ export function deleteCommentInboundJob(jobKey: string): void {
 export function listDueCommentInboundJobs(limit = 40): TgCommentInboundJob[] {
   return getDb()
     .prepare(
-      `SELECT job_key, chain_id, discussion_chat_id, payload, attempts
+      `SELECT job_key, chain_id, discussion_chat_id, payload, attempts, last_error, created_at
        FROM tg_comment_inbound_queue
        WHERE next_retry_at <= ?
        ORDER BY created_at ASC
        LIMIT ?`,
     )
     .all(Date.now(), limit) as TgCommentInboundJob[]
+}
+
+export function listCommentInboundJobViews(limit = 80): CommentQueueJobView[] {
+  const rows = getDb()
+    .prepare(
+      `SELECT job_key, chain_id, payload, attempts, next_retry_at, last_error, created_at
+       FROM tg_comment_inbound_queue
+       ORDER BY created_at ASC
+       LIMIT ?`,
+    )
+    .all(limit) as Array<{
+    job_key: string
+    chain_id: string
+    payload: string
+    attempts: number
+    next_retry_at: number
+    last_error: string | null
+    created_at: number
+  }>
+  return rows.map((row) => ({
+    job_key: row.job_key,
+    chain_id: row.chain_id,
+    attempts: row.attempts,
+    next_retry_at: row.next_retry_at,
+    last_error: row.last_error,
+    created_at: row.created_at,
+    message_id: parseInboundCommentMessage(row.payload)?.message_id ?? null,
+  }))
+}
+
+export function summarizeCommentQueueByChain(): Map<string, ChainQueueSummary> {
+  const rows = getDb()
+    .prepare(
+      `SELECT chain_id, attempts, last_error, created_at
+       FROM tg_comment_inbound_queue`,
+    )
+    .all() as Array<{ chain_id: string; attempts: number; last_error: string | null; created_at: number }>
+  return summarizeQueueRows(rows)
 }
 
 export function parseInboundCommentMessage(payload: string): TgMessage | null {

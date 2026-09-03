@@ -168,9 +168,17 @@ export async function getTgFileUrl(token: string, fileId: string): Promise<strin
       timeout: 15_000,
     })
     const path = res.data?.result?.file_path
-    if (!path) return null
+    if (!path) {
+      logger.warn('[tg] getFile: empty file_path', { fileIdSuffix: fileId.slice(-8) })
+      return null
+    }
     return `https://api.telegram.org/file/bot${token}/${path}`
-  } catch {
+  } catch (err: unknown) {
+    logger.warn('[tg] getFile failed', {
+      fileIdSuffix: fileId.slice(-8),
+      status: axios.isAxiosError(err) ? err.response?.status : undefined,
+      err: err instanceof Error ? err.message : String(err),
+    })
     return null
   }
 }
