@@ -2359,16 +2359,26 @@
     function bootComments() {
       if (!hasPostContext || joinChannelId) return;
 
+      viewHome.classList.add('hidden');
+      viewJoin.classList.add('hidden');
+      if (viewGate) viewGate.classList.add('hidden');
+      viewComments.classList.remove('hidden');
+
       var uid =
         getBridgeNumericUserId(user) ||
         parseInt(mergedParams.get('user_id') || '', 10) ||
         null;
 
-      if (!uid) {
-        showGate();
+      if (window.__miniappCommentsBooted) return;
+
+      if (!uid && !window.__miniappCommentsUidWaited) {
+        window.__miniappCommentsUidWaited = true;
+        window.setTimeout(function () {
+          bootComments();
+        }, 1200);
         return;
       }
-      if (window.__miniappCommentsBooted) return;
+
       window.__miniappCommentsBooted = true;
 
       if (window.visualViewport) {
@@ -2417,24 +2427,15 @@
         syncViewportLayout()
       }
 
-      function shouldSkipSubscribeGate() {
-        if (adminParam) return true;
-        if (inTelegram) {
-          var tgUid = String(mergedParams.get('tg_uid') || '').trim();
-          var tgSig = String(mergedParams.get('tg_sig') || '').trim();
-          if (/^\d+$/.test(tgUid) && /^[a-f0-9]{64}$/i.test(tgSig)) return true;
-        }
-        return false;
-      }
-
       function openCommentsAfterStatusCheck() {
+        if (viewGate) viewGate.classList.add('hidden');
+        viewComments.classList.remove('hidden');
         loadPostAndComments();
       }
 
-      if (shouldSkipSubscribeGate()) {
-        openCommentsAfterStatusCheck();
-        return;
-      }
+      openCommentsAfterStatusCheck();
+
+      if (!uid) return;
 
       var statusQs =
         '?user_id=' +
@@ -2460,15 +2461,8 @@
           if (data && data.is_admin) {
             mergedParams.set('admin', '1');
           }
-          if (data && (data.started || data.is_admin)) {
-            openCommentsAfterStatusCheck();
-          } else {
-            showGate();
-          }
         })
-        .catch(function () {
-          openCommentsAfterStatusCheck();
-        });
+        .catch(function () {});
     }
 
     function loadPostAndComments() {
@@ -4209,8 +4203,11 @@
             '';
           if (initRaw) {
             // Headers must be ASCII; initData is URL-encoded ASCII.
+            // Some proxies (nginx 8k buffer) drop the whole request if this is huge.
             var initSafe = String(initRaw).replace(/[^\x20-\x7E]/g, '');
-            if (initSafe) hdr['X-Miniapp-Init-Data'] = initSafe;
+            if (initSafe && initSafe.length <= 3500) {
+              hdr['X-Miniapp-Init-Data'] = initSafe;
+            }
           }
         } catch (eInit) {}
         return hdr;
@@ -4516,6 +4513,10 @@
         if (!chatId) {
           setErr('Не удалось определить канал');
           return;
+        }
+        if (!userId || !String(userId).trim()) {
+          var lateUid = window.__miniappLateUserId;
+          if (lateUid != null) userId = String(lateUid);
         }
         if (!userId || !String(userId).trim()) {
           setErr('Войдите через MAX или Telegram');
@@ -4824,7 +4825,7 @@
     bootHome();
     bootComments();
 
-    if (getBridgeNumericUserId(user) == null && (inMax || isLikelyMaxMiniapp() || inTelegram)) {
+    if (getBridgeNumericUserId(user) == null) {
       var homeUserRetry = 0;
       var homeUserRetryTimer = window.setInterval(function () {
         homeUserRetry += 1;
@@ -4839,6 +4840,7 @@
         if (freshUid != null) {
           window.clearInterval(homeUserRetryTimer);
           user = freshUser;
+          window.__miniappLateUserId = freshUid;
           mergedParams = buildMergedSearchParams(user, startParam);
           postId = mergedParams.get('post_id');
           chatId = mergedParams.get('chat_id');
@@ -4850,13 +4852,21 @@
             viewComments.classList.remove('hidden');
             if (viewGate) viewGate.classList.add('hidden');
             bootComments();
-          } else {
+          } else if (!hasPostContext) {
             bootHome();
           }
           return;
         }
         if (homeUserRetry >= 50) {
           window.clearInterval(homeUserRetryTimer);
+          if (hasPostContext && !joinChannelId) {
+            viewHome.classList.add('hidden');
+            viewJoin.classList.add('hidden');
+            viewComments.classList.remove('hidden');
+            if (viewGate) viewGate.classList.add('hidden');
+            bootComments();
+            return;
+          }
           var homeErrEl = document.getElementById('homeErr');
           if (homeErrEl) {
             homeErrEl.textContent = inTelegram
@@ -4868,7 +4878,7 @@
       }, 200);
     }
 
-    if (!hasPostContext && !joinChannelId && (inMax || isLikelyMaxMiniapp() || inTelegram)) {
+    if (!hasPostContext && !joinChannelId) {
       var lateStartRetry = 0;
       var lateStartTimer = window.setInterval(function () {
         lateStartRetry += 1;
