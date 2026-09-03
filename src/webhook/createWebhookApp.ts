@@ -20,7 +20,7 @@ import { logger } from '../utils/logger'
 import { enqueueUpdate } from '../utils/updateQueue'
 import { dispatchBotUpdate } from './dispatchUpdate'
 import { getTelegramHealthSnapshot, probeTelegramBotApi, describeTelegramTokenSources } from '../services/telegramHealthService'
-import { describeActiveProxyRuntime, getTelegramProxyApplyError } from '../utils/telegramProxyRuntime'
+import { describeActiveProxyRuntime } from '../utils/telegramProxyRuntime'
 
 const MAX_SECRET_HEADER = 'x-max-bot-api-secret'
 
@@ -172,7 +172,6 @@ export function createHttpApp(options: HttpAppOptions): express.Express {
         ...snapshot,
         token_sources: sources,
         proxy: describeActiveProxyRuntime(),
-        proxy_error: getTelegramProxyApplyError(),
       })
     } catch (err: unknown) {
       logger.error('/health/telegram probe failed', err)
