@@ -63,7 +63,7 @@
   </script>
   <!-- Absolute /miniapp/ paths: MAX/Telegram sometimes open `/miniapp` without a trailing slash, and relative app.js then 404s. -->
   <base href="/miniapp/" />
-  <!-- MAX already injects WebApp in its WebView. Reloading the CDN script there causes «техническая заминка» on some clients. -->
+  <!-- MAX already injects WebApp. Do not fetch st.max.ru on phones — that CDN hang is why the WebView never opens. -->
   <script>
     (function () {
       function markReady() {
@@ -73,29 +73,44 @@
           }
         } catch (e) {}
       }
-      function loadMaxSdk() {
-        if (window.WebApp) {
-          markReady()
-          return
-        }
-        var s = document.createElement('script')
-        s.src = 'https://st.max.ru/js/max-web-app.js'
-        s.onload = markReady
-        s.onerror = function () {
-          window.__maxWebAppScriptFailed = true
-        }
-        document.head.appendChild(s)
-      }
       if (window.WebApp) {
         markReady()
         return
       }
-      // Give MAX WebView a tick to inject WebApp before fetching the CDN script
-      // (double-load is what shows «техническая заминка» on some clients).
-      window.setTimeout(loadMaxSdk, 50)
+      var ua = String(navigator.userAgent || '')
+      var inClientWebView = /MAX|maxmessenger|ru\.max|Telegram/i.test(ua) || !!window.__miniappPreferTelegram
+      if (inClientWebView) {
+        var n = 0
+        var t = window.setInterval(function () {
+          n += 1
+          if (window.WebApp) {
+            window.clearInterval(t)
+            markReady()
+          } else if (n >= 40) {
+            window.clearInterval(t)
+          }
+        }, 50)
+        return
+      }
+      var s = document.createElement('script')
+      s.src = 'https://st.max.ru/js/max-web-app.js'
+      s.async = true
+      s.onload = markReady
+      s.onerror = function () {
+        window.__maxWebAppScriptFailed = true
+      }
+      document.head.appendChild(s)
     })()
   </script>
-  <link rel="stylesheet" href="/miniapp/styles.css" />
+  <link rel="preload" href="/miniapp/styles.css?v=20260903-fast-mobile" as="style" />
+  <link rel="preload" href="/miniapp/app.js?v=20260903-fast-mobile" as="script" />
+  <link rel="stylesheet" href="/miniapp/styles.css?v=20260903-fast-mobile" />
+  <script
+    defer
+    src="/miniapp/app.js?v=20260903-fast-mobile"
+    id="miniappAppScript"
+    onerror="window.__miniappAppJsFailed=true;var el=document.getElementById('miniappLoading');if(el){el.textContent='Не удалось загрузить приложение. Закройте и откройте снова из бота.';el.style.color='#ff8a80';}"
+  ></script>
   <style>
     /* Critical: экран загрузки до styles.css (важно для WebView MAX без gzip) */
     html, body { margin: 0; min-height: 100%; background: #0c0d14; color: rgba(255,255,255,0.92); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
@@ -128,7 +143,7 @@
               height="512"
               alt=""
               decoding="async"
-              fetchpriority="high"
+              loading="lazy"
             />
             <span class="brand-mark-ring"></span>
           </div>
@@ -224,6 +239,7 @@
             height="80"
             alt=""
             decoding="async"
+            loading="lazy"
             onerror="this.style.display='none';this.parentElement.textContent='\uD83D\uDCAC';"
           />
         </div>
@@ -644,45 +660,17 @@
   </div>
   </div>
 
-  <script src="/miniapp/app.js?v=20260903-open-fix" id="miniappAppScript"></script>
   <script>
-    function showMiniappAssetError(msg) {
+    window.setTimeout(function () {
+      if (window.__miniappReady || window.__miniappAppJsLoaded) return
       var el = document.getElementById('miniappLoading')
       if (el) {
-        el.textContent = msg
+        el.textContent = 'Приложение не запустилось. Закройте и откройте снова из бота.'
         el.style.color = '#ff8a80'
         el.style.padding = '16px'
         el.style.lineHeight = '1.45'
       }
-    }
-    var appScript = document.getElementById('miniappAppScript')
-    if (appScript) {
-      appScript.onerror = function () {
-        if (window.__miniappAppJsRetry) {
-          window.__miniappAppJsFailed = true
-          showMiniappAssetError(
-            'Не удалось загрузить приложение. Закройте и откройте снова из бота.'
-          )
-          return
-        }
-        window.__miniappAppJsRetry = true
-        var s = document.createElement('script')
-        s.src = '/miniapp/app.js?v=20260903-open-fix&retry=1'
-        s.onerror = function () {
-          window.__miniappAppJsFailed = true
-          showMiniappAssetError(
-            'Не удалось загрузить приложение. Закройте и откройте снова из бота.'
-          )
-        }
-        document.body.appendChild(s)
-      }
-    }
-    window.setTimeout(function () {
-      if (window.__miniappReady || window.__miniappAppJsLoaded) return
-      showMiniappAssetError(
-        'Приложение не запустилось. Закройте и откройте снова из бота.'
-      )
-    }, 12000)
+    }, 8000)
   </script>
 </body>
 </html>

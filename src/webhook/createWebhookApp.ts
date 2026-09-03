@@ -20,6 +20,7 @@ import { logger } from '../utils/logger'
 import { enqueueUpdate } from '../utils/updateQueue'
 import { dispatchBotUpdate } from './dispatchUpdate'
 import { getTelegramHealthSnapshot, probeTelegramBotApi, describeTelegramTokenSources } from '../services/telegramHealthService'
+import { describeActiveProxyRuntime, getTelegramProxyApplyError } from '../utils/telegramProxyRuntime'
 
 const MAX_SECRET_HEADER = 'x-max-bot-api-secret'
 
@@ -70,9 +71,30 @@ function looksLikeUpdate(body: unknown): body is Update {
 /**
  * Express-приложение: GET /health, статика Mini App (`/miniapp`), REST `/api`, опционально POST webhook.
  */
-function isMiniappRequest(req: express.Request): boolean {
-  const url = String(req.originalUrl || req.url || '')
-  return url === '/miniapp' || url.startsWith('/miniapp?') || url.startsWith('/miniapp/')
+function isMiniappHtmlPath(url: string): boolean {
+  const path = url.split('?')[0]
+  return path === '/miniapp' || path === '/miniapp/' || path.endsWith('.html')
+}
+
+function isClientAbortError(err: unknown): boolean {
+  if (typeof err !== 'object' || err === null) {
+    return false
+  }
+  const rec = err as { code?: unknown; message?: unknown }
+  const code = typeof rec.code === 'string' ? rec.code : ''
+  if (code === 'ECONNABORTED' || code === 'ECONNRESET' || code === 'EPIPE') {
+    return true
+  }
+  const message = typeof rec.message === 'string' ? rec.message : ''
+  return /aborted|EPIPE/i.test(message)
+}
+
+function logSendFileFailure(route: string, err: unknown): void {
+  if (isClientAbortError(err)) {
+    logger.debug(`${route}: client aborted sendFile`, err)
+    return
+  }
+  logger.error(`${route}: sendFile failed`, err)
 }
 
 function applyMiniappHtmlHeaders(res: express.Response): void {
@@ -80,6 +102,21 @@ function applyMiniappHtmlHeaders(res: express.Response): void {
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate, no-transform')
   res.setHeader('Pragma', 'no-cache')
   res.setHeader('Expires', '0')
+}
+
+function applyMiniappAssetHeaders(res: express.Response, filePath: string): void {
+  if (filePath.endsWith('.html')) {
+    applyMiniappHtmlHeaders(res)
+    return
+  }
+  if (filePath.endsWith('.js') || filePath.endsWith('.css')) {
+    // Version query on the HTML shell busts cache; allow phones to keep the file.
+    res.setHeader('Cache-Control', 'public, max-age=604800, stale-while-revalidate=86400')
+    return
+  }
+  if (/\.(png|jpe?g|webp|svg|gif)$/i.test(filePath)) {
+    res.setHeader('Cache-Control', 'public, max-age=604800')
+  }
 }
 
 export function createHttpApp(options: HttpAppOptions): express.Express {
@@ -92,18 +129,19 @@ export function createHttpApp(options: HttpAppOptions): express.Express {
         if (req.headers['x-no-compression']) {
           return false
         }
-        // MAX WebView historically mishandles gzip and shows «техническая заминка».
-        if (isMiniappRequest(req)) {
-          return false
-        }
-        const ua = String(req.headers['user-agent'] || '')
-        if (/MAX|maxmessenger|ru\.max/i.test(ua)) {
+        const url = String(req.originalUrl || req.url || '')
+        // MAX WebView mishandles gzip HTML («техническая заминка»). JS/CSS/JSON are fine.
+        if (isMiniappHtmlPath(url)) {
           return false
         }
         return compression.filter(req, res)
       },
     }),
   )
+
+  app.get('/', (_req, res) => {
+    res.redirect(302, '/admin')
+  })
 
   app.get('/health', (_req, res) => {
     // Лёгкий ответ: COUNT по comments и тяжёлые JOIN здесь блокируют event loop / фронт.
@@ -133,6 +171,8 @@ export function createHttpApp(options: HttpAppOptions): express.Express {
       res.status(snapshot.api_ok || !snapshot.has_token ? 200 : 503).json({
         ...snapshot,
         token_sources: sources,
+        proxy: describeActiveProxyRuntime(),
+        proxy_error: getTelegramProxyApplyError(),
       })
     } catch (err: unknown) {
       logger.error('/health/telegram probe failed', err)
@@ -149,17 +189,19 @@ export function createHttpApp(options: HttpAppOptions): express.Express {
     res.redirect(302, '/admin/assets/favicon.svg')
   })
 
-  app.get('/admin/login', (_req, res) => {
+  const sendAdminLogin = (_req: express.Request, res: express.Response): void => {
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate')
     res.sendFile(join(adminPanelRoot, 'login.html'), (err) => {
       if (err) {
-        logger.error('/admin/login: sendFile failed', err)
+        logSendFileFailure('/admin/login', err)
         if (!res.headersSent) {
           res.status(500).end()
         }
       }
     })
-  })
+  }
+  app.get('/admin/login', sendAdminLogin)
+  app.get('/admin/login/', sendAdminLogin)
 
   app.use(
     '/admin/assets',
@@ -174,7 +216,7 @@ export function createHttpApp(options: HttpAppOptions): express.Express {
     }),
   )
 
-  app.get('/admin', (req, res) => {
+  const sendAdminIndex = (req: express.Request, res: express.Response): void => {
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate')
     if (!isAdminPanelSessionValid(req)) {
       res.redirect(302, '/admin/login')
@@ -182,13 +224,15 @@ export function createHttpApp(options: HttpAppOptions): express.Express {
     }
     res.sendFile(join(adminPanelRoot, 'admin.html'), (err) => {
       if (err) {
-        logger.error('/admin: sendFile failed', err)
+        logSendFileFailure('/admin', err)
         if (!res.headersSent) {
           res.status(500).end()
         }
       }
     })
-  })
+  }
+  app.get('/admin', sendAdminIndex)
+  app.get('/admin/', sendAdminIndex)
 
   app.use('/api/admin', createAdminRouter({ bot: options.bot }))
 
@@ -216,7 +260,7 @@ export function createHttpApp(options: HttpAppOptions): express.Express {
     applyMiniappHtmlHeaders(res)
     res.sendFile(miniappIndex, (err) => {
       if (err) {
-        logger.error('/miniapp: sendFile failed', err)
+        logSendFileFailure('/miniapp', err)
         if (!res.headersSent) {
           res.status(500).end()
         }
@@ -237,14 +281,28 @@ export function createHttpApp(options: HttpAppOptions): express.Express {
       lastModified: true,
       redirect: false,
       setHeaders(res, filePath) {
-        if (filePath.endsWith('.html')) {
-          applyMiniappHtmlHeaders(res)
-          return
-        }
-        res.setHeader('Cache-Control', 'public, max-age=0, must-revalidate, no-transform')
+        applyMiniappAssetHeaders(res, filePath)
       },
     }),
   )
+
+  /** Cached HTML from `/miniapp` (no slash) requested `/app.js` instead of `/miniapp/app.js`. */
+  app.get(['/app.js', '/styles.css', '/brand-logo.png'], (req, res, next) => {
+    const referer = String(req.get('referer') || '')
+    const fromMiniapp =
+      /\/miniapp(\/|\?|$)/i.test(referer) ||
+      String(req.query.v || '').length > 0
+    if (!fromMiniapp) {
+      next()
+      return
+    }
+    const name = req.path === '/app.js' ? 'app.js' : req.path === '/styles.css' ? 'styles.css' : 'brand-logo.png'
+    res.sendFile(join(miniappRoot, name), (err) => {
+      if (err) {
+        next()
+      }
+    })
+  })
 
   if (options.webhook) {
     const { path: webhookPath, secret: webhookSecret } = options.webhook
@@ -277,6 +335,23 @@ export function createHttpApp(options: HttpAppOptions): express.Express {
       },
     )
   }
+
+  app.use((req, res) => {
+    const path = req.originalUrl || req.url || '/'
+    logger.warn('HTTP 404', { method: req.method, path })
+    if (req.accepts('html')) {
+      res
+        .status(404)
+        .type('html')
+        .send(
+          `<!doctype html><meta charset="utf-8"><title>404</title>` +
+            `<p>Нет страницы <code>${path.replace(/</g, '')}</code></p>` +
+            `<p><a href="/admin">Админка</a> · <a href="/miniapp">Mini App</a> · <a href="/health">Health</a></p>`,
+        )
+      return
+    }
+    res.status(404).json({ error: 'not found', method: req.method, path })
+  })
 
   return app
 }

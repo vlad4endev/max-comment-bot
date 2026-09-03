@@ -9,17 +9,25 @@
       if (window.__tgScriptPromise) {
         return window.__tgScriptPromise
       }
-      window.__tgScriptPromise = new Promise(function (resolve, reject) {
+      window.__tgScriptPromise = new Promise(function (resolve) {
+        var settled = false
         var s = document.createElement('script')
         s.src = 'https://telegram.org/js/telegram-web-app.js'
         s.async = true
-        s.onload = function () {
+        function done() {
+          if (settled) return
+          settled = true
           resolve(window.Telegram && window.Telegram.WebApp ? window.Telegram.WebApp : null)
         }
-        s.onerror = function () {
-          reject(new Error('telegram-web-app.js'))
-        }
+        s.onload = done
+        s.onerror = done
         document.head.appendChild(s)
+        window.setTimeout(function () {
+          if (!settled && s.parentNode) {
+            s.parentNode.removeChild(s)
+          }
+          done()
+        }, 1200)
       })
       return window.__tgScriptPromise
     }
@@ -2370,14 +2378,6 @@
         null;
 
       if (window.__miniappCommentsBooted) return;
-
-      if (!uid && !window.__miniappCommentsUidWaited) {
-        window.__miniappCommentsUidWaited = true;
-        window.setTimeout(function () {
-          bootComments();
-        }, 1200);
-        return;
-      }
 
       window.__miniappCommentsBooted = true;
 
@@ -4953,84 +4953,43 @@
     }
 
     function startAppWhenReady() {
-      var attempts = 0;
       var started = false;
       function launchApp() {
         if (started) return;
         started = true;
         initApp();
-        preflightBackendInBackground();
+        if (!hasPostContextInLocation()) {
+          preflightBackendInBackground();
+        }
       }
-      var preferTg = isMiniappTelegramRuntime();
-      var likelyMax = isLikelyMaxMiniapp();
-      var postContextHint = hasPostContextInLocation();
-      // Don't block the spinner for MAX bridge user — pick up startParam after launch.
-      var hardDeadlineMs =
-        preferTg && !postContextHint ? 2500 : likelyMax ? 2800 : 3000;
-      try {
-        var earlySp = new URLSearchParams(location.search);
-        var earlyStart = String(earlySp.get('startapp') || earlySp.get('start_param') || '');
-        if (
-          postContextHint ||
-          (!preferTg &&
-            !likelyMax &&
-            (earlySp.get('post_id') ||
-              /post_id|_mid_/i.test(earlyStart) ||
-              /^\d+$/.test(String(earlySp.get('user_id') || '').trim())))
-        ) {
-          hardDeadlineMs = 1500;
-        }
-      } catch (e) {}
-      var hardDeadline = window.setTimeout(launchApp, hardDeadlineMs);
 
+      if (hasPostContextInLocation()) {
+        launchApp();
+        return;
+      }
+
+      var attempts = 0;
+      var tgScriptRequested = false;
       function run() {
-        if (postContextHint || hasPostContextInLocation()) {
-          window.clearTimeout(hardDeadline);
-          launchApp();
-          return;
-        }
+        if (started) return;
         attempts += 1;
         var bridge = getWebAppBridge();
         tryReadyBridge(bridge);
-        var likelyMaxNow = isLikelyMaxMiniapp();
-        var likelyTg = isLikelyTelegramWebView();
-        var maxAttempts = likelyMaxNow ? 18 : likelyTg || preferTg ? 20 : 8;
-        var user = resolveBridgeUser(bridge);
         var unsafe = (bridge && bridge.initDataUnsafe) || {};
         var sp = collectStartParam(unsafe, bridge);
-        var urlSp = new URLSearchParams(location.search);
-        var hasUrlUser =
-          /^\d+$/.test(String(urlSp.get('user_id') || '').trim()) ||
-          /^\d+$/.test(String(urlSp.get('tg_uid') || '').trim());
-        var hasBridgeUser = getBridgeNumericUserId(user) != null;
-        var needTgScript =
-          (likelyTg || preferTg || !likelyMaxNow) &&
-          (!bridge || !hasBridgeUser) &&
-          (likelyTg ||
-            preferTg ||
-            urlSp.get('platform') === 'telegram' ||
-            /[?&]tg_/i.test(location.search || '') ||
-            !!(window.Telegram && window.Telegram.WebApp));
-        if (needTgScript && !(window.Telegram && window.Telegram.WebApp)) {
-          loadTelegramWebAppScript()
-            .catch(function () {})
-            .finally(function () {
-              window.setTimeout(run, 50);
-            });
-          return;
-        }
         if (
-          !sp &&
-          !hasUrlUser &&
-          !hasBridgeUser &&
-          (bridge || preferTg || likelyMaxNow) &&
-          attempts < maxAttempts
+          !tgScriptRequested &&
+          isMiniappTelegramRuntime() &&
+          !(window.Telegram && window.Telegram.WebApp)
         ) {
-          window.setTimeout(run, 150);
+          tgScriptRequested = true;
+          loadTelegramWebAppScript().catch(function () {});
+        }
+        if (sp || hasPostContextInLocation() || attempts >= 5) {
+          launchApp();
           return;
         }
-        window.clearTimeout(hardDeadline);
-        launchApp();
+        window.setTimeout(run, 50);
       }
 
       if (document.readyState === 'loading') {
