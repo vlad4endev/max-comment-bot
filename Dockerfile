@@ -41,10 +41,17 @@ ARG GIT_COMMIT=unknown
 
 WORKDIR /app
 
-ENV NODE_ENV=production
+# IPv6 в Docker часто ломает fetch/npm; Hysteria2 кладём в образ, чтобы не качать GitHub с рантайма.
+ENV NODE_ENV=production \
+    NODE_OPTIONS=--dns-result-order=ipv4first \
+    HYSTERIA_BIN=/usr/local/bin/hysteria
 
+ARG TARGETARCH
 COPY scripts/alpine-apk-add.sh /tmp/alpine-apk-add.sh
-RUN sh /tmp/alpine-apk-add.sh curl
+COPY scripts/install-hysteria.sh /tmp/install-hysteria.sh
+RUN sh /tmp/alpine-apk-add.sh curl ca-certificates
+RUN TARGETARCH="${TARGETARCH}" sh /tmp/install-hysteria.sh /usr/local/bin/hysteria \
+ || echo "WARN: hysteria не скачался на сборке — рантайм попробует зеркала или bin/"
 
 COPY package.json package-lock.json ./
 COPY --from=builder /app/node_modules ./node_modules

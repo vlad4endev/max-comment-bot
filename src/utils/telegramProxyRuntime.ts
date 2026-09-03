@@ -108,7 +108,7 @@ export function describeActiveProxyRuntime(): {
   if (active.kind === 'hysteria2' && !applied) {
     warning = hysteriaPath
       ? 'Не удалось поднять туннель Hysteria2. Проверьте ключ или логи hysteria.'
-      : 'Клиент Hysteria2 не найден в PATH — при проверке он скачается в bin/hysteria. Можно указать HYSTERIA_BIN.'
+      : 'Клиент Hysteria2 не найден. При проверке бот скачает его в bin/hysteria (GitHub + зеркала). Можно положить бинарник в bin/ или задать HYSTERIA_BIN.'
   }
   if (active.kind === 'http' && applied) {
     warning = 'HTTP-прокси работает для Bot API. MTProto (user-сессия) идёт напрямую — лучше SOCKS5, VLESS или Hysteria2.'

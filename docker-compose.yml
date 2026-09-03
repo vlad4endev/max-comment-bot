@@ -70,6 +70,8 @@ services:
       REDIS_URL: redis://redis:6379
     volumes:
       - ./data:/app/data
+      # Клиент Hysteria2: можно положить bin/hysteria вручную, если GitHub недоступен
+      - ./bin:/app/bin
     extra_hosts:
       - 'host.docker.internal:host-gateway'
     networks:

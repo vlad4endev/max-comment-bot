@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import { existsSync, readdirSync } from 'node:fs'
-import { chmod, mkdir, rename, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, rename, stat, unlink, writeFile } from 'node:fs/promises'
 import net from 'node:net'
 import { homedir } from 'node:os'
 import { dirname, join, delimiter } from 'node:path'
@@ -96,18 +96,89 @@ function listBundledHysteria(): string[] {
   }
 }
 
-function hysteriaDownloadAsset(): { filename: string; url: string } {
+const HYSTERIA_RELEASE = 'app/v2.12.2'
+const HYSTERIA_UA = 'max-comment-bot-hysteria'
+const HYSTERIA_MIN_BYTES = 1_000_000
+
+function hysteriaAssetFilename(): string {
   const platform = process.platform
   const arch = process.arch === 'arm64' ? 'arm64' : process.arch === 'x64' ? 'amd64' : ''
   if (!arch || (platform !== 'darwin' && platform !== 'linux' && platform !== 'win32')) {
     throw new Error(`Нет готового клиента Hysteria2 для ${process.platform}/${process.arch}`)
   }
   const osName = platform === 'win32' ? 'windows' : platform
-  const filename = platform === 'win32' ? `hysteria-${osName}-${arch}.exe` : `hysteria-${osName}-${arch}`
-  return {
-    filename,
-    url: `https://github.com/apernet/hysteria/releases/latest/download/${filename}`,
+  return platform === 'win32' ? `hysteria-${osName}-${arch}.exe` : `hysteria-${osName}-${arch}`
+}
+
+function hysteriaDownloadUrls(filename: string): string[] {
+  const pinned = `hysteria/releases/download/${HYSTERIA_RELEASE}/${filename}`
+  const latest = `hysteria/releases/latest/download/${filename}`
+  const github = [
+    `https://github.com/HyNetworks/${pinned}`,
+    `https://github.com/apernet/${pinned}`,
+    `https://github.com/apernet/${latest}`,
+  ]
+  const proxies = ['https://ghfast.top/', 'https://gh-proxy.com/', 'https://ghproxy.net/', 'https://mirror.ghproxy.com/']
+  return [...github, ...proxies.flatMap((prefix) => github.slice(0, 2).map((url) => `${prefix}${url}`))]
+}
+
+function spawnOnce(command: string, args: string[]): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, { stdio: ['ignore', 'ignore', 'pipe'] })
+    const errChunks: Buffer[] = []
+    child.stderr?.on('data', (buf: Buffer) => {
+      errChunks.push(buf)
+    })
+    child.once('error', reject)
+    child.once('exit', (code) => {
+      if (code === 0) {
+        resolve()
+        return
+      }
+      const stderr = Buffer.concat(errChunks).toString('utf8').trim().slice(0, 180)
+      reject(new Error(`${command} exited ${code}${stderr ? `: ${stderr}` : ''}`))
+    })
+  })
+}
+
+async function curlDownload(url: string, dest: string): Promise<void> {
+  const base = ['-fsSL', '--connect-timeout', '15', '--max-time', '180', '-A', HYSTERIA_UA, '-o', dest, url]
+  try {
+    await spawnOnce('curl', ['-4', ...base])
+  } catch {
+    await spawnOnce('curl', base)
   }
+}
+
+async function fetchDownload(url: string, dest: string): Promise<void> {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), 180_000)
+  try {
+    const response = await fetch(url, {
+      redirect: 'follow',
+      signal: controller.signal,
+      headers: { 'User-Agent': HYSTERIA_UA },
+    })
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`)
+    }
+    const buffer = Buffer.from(await response.arrayBuffer())
+    if (buffer.byteLength < HYSTERIA_MIN_BYTES) {
+      throw new Error(`файл слишком маленький (${buffer.byteLength} байт)`)
+    }
+    await writeFile(dest, buffer)
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+async function downloadUrlToFile(url: string, dest: string): Promise<void> {
+  const curlBin = findInPath('curl')
+  if (curlBin) {
+    await curlDownload(url, dest)
+    return
+  }
+  await fetchDownload(url, dest)
 }
 
 let hysteriaDownload: Promise<string> | null = null
@@ -115,33 +186,36 @@ let hysteriaDownload: Promise<string> | null = null
 async function downloadHysteriaBinary(): Promise<string> {
   const destDir = join(process.cwd(), 'bin')
   const dest = join(destDir, process.platform === 'win32' ? 'hysteria.exe' : 'hysteria')
-  const { url, filename } = hysteriaDownloadAsset()
-  logger.info('[telegramProxy] downloading hysteria client', { url })
-  const response = await fetch(url, {
-    redirect: 'follow',
-    headers: { 'User-Agent': 'max-comment-bot-hysteria' },
-  })
-  if (!response.ok) {
-    throw new Error(`Не удалось скачать ${filename}: HTTP ${response.status}`)
-  }
-  const buffer = Buffer.from(await response.arrayBuffer())
-  if (buffer.byteLength < 1_000_000) {
-    throw new Error('Скачанный файл hysteria повреждён или слишком маленький')
-  }
+  const filename = hysteriaAssetFilename()
+  const urls = hysteriaDownloadUrls(filename)
   await mkdir(destDir, { recursive: true })
   const tmp = `${dest}.tmp`
-  await writeFile(tmp, buffer)
-  await chmod(tmp, 0o755)
-  await rename(tmp, dest)
-  if (process.platform === 'darwin') {
-    await new Promise<void>((resolve) => {
-      const child = spawn('xattr', ['-d', 'com.apple.quarantine', dest], { stdio: 'ignore' })
-      child.once('exit', () => resolve())
-      child.once('error', () => resolve())
-    })
+  const errors: string[] = []
+  for (const url of urls) {
+    logger.info('[telegramProxy] downloading hysteria client', { url })
+    try {
+      await downloadUrlToFile(url, tmp)
+      const { size } = await stat(tmp)
+      if (size < HYSTERIA_MIN_BYTES) {
+        throw new Error(`файл слишком маленький (${size} байт)`)
+      }
+      await chmod(tmp, 0o755)
+      await rename(tmp, dest)
+      if (process.platform === 'darwin') {
+        await spawnOnce('xattr', ['-d', 'com.apple.quarantine', dest]).catch(() => undefined)
+      }
+      logger.info('[telegramProxy] hysteria client ready', { dest, bytes: size })
+      return dest
+    } catch (err: unknown) {
+      const detail = err instanceof Error ? err.message : String(err)
+      errors.push(`${url}: ${detail}`)
+      logger.warn('[telegramProxy] hysteria download failed', { url, error: detail })
+      await unlink(tmp).catch(() => undefined)
+    }
   }
-  logger.info('[telegramProxy] hysteria client ready', { dest, bytes: buffer.byteLength })
-  return dest
+  throw new Error(
+    `GitHub недоступен (${errors[0] ?? 'fetch failed'}). Положите бинарник в bin/hysteria или задайте HYSTERIA_BIN.`,
+  )
 }
 
 export async function ensureHysteriaBinary(): Promise<string> {
