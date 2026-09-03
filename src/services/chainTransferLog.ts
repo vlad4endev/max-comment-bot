@@ -352,6 +352,22 @@ export function recordCommentRetry(input: {
   })
 }
 
+export function recordCommentSkip(input: {
+  chainId: string
+  title: string
+  messageId: number
+  reason: string
+}): void {
+  recordChainTransfer({
+    kind: 'comments',
+    outcome: 'skip',
+    chainId: input.chainId,
+    title: input.title,
+    messageIds: [input.messageId],
+    message: `комментарий ${input.messageId} пропущен — ${input.reason}`,
+  })
+}
+
 export function recordQueueSnapshot(input: {
   posts: number
   comments: number

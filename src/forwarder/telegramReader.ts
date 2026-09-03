@@ -90,6 +90,7 @@ export class TelegramGetUpdatesConflictError extends Error {
 
 export interface TgReplyToMessage {
   message_id: number
+  message_thread_id?: number
   reply_to_message?: TgReplyToMessage
   forward_from_message_id?: number
   is_automatic_forward?: boolean
@@ -114,6 +115,8 @@ export interface TgMessage {
   document?: { file_id: string; mime_type?: string; file_name?: string }
   chat: { id: number; username?: string; type?: string }
   from?: { id?: number; first_name?: string; last_name?: string; username?: string }
+  /** Forum / discussion topic id — у комментариев к посту канала это id авто-репоста в группе. */
+  message_thread_id?: number
   reply_to_message?: TgReplyToMessage
   sender_chat?: { id: number; title?: string; username?: string }
   forward_from_message_id?: number

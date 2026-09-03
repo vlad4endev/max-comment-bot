@@ -42,6 +42,13 @@ export type ChainQueueSummary = {
 const MAX_RETRY_DELAY_MS = 30_000
 /** Комментарий ждёт маппинг поста — не разгонять backoff до минут. */
 export const COMMENT_MAPPING_RETRY_MS = 500
+export const COMMENT_MAPPING_SLOW_RETRY_MS = 5_000
+export const COMMENT_MAPPING_SLOW_AFTER_ATTEMPTS = 20
+export const COMMENT_MAPPING_GIVE_UP_ATTEMPTS = 80
+
+export function shouldLogCommentMappingRetry(attempts: number): boolean {
+  return attempts === 3 || attempts === 10 || attempts === 25 || attempts === 50 || attempts === 80
+}
 
 export function retryDelayMs(attempts: number): number {
   const exp = Math.min(Math.max(attempts, 1), 5)
@@ -277,14 +284,14 @@ export function upsertCommentInboundJob(input: {
 export function bumpCommentInboundRetry(
   jobKey: string,
   err: unknown,
-  delayMs?: number,
+  delayMs?: number | ((attempts: number) => number),
 ): number {
   const row = getDb()
     .prepare('SELECT attempts FROM tg_comment_inbound_queue WHERE job_key = ?')
     .get(jobKey) as { attempts: number } | undefined
   const attempts = (row?.attempts ?? 0) + 1
   const lastError = err instanceof Error ? err.message.slice(0, 500) : String(err ?? 'retry').slice(0, 500)
-  const waitMs = delayMs ?? retryDelayMs(attempts)
+  const waitMs = typeof delayMs === 'function' ? delayMs(attempts) : (delayMs ?? retryDelayMs(attempts))
   getDb()
     .prepare(
       `UPDATE tg_comment_inbound_queue

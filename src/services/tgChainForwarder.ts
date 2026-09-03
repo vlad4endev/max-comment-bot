@@ -45,7 +45,11 @@ import { publishTelegramPostToVk } from './vkChainForwarder'
 import {
   bumpCommentInboundRetry,
   bumpForwardQueueRetry,
+  COMMENT_MAPPING_GIVE_UP_ATTEMPTS,
   COMMENT_MAPPING_RETRY_MS,
+  COMMENT_MAPPING_SLOW_AFTER_ATTEMPTS,
+  COMMENT_MAPPING_SLOW_RETRY_MS,
+  shouldLogCommentMappingRetry,
   deleteCommentInboundJob,
   deleteForwardQueueJob,
   getForwardQueueJob,
@@ -63,6 +67,7 @@ import {
 } from './tgChainForwardQueue'
 import {
   recordCommentRetry,
+  recordCommentSkip,
   recordQueueSnapshot,
   recordTgMaxFail,
   recordTgMaxPartial,
@@ -321,15 +326,27 @@ function scheduleInboundComment(
         const attempts = bumpCommentInboundRetry(
           jobKey,
           'waiting for post mapping',
-          COMMENT_MAPPING_RETRY_MS,
+          (nextAttempts) =>
+            nextAttempts >= COMMENT_MAPPING_SLOW_AFTER_ATTEMPTS
+              ? COMMENT_MAPPING_SLOW_RETRY_MS
+              : COMMENT_MAPPING_RETRY_MS,
         )
-        if (attempts >= 3) {
+        if (shouldLogCommentMappingRetry(attempts)) {
           recordCommentRetry({
             chainId: chain.id,
             title: chainTitle(chain),
             messageId: message.message_id,
             error: 'waiting for post mapping',
             attempts,
+          })
+        }
+        if (attempts >= COMMENT_MAPPING_GIVE_UP_ATTEMPTS) {
+          deleteCommentInboundJob(jobKey)
+          recordCommentSkip({
+            chainId: chain.id,
+            title: chainTitle(chain),
+            messageId: message.message_id,
+            reason: 'пост в MAX так и не появился (нет маппинга)',
           })
         }
         return
@@ -1614,7 +1631,7 @@ async function dispatchChannelUpdatesToChains(tgToken: string, batch: TgChannelU
           handleDiscussionAutoForward(msg, chain.id)
           continue
         }
-        if (!msg.reply_to_message) {
+        if (!msg.reply_to_message && !(typeof msg.message_thread_id === 'number' && msg.message_thread_id > 0)) {
           continue
         }
         const jobKey = upsertCommentInboundJob({

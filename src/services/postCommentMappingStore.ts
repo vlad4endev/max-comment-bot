@@ -17,6 +17,46 @@ export interface PostCommentMappingRow {
 }
 
 const discussionChatCache = new Map<string, number | null>()
+const SKIPPED_MAX_MID = '__skipped__'
+const pendingThreadLinks = new Map<string, { threadChatId: number; threadMsgId: number }>()
+
+function pendingThreadKey(chainId: string, channelMsgId: number): string {
+  return `${chainId}:${channelMsgId}`
+}
+
+function isUsableMaxMid(maxMid: string | null | undefined): maxMid is string {
+  const trimmed = maxMid?.trim() ?? ''
+  return trimmed.length > 0 && trimmed !== SKIPPED_MAX_MID
+}
+
+function parseTgChatIdFromPayload(payload: string | null | undefined): number | null {
+  if (!payload) {
+    return null
+  }
+  try {
+    const parsed = JSON.parse(payload) as { chat?: { id?: number } }
+    return typeof parsed.chat?.id === 'number' ? parsed.chat.id : null
+  } catch {
+    return null
+  }
+}
+
+function applyPendingThreadLink(chainId: string, channelMsgId: number): void {
+  const pending = pendingThreadLinks.get(pendingThreadKey(chainId, channelMsgId))
+  if (!pending) {
+    return
+  }
+  const result = getDb()
+    .prepare(
+      `UPDATE post_comment_mapping
+       SET tg_thread_chat_id = ?, tg_thread_msg_id = ?
+       WHERE chain_id = ? AND tg_msg_id = ?`,
+    )
+    .run(pending.threadChatId, pending.threadMsgId, chainId, channelMsgId)
+  if (Number(result.changes) > 0) {
+    pendingThreadLinks.delete(pendingThreadKey(chainId, channelMsgId))
+  }
+}
 
 /** Маркер в tg_thread_msg_id: GetDiscussionMessage безнадёжен, repair пропускает. */
 export const STALE_THREAD_MSG_ID = -1
@@ -164,6 +204,45 @@ export function upsertPostCommentMapping(
          tg_chat_id = excluded.tg_chat_id`,
     )
     .run(chainId, tgMsgId, maxMid, tgChatId)
+  applyPendingThreadLink(chainId, tgMsgId)
+}
+
+export function ensureMappingFromForwarded(
+  chainId: string,
+  tgMsgId: number,
+): PostCommentMappingRow | null {
+  const existing = findMappingByTgMsgId(chainId, tgMsgId)
+  if (existing && isUsableMaxMid(existing.max_mid)) {
+    return existing
+  }
+  const row = getDb()
+    .prepare(
+      `SELECT max_message_mid, tg_payload
+       FROM tg_chain_forwarded
+       WHERE chain_id = ? AND tg_message_id = ?`,
+    )
+    .get(chainId, tgMsgId) as { max_message_mid: string | null; tg_payload: string | null } | undefined
+  if (!row || !isUsableMaxMid(row.max_message_mid)) {
+    return null
+  }
+  upsertPostCommentMapping(
+    chainId,
+    tgMsgId,
+    row.max_message_mid.trim(),
+    parseTgChatIdFromPayload(row.tg_payload),
+  )
+  return findMappingByTgMsgId(chainId, tgMsgId)
+}
+
+export function isChannelPostSkippedForForward(chainId: string, tgMsgId: number): boolean {
+  const row = getDb()
+    .prepare(
+      `SELECT max_message_mid
+       FROM tg_chain_forwarded
+       WHERE chain_id = ? AND tg_message_id = ?`,
+    )
+    .get(chainId, tgMsgId) as { max_message_mid: string | null } | undefined
+  return row?.max_message_mid?.trim() === SKIPPED_MAX_MID
 }
 
 export function linkThreadMessageToChannelPost(
@@ -172,13 +251,21 @@ export function linkThreadMessageToChannelPost(
   threadChatId: number,
   threadMsgId: number,
 ): void {
-  getDb()
+  const result = getDb()
     .prepare(
       `UPDATE post_comment_mapping
        SET tg_thread_chat_id = ?, tg_thread_msg_id = ?
        WHERE chain_id = ? AND tg_msg_id = ?`,
     )
     .run(threadChatId, threadMsgId, chainId, channelMsgId)
+  if (Number(result.changes) > 0) {
+    pendingThreadLinks.delete(pendingThreadKey(chainId, channelMsgId))
+    return
+  }
+  pendingThreadLinks.set(pendingThreadKey(chainId, channelMsgId), { threadChatId, threadMsgId })
+  if (ensureMappingFromForwarded(chainId, channelMsgId)) {
+    applyPendingThreadLink(chainId, channelMsgId)
+  }
 }
 
 /** Сбрасывает устаревший thread id — для повторного resolve через GetDiscussionMessage. */

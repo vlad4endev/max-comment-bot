@@ -184,8 +184,46 @@ export function resolveThreadRootMessage(message: TgMessage): TgMessage['reply_t
 }
 
 export function resolveDiscussionThreadRootMsgId(message: TgMessage): number | null {
+  if (typeof message.message_thread_id === 'number' && message.message_thread_id > 0) {
+    return message.message_thread_id
+  }
   const root = resolveThreadRootMessage(message)
   return typeof root?.message_id === 'number' ? root.message_id : null
+}
+
+function pushUniqueId(ids: number[], value: number | undefined | null): void {
+  if (typeof value !== 'number' || value <= 0 || ids.includes(value)) {
+    return
+  }
+  ids.push(value)
+}
+
+function collectChannelMsgIdFromForward(source: {
+  forward_origin?: { message_id?: number }
+  forward_from_message_id?: number
+}): number | null {
+  return resolveChannelMsgIdFromThreadRoot(source)
+}
+
+/** Id треда в группе и id поста в канале — чтобы найти post_comment_mapping. */
+export function collectCommentMappingHints(message: TgMessage): {
+  threadMsgIds: number[]
+  channelMsgIds: number[]
+} {
+  const threadMsgIds: number[] = []
+  const channelMsgIds: number[] = []
+  pushUniqueId(threadMsgIds, message.message_thread_id)
+  const root = resolveThreadRootMessage(message)
+  pushUniqueId(threadMsgIds, root?.message_id)
+  pushUniqueId(threadMsgIds, message.reply_to_message?.message_id)
+  pushUniqueId(channelMsgIds, collectChannelMsgIdFromForward(message))
+  if (message.reply_to_message) {
+    pushUniqueId(channelMsgIds, collectChannelMsgIdFromForward(message.reply_to_message))
+  }
+  if (root) {
+    pushUniqueId(channelMsgIds, collectChannelMsgIdFromForward(root))
+  }
+  return { threadMsgIds, channelMsgIds }
 }
 
 /** ID поста в TG-канале из авто-репоста в discussion group. */
