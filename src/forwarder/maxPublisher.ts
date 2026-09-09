@@ -4,6 +4,7 @@ import path from 'node:path'
 import axios from 'axios'
 import FormData from 'form-data'
 
+import { formatAxiosRequestError } from '../utils/axiosApiError'
 import { prepareMessengerHtmlText } from '../utils/messengerHtml'
 
 /** Официальный API MAX (как в @maxhub/max-bot-api). Старый botapi.max.ru/messages/sendMessage даёт 404. */
@@ -24,14 +25,18 @@ async function postMessage(
   chatId: string,
   body: Record<string, unknown>,
 ): Promise<void> {
-  await axios.post(`${MAX_API}/messages`, body, {
-    params: { chat_id: chatId },
-    headers: {
-      ...maxAuthHeaders(token),
-      'Content-Type': 'application/json',
-    },
-    timeout: MAX_MESSAGE_TIMEOUT_MS,
-  })
+  try {
+    await axios.post(`${MAX_API}/messages`, body, {
+      params: { chat_id: chatId },
+      headers: {
+        ...maxAuthHeaders(token),
+        'Content-Type': 'application/json',
+      },
+      timeout: MAX_MESSAGE_TIMEOUT_MS,
+    })
+  } catch (err: unknown) {
+    throw new Error(formatAxiosRequestError(err))
+  }
 }
 
 async function uploadBufferToMax(
@@ -41,23 +46,27 @@ async function uploadBufferToMax(
   filename: string,
   contentType: string,
 ): Promise<string> {
-  const slot = await axios.post<{ url: string; token?: string }>(`${MAX_API}/uploads`, null, {
-    params: { type },
-    headers: maxAuthHeaders(token),
-    timeout: MAX_UPLOAD_TIMEOUT_MS,
-  })
-  const uploadUrl = slot.data.url
-  const uploadToken = slot.data.token
-  const form = new FormData()
-  form.append('data', buffer, { filename, contentType })
-  await axios.post(uploadUrl, form, {
-    headers: form.getHeaders(),
-    timeout: MAX_UPLOAD_TIMEOUT_MS,
-  })
-  if (!uploadToken) {
-    throw new Error('MAX upload: missing token in uploads response')
+  try {
+    const slot = await axios.post<{ url: string; token?: string }>(`${MAX_API}/uploads`, null, {
+      params: { type },
+      headers: maxAuthHeaders(token),
+      timeout: MAX_UPLOAD_TIMEOUT_MS,
+    })
+    const uploadUrl = slot.data.url
+    const uploadToken = slot.data.token
+    const form = new FormData()
+    form.append('data', buffer, { filename, contentType })
+    await axios.post(uploadUrl, form, {
+      headers: form.getHeaders(),
+      timeout: MAX_UPLOAD_TIMEOUT_MS,
+    })
+    if (!uploadToken) {
+      throw new Error('MAX upload: missing token in uploads response')
+    }
+    return uploadToken
+  } catch (err: unknown) {
+    throw new Error(formatAxiosRequestError(err))
   }
-  return uploadToken
 }
 
 type MaxAttachmentType = 'image' | 'video' | 'file'
@@ -99,8 +108,8 @@ function resolveMaxKeyboard(options?: MaxSendOptions): { text: string; url: stri
   return null
 }
 
-function buildMaxTextPayload(text: string, maxLen = 4096): { text: string; format?: 'html' } {
-  const prepared = prepareMessengerHtmlText(text)
+function buildMaxTextPayload(text: string, maxLen = 4000): { text: string; format?: 'html' } {
+  const prepared = prepareMessengerHtmlText(text, { platform: 'max' })
   const payload: { text: string; format?: 'html' } = {
     text: prepared.text.slice(0, maxLen) || '\u00a0',
   }

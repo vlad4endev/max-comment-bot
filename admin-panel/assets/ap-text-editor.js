@@ -35,7 +35,7 @@
     wrap.innerHTML = raw;
 
     function walk(node) {
-      if (node.nodeType === Node.TEXT_NODE) return node.textContent || '';
+      if (node.nodeType === Node.TEXT_NODE) return escHtml(node.textContent || '');
       if (node.nodeType !== Node.ELEMENT_NODE) return '';
       var tag = node.tagName;
       if (tag === 'BR') return '\n';
@@ -70,7 +70,8 @@
     }
 
     var text = walk(wrap).replace(/\n{3,}/g, '\n\n').trim();
-    return text.replace(/\n/g, '<br>');
+    // Telegram/MAX HTML reject <br> — keep real newlines in stored markup.
+    return text;
   }
 
   function wrapSelection(tag, surface, attrs) {
@@ -171,7 +172,8 @@
   function htmlToEditable(html) {
     if (!html) return '';
     return String(html)
-      .replace(/<span class="tg-spoiler">/gi, '<span class="tg-spoiler" data-spoiler="1">');
+      .replace(/<span class="tg-spoiler">/gi, '<span class="tg-spoiler" data-spoiler="1">')
+      .replace(/\n/g, '<br>');
   }
 
   function getHtml(surface) {
@@ -191,8 +193,9 @@
   /** Safe preview HTML (same subset). */
   function previewHtml(storedHtml) {
     if (!storedHtml) return '';
-    var h = storedHtml;
-    h = h.replace(/<span class="tg-spoiler">/gi, '<span class="ap-spoiler">');
+    var h = String(storedHtml)
+      .replace(/<span class="tg-spoiler">/gi, '<span class="ap-spoiler">')
+      .replace(/\n/g, '<br>');
     return h;
   }
 

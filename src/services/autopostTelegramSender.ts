@@ -4,6 +4,7 @@ import path from 'node:path'
 import { telegramAxios as axios } from '../utils/telegramAxios'
 import FormData from 'form-data'
 
+import { formatAxiosRequestError } from '../utils/axiosApiError'
 import { prepareMessengerHtmlText } from '../utils/messengerHtml'
 import { logger } from '../utils/logger'
 import type { AutopostInlineKeyboard, AutopostMediaItem, AutopostRecord } from './autopostStore'
@@ -40,14 +41,18 @@ async function tgPost<T>(
 ): Promise<T> {
   const url = `${TG_API}/bot${token}/${method}`
   const isForm = body instanceof FormData
-  const { data } = await axios.post<{ ok: boolean; description?: string; result?: T }>(url, body, {
-    timeout: 120_000,
-    headers: isForm ? body.getHeaders() : { 'Content-Type': 'application/json' },
-  })
-  if (!data.ok) {
-    throw new Error(data.description ?? `Telegram ${method} failed`)
+  try {
+    const { data } = await axios.post<{ ok: boolean; description?: string; result?: T }>(url, body, {
+      timeout: 120_000,
+      headers: isForm ? body.getHeaders() : { 'Content-Type': 'application/json' },
+    })
+    if (!data.ok) {
+      throw new Error(data.description ?? `Telegram ${method} failed`)
+    }
+    return data.result as T
+  } catch (err: unknown) {
+    throw new Error(formatAxiosRequestError(err))
   }
-  return data.result as T
 }
 
 async function sendText(
@@ -56,7 +61,7 @@ async function sendText(
   text: string,
   keyboard: AutopostInlineKeyboard | null,
 ): Promise<void> {
-  const prepared = prepareMessengerHtmlText(text)
+  const prepared = prepareMessengerHtmlText(text, { platform: 'telegram' })
   const payload: Record<string, unknown> = {
     chat_id: chatId,
     text: prepared.text.slice(0, 4096) || '\u00a0',
@@ -65,7 +70,7 @@ async function sendText(
     payload.parse_mode = prepared.parseMode
   }
   if (keyboard?.length) {
-    payload.reply_markup = JSON.stringify(buildInlineKeyboard(keyboard))
+    payload.reply_markup = buildInlineKeyboard(keyboard)
   }
   await tgPost(token, 'sendMessage', payload)
 }
@@ -82,7 +87,7 @@ async function sendSingleMedia(
   const form = new FormData()
   form.append('chat_id', chatId)
   if (caption.trim()) {
-    const prepared = prepareMessengerHtmlText(caption)
+    const prepared = prepareMessengerHtmlText(caption, { platform: 'telegram' })
     form.append('caption', prepared.text.slice(0, 1024))
     if (prepared.parseMode) {
       form.append('parse_mode', prepared.parseMode)
@@ -111,7 +116,7 @@ async function sendMediaGroup(
       media: `attach://${m.type}_${index}`,
     }
     if (index === 0 && caption.trim()) {
-      const prepared = prepareMessengerHtmlText(caption)
+      const prepared = prepareMessengerHtmlText(caption, { platform: 'telegram' })
       entry.caption = prepared.text.slice(0, 1024)
       if (prepared.parseMode) {
         entry.parse_mode = prepared.parseMode
