@@ -32,9 +32,35 @@ export async function sendAutopostToMax(
   const text = post.text.trim()
   const media = existingMedia(post.media)
   const sendOpts: MaxSendOptions = { keyboard: resolveKeyboard(post) }
+  const detach = Boolean(post.media_separate)
 
   if (media.length === 0) {
     await sendTextToMax(token, chatId, text, sendOpts)
+    return { ok: true }
+  }
+
+  if (detach && text) {
+    await sendTextToMax(token, chatId, text, sendOpts)
+    const mediaOpts: MaxSendOptions = { keyboard: null }
+    if (media.length === 1) {
+      const item = media[0]
+      if (item.type === 'video') {
+        await sendVideoFileToMax(token, chatId, item.path, '', mediaOpts)
+      } else {
+        await sendPhotoFileToMax(token, chatId, item.path, '', mediaOpts)
+      }
+    } else {
+      await sendMediaAlbumFilesToMax(
+        token,
+        chatId,
+        '',
+        media.map((m) => ({
+          type: m.type === 'video' ? 'video' : 'image',
+          filePath: m.path,
+        })),
+        mediaOpts,
+      )
+    }
     return { ok: true }
   }
 

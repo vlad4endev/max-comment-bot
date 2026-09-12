@@ -329,6 +329,15 @@ function parseOnFailure(raw: unknown): AutopostOnFailure {
   return 'skip'
 }
 
+function parseMediaSeparate(raw: unknown): boolean {
+  if (raw === true || raw === 1) return true
+  if (typeof raw === 'string') {
+    const t = raw.trim().toLowerCase()
+    return t === '1' || t === 'true' || t === 'yes' || t === 'on'
+  }
+  return false
+}
+
 const CONDITION_TYPES: AutopostCondition['type'][] = [
   'min_subscribers',
   'max_posts_per_day',
@@ -548,7 +557,11 @@ export function createAutopostRouter(): express.Router {
       }
       syncPostChannelsRegistry()
       const maxChannels = listMaxChannelsForAutopost()
-      const allChannels = [...tgChannels, ...maxChannels]
+      const allChannels = [...tgChannels, ...maxChannels].sort((a, b) => {
+        const la = (a.title || a.id).toLocaleLowerCase('ru')
+        const lb = (b.title || b.id).toLocaleLowerCase('ru')
+        return la.localeCompare(lb, 'ru')
+      })
       const registered = listPostChannels()
       const integ = integrationsStore.getTelegramIntegration()
       const hints: string[] = []
@@ -701,7 +714,8 @@ export function createAutopostRouter(): express.Router {
       const platformRaw = parseNonEmptyString(body.platform)
       const platform = platformRaw === 'max' ? 'max' : 'telegram'
       const status = parseAutopostStatus(body.status) ?? 'active'
-      if (media.length > 1 && inline_buttons && platform === 'telegram') {
+      const mediaSeparate = parseMediaSeparate(body.media_separate)
+      if (media.length > 1 && inline_buttons && platform === 'telegram' && !mediaSeparate) {
         res.status(400).json({
           error: 'album_inline_button',
           message:
@@ -718,6 +732,7 @@ export function createAutopostRouter(): express.Router {
         target_channel_id,
         channel_title: parseNonEmptyString(body.channel_title),
         status,
+        media_separate: mediaSeparate,
         ...schedule,
       })
       logger.info('autopost created', {
@@ -775,6 +790,9 @@ export function createAutopostRouter(): express.Router {
       if (body.tags !== undefined) {
         patch.tags = parseTagsFromBody(body)
       }
+      if (body.media_separate !== undefined) {
+        patch.media_separate = parseMediaSeparate(body.media_separate)
+      }
       if (
         body.existing_media !== undefined ||
         (req.files && (req.files as Express.Multer.File[]).length > 0)
@@ -814,7 +832,9 @@ export function createAutopostRouter(): express.Router {
       const nextPlatform = patch.platform ?? current.platform
       const nextButtons =
         patch.inline_buttons !== undefined ? patch.inline_buttons : current.inline_buttons
-      if (nextMedia.length > 1 && nextButtons && nextPlatform === 'telegram') {
+      const nextSeparate =
+        patch.media_separate !== undefined ? patch.media_separate : current.media_separate
+      if (nextMedia.length > 1 && nextButtons && nextPlatform === 'telegram' && !nextSeparate) {
         res.status(400).json({
           error: 'album_inline_button',
           message:

@@ -145,9 +145,20 @@ export async function sendAutopostToTelegram(
   const text = post.text.trim()
   const media = post.media.filter((m) => fs.existsSync(m.path))
   const keyboard = resolveKeyboard(post)
+  const detach = Boolean(post.media_separate)
 
   if (media.length === 0) {
     await sendText(token, chatId, text, keyboard)
+    return { ok: true }
+  }
+
+  if (detach && text) {
+    await sendText(token, chatId, text, keyboard)
+    if (media.length === 1) {
+      await sendSingleMedia(token, chatId, media[0], '', null)
+    } else {
+      await sendMediaGroup(token, chatId, media, '')
+    }
     return { ok: true }
   }
 

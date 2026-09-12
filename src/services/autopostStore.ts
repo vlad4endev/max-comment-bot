@@ -73,6 +73,8 @@ export interface AutopostRecord {
   last_error: string | null
   sent_count: number
   platform_message_id: string | null
+  /** true: текст и фото — разные сообщения, фото не становится подписью. */
+  media_separate: boolean
   created_at: string
   updated_at: string
 }
@@ -100,6 +102,7 @@ export interface CreateAutopostInput {
   on_failure?: AutopostOnFailure
   conditions?: AutopostCondition[]
   status?: AutopostStatus
+  media_separate?: boolean
 }
 
 export interface UpdateAutopostInput {
@@ -126,6 +129,7 @@ export interface UpdateAutopostInput {
   conditions?: AutopostCondition[]
   status?: AutopostStatus
   platform_message_id?: string | null
+  media_separate?: boolean
 }
 
 export interface PostChannelRecord {
@@ -166,6 +170,7 @@ interface AutopostDbRow {
   last_error: string | null
   sent_count: number
   platform_message_id: string | null
+  media_separate: number | null
   created_at: string
   updated_at: string
 }
@@ -384,6 +389,7 @@ function rowToRecord(row: AutopostDbRow): AutopostRecord {
     last_error: row.last_error,
     sent_count: row.sent_count,
     platform_message_id: row.platform_message_id,
+    media_separate: Number(row.media_separate) === 1,
     created_at: row.created_at,
     updated_at: row.updated_at,
   }
@@ -631,6 +637,7 @@ export function createAutopost(input: CreateAutopostInput): AutopostRecord {
   const inline_buttons = resolveInlineKeyboard(input.inline_buttons, input.inline_button ?? null)
   const inline_button = primaryInlineButton(inline_buttons)
   const tags = normalizeAutopostTags(input.tags ?? [])
+  const media_separate = input.media_separate === true
 
   upsertPostChannel({
     id: input.target_channel_id,
@@ -644,12 +651,13 @@ export function createAutopost(input: CreateAutopostInput): AutopostRecord {
         id, platform, target_channel_id, channel_title, series_id, text, media_json,
         inline_button_json, inline_buttons_json, tags_json, status, schedule_type, scheduled_at, recurring_time,
         weekdays_json, daily_times_json, timezone, start_date, end_date, repeat_limit,
-        interval_hours, on_failure, conditions_json, last_sent_at, last_error, sent_count, created_at, updated_at
+        interval_hours, on_failure, conditions_json, last_sent_at, last_error, sent_count,
+        media_separate, created_at, updated_at
       ) VALUES (
         ?, ?, ?, ?, ?, ?, ?,
         ?, ?, ?, ?, ?, ?, ?,
         ?, ?, ?, ?, ?, ?,
-        ?, ?, ?, NULL, NULL, 0, ?, ?
+        ?, ?, ?, NULL, NULL, 0, ?, ?, ?
       )`,
     )
     .run(
@@ -676,6 +684,7 @@ export function createAutopost(input: CreateAutopostInput): AutopostRecord {
       input.interval_hours ?? null,
       input.on_failure ?? 'skip',
       JSON.stringify(input.conditions ?? []),
+      media_separate ? 1 : 0,
       now,
       now,
     )
@@ -720,6 +729,7 @@ export function updateAutopost(id: string, patch: UpdateAutopostInput): Autopost
     status: patch.status ?? current.status,
     platform_message_id:
       patch.platform_message_id !== undefined ? patch.platform_message_id : current.platform_message_id,
+    media_separate: patch.media_separate !== undefined ? patch.media_separate : current.media_separate,
     updated_at: new Date().toISOString(),
   }
 
@@ -740,7 +750,7 @@ export function updateAutopost(id: string, patch: UpdateAutopostInput): Autopost
         recurring_time = ?, weekdays_json = ?, daily_times_json = ?, timezone = ?,
         start_date = ?, end_date = ?, repeat_limit = ?, interval_hours = ?,
         on_failure = ?, conditions_json = ?, platform_message_id = ?,
-        updated_at = ?
+        media_separate = ?, updated_at = ?
        WHERE id = ?`,
     )
     .run(
@@ -767,6 +777,7 @@ export function updateAutopost(id: string, patch: UpdateAutopostInput): Autopost
       next.on_failure,
       JSON.stringify(next.conditions),
       next.platform_message_id,
+      next.media_separate ? 1 : 0,
       next.updated_at,
       id,
     )

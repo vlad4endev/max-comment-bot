@@ -6,15 +6,17 @@
   'use strict';
 
   var TOOLBAR = [
-    { cmd: 'bold', label: 'B', title: 'Жирный (Ctrl+B)', tag: 'b' },
-    { cmd: 'italic', label: 'I', title: 'Курсив (Ctrl+I)', tag: 'i' },
-    { cmd: 'underline', label: 'U', title: 'Подчёркнутый', tag: 'u' },
-    { cmd: 'strike', label: 'S', title: 'Зачёркнутый', tag: 's' },
-    { cmd: 'code', label: '{}', title: 'Код', tag: 'code' },
-    { cmd: 'link', label: '🔗', title: 'Ссылка', tag: 'a' },
-    { cmd: 'quote', label: '❝', title: 'Цитата', tag: 'blockquote' },
-    { cmd: 'spoiler', label: '▒', title: 'Спойлер', tag: 'spoiler' },
+    { cmd: 'bold', label: 'Ж', title: 'Жирный (Ctrl+B)', exec: 'bold', tag: 'b' },
+    { cmd: 'italic', label: 'К', title: 'Курсив (Ctrl+I)', exec: 'italic', tag: 'i' },
+    { cmd: 'underline', label: 'Ч', title: 'Подчёркнутый', exec: 'underline', tag: 'u' },
+    { cmd: 'strike', label: 'З', title: 'Зачёркнутый', exec: 'strikeThrough', tag: 's' },
+    { cmd: 'code', label: '</>', title: 'Моноширинный код', tag: 'code' },
+    { cmd: 'link', label: 'Ссылка', title: 'Вставить ссылку', tag: 'a' },
+    { cmd: 'quote', label: 'Цитата', title: 'Цитата', tag: 'blockquote' },
+    { cmd: 'spoiler', label: 'Скрыть', title: 'Спойлер — текст скрыт до нажатия', tag: 'spoiler' },
   ];
+
+  var DEFAULT_HINT = 'Выделите текст, затем нажмите кнопку';
 
   function escHtml(s) {
     return String(s || '')
@@ -74,28 +76,61 @@
     return text;
   }
 
+  function selectionInside(surface) {
+    var sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0) return null;
+    var range = sel.getRangeAt(0);
+    if (!surface.contains(range.commonAncestorContainer) && range.commonAncestorContainer !== surface) {
+      return null;
+    }
+    return { sel: sel, range: range, collapsed: range.collapsed };
+  }
+
+  function flashHint(root, text) {
+    var hint = root.querySelector('.ap-editor-hint');
+    if (!hint) return;
+    hint.textContent = text;
+    hint.classList.add('ap-editor-hint--warn');
+    clearTimeout(hint._apHintTimer);
+    hint._apHintTimer = setTimeout(function () {
+      hint.textContent = DEFAULT_HINT;
+      hint.classList.remove('ap-editor-hint--warn');
+    }, 2200);
+  }
+
   function wrapSelection(tag, surface, attrs) {
     surface.focus();
-    var sel = window.getSelection();
-    if (!sel || sel.rangeCount === 0) return;
-    var range = sel.getRangeAt(0);
-    if (range.collapsed) return;
+    var ctx = selectionInside(surface);
+    if (!ctx || ctx.collapsed) return false;
     var el = document.createElement(tag);
     if (attrs) {
       Object.keys(attrs).forEach(function (k) { el.setAttribute(k, attrs[k]); });
     }
     try {
-      range.surroundContents(el);
+      ctx.range.surroundContents(el);
     } catch (_e) {
-      var frag = range.extractContents();
+      var frag = ctx.range.extractContents();
       el.appendChild(frag);
-      range.insertNode(el);
+      ctx.range.insertNode(el);
     }
-    sel.removeAllRanges();
+    ctx.sel.removeAllRanges();
     var nr = document.createRange();
     nr.selectNodeContents(el);
     nr.collapse(false);
-    sel.addRange(nr);
+    ctx.sel.addRange(nr);
+    return true;
+  }
+
+  function applyExec(exec, surface) {
+    surface.focus();
+    var ctx = selectionInside(surface);
+    if (!ctx || ctx.collapsed) return false;
+    try {
+      document.execCommand(exec, false);
+      return true;
+    } catch (_e) {
+      return false;
+    }
   }
 
   function bindToolbar(root, surface, onChange) {
@@ -106,29 +141,46 @@
         e.preventDefault();
       });
       btn.addEventListener('click', function () {
+        var ok = false;
         if (item.cmd === 'link') {
-          var url = prompt('URL (https://…)', 'https://');
+          var ctx = selectionInside(surface);
+          if (!ctx || ctx.collapsed) {
+            flashHint(root, 'Сначала выделите текст для ссылки');
+            return;
+          }
+          var url = prompt('Адрес ссылки (https://…)', 'https://');
           if (!url || !/^https?:\/\//i.test(url.trim())) return;
-          wrapSelection('a', surface, { href: url.trim(), target: '_blank', rel: 'noopener' });
+          ok = wrapSelection('a', surface, { href: url.trim(), target: '_blank', rel: 'noopener' });
         } else if (item.cmd === 'quote') {
-          wrapSelection('blockquote', surface);
+          ok = wrapSelection('blockquote', surface);
         } else if (item.cmd === 'spoiler') {
+          var ctx2 = selectionInside(surface);
+          if (!ctx2 || ctx2.collapsed) {
+            flashHint(root, 'Сначала выделите текст');
+            return;
+          }
           var span = document.createElement('span');
           span.className = 'tg-spoiler';
           span.setAttribute('data-spoiler', '1');
-          surface.focus();
-          var sel = window.getSelection();
-          if (!sel || sel.rangeCount === 0) return;
-          var range = sel.getRangeAt(0);
-          if (range.collapsed) return;
           try {
-            range.surroundContents(span);
+            ctx2.range.surroundContents(span);
+            ok = true;
           } catch (_e2) {
-            span.appendChild(range.extractContents());
-            range.insertNode(span);
+            span.appendChild(ctx2.range.extractContents());
+            ctx2.range.insertNode(span);
+            ok = true;
           }
+        } else if (item.cmd === 'code') {
+          ok = wrapSelection('code', surface);
+        } else if (item.exec) {
+          ok = applyExec(item.exec, surface);
+          if (!ok) ok = wrapSelection(item.tag, surface);
         } else {
-          wrapSelection(item.tag, surface);
+          ok = wrapSelection(item.tag, surface);
+        }
+        if (!ok) {
+          flashHint(root, 'Сначала выделите текст');
+          return;
         }
         if (onChange) onChange();
       });
@@ -136,8 +188,16 @@
 
     surface.addEventListener('keydown', function (e) {
       if (e.ctrlKey || e.metaKey) {
-        if (e.key === 'b') { e.preventDefault(); wrapSelection('b', surface); if (onChange) onChange(); }
-        if (e.key === 'i') { e.preventDefault(); wrapSelection('i', surface); if (onChange) onChange(); }
+        if (e.key === 'b') {
+          e.preventDefault();
+          applyExec('bold', surface);
+          if (onChange) onChange();
+        }
+        if (e.key === 'i') {
+          e.preventDefault();
+          applyExec('italic', surface);
+          if (onChange) onChange();
+        }
       }
     });
 
@@ -149,15 +209,16 @@
   function mount(container, options) {
     options = options || {};
     var html = options.value || '';
-    var placeholder = options.placeholder || 'Введите текст…';
+    var placeholder = options.placeholder || 'Текст поста — как в канале';
 
     container.innerHTML =
       '<div class="ap-editor-toolbar">' +
       TOOLBAR.map(function (t) {
         return '<button type="button" class="ap-editor-btn" data-ap-ed="' + t.cmd + '" title="' + escHtml(t.title) + '">' + t.label + '</button>';
       }).join('') +
-      '<span class="ap-editor-hint">HTML · Telegram & MAX</span></div>' +
-      '<div class="ap-editor-surface" contenteditable="true" data-placeholder="' + escHtml(placeholder) + '"></div>';
+      '</div>' +
+      '<div class="ap-editor-surface" contenteditable="true" data-placeholder="' + escHtml(placeholder) + '"></div>' +
+      '<p class="ap-editor-hint">' + DEFAULT_HINT + '</p>';
 
     var surface = container.querySelector('.ap-editor-surface');
     if (html) {

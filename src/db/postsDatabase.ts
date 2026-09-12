@@ -103,6 +103,7 @@ function initPostsSchema(db: Database.Database): void {
       last_error            TEXT,
       sent_count            INTEGER NOT NULL DEFAULT 0,
       platform_message_id   TEXT,
+      media_separate        INTEGER NOT NULL DEFAULT 0,
       created_at            TEXT NOT NULL,
       updated_at            TEXT NOT NULL
     );
@@ -158,6 +159,7 @@ function migrateAutopostsColumns(db: Database.Database): void {
     ['conditions_json', "TEXT NOT NULL DEFAULT '[]'"],
     ['platform_message_id', 'TEXT'],
     ['tags_json', "TEXT NOT NULL DEFAULT '[]'"],
+    ['media_separate', 'INTEGER NOT NULL DEFAULT 0'],
   ]
   for (const [col, ddl] of additions) {
     if (!names.has(col)) {
