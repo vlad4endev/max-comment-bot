@@ -5478,7 +5478,7 @@ tbody tr:hover td {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  max-height: 220px;
+  max-height: 360px;
   overflow-y: auto;
   padding-right: 4px;
 }
@@ -5550,6 +5550,93 @@ tbody tr:hover td {
   font-size: 0.88rem;
 }
 .vk-multi-bar strong { color: var(--accent); }
+
+.vk-community-search-row {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+.vk-community-search-row .input {
+  flex: 1;
+  min-width: 0;
+}
+
+.vk-chain-form-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 14px;
+}
+.vk-chain-form-actions .btn-primary {
+  margin-left: auto;
+}
+
+.vk-check-slot,
+.vk-chain-check-slot {
+  margin-top: 10px;
+}
+.vk-chain-check-slot:empty {
+  display: none;
+}
+
+.vk-check-result {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+}
+.vk-check-result.is-ok {
+  border-color: var(--success, #16a34a);
+  background: color-mix(in srgb, var(--success, #16a34a) 8%, transparent);
+}
+.vk-check-result.is-fail {
+  border-color: var(--danger, #e11);
+  background: color-mix(in srgb, var(--danger, #e11) 8%, transparent);
+}
+.vk-check-result__title {
+  font-weight: 700;
+  font-size: 0.88rem;
+  margin-bottom: 2px;
+}
+.vk-check-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 0.82rem;
+  line-height: 1.35;
+}
+.vk-check-item i,
+.vk-check-item svg {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+.vk-check-item.is-ok { color: var(--success, #16a34a); }
+.vk-check-item.is-fail { color: var(--danger, #e11); }
+.vk-check-item div {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  color: var(--text);
+}
+.vk-check-item span {
+  color: var(--text-muted);
+  font-size: 0.78rem;
+}
+
+.chain-card.is-warn {
+  box-shadow: inset 3px 0 0 var(--warning, #d97706);
+}
+
+#vc_tg_max_hint:empty,
+#vc_tg_max_hint.hidden {
+  display: none;
+}
 
 
 /* ── Light theme polish ── */

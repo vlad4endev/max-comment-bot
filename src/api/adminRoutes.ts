@@ -74,6 +74,7 @@ import { integrationsStore } from '../services/integrationsStore'
 import { parseAdminLogLine, formatAdminLogExtra, type AdminLogEntry, type AdminLogLevel } from '../utils/adminLogFormat'
 import { resolveTgChainChannelFields, repairStaleTgChainBotTokens } from '../services/tgChainChannelRef'
 import { resolveVkGroup, listVkManagedGroups } from '../services/integrationPlatformClient'
+import { probeVkChainSetup } from '../services/vkChainProbe'
 import { isMtprotoSessionReady, resolveMtprotoCredentials } from '../services/mtprotoConfigStore'
 import { handleDeletedPost } from '../services/tgPostDeletionWatcher'
 import {
@@ -1818,19 +1819,53 @@ export function createAdminRouter(deps: AdminRouterDeps): express.Router {
     })
   })
 
-  /** Список сообществ VK, где токен имеет права модератора/редактора/администратора. */
-  secured.get('/vk-groups', async (req, res) => {
+  async function resolveVkTokenFromRequest(
+    bodyToken?: unknown,
+    queryToken?: unknown,
+  ): Promise<string> {
     await integrationsStore.load()
     const vkInt = integrationsStore.getIntegrations().find(
       (i) => i.platform === 'vk' && i.status === 'connected',
     )
-    const token = parseNonEmptyString(String(req.query.token ?? '')) ?? vkInt?.token ?? ''
+    return (
+      parseNonEmptyString(bodyToken) ??
+      parseNonEmptyString(typeof queryToken === 'string' ? queryToken : '') ??
+      vkInt?.token ??
+      ''
+    )
+  }
+
+  /** Список сообществ VK, где токен имеет права модератора/редактора/администратора. */
+  secured.get('/vk-groups', async (req, res) => {
+    const token = await resolveVkTokenFromRequest(undefined, req.query.token)
     if (!token) {
       res.status(400).json({ error: 'VK не подключён — укажите токен' })
       return
     }
-    const groups = await listVkManagedGroups(token)
-    res.json({ groups })
+    const result = await listVkManagedGroups(token)
+    if (result.error && result.groups.length === 0) {
+      res.status(400).json({ error: result.error, groups: [] })
+      return
+    }
+    res.json({ groups: result.groups, error: result.error })
+  })
+
+  secured.post('/vk-groups', async (req, res) => {
+    if (!isRecord(req.body)) {
+      res.status(400).json({ error: 'invalid body' })
+      return
+    }
+    const token = await resolveVkTokenFromRequest(req.body.vk_token)
+    if (!token) {
+      res.status(400).json({ error: 'VK не подключён — укажите токен' })
+      return
+    }
+    const result = await listVkManagedGroups(token)
+    if (result.error && result.groups.length === 0) {
+      res.status(400).json({ error: result.error, groups: [] })
+      return
+    }
+    res.json({ groups: result.groups, error: result.error })
   })
 
   /** Разрешить VK-сообщество по URL, slug или числовому ID. */
@@ -1857,22 +1892,103 @@ export function createAdminRouter(deps: AdminRouterDeps): express.Router {
     res.json({ group: result.group })
   })
 
+  async function resolveVkChainMaxChatId(
+    body: Record<string, unknown>,
+  ): Promise<{ ok: true; maxChatId: number } | { ok: false; error: string }> {
+    const tgChainId = parseNonEmptyString(body.tg_chain_id)
+    if (tgChainId) {
+      const tg = (await listTgChains()).find((c) => c.id === tgChainId)
+      if (!tg) {
+        return {
+          ok: false,
+          error:
+            'Связка Telegram → MAX не найдена. Сначала настройте пересылку во вкладке Telegram → MAX.',
+        }
+      }
+      return { ok: true, maxChatId: tg.max_chat_id }
+    }
+    const maxChatId = parseNonZeroInt(body.max_chat_id)
+    if (maxChatId === null) {
+      return { ok: false, error: 'Выберите канал Telegram (связка TG→MAX) или канал MAX' }
+    }
+    return { ok: true, maxChatId }
+  }
+
+  secured.post('/vk-chains/check', async (req, res) => {
+    if (!isRecord(req.body)) {
+      res.status(400).json({ error: 'invalid body' })
+      return
+    }
+    const resolved = await resolveVkChainMaxChatId(req.body)
+    if (!resolved.ok) {
+      res.status(400).json({ error: resolved.error })
+      return
+    }
+    const vkGroupIdRaw = parseNonEmptyString(req.body.vk_group_id)
+    if (!vkGroupIdRaw) {
+      res.status(400).json({ error: 'Выберите сообщество ВКонтакте' })
+      return
+    }
+    const vkToken = await resolveVkTokenFromRequest(req.body.vk_token)
+    if (!vkToken) {
+      res.status(400).json({ error: 'Токен VK не найден: укажите токен или подключите VK в «Интеграциях»' })
+      return
+    }
+    try {
+      const result = await probeVkChainSetup({
+        maxChatId: resolved.maxChatId,
+        vkGroupId: vkGroupIdRaw.replace(/^-/, ''),
+        vkToken,
+        publishTest: req.body.publish_test === true,
+      })
+      res.json(result)
+    } catch (err: unknown) {
+      res.status(500).json({ error: String(err) })
+    }
+  })
+
+  secured.post('/vk-chains/:id/check', async (req, res) => {
+    const id = parseNonEmptyString(req.params.id)
+    if (!id) {
+      res.status(400).json({ error: 'invalid id' })
+      return
+    }
+    const chain = (await listVkChains()).find((c) => c.id === id)
+    if (!chain) {
+      res.status(404).json({ error: 'not found' })
+      return
+    }
+    const publishTest = isRecord(req.body) && req.body.publish_test === true
+    try {
+      const result = await probeVkChainSetup({
+        maxChatId: chain.max_chat_id,
+        vkGroupId: chain.vk_group_id,
+        vkToken: chain.vk_token,
+        publishTest,
+      })
+      res.json(result)
+    } catch (err: unknown) {
+      res.status(500).json({ error: String(err) })
+    }
+  })
+
   secured.post('/vk-chains', async (req, res) => {
     if (!isRecord(req.body)) {
       res.status(400).json({ error: 'invalid body' })
       return
     }
-    const maxChatId = parseNonZeroInt(req.body.max_chat_id)
-    const vkGroupIdRaw = parseNonEmptyString(req.body.vk_group_id)
-    if (maxChatId === null || !vkGroupIdRaw) {
-      res.status(400).json({ error: 'max_chat_id and vk_group_id required' })
+    const resolved = await resolveVkChainMaxChatId(req.body)
+    if (!resolved.ok) {
+      res.status(400).json({ error: resolved.error })
       return
     }
-    await integrationsStore.load()
-    const vkInt = integrationsStore.getIntegrations().find(
-      (i) => i.platform === 'vk' && i.status === 'connected',
-    )
-    const vkToken = parseNonEmptyString(req.body.vk_token) ?? vkInt?.token ?? ''
+    const maxChatId = resolved.maxChatId
+    const vkGroupIdRaw = parseNonEmptyString(req.body.vk_group_id)
+    if (!vkGroupIdRaw) {
+      res.status(400).json({ error: 'Выберите сообщество ВКонтакте' })
+      return
+    }
+    const vkToken = await resolveVkTokenFromRequest(req.body.vk_token)
     if (!vkToken) {
       res.status(400).json({ error: 'Токен VK не найден: укажите vk_token или подключите VK в Интеграциях' })
       return

@@ -894,6 +894,22 @@ interface VkGroupApiItem {
   screen_name?: string
   photo_50?: string
   photo_100?: string
+  is_admin?: number | boolean
+  admin_level?: number
+  can_post?: number | boolean
+}
+
+function vkApiFlag(value: unknown): boolean {
+  return value === true || value === 1 || value === '1'
+}
+
+export type VkTokenKind = 'user' | 'group' | 'unknown'
+
+export interface VkGroupAccessInfo {
+  group: VkGroupInfo
+  isAdmin: boolean
+  canPost: boolean
+  adminLevel: number | null
 }
 
 /** Нормализует ввод: URL, club123, public123, clubslug → slug/id для VK API. */
@@ -1006,45 +1022,143 @@ export async function resolveVkGroup(
 
 /**
  * Список сообществ, где токен имеет права администратора/редактора.
+ * Токен сообщества этот метод не умеет — тогда error с подсказкой.
  */
-export async function listVkManagedGroups(token: string): Promise<VkGroupInfo[]> {
+export async function listVkManagedGroups(
+  token: string,
+): Promise<{ groups: VkGroupInfo[]; error?: string }> {
+  const groups: VkGroupInfo[] = []
+  const pageSize = 100
+  const maxTotal = 400
+  try {
+    let offset = 0
+    while (groups.length < maxTotal) {
+      const { data } = await httpGet<{
+        response?: {
+          count?: number
+          items?: VkGroupApiItem[]
+        }
+        error?: { error_code?: number; error_msg?: string }
+      }>('https://api.vk.com/method/groups.get', {
+        params: {
+          access_token: token,
+          filter: 'moder',
+          fields: 'screen_name,photo_50,photo_100',
+          count: pageSize,
+          offset,
+          v: '5.199',
+        },
+        timeout: 15_000,
+      })
+      if (data.error) {
+        const code = data.error.error_code
+        const msg = data.error.error_msg?.trim() || 'Ошибка VK API'
+        if (code === 27) {
+          return {
+            groups,
+            error:
+              'Токен сообщества не показывает список. Вставьте ссылку сообщества и нажмите «Найти».',
+          }
+        }
+        if (code === 5) {
+          return { groups, error: 'Недействительный токен VK. Подключите VK заново в «Интеграциях».' }
+        }
+        return { groups, error: msg }
+      }
+      const items = data.response?.items ?? []
+      for (const g of items) {
+        groups.push(mapVkGroupApiItem(g))
+      }
+      if (items.length < pageSize) break
+      offset += pageSize
+    }
+    return { groups }
+  } catch (err: unknown) {
+    logger.debug('listVkManagedGroups failed', err)
+    return { groups, error: 'Не удалось связаться с VK API' }
+  }
+}
+
+export async function detectVkTokenKind(
+  token: string,
+): Promise<{ kind: VkTokenKind; error?: string }> {
+  try {
+    await vkApiCall<unknown[]>('users.get', token, {})
+    return { kind: 'user' }
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err)
+    if (/\[27\]|group auth|unavailable with group/i.test(message)) {
+      return { kind: 'group' }
+    }
+    if (/\[5\]|invalid access token|user authorization failed/i.test(message)) {
+      return { kind: 'unknown', error: 'Недействительный токен VK' }
+    }
+    return { kind: 'unknown', error: message }
+  }
+}
+
+export async function inspectVkGroupAccess(
+  token: string,
+  input: string,
+): Promise<{ info: VkGroupAccessInfo | null; error?: string }> {
+  const lookup = normalizeVkGroupLookup(input)
+  if (!lookup) {
+    return { info: null, error: 'Пустой ввод' }
+  }
   try {
     const { data } = await httpGet<{
-      response?: {
-        count?: number
-        items?: Array<{
-          id: number
-          name?: string
-          screen_name?: string
-          photo_50?: string
-          photo_100?: string
-        }>
-      }
-      error?: { error_msg?: string }
-    }>('https://api.vk.com/method/groups.get', {
+      response?: unknown
+      error?: { error_code?: number; error_msg?: string }
+    }>('https://api.vk.com/method/groups.getById', {
       params: {
         access_token: token,
-        filter: 'moder',
-        fields: 'screen_name,photo_50,photo_100',
-        count: 100,
+        group_id: lookup,
+        fields: 'screen_name,photo_50,photo_100,is_admin,admin_level,can_post,is_member',
         v: '5.199',
       },
       timeout: 15_000,
     })
-    if (data.error || !data.response?.items) return []
-    return data.response.items.map((g) => {
-      const screenName = g.screen_name ?? `club${g.id}`
-      return {
-        id: String(g.id),
-        name: g.name?.trim() || `club${g.id}`,
-        screenName,
-        url: `https://vk.com/${screenName}`,
-        photo: g.photo_100 ?? g.photo_50,
-      }
-    })
+    if (data.error) {
+      const msg = data.error.error_msg?.trim() || 'Ошибка VK API'
+      return { info: null, error: msg }
+    }
+    const items = parseVkGroupsGetByIdItems(data.response)
+    const g = items[0]
+    if (!g) {
+      return { info: null, error: 'Сообщество не найдено. Проверьте ссылку или ID.' }
+    }
+    const adminLevel = typeof g.admin_level === 'number' ? g.admin_level : null
+    const isAdmin = vkApiFlag(g.is_admin) || (adminLevel != null && adminLevel >= 1)
+    const canPost = vkApiFlag(g.can_post) || (adminLevel != null && adminLevel >= 2)
+    return {
+      info: {
+        group: mapVkGroupApiItem(g),
+        isAdmin,
+        canPost,
+        adminLevel,
+      },
+    }
   } catch (err: unknown) {
-    logger.debug('listVkManagedGroups failed', err)
-    return []
+    logger.debug('inspectVkGroupAccess failed', { lookup, err })
+    return { info: null, error: 'Не удалось связаться с VK API' }
+  }
+}
+
+export async function probeVkWallReadable(
+  token: string,
+  groupId: string,
+): Promise<{ ok: boolean; error?: string }> {
+  const ownerId = groupId.startsWith('-') ? groupId : `-${groupId.replace(/^public/, '')}`
+  try {
+    await vkApiCall<{ count?: number; items?: unknown[] }>(
+      'wall.get',
+      token,
+      { owner_id: ownerId, count: 1 },
+    )
+    return { ok: true }
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err)
+    return { ok: false, error: message }
   }
 }
 
@@ -1643,6 +1757,32 @@ export async function publishVkWallPost(
   }
   const response = await vkApiCall<{ post_id?: number }>('wall.post', token, params, { usePost: true })
   return response.post_id ?? null
+}
+
+export async function deleteVkWallPost(
+  token: string,
+  groupId: string,
+  postId: number,
+): Promise<boolean> {
+  try {
+    await vkApiCall<number>(
+      'wall.delete',
+      token,
+      {
+        owner_id: vkOwnerId(groupId),
+        post_id: postId,
+      },
+      { usePost: true },
+    )
+    return true
+  } catch (err: unknown) {
+    logger.warn('deleteVkWallPost failed', {
+      groupId,
+      postId,
+      err: err instanceof Error ? err.message : String(err),
+    })
+    return false
+  }
 }
 
 function vkOwnerId(groupId: string): string {

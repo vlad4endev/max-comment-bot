@@ -40,8 +40,12 @@
   var chainsListFilter = 'all';
   var chainsListSearch = '';
   var chainsWizardCollapsed = false;
+  var vkPageTgChainsCache = [];
   var antispamTab = 'overview';
   var antispamLogCache = [];
+  var sidebarRendered = false;
+  var routeAbort = null;
+  var DEFAULT_FETCH_TIMEOUT_MS = 12000;
 
   var NAV = [
     {
@@ -506,32 +510,61 @@
     return res;
   }
 
+  function beginRouteLoads() {
+    if (routeAbort) {
+      try {
+        routeAbort.abort();
+      } catch (_e) {
+        /* ignore */
+      }
+    }
+    routeAbort = typeof AbortController === 'function' ? new AbortController() : null;
+  }
+
   function authFetch(url, opts) {
     opts = opts || {};
     opts.credentials = 'same-origin';
     if (!opts.headers) opts.headers = {};
     var timeoutMs =
-      typeof opts.timeoutMs === 'number' && Number.isFinite(opts.timeoutMs) && opts.timeoutMs > 0
+      typeof opts.timeoutMs === 'number' && Number.isFinite(opts.timeoutMs)
         ? opts.timeoutMs
-        : 0;
+        : DEFAULT_FETCH_TIMEOUT_MS;
     delete opts.timeoutMs;
     if (opts.body && typeof opts.body === 'object' && !(opts.body instanceof FormData)) {
       opts.headers['Content-Type'] = 'application/json';
       opts.body = JSON.stringify(opts.body);
     }
-    if (typeof AbortController === 'function' && timeoutMs > 0) {
-      var controller = new AbortController();
+    var controller = null;
+    var timer = null;
+    var method = String(opts.method || 'GET').toUpperCase();
+    var ignoreRouteAbort = opts.ignoreRouteAbort === true;
+    delete opts.ignoreRouteAbort;
+    var followRouteAbort = method === 'GET' && routeAbort && !ignoreRouteAbort;
+    if (typeof AbortController === 'function' && (timeoutMs > 0 || followRouteAbort)) {
+      controller = new AbortController();
       opts.signal = controller.signal;
-      var timer = window.setTimeout(function () {
-        controller.abort();
-      }, timeoutMs);
-      return fetch(url, opts)
-        .then(handleAuth)
-        .finally(function () {
-          window.clearTimeout(timer);
-        });
+      if (timeoutMs > 0) {
+        timer = window.setTimeout(function () {
+          controller.abort();
+        }, timeoutMs);
+      }
+      if (followRouteAbort) {
+        if (routeAbort.signal.aborted) {
+          controller.abort();
+        } else {
+          routeAbort.signal.addEventListener('abort', function () {
+            controller.abort();
+          });
+        }
+      }
     }
-    return fetch(url, opts).then(handleAuth);
+    var req = fetch(url, opts).then(handleAuth);
+    if (timer != null) {
+      return req.finally(function () {
+        window.clearTimeout(timer);
+      });
+    }
+    return req;
   }
 
   function parseApiJsonResponse(r) {
@@ -554,12 +587,21 @@
     });
   }
 
-  function getJson(path) {
-    return authFetch(apiPath(path)).then(function (r) {
+  function mapFetchError(err) {
+    if (err && err.name === 'AbortError') {
+      return new Error('Сервер не ответил вовремя');
+    }
+    return err;
+  }
+
+  function getJson(path, extraOpts) {
+    return authFetch(apiPath(path), extraOpts || {}).then(function (r) {
       return parseApiJsonResponse(r).then(function (j) {
         if (!r.ok) throw new Error((j && j.error) || 'HTTP ' + r.status);
         return j;
       });
+    }).catch(function (err) {
+      throw mapFetchError(err);
     });
   }
 
@@ -570,6 +612,7 @@
     if (path === '/logs/analyze') timeoutMs = 120000;
     if (path === '/logs/ai-test') timeoutMs = 60000;
     if (path.indexOf('/telegram-proxy') === 0 && path.indexOf('probe') !== -1) timeoutMs = 120000;
+    if (path.indexOf('/vk-chains') === 0 && path.indexOf('check') !== -1) timeoutMs = 25000;
     return authFetch(apiPath(path), {
       method: 'POST',
       body: body || {},
@@ -628,6 +671,8 @@
         if (!r.ok) throw new Error((j && j.error) || 'HTTP ' + r.status);
         return j;
       });
+    }).catch(function (err) {
+      throw mapFetchError(err);
     });
   }
 
@@ -708,7 +753,7 @@
     var title = isTg ? 'Пересылка Telegram → MAX' : 'Публикация Telegram → VK';
     var desc = isTg
       ? 'Автоматическая публикация постов из Telegram в MAX с опциональной синхронизацией комментариев.'
-      : 'Посты из Telegram-канала (через TG→MAX того же MAX) уходят на стену VK с тем же текстом и фото.';
+      : 'Посты из выбранного Telegram-канала (через уже настроенную TG→MAX) уходят на стену сообщества VK с тем же текстом и фото.';
     var errNum = Number(st.errors_today) || 0;
     var html = '<header class="chains-page-head">';
     html += '<div class="chains-page-head-text"><h2>' + esc(title) + '</h2><p>' + esc(desc) + '</p></div>';
@@ -735,7 +780,9 @@
     var html = '<div class="chains-toolbar">';
     html += '<div class="chains-search-wrap"><i data-lucide="search"></i>';
     html +=
-      '<input type="search" class="chains-search-input" id="chains_search" placeholder="Поиск по каналу…" value="' +
+      '<input type="search" class="chains-search-input" id="chains_search" placeholder="' +
+      (chainsPlatformTab === 'vk' ? 'Поиск по каналу или сообществу…' : 'Поиск по каналу…') +
+      '" value="' +
       esc(chainsListSearch) +
       '" autocomplete="off" /></div>';
     html += '<div class="chains-filter-chips" role="group" aria-label="Фильтр">';
@@ -778,7 +825,7 @@
         '<p class="chains-empty-hint">' +
         (isTg
           ? 'Настройте пару каналов слева и нажмите «Включить пересылку»'
-          : 'Нужна TG→MAX связка на тот же MAX-канал, затем укажите сообщество VK') +
+          : 'Выберите канал Telegram из связки TG→MAX и сообщество VK') +
         '</p>';
     }
     html += '</div>';
@@ -790,7 +837,18 @@
     var q = search.toLowerCase();
     if (platform === 'vk') {
       var mx = tgChainMaxDisplayName(chain);
-      var parts = [mx.title, mx.sub, chain.vk_group_id, chain.id];
+      var tgSrc = findTgChainForVk(chain, vkPageTgChainsCache);
+      var tg = tgSrc ? tgChainTgDisplayName(tgSrc) : { title: '', sub: '' };
+      var parts = [
+        mx.title,
+        mx.sub,
+        tg.title,
+        tg.sub,
+        chain.vk_group_id,
+        chain.vk_name,
+        chain.vk_screen_name,
+        chain.id,
+      ];
       return parts.some(function (p) {
         return p && String(p).toLowerCase().indexOf(q) !== -1;
       });
@@ -1690,9 +1748,19 @@
     }
   }
 
+  function setSidebarActive() {
+    qsa('#sidebarNav .nav-item').forEach(function (btn) {
+      btn.classList.toggle('active', (btn.getAttribute('data-route') || '') === currentRoute);
+    });
+  }
+
   function renderSidebar() {
     var nav = qs('#sidebarNav');
     if (!nav) return;
+    if (sidebarRendered) {
+      setSidebarActive();
+      return;
+    }
     var html = '';
     NAV.forEach(function (g) {
       html += '<p class="nav-group-label">' + esc(g.group) + '</p>';
@@ -1720,7 +1788,8 @@
         closeSidebarMobile();
       });
     });
-    refreshIcons();
+    sidebarRendered = true;
+    refreshIcons(nav);
   }
 
   function setPageTitle() {
@@ -3393,6 +3462,188 @@
       });
   }
 
+  function findTgChainForVk(vkChain, tgChains) {
+    if (!vkChain) return null;
+    var maxId = Math.abs(Number(vkChain.max_chat_id));
+    if (!maxId) return null;
+    var list = tgChains || vkPageTgChainsCache || [];
+    var matches = list.filter(function (c) {
+      return Math.abs(Number(c.max_chat_id)) === maxId;
+    });
+    return (
+      matches.find(function (c) {
+        return c.active;
+      }) ||
+      matches[0] ||
+      null
+    );
+  }
+
+  function buildVkTgChainSelect(tgChains) {
+    var active = (tgChains || []).filter(function (c) {
+      return c.active;
+    });
+    if (!active.length) {
+      return (
+        '<select class="select" id="vc_tg_chain" disabled>' +
+        '<option value="">— сначала создайте связку Telegram → MAX —</option>' +
+        '</select>'
+      );
+    }
+    var opts = '<option value="">— выберите канал Telegram —</option>';
+    active.forEach(function (c) {
+      var tg = tgChainTgDisplayName(c);
+      var mx = tgChainMaxDisplayName(c);
+      var label = tg.title + (tg.sub ? ' · ' + tg.sub : '') + '  →  MAX: ' + mx.title;
+      opts +=
+        '<option value="' +
+        esc(c.id) +
+        '" data-max-chat-id="' +
+        esc(String(c.max_chat_id)) +
+        '">' +
+        esc(label) +
+        '</option>';
+    });
+    return '<select class="select" id="vc_tg_chain">' + opts + '</select>';
+  }
+
+  function readVkFormTgChainId(root) {
+    var sel = qs('#vc_tg_chain', root);
+    return sel ? String(sel.value || '').trim() : '';
+  }
+
+  function readVkFormMaxChatId(root) {
+    var sel = qs('#vc_tg_chain', root);
+    if (sel && sel.selectedIndex >= 0) {
+      var opt = sel.options[sel.selectedIndex];
+      var fromOpt = opt && opt.getAttribute('data-max-chat-id');
+      if (fromOpt) return Number(fromOpt);
+    }
+    var hidden = qs('#vc_max', root);
+    return hidden ? Number(hidden.value || '') : 0;
+  }
+
+  function syncVkMaxHiddenFromTgSelect(root) {
+    var hidden = qs('#vc_max', root);
+    var maxId = readVkFormMaxChatId(root);
+    if (hidden) hidden.value = maxId ? String(maxId) : '';
+    var hint = qs('#vc_tg_max_hint', root);
+    if (hint) {
+      var tgId = readVkFormTgChainId(root);
+      var tgChain = (vkPageTgChainsCache || []).find(function (c) {
+        return c.id === tgId;
+      });
+      if (!tgChain) {
+        hint.innerHTML = '';
+        hint.classList.add('hidden');
+        return;
+      }
+      var mx = tgChainMaxDisplayName(tgChain);
+      hint.classList.remove('hidden');
+      hint.innerHTML =
+        'Якорь MAX (из TG→MAX): <strong>' + esc(mx.title) + '</strong>' + (mx.sub ? ' · ' + esc(mx.sub) : '');
+    }
+  }
+
+  function updateVkChainPairPreview(root) {
+    var el = qs('#vc_pair_preview', root);
+    if (!el) return;
+    var tgId = readVkFormTgChainId(root);
+    var groupIdEl = qs('#vc_group_id', root);
+    var groupId = groupIdEl ? String(groupIdEl.value || '').trim() : '';
+    var resultEl = qs('#vc_community_result', root);
+    var nameEl = resultEl ? qs('.vk-group-preview__name', resultEl) : null;
+    var vkName = nameEl ? String(nameEl.textContent || '').trim() : '';
+    if (!tgId || !groupId) {
+      el.className = 'tg-chain-pair-live is-empty';
+      el.innerHTML =
+        'Выберите <strong>канал Telegram</strong> и <strong>сообщество VK</strong>. Посты из TG появятся на стене сообщества.';
+      return;
+    }
+    var tgChain = (vkPageTgChainsCache || []).find(function (c) {
+      return c.id === tgId;
+    });
+    var tg = tgChain ? tgChainTgDisplayName(tgChain) : { title: 'Telegram', sub: '' };
+    el.className = 'tg-chain-pair-live';
+    el.innerHTML =
+      'Пара: <strong>' +
+      esc(tg.title) +
+      '</strong> → <strong>' +
+      esc(vkName || 'сообщество ' + groupId) +
+      '</strong>. Новые посты в Telegram сразу появятся на стене VK.';
+  }
+
+  function updateVkChainWizardSteps(root) {
+    var tgId = readVkFormTgChainId(root);
+    var groupIdEl = qs('#vc_group_id', root);
+    var groupId = groupIdEl ? String(groupIdEl.value || '').trim() : '';
+    var listEl = qs('#vc_groups_list', root);
+    var multi = listEl ? qsa('.vk-group-item__cb:checked', listEl).length > 0 : false;
+    var step1 = qs('[data-wizard-step="1"]', root);
+    var step2 = qs('[data-wizard-step="2"]', root);
+    if (step1) step1.classList.toggle('is-done', !!tgId);
+    if (step2) step2.classList.toggle('is-done', !!groupId || multi);
+  }
+
+  function renderVkCheckResult(result) {
+    var checks = (result && result.checks) || [];
+    var html =
+      '<div class="vk-check-result' + (result && result.ok ? ' is-ok' : ' is-fail') + '">';
+    html +=
+      '<div class="vk-check-result__title">' +
+      (result && result.ok ? 'Связка настроена верно' : 'Связка пока не готова') +
+      '</div>';
+    checks.forEach(function (c) {
+      html +=
+        '<div class="vk-check-item' +
+        (c.ok ? ' is-ok' : ' is-fail') +
+        '"><i data-lucide="' +
+        (c.ok ? 'check' : 'x') +
+        '"></i><div><strong>' +
+        esc(c.label) +
+        '</strong>' +
+        (c.detail ? '<span>' + esc(c.detail) + '</span>' : '') +
+        '</div></div>';
+    });
+    html += '</div>';
+    return html;
+  }
+
+  function runVkChainCheck(opts) {
+    opts = opts || {};
+    var slot = opts.slot;
+    var publishTest = !!opts.publishTest;
+    var path = opts.chainId
+      ? '/vk-chains/' + encodeURIComponent(opts.chainId) + '/check'
+      : '/vk-chains/check';
+    var body = opts.chainId
+      ? { publish_test: publishTest }
+      : Object.assign({}, opts.body || {}, { publish_test: publishTest });
+    if (slot) slot.innerHTML = '<p class="muted text-sm">Проверяем связку…</p>';
+    return postJson(path, body)
+      .then(function (result) {
+        if (slot) {
+          slot.innerHTML = renderVkCheckResult(result);
+          refreshIcons();
+        }
+        showToast(
+          result.ok ? 'Связка работает' : 'Есть проблемы — смотрите результат проверки',
+          result.ok ? 'success' : 'error',
+        );
+        return result;
+      })
+      .catch(function (e) {
+        if (slot) {
+          slot.innerHTML =
+            '<p class="muted text-sm" style="color:var(--danger)">' +
+            esc(e.message || 'Ошибка проверки') +
+            '</p>';
+        }
+        showToast(e.message || 'Ошибка проверки', 'error');
+        return null;
+      });
+  }
+
   /** Превью одного выбранного сообщества VK (после резолвинга). */
   function renderVkGroupPreview(g, compact) {
     var url = g.url || ('https://vk.com/' + (g.screenName || ('club' + g.id)));
@@ -3432,7 +3683,7 @@
     return token || null;
   }
 
-  /** Привязывает логику пикера сообществ VK с поддержкой мульти-выбора. */
+  /** Привязывает логику пикера сообществ VK с поиском и мульти-выбором. */
   function bindVkCommunityPicker(root, vkInt) {
     var resolveBtn = qs('#vc_resolve_btn', root);
     var loadGroupsBtn = qs('#vc_load_groups_btn', root);
@@ -3441,17 +3692,26 @@
     var listEl = qs('#vc_groups_list', root);
     var groupIdHidden = qs('#vc_group_id', root);
     var multiBarEl = qs('#vc_multi_bar', root);
+    var loadedGroups = [];
 
-    // --- Обновляет плашку "Выбрано N сообществ" ---
+    function refreshPreviewAndSteps() {
+      updateVkChainPairPreview(root);
+      updateVkChainWizardSteps(root);
+    }
+
     function refreshMultiBar() {
       if (!multiBarEl || !listEl) return;
       var checked = qsa('.vk-group-item__cb:checked', listEl);
       if (checked.length > 1) {
         multiBarEl.innerHTML =
           '<div class="vk-multi-bar">' +
-          '<span>Выбрано сообществ: <strong>' + checked.length + '</strong></span>' +
+          '<span>Выбрано сообществ: <strong>' +
+          checked.length +
+          '</strong></span>' +
           '<button type="button" class="btn btn-primary btn-sm" id="vc_multi_submit">' +
-          '<i data-lucide="zap"></i> Создать ' + checked.length + ' связки</button>' +
+          '<i data-lucide="zap"></i> Создать ' +
+          checked.length +
+          ' связки</button>' +
           '</div>';
         refreshIcons();
         var multiBtn = qs('#vc_multi_submit', multiBarEl);
@@ -3465,127 +3725,265 @@
       }
     }
 
-    // --- Выбор одиночного сообщества (через "Найти") ---
+    function applySelectionFromList() {
+      if (!listEl) return;
+      var allChecked = qsa('.vk-group-item__cb:checked', listEl);
+      qsa('[data-pick-vk-group]', listEl).forEach(function (item) {
+        var cb = qs('.vk-group-item__cb', item);
+        item.classList.toggle('is-selected', !!(cb && cb.checked));
+      });
+      if (allChecked.length === 1) {
+        var parentItem = allChecked[0].closest
+          ? allChecked[0].closest('[data-pick-vk-group]')
+          : null;
+        if (groupIdHidden) groupIdHidden.value = allChecked[0].value;
+        if (resultEl && parentItem) {
+          resultEl.innerHTML = renderVkGroupPreview(
+            {
+              id: allChecked[0].value,
+              name: parentItem.getAttribute('data-vk-name') || '',
+              screenName: parentItem.getAttribute('data-vk-screen') || '',
+              url: parentItem.getAttribute('data-vk-url') || '',
+              photo: parentItem.getAttribute('data-vk-photo') || '',
+            },
+            true,
+          );
+          refreshIcons();
+        }
+      } else if (allChecked.length === 0) {
+        if (groupIdHidden) groupIdHidden.value = '';
+        if (resultEl) resultEl.innerHTML = '';
+      } else {
+        if (groupIdHidden) groupIdHidden.value = '';
+        if (resultEl) {
+          resultEl.innerHTML =
+            '<p class="form-hint" style="margin:0">Выбрано ' +
+            allChecked.length +
+            ' сообществ — связки создадутся пакетом.</p>';
+        }
+      }
+      refreshMultiBar();
+      refreshPreviewAndSteps();
+    }
+
     function selectSingleGroup(g) {
       if (groupIdHidden) groupIdHidden.value = String(g.id || '');
-      if (resultEl) { resultEl.innerHTML = renderVkGroupPreview(g, true); refreshIcons(); }
-      // Снимаем все чекбоксы в списке при ручном резолве
-      qsa('.vk-group-item__cb', listEl || root).forEach(function (cb) { cb.checked = false; });
-      qsa('[data-pick-vk-group]', listEl || root).forEach(function (item) { item.classList.remove('is-selected'); });
+      if (resultEl) {
+        resultEl.innerHTML = renderVkGroupPreview(g, true);
+        refreshIcons();
+      }
+      qsa('.vk-group-item__cb', listEl || root).forEach(function (cb) {
+        cb.checked = String(cb.value) === String(g.id);
+      });
+      qsa('[data-pick-vk-group]', listEl || root).forEach(function (item) {
+        item.classList.toggle('is-selected', item.getAttribute('data-pick-vk-group') === String(g.id));
+      });
       if (multiBarEl) multiBarEl.innerHTML = '';
+      refreshPreviewAndSteps();
+    }
+
+    function bindGroupItemEvents() {
+      if (!listEl) return;
+      qsa('.vk-group-item', listEl).forEach(function (item) {
+        var cb = qs('.vk-group-item__cb', item);
+        if (!cb || cb.getAttribute('data-bound') === '1') return;
+        cb.setAttribute('data-bound', '1');
+        cb.addEventListener('change', function () {
+          applySelectionFromList();
+        });
+      });
+    }
+
+    function groupMatchesQuery(g, q) {
+      if (!q) return true;
+      var hay = [g.name, g.screenName, g.id, g.url].join(' ').toLowerCase();
+      return hay.indexOf(q) !== -1;
+    }
+
+    function renderGroupsList(groups, query) {
+      var q = String(query || '').trim().toLowerCase();
+      var filtered = (groups || []).filter(function (g) {
+        return groupMatchesQuery(g, q);
+      });
+      if (!listEl) return;
+      if (!(groups || []).length) {
+        listEl.innerHTML =
+          '<p class="muted" style="padding:8px 0">Сообществ не найдено. Вставьте ссылку и нажмите «Найти», либо проверьте права токена.</p>';
+        return;
+      }
+      if (!filtered.length) {
+        listEl.innerHTML =
+          '<p class="muted" style="padding:8px 0">Нет совпадений по «' +
+          esc(query) +
+          '». Попробуйте другое имя или вставьте ссылку.</p>';
+        return;
+      }
+      var html =
+        '<p class="form-hint" style="margin-bottom:6px">Нажмите сообщество, чтобы выбрать. Можно отметить несколько.</p>';
+      html += '<div class="vk-groups-picker">';
+      filtered.forEach(function (g) {
+        html += renderVkGroupPickerItem(g);
+      });
+      html += '</div>';
+      listEl.innerHTML = html;
+      bindGroupItemEvents();
+      refreshIcons();
+    }
+
+    function loadGroups() {
+      var token = getVkTokenFromForm(root, vkInt);
+      if (!token) {
+        if (listEl) {
+          listEl.innerHTML =
+            '<p class="muted" style="padding:8px 0">Сначала укажите токен VK или подключите VK в «Интеграциях».</p>';
+        }
+        return;
+      }
+      if (loadGroupsBtn) {
+        loadGroupsBtn.disabled = true;
+        loadGroupsBtn.innerHTML = '<i data-lucide="loader"></i> Загрузка…';
+        refreshIcons();
+      }
+      if (listEl) listEl.innerHTML = '<p class="muted" style="padding:8px 0">Загружаем сообщества…</p>';
+      var reqBody = {};
+      var tokenEl = qs('#vc_token', root);
+      if (tokenEl && tokenEl.value.trim()) reqBody.vk_token = tokenEl.value.trim();
+      postJson('/vk-groups', reqBody)
+        .then(function (res) {
+          loadedGroups = res.groups || [];
+          if (res.error && loadedGroups.length) showToast(res.error, 'info');
+          renderGroupsList(loadedGroups, communityInput ? communityInput.value : '');
+        })
+        .catch(function (e) {
+          loadedGroups = [];
+          if (listEl) {
+            listEl.innerHTML =
+              '<p class="muted" style="padding:8px 0">' +
+              esc(e.message || 'Не удалось загрузить сообщества') +
+              '</p>';
+          }
+          showToast(e.message || 'Ошибка загрузки', 'error');
+        })
+        .finally(function () {
+          if (loadGroupsBtn) {
+            loadGroupsBtn.disabled = false;
+            loadGroupsBtn.innerHTML = '<i data-lucide="refresh-cw"></i> Обновить список';
+            refreshIcons();
+          }
+        });
     }
 
     if (resolveBtn) {
       resolveBtn.addEventListener('click', function () {
         var val = communityInput ? String(communityInput.value || '').trim() : '';
-        if (!val) { showToast('Введите ссылку, username или ID', 'error'); return; }
+        if (!val) {
+          showToast('Введите ссылку, username или ID', 'error');
+          return;
+        }
         var token = getVkTokenFromForm(root, vkInt);
-        if (!token) { showToast('Сначала укажите токен VK или подключите VK в «Интеграциях»', 'error'); return; }
+        if (!token) {
+          showToast('Сначала укажите токен VK или подключите VK в «Интеграциях»', 'error');
+          return;
+        }
         resolveBtn.disabled = true;
         resolveBtn.textContent = '…';
-        postJson('/vk-resolve-group', { input: val, vk_token: token })
+        var body = { input: val };
+        var tokenEl = qs('#vc_token', root);
+        if (tokenEl && tokenEl.value.trim()) body.vk_token = tokenEl.value.trim();
+        postJson('/vk-resolve-group', body)
           .then(function (res) {
-            if (listEl) listEl.innerHTML = '';
             selectSingleGroup(res.group);
           })
-          .catch(function (e) { showToast(e.message || 'Сообщество не найдено', 'error'); })
-          .finally(function () { resolveBtn.disabled = false; resolveBtn.textContent = 'Найти'; });
+          .catch(function (e) {
+            showToast(e.message || 'Сообщество не найдено', 'error');
+          })
+          .finally(function () {
+            resolveBtn.disabled = false;
+            resolveBtn.textContent = 'Найти';
+          });
       });
-      if (communityInput) {
-        communityInput.addEventListener('keydown', function (e) {
-          if (e.key === 'Enter') { e.preventDefault(); resolveBtn.click(); }
-        });
-      }
+    }
+
+    if (communityInput) {
+      communityInput.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          if (loadedGroups.length) {
+            var q = String(communityInput.value || '').trim().toLowerCase();
+            var exact = loadedGroups.filter(function (g) {
+              return groupMatchesQuery(g, q);
+            });
+            if (exact.length === 1) {
+              selectSingleGroup(exact[0]);
+              return;
+            }
+            if (exact.length > 1) {
+              renderGroupsList(loadedGroups, communityInput.value);
+              return;
+            }
+          }
+          if (resolveBtn) resolveBtn.click();
+        }
+      });
+      communityInput.addEventListener('input', function () {
+        if (loadedGroups.length) renderGroupsList(loadedGroups, communityInput.value);
+      });
     }
 
     if (loadGroupsBtn) {
       loadGroupsBtn.addEventListener('click', function () {
-        var token = getVkTokenFromForm(root, vkInt);
-        if (!token) { showToast('Сначала укажите токен VK или подключите VK в «Интеграциях»', 'error'); return; }
-        loadGroupsBtn.disabled = true;
-        loadGroupsBtn.innerHTML = '<i data-lucide="loader"></i> Загрузка…';
-        getJson('/vk-groups?token=' + encodeURIComponent(token))
-          .then(function (res) {
-            var groups = res.groups || [];
-            if (resultEl) resultEl.innerHTML = '';
-            if (groupIdHidden) groupIdHidden.value = '';
-            if (!groups.length) {
-              if (listEl) listEl.innerHTML = '<p class="muted" style="padding:8px 0">Сообществ не найдено. Убедитесь, что токен имеет права администратора.</p>';
-              return;
-            }
-            var hint = groups.length > 1
-              ? '<p class="form-hint" style="margin-bottom:6px">Отметьте одно или несколько сообществ.</p>'
-              : '';
-            var html = hint + '<div class="vk-groups-picker">';
-            groups.forEach(function (g) { html += renderVkGroupPickerItem(g); });
-            html += '</div>';
-            if (listEl) listEl.innerHTML = html;
-            // Обработка чекбоксов
-            qsa('.vk-group-item', listEl).forEach(function (item) {
-              var cb = qs('.vk-group-item__cb', item);
-              if (!cb) return;
-              item.addEventListener('click', function (e) {
-                // click на label уже переключает cb; обновляем стиль и плашку
-                setTimeout(function () {
-                  item.classList.toggle('is-selected', cb.checked);
-                  // Если выбрано ровно одно — пишем в скрытый input (для совместимости с main submit)
-                  var allChecked = qsa('.vk-group-item__cb:checked', listEl);
-                  if (allChecked.length === 1) {
-                    if (groupIdHidden) groupIdHidden.value = allChecked[0].value;
-                    if (resultEl) {
-                      var parentItem = allChecked[0].closest ? allChecked[0].closest('[data-pick-vk-group]') : null;
-                      if (parentItem) {
-                        var url = parentItem.getAttribute('data-vk-url') || '';
-                        resultEl.innerHTML = renderVkGroupPreview({
-                          id: allChecked[0].value,
-                          name: parentItem.getAttribute('data-vk-name') || '',
-                          screenName: parentItem.getAttribute('data-vk-screen') || '',
-                          url: url,
-                          photo: parentItem.getAttribute('data-vk-photo') || '',
-                        }, true);
-                        refreshIcons();
-                      }
-                    }
-                  } else {
-                    if (groupIdHidden) groupIdHidden.value = '';
-                    if (resultEl) resultEl.innerHTML = '';
-                  }
-                  refreshMultiBar();
-                }, 0);
-              });
-            });
-            refreshIcons();
-          })
-          .catch(function (e) { showToast(e.message || 'Ошибка загрузки', 'error'); })
-          .finally(function () {
-            loadGroupsBtn.disabled = false;
-            loadGroupsBtn.innerHTML = '<i data-lucide="list"></i> Мои сообщества';
-            refreshIcons();
-          });
+        loadGroups();
       });
     }
+
+    var tokenField = qs('#vc_token', root);
+    if (tokenField && tokenField.type === 'password') {
+      tokenField.addEventListener('change', function () {
+        if (String(tokenField.value || '').trim()) loadGroups();
+      });
+    }
+
+    var tgSel = qs('#vc_tg_chain', root);
+    if (tgSel) {
+      tgSel.addEventListener('change', function () {
+        syncVkMaxHiddenFromTgSelect(root);
+        refreshPreviewAndSteps();
+      });
+    }
+
+    loadGroups();
+    syncVkMaxHiddenFromTgSelect(root);
+    refreshPreviewAndSteps();
   }
 
   /** Пакетное создание связок для всех отмеченных сообществ. */
   function submitVkChainsMulti(root, vkInt) {
-    var maxId = Number(qs('#vc_max', root) ? qs('#vc_max', root).value : '');
-    if (!maxId) { showToast('Выберите канал MAX', 'error'); return; }
+    var tgChainId = readVkFormTgChainId(root);
+    var maxId = readVkFormMaxChatId(root);
+    if (!tgChainId && !maxId) {
+      showToast('Выберите канал Telegram', 'error');
+      return;
+    }
     var sw = readSwitches(root);
     var tokenEl = qs('#vc_token', root);
     var listEl = qs('#vc_groups_list', root);
     var checked = listEl ? qsa('.vk-group-item__cb:checked', listEl) : [];
-    if (!checked.length) { showToast('Отметьте хотя бы одно сообщество', 'error'); return; }
+    if (!checked.length) {
+      showToast('Отметьте хотя бы одно сообщество', 'error');
+      return;
+    }
 
     var btn = qs('#vc_multi_submit', root);
     if (btn) btn.disabled = true;
 
     var tasks = Array.prototype.slice.call(checked).map(function (cb) {
       var body = {
-        max_chat_id: maxId,
         vk_group_id: cb.value,
         forward_posts: sw.forward_posts !== false,
         sync_comments: !!sw.sync_comments,
       };
+      if (tgChainId) body.tg_chain_id = tgChainId;
+      else body.max_chat_id = maxId;
       if (tokenEl && tokenEl.value.trim()) body.vk_token = tokenEl.value.trim();
       return postJson('/vk-chains', body);
     });
@@ -3612,12 +4010,15 @@
     );
   }
 
-  function renderVkChainCardHtml(c) {
+  function renderVkChainCardHtml(c, tgChains) {
+    var tgSrc = findTgChainForVk(c, tgChains);
+    var tg = tgSrc ? tgChainTgDisplayName(tgSrc) : { title: 'Telegram', sub: 'нет связки TG→MAX' };
     var mx = tgChainMaxDisplayName(c);
     var shortId = String(c.id || '').slice(0, 8);
     var html =
       '<article class="chain-card tg-chain-card' +
       (c.active ? '' : ' is-paused') +
+      (!tgSrc || !tgSrc.active ? ' is-warn' : '') +
       '" data-vk-chain-id="' +
       esc(c.id) +
       '">';
@@ -3628,27 +4029,34 @@
       '">' +
       (c.active ? 'Активна' : 'На паузе') +
       '</span>';
+    if (!tgSrc) {
+      html += '<span class="chain-status-badge chain-status-badge--paused">нет TG→MAX</span>';
+    }
     if (shortId) html += '<span class="chain-card__id" title="' + esc(c.id) + '">#' + esc(shortId) + '</span>';
     html += '</header>';
     html += '<div class="chain-card__flow">';
-    html += '<div class="chain-card__node chain-card__node--max">';
+    html += '<div class="chain-card__node chain-card__node--tg">';
     html += '<span class="chain-card__platform-icon">TG</span>';
     html += '<div class="chain-card__node-info">';
-    html += '<span class="chain-card__node-name">Telegram → VK</span>';
+    html += '<span class="chain-card__node-name">' + esc(tg.title) + '</span>';
     html +=
-      '<span class="chain-card__node-id">якорь MAX: ' +
-      esc(mx.title) +
-      (mx.sub ? ' · ' + esc(mx.sub) : '') +
+      '<span class="chain-card__node-id">' +
+      esc(tg.sub || (mx.title ? 'MAX: ' + mx.title : '')) +
       '</span>';
     html += '</div></div>';
     html += '<div class="chain-card__connector"><i data-lucide="arrow-right"></i></div>';
     html += '<div class="chain-card__node chain-card__node--vk">';
     html += '<span class="chain-card__platform-icon">VK</span>';
     html += '<div class="chain-card__node-info">';
-    var vkDisplayName = c.vk_name || ('Сообщество ' + esc(c.vk_group_id || '—'));
-    var vkUrl = c.vk_screen_name ? 'vk.com/' + c.vk_screen_name : ('vk.com/club' + (c.vk_group_id || ''));
+    var vkDisplayName = c.vk_name || 'Сообщество ' + (c.vk_group_id || '—');
+    var vkUrl = c.vk_screen_name ? 'vk.com/' + c.vk_screen_name : 'vk.com/club' + (c.vk_group_id || '');
     html += '<span class="chain-card__node-name">' + esc(vkDisplayName) + '</span>';
-    html += '<a href="https://' + esc(vkUrl) + '" target="_blank" class="chain-card__node-id chain-card__node-link">' + esc(vkUrl) + '</a>';
+    html +=
+      '<a href="https://' +
+      esc(vkUrl) +
+      '" target="_blank" class="chain-card__node-id chain-card__node-link">' +
+      esc(vkUrl) +
+      '</a>';
     html += '</div></div></div>';
     html += '<div class="chain-card__stats">';
     html +=
@@ -3661,6 +4069,7 @@
         '</span>';
     }
     html += '</div>';
+    html += '<div class="vk-chain-check-slot"></div>';
     html += '<footer class="chain-card__footer">';
     html += '<div class="chain-card__toggles">';
     html +=
@@ -3677,6 +4086,10 @@
       '" data-vk-chain-field="active" role="switch" tabindex="0"></span></label>';
     html += '</div>';
     html += '<div class="chain-card__actions-end">';
+    html +=
+      '<button type="button" class="btn btn-ghost btn-sm" data-check-vk-chain title="Проверить токен, права и TG→MAX"><i data-lucide="shield-check"></i> Проверить</button>';
+    html +=
+      '<button type="button" class="btn btn-ghost btn-sm" data-test-vk-chain title="Короткий пост на стену, сразу удаляется">Тест</button>';
     html +=
       '<button type="button" class="btn btn-danger btn-sm" data-del-vk-chain><i data-lucide="trash-2"></i></button>';
     html += '</div></footer></article>';
@@ -3710,6 +4123,32 @@
           });
       });
     });
+    var checkBtn = qs('[data-check-vk-chain]', card);
+    if (checkBtn) {
+      checkBtn.addEventListener('click', function () {
+        var slot = qs('.vk-chain-check-slot', card);
+        checkBtn.disabled = true;
+        runVkChainCheck({ chainId: chainId, slot: slot }).finally(function () {
+          checkBtn.disabled = false;
+        });
+      });
+    }
+    var testBtn = qs('[data-test-vk-chain]', card);
+    if (testBtn) {
+      testBtn.addEventListener('click', function () {
+        showConfirm(
+          'Отправить тестовый пост?',
+          'На стену сообщества уйдёт короткий пост «Проверка связки» и сразу будет удалён.',
+          function () {
+            var slot = qs('.vk-chain-check-slot', card);
+            testBtn.disabled = true;
+            runVkChainCheck({ chainId: chainId, slot: slot, publishTest: true }).finally(function () {
+              testBtn.disabled = false;
+            });
+          },
+        );
+      });
+    }
     var del = qs('[data-del-vk-chain]', card);
     if (del) {
       del.addEventListener('click', function () {
@@ -3728,7 +4167,8 @@
   }
 
   function submitVkChainFromForm(root) {
-    var maxId = Number(qs('#vc_max', root) ? qs('#vc_max', root).value : '');
+    var tgChainId = readVkFormTgChainId(root);
+    var maxId = readVkFormMaxChatId(root);
     var groupIdEl = qs('#vc_group_id', root);
     var tokenEl = qs('#vc_token', root);
     var vkGroup = groupIdEl ? String(groupIdEl.value || '').trim().replace(/^-/, '') : '';
@@ -3736,15 +4176,20 @@
     var vkInt = integrationsCache.find(function (i) {
       return i.platform === 'vk' && i.status === 'connected';
     });
-    // Токен берём из формы или из сохранённой интеграции (сервер тоже это сделает, но проверяем на клиенте)
     if (!vkToken && vkInt && vkInt.token) vkToken = String(vkInt.token).trim();
     var sw = readSwitches(root);
-    if (!maxId) {
-      showToast('Выберите канал MAX', 'error');
+    if (!tgChainId && !maxId) {
+      showToast('Выберите канал Telegram из связки TG→MAX', 'error');
       return;
     }
     if (!vkGroup) {
-      showToast('Выберите сообщество ВКонтакте: введите ссылку и нажмите «Найти» или загрузите список', 'error');
+      var listEl = qs('#vc_groups_list', root);
+      var checked = listEl ? qsa('.vk-group-item__cb:checked', listEl) : [];
+      if (checked.length > 1) {
+        submitVkChainsMulti(root, vkInt);
+        return;
+      }
+      showToast('Выберите сообщество ВКонтакте из списка или найдите по ссылке', 'error');
       return;
     }
     if (!vkToken) {
@@ -3754,12 +4199,12 @@
     var btn = qs('#vc_submit', root);
     if (btn) btn.disabled = true;
     var body = {
-      max_chat_id: maxId,
       vk_group_id: vkGroup,
       forward_posts: sw.forward_posts !== false,
       sync_comments: !!sw.sync_comments,
     };
-    // Передаём токен только если он явно введён (иначе сервер возьмёт из интеграции)
+    if (tgChainId) body.tg_chain_id = tgChainId;
+    else body.max_chat_id = maxId;
     if (tokenEl && tokenEl.value.trim()) body.vk_token = tokenEl.value.trim();
     postJson('/vk-chains', body)
       .then(function () {
@@ -3780,15 +4225,18 @@
       getJson('/tg-chains').catch(function () {
         return { chains: [] };
       }),
-      fetchMaxLinkedChannels(false).catch(function () {
-        return { channels: maxLinkedChatsCache };
+      fetchTelegramLinkedChats(false).catch(function () {
+        return { channels: tgLinkedChatsCache };
       }),
     ])
       .then(function (bundle) {
         if (currentRoute !== 'tgchains' || chainsPlatformTab !== 'vk') return;
         var data = bundle[0];
         var tgData = bundle[1];
-        var maxChannels = bundle[2].channels || maxLinkedChatsCache || [];
+        var tgChats = bundle[2].channels || tgLinkedChatsCache || [];
+        if (tgChats.length) tgLinkedChatsCache = tgChats;
+        var tgChains = tgData.chains || [];
+        vkPageTgChainsCache = tgChains;
         var chains = data.chains || [];
         var st = data.stats || {};
         var vkInt = integrationsCache.find(function (i) {
@@ -3796,31 +4244,47 @@
         });
         var filtered = filterChainsList(chains, 'vk');
         if (!chains.length) chainsWizardCollapsed = false;
+        var activeTgChains = tgChains.filter(function (c) {
+          return c.active;
+        });
 
         var html = '<div class="chains-hub tg-chains-page">';
         html += renderChainsPageHead('vk', st);
         html += renderChainsPlatformTabs('vk', {
-          tg: (tgData.chains || []).length,
+          tg: tgChains.length,
           vk: chains.length,
         });
         html += renderVkConnectBanner();
         html += '<div class="chains-layout">';
 
         html += renderChainsWizardPanelHead('Новая связка', 'plus-circle');
+        html += '<div class="chains-wizard-steps">';
+        html += '<div class="chains-wizard-step" data-wizard-step="1">① Telegram</div>';
+        html += '<div class="chains-wizard-step" data-wizard-step="2">② VK</div>';
+        html += '<div class="chains-wizard-step" data-wizard-step="3">③ Проверка</div>';
+        html += '</div>';
         html +=
-          '<div class="chains-requirements"><strong>Требования</strong><ul>' +
-          '<li>Активная связка <strong>Telegram → MAX</strong> на тот же канал MAX (источник постов — Telegram)</li>' +
-          '<li>Токен пользователя VK (не сообщества) с правами <code>wall</code>, <code>photos</code>, <code>video</code>, <code>groups</code></li>' +
-          '<li>Для комментариев дополнительно доступ к обсуждениям сообщества</li>' +
+          '<div class="chains-requirements"><strong>Как это работает</strong><ul>' +
+          '<li>Выберите <strong>канал Telegram</strong> из уже настроенной пересылки Telegram → MAX</li>' +
+          '<li>Выберите <strong>сообщество VK</strong> из списка (или вставьте ссылку)</li>' +
+          '<li>Нажмите «Проверить», чтобы убедиться, что публикация на стену возможна</li>' +
           '</ul></div>';
         html += '<div class="forwarding-add-form forwarding-add-form--picks">';
-        html +=
-          '<div class="form-group"><div class="flex-between" style="align-items:center;gap:8px;margin-bottom:6px"><label style="margin:0">Канал MAX — якорь (тот же, что в TG→MAX)</label><button type="button" class="btn btn-ghost btn-sm" id="vc_refresh_max"><i data-lucide="refresh-cw"></i></button></div>';
-        html +=
-          '<select class="select" id="vc_max">' +
-          buildMaxChannelSelectOptions(maxChannels, { adminOnly: true }) +
-          '</select></div>';
-        // ── Токен (если VK не подключён глобально) ──
+
+        html += '<div class="form-group">';
+        html += '<label>Канал Telegram — откуда брать посты</label>';
+        html += buildVkTgChainSelect(tgChains);
+        html += '<p class="form-hint" id="vc_tg_max_hint"></p>';
+        html += '<input type="hidden" id="vc_max" value=""/>';
+        if (!activeTgChains.length) {
+          html +=
+            '<div class="chains-connect-banner" style="margin-top:8px">' +
+            '<span>Сначала создайте связку Telegram → MAX — из неё подтянется канал.</span>' +
+            '<button type="button" class="btn btn-ghost btn-sm" data-chains-tab="tg">Настроить TG → MAX</button>' +
+            '</div>';
+        }
+        html += '</div>';
+
         if (!vkInt) {
           html +=
             '<div class="form-group">' +
@@ -3832,29 +4296,39 @@
           html += '<input type="hidden" id="vc_token" value=""/>';
         }
 
-        // ── Выбор сообщества ──
         html += '<div class="form-group">';
         html += '<div class="flex-between" style="align-items:center;gap:8px;margin-bottom:6px">';
         html += '<label style="margin:0">Сообщество ВКонтакте</label>';
-        html += '<button type="button" class="btn btn-ghost btn-sm" id="vc_load_groups_btn"><i data-lucide="list"></i> Мои сообщества</button>';
+        html +=
+          '<button type="button" class="btn btn-ghost btn-sm" id="vc_load_groups_btn"><i data-lucide="refresh-cw"></i> Обновить список</button>';
         html += '</div>';
-        html += '<div style="display:flex;gap:8px">';
-        html += '<input class="input" id="vc_community_input" placeholder="vk.com/ostrovskidok  или  12345678" style="flex:1"/>';
-        html += '<button type="button" class="btn btn-secondary btn-sm" id="vc_resolve_btn" style="white-space:nowrap">Найти</button>';
+        html += '<div class="vk-community-search-row">';
+        html +=
+          '<input class="input" id="vc_community_input" placeholder="Поиск по названию или вставьте vk.com/…" autocomplete="off"/>';
+        html +=
+          '<button type="button" class="btn btn-secondary btn-sm" id="vc_resolve_btn" style="white-space:nowrap">Найти</button>';
         html += '</div>';
-        html += '<p class="form-hint">Введите ссылку, username или числовой ID сообщества и нажмите «Найти».</p>';
+        html +=
+          '<p class="form-hint">Список сообществ, где вы админ, загружается сам. Поиск фильтрует его; «Найти» — если сообщества нет в списке.</p>';
         html += '<div id="vc_community_result" style="margin-top:8px"></div>';
         html += '<div id="vc_groups_list" style="margin-top:8px"></div>';
         html += '<div id="vc_multi_bar"></div>';
         html += '<input type="hidden" id="vc_group_id"/>';
         html += '</div>';
+
+        html += '<div id="vc_pair_preview" class="tg-chain-pair-live is-empty"></div>';
         html += '<div id="vcToggles">';
         html += toggleRow('forward_posts', 'Публиковать посты Telegram → VK', 'Текст и фото как в Telegram', true);
         html += toggleRow('sync_comments', 'Синхронизировать комментарии', 'VK ↔ MAX miniapp', false);
         html += '</div>';
-        html += '<div class="forwarding-add-form-actions" style="margin-top:14px">';
+        html += '<div id="vc_check_result" class="vk-check-slot"></div>';
+        html += '<div class="forwarding-add-form-actions vk-chain-form-actions">';
         html +=
-          '<button type="button" class="btn btn-primary btn-block" id="vc_submit"><i data-lucide="zap"></i> Создать связку</button>';
+          '<button type="button" class="btn btn-ghost" id="vc_check"><i data-lucide="shield-check"></i> Проверить связку</button>';
+        html +=
+          '<button type="button" class="btn btn-ghost" id="vc_test_post" title="Опубликует короткий пост и сразу удалит его">Тестовый пост</button>';
+        html +=
+          '<button type="button" class="btn btn-primary" id="vc_submit"><i data-lucide="zap"></i> Создать связку</button>';
         html += '</div></div></div></section>';
 
         html += '<section class="chains-panel chains-panel--list">';
@@ -3864,7 +4338,7 @@
         html += '<div class="chains-list-grid">';
         if (filtered.length) {
           filtered.forEach(function (c) {
-            html += renderVkChainCardHtml(c);
+            html += renderVkChainCardHtml(c, tgChains);
           });
         } else {
           html += renderChainsEmptyState('vk', chains.length > 0);
@@ -3876,28 +4350,79 @@
         bindChainsPlatformTabs(main);
         bindRouteJumpButtons(main);
         bindChainsListToolbar(main, 'vk', chains);
-        var refreshMax = qs('#vc_refresh_max', main);
-        if (refreshMax) {
-          refreshMax.addEventListener('click', function () {
-            fetchMaxLinkedChannels(true)
-              .then(function (data) {
-                var sel = qs('#vc_max', main);
-                if (sel) sel.innerHTML = buildMaxChannelSelectOptions(data.channels || [], { adminOnly: true });
-                showToast((data.channels || []).length ? 'MAX обновлён' : 'Каналы не найдены', 'info');
-                refreshIcons();
-              })
-              .catch(function (e) {
-                showToast(e.message || 'Ошибка', 'error');
-              });
-          });
-        }
         bindVkCommunityPicker(main, vkInt || null);
         var submit = qs('#vc_submit', main);
-        if (submit) submit.addEventListener('click', function () { submitVkChainFromForm(main); });
+        if (submit) {
+          submit.addEventListener('click', function () {
+            submitVkChainFromForm(main);
+          });
+        }
+        var checkBtn = qs('#vc_check', main);
+        if (checkBtn) {
+          checkBtn.addEventListener('click', function () {
+            var body = {
+              vk_group_id: qs('#vc_group_id', main) ? String(qs('#vc_group_id', main).value || '').trim() : '',
+            };
+            var tgChainId = readVkFormTgChainId(main);
+            var maxId = readVkFormMaxChatId(main);
+            if (tgChainId) body.tg_chain_id = tgChainId;
+            if (maxId) body.max_chat_id = maxId;
+            var tokenEl = qs('#vc_token', main);
+            if (tokenEl && tokenEl.value.trim()) body.vk_token = tokenEl.value.trim();
+            if (!body.tg_chain_id && !body.max_chat_id) {
+              showToast('Выберите канал Telegram', 'error');
+              return;
+            }
+            if (!body.vk_group_id) {
+              showToast('Выберите сообщество VK', 'error');
+              return;
+            }
+            checkBtn.disabled = true;
+            runVkChainCheck({ body: body, slot: qs('#vc_check_result', main) }).finally(function () {
+              checkBtn.disabled = false;
+            });
+          });
+        }
+        var testBtn = qs('#vc_test_post', main);
+        if (testBtn) {
+          testBtn.addEventListener('click', function () {
+            showConfirm(
+              'Отправить тестовый пост?',
+              'На стену сообщества уйдёт короткий пост «Проверка связки» и сразу будет удалён.',
+              function () {
+                var body = {
+                  vk_group_id: qs('#vc_group_id', main)
+                    ? String(qs('#vc_group_id', main).value || '').trim()
+                    : '',
+                };
+                var tgChainId = readVkFormTgChainId(main);
+                var maxId = readVkFormMaxChatId(main);
+                if (tgChainId) body.tg_chain_id = tgChainId;
+                if (maxId) body.max_chat_id = maxId;
+                var tokenEl = qs('#vc_token', main);
+                if (tokenEl && tokenEl.value.trim()) body.vk_token = tokenEl.value.trim();
+                if (!body.vk_group_id) {
+                  showToast('Выберите сообщество VK', 'error');
+                  return;
+                }
+                testBtn.disabled = true;
+                runVkChainCheck({
+                  body: body,
+                  slot: qs('#vc_check_result', main),
+                  publishTest: true,
+                }).finally(function () {
+                  testBtn.disabled = false;
+                });
+              },
+            );
+          });
+        }
         bindToggleRows(main, null);
         qsa('[data-vk-chain-id]', main).forEach(function (card) {
           var chainId = card.getAttribute('data-vk-chain-id');
-          var chain = chains.find(function (c) { return c.id === chainId; });
+          var chain = chains.find(function (c) {
+            return c.id === chainId;
+          });
           if (chain) bindVkChainCard(card, chain);
         });
         refreshIcons();
@@ -4710,7 +5235,7 @@
     if (!main) return;
     main.innerHTML = skeletonPage();
     Promise.all([
-      getJson('/channels').catch(function () { return { channels: [] }; }),
+      getJson('/channels?summary=1').catch(function () { return { channels: [] }; }),
       getJsonAbs(API_INTEGRATIONS),
       getJsonAbs(API_FLOWS),
       getJsonAbs(API_INTEGRATIONS + '/meta/max'),
@@ -5788,7 +6313,11 @@
               '<p>Отдельный бот: <code>' +
               esc(tgAsBot.bot_username ? '@' + tgAsBot.bot_username : tgAsBot.token_preview || '—') +
               '</code> — ' +
-              (tgAsBot.api_ok ? 'подключён' : 'ошибка API') +
+              (tgAsBot.api_ok === true
+                ? 'подключён'
+                : tgAsBot.api_ok === false
+                  ? 'ошибка API'
+                  : 'токен задан') +
               '. Модерирует группы обсуждений, основной CommentBot занимается синхронизацией.</p>';
           } else {
             html +=
@@ -8533,8 +9062,13 @@
     var rawHash = (location.hash || '').replace(/^#/, '').trim();
     var hashBase = rawHash.split(/[/?]/)[0];
     if (hashBase !== currentRoute) {
-      location.hash = currentRoute;
+      if (window.history && typeof window.history.replaceState === 'function') {
+        window.history.replaceState(null, '', '#' + currentRoute);
+      } else {
+        location.hash = currentRoute;
+      }
     }
+    beginRouteLoads();
     setPageTitle();
     renderSidebar();
     renderTopbarForRoute();
@@ -8569,7 +9103,7 @@
   }
 
   function loadBotStatus() {
-    getJson('/bot-status')
+    getJson('/bot-status', { ignoreRouteAbort: true })
       .then(function (s) {
         var el = qs('#botStatus');
         if (!el) return;
@@ -8611,54 +9145,59 @@
   }
 
   function boot() {
-    getJson('/settings')
-      .then(function () {
-        var app = qs('#app');
-        if (app) app.classList.remove('hidden');
-        var logout = qs('#logoutBtn');
-        if (logout) {
-          logout.addEventListener('click', function () {
-            postJson('/panel-logout', {})
-              .then(function () {
-                window.location.href = '/admin/login';
-              })
-              .catch(function () {
-                window.location.href = '/admin/login';
-              });
-          });
-        }
-        loadBotStatus();
-        var sidebarToggle = qs('#sidebarToggle');
-        var sidebarOverlay = qs('#sidebarOverlay');
-        if (sidebarToggle) {
-          sidebarToggle.addEventListener('click', function () {
-            var sidebar = qs('#sidebar');
-            if (sidebar && sidebar.classList.contains('open')) closeSidebarMobile();
-            else openSidebarMobile();
-          });
-        }
-        if (sidebarOverlay) {
-          sidebarOverlay.addEventListener('click', closeSidebarMobile);
-        }
-        var mainEl = qs('#mainContent');
-        if (mainEl && mainEl.dataset.channelNavBound !== '1') {
-          mainEl.dataset.channelNavBound = '1';
-          mainEl.addEventListener('click', function (e) {
-            var card = e.target.closest('a.channel-card[data-chat-id]');
-            if (!card) return;
-            e.preventDefault();
-            selectedChannelId = Number(card.getAttribute('data-chat-id'));
-            location.hash = 'channels';
-          });
-        }
-        window.addEventListener('hashchange', handleRoute);
-        handleRoute();
-        refreshIcons();
-      })
-      .catch(function () {
-        /* handleAuth redirects */
-      });
+    function startShell() {
+      var app = qs('#app');
+      if (app) app.classList.remove('hidden');
+      var logout = qs('#logoutBtn');
+      if (logout) {
+        logout.addEventListener('click', function () {
+          postJson('/panel-logout', {})
+            .then(function () {
+              window.location.href = '/admin/login';
+            })
+            .catch(function () {
+              window.location.href = '/admin/login';
+            });
+        });
+      }
+      loadBotStatus();
+      var sidebarToggle = qs('#sidebarToggle');
+      var sidebarOverlay = qs('#sidebarOverlay');
+      if (sidebarToggle) {
+        sidebarToggle.addEventListener('click', function () {
+          var sidebar = qs('#sidebar');
+          if (sidebar && sidebar.classList.contains('open')) closeSidebarMobile();
+          else openSidebarMobile();
+        });
+      }
+      if (sidebarOverlay) {
+        sidebarOverlay.addEventListener('click', closeSidebarMobile);
+      }
+      var mainEl = qs('#mainContent');
+      if (mainEl && mainEl.dataset.channelNavBound !== '1') {
+        mainEl.dataset.channelNavBound = '1';
+        mainEl.addEventListener('click', function (e) {
+          var card = e.target.closest('a.channel-card[data-chat-id]');
+          if (!card) return;
+          e.preventDefault();
+          selectedChannelId = Number(card.getAttribute('data-chat-id'));
+          location.hash = 'channels';
+        });
+      }
+      window.addEventListener('hashchange', handleRoute);
+      handleRoute();
+      refreshIcons();
+    }
+
+    startShell();
+    getJson('/settings', { ignoreRouteAbort: true }).catch(function () {
+      /* handleAuth redirects */
+    });
   }
+
+  window.addEventListener('load', function () {
+    refreshIcons();
+  });
 
   window.AdminShell = {
     showToast: showToast,
