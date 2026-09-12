@@ -91,7 +91,7 @@ function extractAxiosErrorText(err: unknown): string {
     }
     const cause = err.cause
     if (cause && typeof cause === 'object') {
-      const c = cause as NodeJS.ErrnoException
+      const c = cause as NodeJS.ErrnoException & { address?: string; port?: number }
       if (c.code && c.code !== err.code) parts.push(c.code)
       if (c.syscall) parts.push(String(c.syscall))
       if (c.address) parts.push(String(c.address))
