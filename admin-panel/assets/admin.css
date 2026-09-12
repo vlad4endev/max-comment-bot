@@ -1878,6 +1878,195 @@ tbody tr:hover td {
   color: var(--text-secondary);
 }
 
+.log-badge-chain {
+  text-transform: none;
+  background: color-mix(in srgb, var(--accent, #0d9488) 16%, transparent);
+  color: var(--accent, #0d9488);
+}
+
+.chain-log-panel {
+  margin-bottom: 12px;
+  padding: 12px 14px;
+  background: var(--surface-2, #f4f5f7);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.chain-log-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.chain-log-health {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.9rem;
+}
+
+.chain-log-health-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-muted);
+}
+
+.chain-log-health.is-ok .chain-log-health-dot {
+  background: #16a34a;
+}
+
+.chain-log-health.is-warn .chain-log-health-dot {
+  background: var(--warning, #e07b00);
+}
+
+.chain-log-health.is-bad .chain-log-health-dot {
+  background: var(--danger, #dc2626);
+}
+
+.chain-log-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+.chain-log-metrics .is-warn,
+.chain-log-card-stats .is-warn,
+.chain-log-queue-row .is-warn {
+  color: var(--warning, #e07b00);
+}
+
+.chain-log-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.chain-log-card {
+  cursor: pointer;
+  background: var(--bg-card, #fff);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+
+.chain-log-card.is-ok {
+  border-left-color: #16a34a;
+}
+
+.chain-log-card.is-warn {
+  border-left-color: var(--warning, #e07b00);
+}
+
+.chain-log-card.is-bad {
+  border-left-color: var(--danger, #dc2626);
+}
+
+.chain-log-card.is-idle {
+  border-left-color: var(--text-muted);
+  opacity: 0.88;
+}
+
+.chain-log-card header {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 4px;
+}
+
+.chain-log-kind,
+.chain-log-status {
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.chain-log-title {
+  font-weight: 600;
+  font-size: 0.88rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chain-log-card-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  font-size: 0.75rem;
+  margin-top: 4px;
+  color: var(--text-secondary);
+}
+
+.chain-log-error {
+  margin-top: 6px;
+  font-size: 0.75rem;
+  color: var(--danger, #dc2626);
+  word-break: break-word;
+}
+
+.chain-log-queue,
+.chain-log-events {
+  margin-top: 10px;
+}
+
+.chain-log-queue h4,
+.chain-log-events h4 {
+  margin: 0 0 6px;
+  font-size: 0.78rem;
+  font-weight: 650;
+  color: var(--text-secondary);
+}
+
+.chain-log-queue-row,
+.chain-log-event {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  font-size: 0.78rem;
+  padding: 4px 0;
+  border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+}
+
+.chain-log-event time {
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.chain-log-event-tag {
+  font-size: 0.68rem;
+  font-weight: 650;
+  text-transform: uppercase;
+}
+
+.chain-log-event.outcome-success .chain-log-event-tag {
+  color: #16a34a;
+}
+
+.chain-log-event.outcome-fail .chain-log-event-tag {
+  color: var(--danger, #dc2626);
+}
+
+.chain-log-event.outcome-retry,
+.chain-log-event.outcome-partial,
+.chain-log-event.outcome-queue {
+  color: inherit;
+}
+
+.chain-log-event.outcome-retry .chain-log-event-tag,
+.chain-log-event.outcome-partial .chain-log-event-tag,
+.chain-log-event.outcome-queue .chain-log-event-tag {
+  color: var(--warning, #e07b00);
+}
+
 .log-entry.level-warn .log-badge {
   background: color-mix(in srgb, var(--warning) 18%, transparent);
   color: var(--warning);

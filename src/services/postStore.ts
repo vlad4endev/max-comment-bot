@@ -1076,7 +1076,7 @@ export function buildMiniAppUrl(
     if (!base) {
       throw new Error('buildMiniAppUrl: задайте BOT_NICKNAME или MINI_APP_URL')
     }
-    const u = new URL(base.replace(/\/+$/, ''))
+    const u = new URL(base)
     u.searchParams.set('post_id', postId)
     u.searchParams.set('chat_id', String(chatId))
     if (messageMid && messageMid.trim() !== '') {

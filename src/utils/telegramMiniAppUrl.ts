@@ -47,7 +47,7 @@ export function isPrivateOrLocalMiniAppHost(url: string): boolean {
   }
 }
 
-/** Собрать `https://домен/miniapp` из `WEBHOOK_URL`, если `MINI_APP_URL` не задан. */
+/** Собрать `https://домен/miniapp/` из `WEBHOOK_URL`, если `MINI_APP_URL` не задан. */
 export function deriveMiniAppUrlFromWebhook(webhookUrl: string): string | undefined {
   const trimmed = webhookUrl.trim()
   if (!trimmed.startsWith('https://')) {
@@ -55,10 +55,10 @@ export function deriveMiniAppUrlFromWebhook(webhookUrl: string): string | undefi
   }
   try {
     const u = new URL(trimmed)
-    u.pathname = '/miniapp'
+    u.pathname = '/miniapp/'
     u.search = ''
     u.hash = ''
-    const out = u.toString().replace(/\/+$/, '')
+    const out = u.toString()
     return isTelegramWebAppUrl(out) ? out : undefined
   } catch {
     return undefined
@@ -70,7 +70,18 @@ export function normalizeMiniAppUrl(raw: string): string | undefined {
   if (trimmed === '') {
     return undefined
   }
-  return trimmed.replace(/\/+$/, '')
+  try {
+    const u = new URL(trimmed)
+    if (u.pathname === '/miniapp' || u.pathname === '/miniapp/' || u.pathname === '' || u.pathname === '/') {
+      u.pathname = '/miniapp/'
+    }
+    return u.toString()
+  } catch {
+    if (/\/miniapp\/?$/i.test(trimmed)) {
+      return trimmed.replace(/\/miniapp\/?$/i, '/miniapp/')
+    }
+    return trimmed
+  }
 }
 
 /** Ensures Telegram WebView opens in TG mode (BotFather URL, deep links, notifications). */
@@ -84,7 +95,10 @@ export function withTelegramMiniappPlatform(rawUrl: string): string {
     if (!url.searchParams.has('platform')) {
       url.searchParams.set('platform', 'telegram')
     }
-    return url.toString().replace(/\/+$/, '')
+    if (url.pathname === '/miniapp' || url.pathname === '/miniapp/') {
+      url.pathname = '/miniapp/'
+    }
+    return url.toString()
   } catch {
     return trimmed
   }
@@ -149,7 +163,7 @@ export function logMiniAppUrlDiagnostics(
     return
   }
   logger.warn(
-    'Mini App URL не настроен: задайте MINI_APP_URL=https://ваш-домен/miniapp (публичный HTTPS) или WEBHOOK_URL для автоподстановки. Тот же URL укажите в панели MAX (dev.max.ru) и в BotFather для Telegram.',
+    'Mini App URL не настроен: задайте MINI_APP_URL=https://ваш-домен/miniapp/ (со слэшем в конце) или WEBHOOK_URL для автоподстановки. Тот же URL укажите в панели MAX (dev.max.ru) и в BotFather для Telegram.',
   )
 }
 

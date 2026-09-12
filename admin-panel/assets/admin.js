@@ -6822,6 +6822,15 @@
     return out;
   }
 
+  function isChainLogEntry(entry) {
+    var msg = (entry && entry.message) || '';
+    var extra = entry && entry.extra;
+    if (msg.indexOf('[цепочка]') !== -1 || msg.indexOf('[tgChain]') !== -1 || msg.indexOf('[vkChain]') !== -1) {
+      return true;
+    }
+    return extra && extra.scope === 'chain';
+  }
+
   function logEntryHtml(entry, filter) {
     var level = entry.level || 'UNKNOWN';
     var label = LOG_LEVEL_LABELS[level] || level;
@@ -6840,6 +6849,9 @@
       '<span class="log-badge">' +
       esc(label) +
       '</span>' +
+      (isChainLogEntry(entry)
+        ? '<span class="log-badge log-badge-chain">цепочка</span>'
+        : '') +
       '<div class="log-entry-actions">' +
       '<button type="button" class="btn btn-ghost btn-sm log-copy-btn" data-copy-log-entry title="Скопировать запись целиком">' +
       '<i data-lucide="copy"></i> Копировать</button>' +
@@ -7283,6 +7295,7 @@
     html += '<option value="database">База данных</option>';
     html += '<option value="rate_limit">Rate limit</option>';
     html += '<option value="integrations">Интеграции</option>';
+    html += '<option value="chains">Цепочки / перенос</option>';
     html += '</select>';
     html +=
       '<button type="button" class="btn btn-primary" id="log_ai_run"><i data-lucide="sparkles"></i> Запустить ИИ-анализ</button>';
@@ -7400,12 +7413,222 @@
       });
   }
 
+  function fmtWaitMs(ms) {
+    if (ms == null || !Number.isFinite(ms) || ms < 0) return '';
+    if (ms < 60000) return Math.max(1, Math.round(ms / 1000)) + ' с';
+    var min = Math.round(ms / 60000);
+    if (min < 60) return min + ' мин';
+    return Math.floor(min / 60) + ' ч';
+  }
+
+  function chainStatusClass(status) {
+    if (status === 'ok') return 'is-ok';
+    if (status === 'paused' || status === 'idle') return 'is-idle';
+    if (status === 'stuck' || status === 'failing') return 'is-bad';
+    return 'is-warn';
+  }
+
+  function chainKindLabel(kind) {
+    if (kind === 'tg_vk') return 'TG→VK';
+    return 'TG→MAX';
+  }
+
+  function chainOutcomeLabel(outcome) {
+    var map = {
+      success: 'успех',
+      fail: 'ошибка',
+      retry: 'повтор',
+      skip: 'пропуск',
+      received: 'получен',
+      partial: 'частично',
+      queue: 'очередь',
+    };
+    return map[outcome] || outcome || '';
+  }
+
+  function renderChainTransferPanelHtml(data) {
+    data = data || {};
+    var health = data.health || 'ok';
+    var healthClass = health === 'critical' ? 'is-bad' : health === 'attention' ? 'is-warn' : 'is-ok';
+    var html = '<div class="chain-log-head">';
+    html +=
+      '<div class="chain-log-health ' +
+      healthClass +
+      '"><span class="chain-log-health-dot"></span><strong>' +
+      esc(data.health_label || 'Перенос постов') +
+      '</strong></div>';
+    html += '<div class="chain-log-metrics">';
+    html +=
+      '<span title="Опрос Telegram">опрос: <strong>' +
+      esc(String(data.poll_loops || 0)) +
+      '</strong></span>';
+    html +=
+      '<span title="Опубликовано сегодня">сегодня: <strong>' +
+      esc(String(data.forwarded_today || 0)) +
+      '</strong></span>';
+    html +=
+      '<span' +
+      (data.errors_today ? ' class="is-warn"' : '') +
+      ' title="Ошибки сегодня">ошибок: <strong>' +
+      esc(String(data.errors_today || 0)) +
+      '</strong></span>';
+    html +=
+      '<span' +
+      (data.queue_posts ? ' class="is-warn"' : '') +
+      ' title="Посты в очереди переноса">очередь постов: <strong>' +
+      esc(String(data.queue_posts || 0)) +
+      '</strong></span>';
+    html +=
+      '<span' +
+      (data.queue_comments ? ' class="is-warn"' : '') +
+      ' title="Комментарии в очереди">очередь коммент.: <strong>' +
+      esc(String(data.queue_comments || 0)) +
+      '</strong></span>';
+    if (data.in_flight_forwards) {
+      html +=
+        '<span title="Сейчас публикуются">в работе: <strong>' +
+        esc(String(data.in_flight_forwards)) +
+        '</strong></span>';
+    }
+    if (data.album_buffer) {
+      html +=
+        '<span title="Альбомы ждут сборки">альбомы: <strong>' +
+        esc(String(data.album_buffer)) +
+        '</strong></span>';
+    }
+    html += '</div></div>';
+
+    var chains = data.chains || [];
+    if (chains.length) {
+      html += '<div class="chain-log-cards">';
+      chains.forEach(function (c) {
+        html +=
+          '<article class="chain-log-card ' +
+          chainStatusClass(c.status) +
+          '" data-chain-filter="' +
+          esc(c.id) +
+          '">';
+        html += '<header>';
+        html += '<span class="chain-log-kind">' + esc(chainKindLabel(c.kind)) + '</span>';
+        html +=
+          '<span class="chain-log-status">' + esc(c.status_label || c.status || '') + '</span>';
+        html += '</header>';
+        html += '<div class="chain-log-title" title="' + esc(c.title || '') + '">' + esc(c.title || '—') + '</div>';
+        html +=
+          '<div class="chain-log-path muted text-sm">' +
+          esc(c.source || '') +
+          ' → ' +
+          esc(c.target || '') +
+          '</div>';
+        html += '<div class="chain-log-card-stats">';
+        html += '<span>сегодня ' + esc(String(c.forwarded_today || 0)) + '</span>';
+        if (c.errors_today) html += '<span class="is-warn">ошибок ' + esc(String(c.errors_today)) + '</span>';
+        if (c.queue_posts) html += '<span class="is-warn">очередь ' + esc(String(c.queue_posts)) + '</span>';
+        if (c.oldest_wait_ms) html += '<span>ждёт ' + esc(fmtWaitMs(c.oldest_wait_ms)) + '</span>';
+        html += '</div>';
+        if (c.last_forwarded_at) {
+          html +=
+            '<div class="muted text-sm">последний перенос: ' +
+            esc(fmtRelativeTime(c.last_forwarded_at)) +
+            '</div>';
+        } else if (c.active && c.forward_posts) {
+          html += '<div class="muted text-sm">успешных переносов ещё не было</div>';
+        }
+        if (c.last_error) {
+          html += '<div class="chain-log-error">' + esc(c.last_error) + '</div>';
+        }
+        html += '</article>';
+      });
+      html += '</div>';
+    } else {
+      html += '<p class="muted text-sm" style="margin:0.35rem 0 0">Нет настроенных цепочек.</p>';
+    }
+
+    var queues = data.queues || {};
+    var postJobs = queues.posts || [];
+    if (postJobs.length) {
+      html += '<div class="chain-log-queue">';
+      html += '<h4>Накопление очереди</h4>';
+      postJobs.slice(0, 8).forEach(function (job) {
+        var chain = chains.find(function (row) {
+          return row.id === job.chain_id;
+        });
+        html += '<div class="chain-log-queue-row">';
+        html +=
+          '<span>' +
+          esc((chain && chain.title) || job.chain_id.slice(0, 8)) +
+          '</span>';
+        html +=
+          '<span>попытка ' +
+          esc(String(job.attempts || 0)) +
+          (job.created_at ? ' · ' + esc(fmtWaitMs(Date.now() - job.created_at)) : '') +
+          '</span>';
+        if (job.last_error) html += '<span class="is-warn">' + esc(job.last_error) + '</span>';
+        html += '</div>';
+      });
+      html += '</div>';
+    }
+
+    var events = (data.events || []).slice().reverse().slice(0, 12);
+    if (events.length) {
+      html += '<div class="chain-log-events">';
+      html += '<h4>Последние переносы</h4>';
+      events.forEach(function (ev) {
+        html +=
+          '<div class="chain-log-event outcome-' +
+          esc(ev.outcome || '') +
+          '"><time>' +
+          esc(formatLogTimestamp(ev.ts)) +
+          '</time><span class="chain-log-event-tag">' +
+          esc(chainOutcomeLabel(ev.outcome)) +
+          '</span><span>' +
+          esc((ev.chainId === '*' ? '' : '«' + (ev.title || '') + '»: ') + (ev.message || '')) +
+          '</span></div>';
+      });
+      html += '</div>';
+    }
+    return html;
+  }
+
+  function bindChainTransferPanel(root) {
+    if (!root) return;
+    qsa('[data-chain-filter]', root).forEach(function (card) {
+      card.addEventListener('click', function () {
+        var chainId = card.getAttribute('data-chain-filter') || '';
+        var filterEl = qs('#log_filter');
+        if (filterEl && chainId) {
+          filterEl.value = chainId;
+          var runBtn = qs('#log_run');
+          if (runBtn) runBtn.click();
+        }
+      });
+    });
+  }
+
+  function loadChainTransferPanel(main) {
+    var panel = qs('#chain_transfer_panel', main);
+    if (!panel) return;
+    getJson('/logs/chains')
+      .then(function (data) {
+        if (currentRoute !== 'logs') return;
+        panel.innerHTML = renderChainTransferPanelHtml(data);
+        bindChainTransferPanel(panel);
+        refreshIcons();
+      })
+      .catch(function () {
+        if (currentRoute !== 'logs') return;
+        panel.innerHTML =
+          '<p class="muted text-sm" style="margin:0">Не удалось загрузить статус переноса цепочек.</p>';
+      });
+  }
+
   function renderLogs() {
     var main = qs('#mainContent');
     if (!main) return;
     clearLogsTimer();
     main.innerHTML =
       '<p class="text-sm muted">Журнал работы бота: события, предупреждения и ошибки. Новые записи сверху.</p>' +
+      '<div id="chain_transfer_panel" class="chain-log-panel"><p class="muted text-sm" style="margin:0">Загрузка статуса переноса…</p></div>' +
       '<div id="db_stats_bar" style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px;padding:10px 12px;background:var(--surface-2,#f4f5f7);border-radius:8px;font-size:13px;align-items:center">' +
       '<span style="font-weight:600;color:var(--text-2,#555)">БД:</span>' +
       '<span id="dbs_posts" class="log-stat" title="Всего постов в БД">📄 посты: <strong>…</strong></span>' +
@@ -7430,6 +7653,8 @@
       '</div>' +
       renderLogAiAnalysisControls({ limit: 200, compact: true }) +
       '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px">' +
+      '<button type="button" class="btn btn-ghost btn-sm log-quick-filter" data-filter="цепочка">🔗 Цепочки</button>' +
+      '<button type="button" class="btn btn-ghost btn-sm log-quick-filter" data-filter="очередь">📥 Очередь</button>' +
       '<button type="button" class="btn btn-ghost btn-sm log-quick-filter" data-filter="db:">🗄 БД</button>' +
       '<button type="button" class="btn btn-ghost btn-sm log-quick-filter" data-filter="commentButton">🔘 Кнопки</button>' +
       '<button type="button" class="btn btn-ghost btn-sm log-quick-filter" data-filter="attach_failed">❌ attach_failed</button>' +
@@ -7524,7 +7749,10 @@
       var auto = qs('#log_auto', main);
       if (!auto || !auto.checked) return;
       logsRefreshTimer = window.setInterval(function () {
-        if (currentRoute === 'logs') run(true);
+        if (currentRoute === 'logs') {
+          run(true);
+          loadChainTransferPanel(main);
+        }
       }, 5000);
     }
 
@@ -7574,8 +7802,12 @@
     }
 
     var dbsRefreshBtn = qs('#dbs_refresh', main);
-    if (dbsRefreshBtn) dbsRefreshBtn.addEventListener('click', loadDbStats);
+    if (dbsRefreshBtn) dbsRefreshBtn.addEventListener('click', function () {
+      loadDbStats();
+      loadChainTransferPanel(main);
+    });
     loadDbStats();
+    loadChainTransferPanel(main);
 
     qsa('.log-quick-filter', main).forEach(function (btn) {
       btn.addEventListener('click', function () {
@@ -7602,6 +7834,7 @@
 
     qs('#log_run', main).addEventListener('click', function () {
       run(false);
+      loadChainTransferPanel(main);
     });
     bindLogAiAnalysis(main, 'logs');
     var autoEl = qs('#log_auto', main);

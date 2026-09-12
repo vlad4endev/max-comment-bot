@@ -27,6 +27,8 @@ import { invalidatePersistentMtprotoClient } from './services/telegramUserArchiv
 import {
   applyTelegramProxyRuntime,
   setTelegramProxyChangeHandler,
+  startTelegramProxyWatchdog,
+  stopTelegramProxyWatchdog,
 } from './utils/telegramProxyRuntime'
 import { disabledAdminStore } from './services/disabledAdminStore'
 import { subscriberStore } from './services/subscriberStore'
@@ -158,7 +160,47 @@ async function main(): Promise<void> {
   setTelegramProxyChangeHandler(() => {
     invalidatePersistentMtprotoClient()
   })
+
+  const listenPort = config.listenPort
+  let httpServer: ReturnType<typeof createServer>
+  if (config.receiveMode === 'webhook') {
+    const webhookPath = config.webhookPath!
+    const app = createWebhookApp({
+      bot,
+      webhookPath,
+      webhookSecret: config.webhookSecret,
+    })
+    httpServer = createServer(app)
+    await new Promise<void>((resolve, reject) => {
+      httpServer.listen(listenPort, '0.0.0.0', () => resolve())
+      httpServer.once('error', reject)
+    })
+    logger.info(
+      `HTTP слушает 0.0.0.0:${listenPort}, webhook: POST ${webhookPath}, /api, /miniapp`,
+    )
+    setupGracefulShutdown(bot, {
+      receiveMode: 'webhook',
+      httpServer,
+      webhookUrl: config.webhookUrl,
+    })
+  } else {
+    const app = createHttpApp({ bot })
+    httpServer = createServer(app)
+    await new Promise<void>((resolve, reject) => {
+      httpServer.listen(listenPort, '0.0.0.0', () => resolve())
+      httpServer.once('error', reject)
+    })
+    logger.info(
+      `HTTP слушает 0.0.0.0:${listenPort} (/api, /miniapp); long polling для updates`,
+    )
+    setupGracefulShutdown(bot, {
+      receiveMode: 'polling',
+      httpServer,
+    })
+  }
+
   await applyTelegramProxyRuntime()
+  startTelegramProxyWatchdog()
   await integrationsStore.load()
   await ensureAdminPanelStateLoaded()
   await repairLegacyMiniappTgChains()
@@ -218,8 +260,14 @@ async function main(): Promise<void> {
   setTelegramSyncAlertBot(bot)
   await assertTelegramBotApiOnStartup()
   startTelegramHealthMonitor()
-  process.once('SIGINT', () => stopTelegramHealthMonitor())
-  process.once('SIGTERM', () => stopTelegramHealthMonitor())
+  process.once('SIGINT', () => {
+    stopTelegramHealthMonitor()
+    stopTelegramProxyWatchdog()
+  })
+  process.once('SIGTERM', () => {
+    stopTelegramHealthMonitor()
+    stopTelegramProxyWatchdog()
+  })
   startRuntimeLogRotationScheduler()
   setChannelRegistryChangeHandler(() => notifyChannelRegistryChanged())
   startChannelPostPoller(bot)
@@ -252,35 +300,11 @@ async function main(): Promise<void> {
     })),
   })
 
-  const listenPort = config.listenPort
-
-  // HTTP сразу после базовой инициализации — /health не должен ждать purge/sync/alerts.
-  let httpServer: ReturnType<typeof createServer>
-  if (config.receiveMode === 'webhook') {
-    const webhookPath = config.webhookPath!
-    const webhookUrl = config.webhookUrl!
-
-    const app = createWebhookApp({
-      bot,
-      webhookPath,
-      webhookSecret: config.webhookSecret,
-    })
-
-    httpServer = createServer(app)
-
-    await new Promise<void>((resolve, reject) => {
-      httpServer.listen(listenPort, '0.0.0.0', () => resolve())
-      httpServer.once('error', reject)
-    })
-
-    logger.info(
-      `HTTP слушает 0.0.0.0:${listenPort}, webhook: POST ${webhookPath}, /api, /miniapp`,
-    )
-
+  if (config.receiveMode === 'webhook' && config.webhookUrl) {
     try {
       await setWebhookSubscription({
         token: config.BOT_TOKEN,
-        url: webhookUrl,
+        url: config.webhookUrl,
         secret: config.webhookSecret,
         updateTypes: BOT_WEBHOOK_UPDATE_TYPES,
       })
@@ -296,29 +320,6 @@ async function main(): Promise<void> {
         { error: e instanceof Error ? e.message : String(e) },
       )
     }
-
-    setupGracefulShutdown(bot, {
-      receiveMode: 'webhook',
-      httpServer,
-      webhookUrl,
-    })
-  } else {
-    const app = createHttpApp({ bot })
-    httpServer = createServer(app)
-
-    await new Promise<void>((resolve, reject) => {
-      httpServer.listen(listenPort, '0.0.0.0', () => resolve())
-      httpServer.once('error', reject)
-    })
-
-    logger.info(
-      `HTTP слушает 0.0.0.0:${listenPort} (/api, /miniapp); long polling для updates`,
-    )
-
-    setupGracefulShutdown(bot, {
-      receiveMode: 'polling',
-      httpServer,
-    })
   }
 
   // Диагностика цепочек и тяжёлая синхронизация — после listen.

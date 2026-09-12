@@ -71,7 +71,7 @@ import { createAutopostRouter } from './autopostRoutes'
 import { createTelegramProxyRouter } from './telegramProxyRoutes'
 import { buildDashboardAnalytics, parseDashboardPeriodDays } from '../services/analyticsService'
 import { integrationsStore } from '../services/integrationsStore'
-import { parseAdminLogLine, type AdminLogEntry, type AdminLogLevel } from '../utils/adminLogFormat'
+import { parseAdminLogLine, formatAdminLogExtra, type AdminLogEntry, type AdminLogLevel } from '../utils/adminLogFormat'
 import { resolveTgChainChannelFields, repairStaleTgChainBotTokens } from '../services/tgChainChannelRef'
 import { resolveVkGroup, listVkManagedGroups } from '../services/integrationPlatformClient'
 import { isMtprotoSessionReady, resolveMtprotoCredentials } from '../services/mtprotoConfigStore'
@@ -93,6 +93,7 @@ import {
   testLogAiConnection,
   type LogAnalysisFocus,
 } from '../services/logAnalysisService'
+import { getChainTransferHealthSnapshot } from '../services/chainTransferHealth'
 import { getAdminLogTail, logger, readRuntimeLogTailLines } from '../utils/logger'
 import {
   BackupBusyError,
@@ -1201,7 +1202,8 @@ export function createAdminRouter(deps: AdminRouterDeps): express.Router {
     }
     if (filter) {
       entries = entries.filter((e) => {
-        const hay = `${e.message} ${e.raw}`.toLowerCase()
+        const extraStr = e.extra !== undefined ? formatAdminLogExtra(e.extra) : ''
+        const hay = `${e.message} ${e.raw} ${extraStr}`.toLowerCase()
         return hay.includes(filter)
       })
     }
@@ -1220,6 +1222,15 @@ export function createAdminRouter(deps: AdminRouterDeps): express.Router {
       stats,
       lines: slice.map((e) => e.raw),
     })
+  })
+
+  secured.get('/logs/chains', (_req, res) => {
+    try {
+      res.json(getChainTransferHealthSnapshot())
+    } catch (err: unknown) {
+      logger.error('admin /logs/chains failed', err)
+      res.status(500).json({ error: 'internal error' })
+    }
   })
 
   secured.get('/logs/ai-config', (_req, res) => {
@@ -1294,6 +1305,7 @@ export function createAdminRouter(deps: AdminRouterDeps): express.Router {
       'database',
       'rate_limit',
       'integrations',
+      'chains',
     ]
     const focus: LogAnalysisFocus = focusAllowed.includes(focusRaw as LogAnalysisFocus)
       ? (focusRaw as LogAnalysisFocus)

@@ -71,20 +71,41 @@ function getMonitorIntervalMs(): number {
 }
 
 function extractAxiosErrorText(err: unknown): string {
+  const parts: string[] = []
   if (axios.isAxiosError(err)) {
+    if (err.code) {
+      parts.push(err.code)
+    }
     const status = err.response?.status
     const data = err.response?.data
     if (typeof data === 'object' && data !== null && 'description' in data) {
       const description = String((data as { description?: string }).description ?? '').trim()
       if (description) {
-        return status != null ? `${status}: ${description}` : description
+        parts.push(status != null ? `${status}: ${description}` : description)
       }
+    } else if (status != null) {
+      parts.push(`HTTP ${status}`)
     }
-    if (status != null) {
-      return `HTTP ${status}`
+    if (err.message && err.message !== err.code) {
+      parts.push(err.message)
     }
+    const cause = err.cause
+    if (cause && typeof cause === 'object') {
+      const c = cause as NodeJS.ErrnoException
+      if (c.code && c.code !== err.code) parts.push(c.code)
+      if (c.syscall) parts.push(String(c.syscall))
+      if (c.address) parts.push(String(c.address))
+      if (c.port != null) parts.push(String(c.port))
+    }
+  } else if (err instanceof Error) {
+    if (err.message) parts.push(err.message)
+    const code = (err as NodeJS.ErrnoException).code
+    if (code) parts.push(code)
+  } else if (err != null) {
+    parts.push(String(err))
   }
-  return err instanceof Error ? err.message : String(err ?? '')
+  const unique = [...new Set(parts.map((p) => p.trim()).filter(Boolean))]
+  return unique.join(' ') || 'network error'
 }
 
 /** Откуда реально берётся основной TG-токен (без раскрытия полного значения). */

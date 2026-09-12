@@ -22,6 +22,12 @@ export type TunnelEngine = 'xray' | 'hysteria'
 let mainChild: ChildProcess | null = null
 let mainPort: number | null = null
 let mainEngine: TunnelEngine | null = null
+let stoppingMain = false
+let onMainTunnelExit: (() => void) | null = null
+
+export function setMainTunnelExitHandler(handler: (() => void) | null): void {
+  onMainTunnelExit = handler
+}
 
 function findInPath(name: string): string | null {
   const pathEnv = process.env.PATH ?? ''
@@ -415,10 +421,15 @@ async function spawnTunnel(
 }
 
 export async function stopMainVlessTunnel(): Promise<void> {
-  await stopProcess(mainChild)
-  mainChild = null
-  mainPort = null
-  mainEngine = null
+  stoppingMain = true
+  try {
+    await stopProcess(mainChild)
+    mainChild = null
+    mainPort = null
+    mainEngine = null
+  } finally {
+    stoppingMain = false
+  }
 }
 
 export async function startMainVlessTunnel(parsed: ParsedTunnelInput, socksPort: number): Promise<void> {
@@ -427,6 +438,17 @@ export async function startMainVlessTunnel(parsed: ParsedTunnelInput, socksPort:
   mainChild = started.child
   mainPort = socksPort
   mainEngine = started.engine
+  const child = started.child
+  child.once('exit', (code, signal) => {
+    if (stoppingMain || mainChild !== child) {
+      return
+    }
+    mainChild = null
+    mainPort = null
+    mainEngine = null
+    logger.warn('[telegramProxy] tunnel process exited — will reapply', { code, signal })
+    onMainTunnelExit?.()
+  })
   logger.info('[telegramProxy] tunnel started', {
     kind: parsed.kind,
     engine: started.engine,

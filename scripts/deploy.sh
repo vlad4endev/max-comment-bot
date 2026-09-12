@@ -144,16 +144,21 @@ docker compose logs --tail=40 bot
 
 echo ""
 echo "==> проверка admin autoposts (патч модалки):"
-AUTOPOST_JS="$(curl -sS --max-time 8 "http://127.0.0.1:${HOST_PORT}/admin/assets/autoposts.js" 2>/dev/null || true)"
-if [[ -n "$AUTOPOST_JS" ]] && echo "$AUTOPOST_JS" | grep -qE 'single-form-v3|AP_UI_BUILD'; then
+# Сначала файл в контейнере: HTTP gzip ломает grep по телу ответа.
+if docker compose exec -T bot grep -qE 'single-form-v3|AP_UI_BUILD' admin-panel/assets/autoposts.js 2>/dev/null; then
   echo "  /admin/assets/autoposts.js -> OK"
-elif [[ -n "$AUTOPOST_JS" ]] && echo "$AUTOPOST_JS" | grep -q 'updateModalPreview'; then
-  echo "  /admin/assets/autoposts.js -> частично (старая сборка)" >&2
-  exit 1
 else
-  echo "  /admin/assets/autoposts.js -> СТАРАЯ ВЕРСИЯ или недоступен" >&2
-  echo "  Пересоберите образ: DEPLOY_NO_CACHE=1 bash scripts/deploy.sh" >&2
-  exit 1
+  AUTOPOST_JS="$(curl -sS --compressed --max-time 8 "http://127.0.0.1:${HOST_PORT}/admin/assets/autoposts.js" 2>/dev/null || true)"
+  if [[ -n "$AUTOPOST_JS" ]] && echo "$AUTOPOST_JS" | grep -qE 'single-form-v3|AP_UI_BUILD'; then
+    echo "  /admin/assets/autoposts.js -> OK"
+  elif [[ -n "$AUTOPOST_JS" ]] && echo "$AUTOPOST_JS" | grep -q 'updateModalPreview'; then
+    echo "  /admin/assets/autoposts.js -> частично (старая сборка)" >&2
+    exit 1
+  else
+    echo "  /admin/assets/autoposts.js -> СТАРАЯ ВЕРСИЯ или недоступен" >&2
+    echo "  Пересоберите образ: DEPLOY_NO_CACHE=1 bash scripts/deploy.sh" >&2
+    exit 1
+  fi
 fi
 ADMIN_HTML="$(docker compose exec -T bot sh -c 'cat admin-panel/admin.html' 2>/dev/null || true)"
 if [[ -n "$ADMIN_HTML" ]] && echo "$ADMIN_HTML" | grep -q 'autoposts.js'; then

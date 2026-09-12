@@ -1,4 +1,5 @@
 import type { Agent as HttpAgent } from 'node:http'
+import net from 'node:net'
 
 import { SocksProxyAgent } from 'socks-proxy-agent'
 import createHttpsProxyAgent from 'https-proxy-agent'
@@ -9,6 +10,7 @@ import {
   findXrayBinary,
   getMainTunnelEngine,
   isMainTunnelRunning,
+  setMainTunnelExitHandler,
   startMainVlessTunnel,
   stopMainVlessTunnel,
 } from '../services/telegramProxyTunnel'
@@ -28,9 +30,65 @@ let httpsAgent: HttpAgent | undefined
 let pollHttpAgent: HttpAgent | undefined
 let pollHttpsAgent: HttpAgent | undefined
 let changeHandler: (() => void) | null = null
+let lastApplyError: string | null = null
+let applyInFlight: Promise<void> | null = null
+let watchdogTimer: ReturnType<typeof setInterval> | null = null
+let tunnelExitHooked = false
 
 export function setTelegramProxyChangeHandler(handler: () => void): void {
   changeHandler = handler
+}
+
+export function isTelegramProxyRequired(): boolean {
+  const state = telegramProxyStore.getState()
+  return Boolean(state.enabled && telegramProxyStore.getActive())
+}
+
+export function getTelegramProxyApplyError(): string | null {
+  return lastApplyError
+}
+
+function errorText(err: unknown): string {
+  if (err instanceof Error && err.message.trim()) {
+    return err.message
+  }
+  return String(err ?? 'unknown error')
+}
+
+function tcpReachable(host: string, port: number, timeoutMs = 5_000): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const socket = net.connect({ host, port })
+    const timer = setTimeout(() => {
+      socket.destroy()
+      reject(new Error(`таймаут TCP ${host}:${port}`))
+    }, timeoutMs)
+    socket.once('connect', () => {
+      clearTimeout(timer)
+      socket.end()
+      resolve()
+    })
+    socket.once('error', (err: NodeJS.ErrnoException) => {
+      clearTimeout(timer)
+      socket.destroy()
+      reject(new Error(`${err.code ?? err.message} ${host}:${port}`))
+    })
+  })
+}
+
+function hookTunnelExitOnce(): void {
+  if (tunnelExitHooked) {
+    return
+  }
+  tunnelExitHooked = true
+  setMainTunnelExitHandler(() => {
+    lastApplyError = 'туннель Hysteria/xray упал'
+    httpAgent = undefined
+    httpsAgent = undefined
+    pollHttpAgent = undefined
+    pollHttpsAgent = undefined
+    notifyChanged()
+    void ensureTelegramProxyRuntime()
+  })
 }
 
 export function getTelegramProxyAgents(): { httpAgent: HttpAgent; httpsAgent: HttpAgent } | null {
@@ -99,16 +157,19 @@ export function describeActiveProxyRuntime(): {
     }
   }
   const applied = getTelegramProxyAgents() !== null
-  let warning: string | null = null
-  if (active.kind === 'vless' && !applied) {
+  let warning: string | null = lastApplyError
+  if (!warning && active.kind === 'vless' && !applied) {
     warning = xrayPath
       ? 'Не удалось поднять VLESS-туннель. Проверьте ключ или логи xray.'
       : 'Для ключей VLESS нужен xray-core на сервере (переменная XRAY_BIN) либо SOCKS5 с панели.'
   }
-  if (active.kind === 'hysteria2' && !applied) {
+  if (!warning && active.kind === 'hysteria2' && !applied) {
     warning = hysteriaPath
       ? 'Не удалось поднять туннель Hysteria2. Проверьте ключ или логи hysteria.'
       : 'Клиент Hysteria2 не найден. При проверке бот скачает его в bin/hysteria (GitHub + зеркала). Можно положить бинарник в bin/ или задать HYSTERIA_BIN.'
+  }
+  if (!warning && active.kind === 'socks5' && !applied) {
+    warning = `SOCKS5 ${active.host}:${active.port} не подключён.`
   }
   if (active.kind === 'http' && applied) {
     warning = 'HTTP-прокси работает для Bot API. MTProto (user-сессия) идёт напрямую — лучше SOCKS5, VLESS или Hysteria2.'
@@ -127,6 +188,17 @@ export function describeActiveProxyRuntime(): {
 }
 
 export async function applyTelegramProxyRuntime(): Promise<void> {
+  if (applyInFlight) {
+    return applyInFlight
+  }
+  applyInFlight = applyTelegramProxyRuntimeInner().finally(() => {
+    applyInFlight = null
+  })
+  return applyInFlight
+}
+
+async function applyTelegramProxyRuntimeInner(): Promise<void> {
+  hookTunnelExitOnce()
   httpAgent = undefined
   httpsAgent = undefined
   pollHttpAgent = undefined
@@ -136,6 +208,7 @@ export async function applyTelegramProxyRuntime(): Promise<void> {
   const state = telegramProxyStore.getState()
   const active = telegramProxyStore.getActive()
   if (!state.enabled || !active) {
+    lastApplyError = null
     logger.info('[telegramProxy] Telegram goes direct (proxy off)')
     notifyChanged()
     return
@@ -152,6 +225,7 @@ export async function applyTelegramProxyRuntime(): Promise<void> {
       pollHttpAgent = pollAgent
       pollHttpsAgent = pollAgent
     } else if (active.kind === 'socks5') {
+      await tcpReachable(active.host, active.port)
       const agent = socksAgentFor(active, active.host, active.port)
       const pollAgent = socksAgentFor(active, active.host, active.port)
       httpAgent = agent
@@ -166,6 +240,7 @@ export async function applyTelegramProxyRuntime(): Promise<void> {
       pollHttpAgent = pollAgent
       pollHttpsAgent = pollAgent
     }
+    lastApplyError = null
     logger.info('[telegramProxy] applied', {
       kind: active.kind,
       host: active.host,
@@ -176,9 +251,49 @@ export async function applyTelegramProxyRuntime(): Promise<void> {
     httpsAgent = undefined
     pollHttpAgent = undefined
     pollHttpsAgent = undefined
-    logger.error('[telegramProxy] failed to apply, falling back to direct', err)
+    lastApplyError = errorText(err)
+    logger.error(
+      '[telegramProxy] failed to apply — Telegram stays blocked until proxy is up (no direct fallback)',
+      { error: lastApplyError, kind: active.kind, host: active.host, port: active.port },
+    )
   }
   notifyChanged()
+}
+
+export async function ensureTelegramProxyRuntime(): Promise<void> {
+  const state = telegramProxyStore.getState()
+  const active = telegramProxyStore.getActive()
+  if (!state.enabled || !active) {
+    return
+  }
+  const tunnelKinds = active.kind === 'vless' || active.kind === 'hysteria2'
+  const needApply =
+    getTelegramProxyAgents() === null || (tunnelKinds && !isMainTunnelRunning())
+  if (!needApply) {
+    return
+  }
+  await applyTelegramProxyRuntime()
+}
+
+export function startTelegramProxyWatchdog(): void {
+  if (watchdogTimer) {
+    return
+  }
+  hookTunnelExitOnce()
+  watchdogTimer = setInterval(() => {
+    void ensureTelegramProxyRuntime().catch((err: unknown) => {
+      logger.warn('[telegramProxy] watchdog reapply failed', err)
+    })
+  }, 15_000)
+  watchdogTimer.unref?.()
+  logger.info('[telegramProxy] watchdog started')
+}
+
+export function stopTelegramProxyWatchdog(): void {
+  if (watchdogTimer) {
+    clearInterval(watchdogTimer)
+    watchdogTimer = null
+  }
 }
 
 export function createSocksAgent(host: string, port: number, username = '', password = ''): HttpAgent {

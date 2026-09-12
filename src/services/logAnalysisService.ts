@@ -58,6 +58,7 @@ export type LogAnalysisFocus =
   | 'database'
   | 'rate_limit'
   | 'integrations'
+  | 'chains'
 
 export interface LogAiPublicConfig {
   configured: boolean
@@ -111,6 +112,14 @@ interface DbStatsSnapshot {
   subscribers: number
   retry_queue: number
   auto_recovery: ReturnType<typeof getPostLinkAutoRecoveryStats>
+  chains?: {
+    health: string
+    queue_posts: number
+    queue_comments: number
+    forwarded_today: number
+    errors_today: number
+    stuck: string[]
+  }
 }
 
 function isOpenRouterBaseUrl(baseUrl: string): boolean {
@@ -285,7 +294,8 @@ async function loadLogEntries(limit: number, level: AdminLogLevel | null, filter
   const filterLower = filter.trim().toLowerCase()
   if (filterLower) {
     entries = entries.filter((e) => {
-      const hay = `${e.message} ${e.raw}`.toLowerCase()
+      const extraStr = e.extra !== undefined ? formatAdminLogExtra(e.extra) : ''
+      const hay = `${e.message} ${e.raw} ${extraStr}`.toLowerCase()
       return hay.includes(filterLower)
     })
   }
@@ -307,6 +317,16 @@ function getDbStatsSnapshot(): DbStatsSnapshot | null {
     const retryQueueSize = (
       require('./commentButtonRetryQueue') as { getCommentButtonRetryQueueSize: () => number }
     ).getCommentButtonRetryQueueSize()
+    let chains: DbStatsSnapshot['chains']
+    try {
+      chains = (
+        require('./chainTransferHealth') as {
+          getChainTransferHealthSummary: () => NonNullable<DbStatsSnapshot['chains']>
+        }
+      ).getChainTransferHealthSummary()
+    } catch {
+      chains = undefined
+    }
     return {
       posts,
       pending_buttons: pendingButtons,
@@ -315,6 +335,7 @@ function getDbStatsSnapshot(): DbStatsSnapshot | null {
       subscribers,
       retry_queue: retryQueueSize,
       auto_recovery: getPostLinkAutoRecoveryStats(),
+      ...(chains ? { chains } : {}),
     }
   } catch (err: unknown) {
     logger.warn('logAnalysis: db-stats unavailable', err)
@@ -334,6 +355,8 @@ function focusHint(focus: LogAnalysisFocus): string {
       return 'Сфокусируйся на rate limit, таймаутах и перегрузке API MAX/Telegram.'
     case 'integrations':
       return 'Сфокусируйся на интеграциях Telegram→MAX, пересылке, webhook и MTProto.'
+    case 'chains':
+      return 'Сфокусируйся на цепочках переноса постов: успешные и неуспешные публикации, очередь, задержки, ошибки TG→MAX и TG→VK.'
     default:
       return 'Дай общую картину здоровья проекта.'
   }
