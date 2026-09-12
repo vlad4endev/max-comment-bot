@@ -494,21 +494,6 @@ export class PostStore {
       ? { media: [] as AttachmentRequest[], warnMissingSnapshot: false }
       : await resolveChannelPostMediaForEdit(bot, fresh)
 
-    // Caption unknown + media: never editMessage with `\u00a0` — that clears album text and keeps photos.
-    if (!usesReplyUi && wouldRiskWipingMediaCaption(editText, fresh, media)) {
-      logger.warn(
-        'postStore.updateButtonCaption: skip edit — caption unknown, refuse to wipe media post',
-        {
-          postId: fresh.post_id,
-          chatId: fresh.chat_id,
-          messageMid: fresh.message_mid,
-          mediaCount: media.length,
-          hasPhotoUrl: Boolean(fresh.photo_url?.trim()),
-        },
-      )
-      return false
-    }
-
     const tryAttachFallback = async (reason: string, keyboard = kb): Promise<boolean> => {
       logger.info('postStore.updateButtonCaption: fallback attach', {
         postId: fresh.post_id,
@@ -528,6 +513,33 @@ export class PostStore {
     }
     const attachments: AttachmentRequest[] =
       usesReplyUi || media.length === 0 ? [kb] : [...media, kb]
+
+    // Caption unknown + media: never rewrite text with `\u00a0` — that clears album descriptions.
+    // Keyboard-only edit keeps current caption and still updates the comment-count button.
+    if (!usesReplyUi && wouldRiskWipingMediaCaption(editText, fresh, media)) {
+      logger.warn(
+        'postStore.updateButtonCaption: caption unknown, try keyboard-only edit',
+        {
+          postId: fresh.post_id,
+          chatId: fresh.chat_id,
+          messageMid: fresh.message_mid,
+          mediaCount: media.length,
+          hasPhotoUrl: Boolean(fresh.photo_url?.trim()),
+        },
+      )
+      try {
+        await apiCallWithRetry(() => bot.api.editMessage(targetMid, { attachments }))
+        return true
+      } catch (err: unknown) {
+        logger.warn('postStore.updateButtonCaption: keyboard-only edit failed', {
+          postId: fresh.post_id,
+          targetMid,
+          err,
+        })
+        return false
+      }
+    }
+
     try {
       await apiCallWithRetry(() =>
         bot.api.editMessage(targetMid, { text: editText, attachments }),

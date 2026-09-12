@@ -2915,7 +2915,7 @@
   }
 
   var commentSyncKeywordHelp =
-    'Enter — добавить тег. Для одного слова можно задать свой режим префиксом: <code>=да</code> (точно), <code>#вопрос</code> (отдельное слово), <code>^привет</code> (начало), <code>$!</code> (конец), <code>~help</code> (содержит). Без слов обычные комментарии не переносятся.';
+    'Enter — добавить тег. Для одного слова можно задать свой режим префиксом: <code>=да</code> (точно), <code>#вопрос</code> (отдельное слово), <code>^привет</code> (начало), <code>$!</code> (конец), <code>~help</code> (содержит). Без слов переносятся все обычные комментарии.';
 
   function updateChainCardCommentSyncVisibility(card) {
     var sw = qs('[data-chain-comment-forward]', card);
@@ -2934,14 +2934,14 @@
       html += ' · вкл';
       if (discVal) html += ' · чат ' + esc(discVal);
       if (kw.length) html += ' · ' + esc(String(kw.length)) + ' сл.';
-      else html += ' · только админ';
+      else html += ' · все';
     } else {
       html += ' · выкл';
     }
     html += '</summary>';
     html += '<div class="tg-chain-comment-sync">';
     html +=
-      '<p class="muted text-sm" style="margin:0 0 10px;line-height:1.45">Обычные комментарии переносятся только при совпадении со словами. Комментарии админа — всегда, если он отвечает пользователю или если в MAX ещё нет комментариев.</p>';
+      '<p class="muted text-sm" style="margin:0 0 10px;line-height:1.45">Без слов переносятся все комментарии из Telegram — они появляются в miniapp и в счётчике на кнопке в MAX. Если задать слова — обычные комментарии переносятся только при совпадении. Комментарии админа при фильтре — если он отвечает пользователю или если в MAX ещё нет комментариев.</p>';
     html +=
       '<label class="tg-chain-mini-toggle" style="margin-bottom:10px"><span>Синхронизировать комментарии</span><span class="switch' +
       (c.forward_comments ? ' on' : '') +
@@ -3399,7 +3399,7 @@
         html += '</div></details>';
         html += '<div id="tc_comment_sync_block" class="tg-chain-comment-sync hidden">';
         html +=
-          '<p class="muted text-sm" style="margin:0 0 10px;line-height:1.45">Обычные комментарии переносятся только при совпадении со словами ниже. Комментарии админа — всегда, если он отвечает пользователю или если в MAX ещё нет комментариев.</p>';
+          '<p class="muted text-sm" style="margin:0 0 10px;line-height:1.45">Без слов переносятся все комментарии из Telegram — они появляются в miniapp и в счётчике на кнопке в MAX. Если задать слова — обычные комментарии переносятся только при совпадении. Комментарии админа при фильтре — если он отвечает пользователю или если в MAX ещё нет комментариев.</p>';
         html +=
           '<div class="form-group"><label>Чат комментариев Telegram</label><p class="muted text-sm" style="margin:0 0 6px">Группа обсуждений канала. Если не указать — берётся linked chat канала.</p>';
         html +=

@@ -108,7 +108,7 @@ export interface TgChainRecord {
   tg_discussion_chat_id?: string | null
   /** От чьего имени публиковать ответы MAX → TG: канал или группа обсуждений (аноним). */
   tg_discussion_send_as?: 'channel' | 'chat'
-  /** Ключевые слова/фразы: обычные комментарии TG синхронизируются только при совпадении. */
+  /** Ключевые слова/фразы: если заданы, обычные комментарии TG синхронизируются только при совпадении. Пустой список — переносить все. */
   comment_sync_keywords?: string[]
   /** Режим сопоставления слов: contains | equals | word | starts_with | ends_with. */
   comment_sync_match_mode?: 'contains' | 'equals' | 'word' | 'starts_with' | 'ends_with'

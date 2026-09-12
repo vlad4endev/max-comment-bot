@@ -385,7 +385,10 @@ export async function handleTgComment(
 
     const isAdmin = await isTgCommentFromAdmin(message, tgToken, chain, discussionChatId)
 
-    if (directReplyId !== threadRootMsgId) {
+    // Only admin replies to a known MAX/TG comment stay as thread replies.
+    // Regular users replying in the discussion are still comments — they must
+    // appear in the miniapp and bump the MAX inline button count.
+    if (isAdmin && directReplyId !== threadRootMsgId) {
       const parentComment = commentStore.findCommentByTgMessageId(directReplyId)
       if (parentComment) {
         await handleTgReplyToMaxComment(
@@ -444,6 +447,7 @@ export async function handleTgComment(
 
     markCommentSynced(`max:${saved.comment_id}`)
 
+    const newCount = postStore.incrementCommentCount(post.post_id)
     const claimed = await claimAndPropagateCommentsBooking(post.post_id, 'telegram', bot)
     if (claimed) {
       logger.info('[tgCommentSync] post booked by Telegram (cross-platform markers applied)', {
@@ -451,13 +455,16 @@ export async function handleTgComment(
         postId: post.post_id,
         tgCommentId,
       })
-    }
-
-    const newCount = postStore.incrementCommentCount(post.post_id)
-    if (newCount !== null) {
+    } else if (newCount !== null) {
       const updatedPost = postStore.getPost(post.post_id)
       if (updatedPost) {
-        void postStore.updateButtonCaption(bot, updatedPost)
+        await postStore.updateButtonCaption(bot, updatedPost).catch((err: unknown) => {
+          logger.warn('[tgCommentSync] updateButtonCaption failed', {
+            commentId: saved.comment_id,
+            postId: post.post_id,
+            err,
+          })
+        })
       }
     }
 

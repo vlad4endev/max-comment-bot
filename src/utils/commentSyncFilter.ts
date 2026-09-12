@@ -427,6 +427,11 @@ export async function shouldSyncTgCommentToMax(params: {
   }
 
   const keywords = normalizeCommentSyncKeywords(params.chain.comment_sync_keywords)
+  // No keyword list = no filter: every regular TG comment goes to MAX (original behaviour).
+  if (keywords.length === 0) {
+    return true
+  }
+
   const isAdmin = await isTgCommentFromAdmin(
     params.message,
     params.token,
