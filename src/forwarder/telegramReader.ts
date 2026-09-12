@@ -110,8 +110,9 @@ export interface TgMessage {
   caption?: string
   /** Альбом из нескольких фото/видео — отдельные channel_post с одним media_group_id */
   media_group_id?: string
-  photo?: { file_id: string; file_size: number }[]
-  video?: { file_id: string; mime_type?: string }
+  photo?: { file_id: string; file_size?: number; width?: number; height?: number }[]
+  video?: { file_id: string; mime_type?: string; file_name?: string; file_size?: number }
+  animation?: { file_id: string; mime_type?: string; file_name?: string; file_size?: number }
   document?: { file_id: string; mime_type?: string; file_name?: string }
   chat: { id: number; username?: string; type?: string }
   from?: { id?: number; first_name?: string; last_name?: string; username?: string }

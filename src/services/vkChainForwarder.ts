@@ -7,13 +7,13 @@
  * 3. Отправляет новые комментарии из MAX miniapp в VK.
  */
 
-import axios from 'axios'
 import pLimit from 'p-limit'
 import type { Bot } from '@maxhub/max-bot-api'
 
 import { listVkChainsSync, updateVkChain, type VkChainRecord } from '../api/adminPanelState'
 import type { TgMessage } from '../forwarder/telegramReader'
 import { getTgFileUrl } from '../forwarder/telegramReader'
+import { telegramAxios } from '../utils/telegramAxios'
 import { evaluateComment } from './antispamService'
 import { commentStore } from './commentStore'
 import { channelRegistry } from './channelRegistry'
@@ -46,6 +46,8 @@ const VK_USER_PREFIX = 'vk:'
 /** VK wall.post — не более 10 вложений. */
 const VK_WALL_ATTACHMENTS_LIMIT = 10
 const TG_DOWNLOAD_TIMEOUT_MS = 120_000
+const TG_DOWNLOAD_MAX_BYTES = 32 * 1024 * 1024
+const MEDIA_UPLOAD_ATTEMPTS = 3
 
 export interface TelegramPostToVkInput {
   /** MAX chat id — якорь VK-связки (тот же канал, куда идёт TG→MAX). */
@@ -68,25 +70,75 @@ export function exactTelegramPostText(messages: TgMessage[]): string {
   return ''
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function tgDocMime(msg: TgMessage): string {
+  return msg.document?.mime_type?.toLowerCase() ?? ''
+}
+
 function tgMessageHasMedia(msg: TgMessage): boolean {
   if (msg.photo && msg.photo.length > 0) return true
   if (msg.video?.file_id) return true
-  const docMime = msg.document?.mime_type?.toLowerCase() ?? ''
-  if (msg.document?.file_id && docMime.startsWith('image/')) return true
-  return false
+  if (msg.animation?.file_id) return true
+  return isTgImageDocument(msg) || isTgVideoDocument(msg)
 }
 
-async function downloadBinary(url: string): Promise<Buffer | null> {
+function largestTgPhoto(
+  photo: NonNullable<TgMessage['photo']>,
+): NonNullable<TgMessage['photo']>[number] {
+  return photo.reduce((best, item) =>
+    (item.file_size ?? item.width ?? 0) >= (best.file_size ?? best.width ?? 0) ? item : best,
+  )
+}
+
+function isTgVideoDocument(msg: TgMessage): boolean {
+  if (!msg.document?.file_id) return false
+  if (tgDocMime(msg).startsWith('video/')) return true
+  return /\.(mp4|mov|webm|mkv|m4v|avi)$/i.test(msg.document.file_name || '')
+}
+
+function isTgImageDocument(msg: TgMessage): boolean {
+  if (!msg.document?.file_id) return false
+  if (tgDocMime(msg).startsWith('image/')) return true
+  return /\.(jpe?g|png|webp|gif)$/i.test(msg.document.file_name || '')
+}
+
+/** Скачивает файл Telegram тем же прокси, что и TG→MAX. Обычный axios сюда не ходит. */
+async function downloadTgMediaBuffer(url: string): Promise<Buffer | null> {
   try {
-    const res = await axios.get<ArrayBuffer>(url, {
+    const res = await telegramAxios.get<ArrayBuffer>(url, {
       responseType: 'arraybuffer',
       timeout: TG_DOWNLOAD_TIMEOUT_MS,
+      maxContentLength: TG_DOWNLOAD_MAX_BYTES,
+      maxBodyLength: TG_DOWNLOAD_MAX_BYTES,
     })
-    return Buffer.from(res.data)
+    const buffer = Buffer.from(res.data)
+    return buffer.length > 0 ? buffer : null
   } catch (err: unknown) {
-    logger.warn('[vkChain] media download failed', { url: url.slice(0, 120), err })
+    logger.warn('[vkChain] media download failed', {
+      url: url.slice(0, 120),
+      err: err instanceof Error ? err.message : String(err),
+    })
     return null
   }
+}
+
+async function withMediaAttempts<T>(
+  label: string,
+  run: () => Promise<T | null>,
+): Promise<T | null> {
+  let last: T | null = null
+  for (let attempt = 1; attempt <= MEDIA_UPLOAD_ATTEMPTS; attempt += 1) {
+    last = await run()
+    if (last) return last
+    if (attempt < MEDIA_UPLOAD_ATTEMPTS) {
+      logger.warn('[vkChain] media attempt failed, retrying', { label, attempt })
+      await sleep(400 * attempt)
+    }
+  }
+  return last
 }
 
 async function uploadTgPhotoToVk(
@@ -96,17 +148,19 @@ async function uploadTgPhotoToVk(
   fileId: string,
   filenameHint?: string,
 ): Promise<string | null> {
-  const url = await getTgFileUrl(tgToken, fileId)
-  if (!url) return null
-  const buffer = await downloadBinary(url)
-  if (!buffer) return null
-  const fromPath = url.split('/').pop()?.split('?')[0]
-  return uploadVkWallPhotoFromBuffer(
-    vkToken,
-    groupId,
-    buffer,
-    filenameHint || fromPath || 'photo.jpg',
-  )
+  return withMediaAttempts(`photo:${fileId.slice(-8)}`, async () => {
+    const url = await getTgFileUrl(tgToken, fileId)
+    if (!url) return null
+    const buffer = await downloadTgMediaBuffer(url)
+    if (!buffer) return null
+    const fromPath = url.split('/').pop()?.split('?')[0]
+    return uploadVkWallPhotoFromBuffer(
+      vkToken,
+      groupId,
+      buffer,
+      filenameHint || fromPath || 'photo.jpg',
+    )
+  })
 }
 
 async function uploadTgVideoToVk(
@@ -115,12 +169,89 @@ async function uploadTgVideoToVk(
   tgToken: string,
   fileId: string,
   title: string,
+  filename?: string,
+  mimeType?: string,
 ): Promise<string | null> {
-  const url = await getTgFileUrl(tgToken, fileId)
-  if (!url) return null
-  const buffer = await downloadBinary(url)
-  if (!buffer) return null
-  return uploadVkWallVideoFromBuffer(vkToken, groupId, buffer, 'video.mp4', title)
+  return withMediaAttempts(`video:${fileId.slice(-8)}`, async () => {
+    const url = await getTgFileUrl(tgToken, fileId)
+    if (!url) return null
+    const buffer = await downloadTgMediaBuffer(url)
+    if (!buffer) return null
+    const fromPath = url.split('/').pop()?.split('?')[0]
+    return uploadVkWallVideoFromBuffer(
+      vkToken,
+      groupId,
+      buffer,
+      filename || fromPath || 'video.mp4',
+      title,
+      mimeType,
+    )
+  })
+}
+
+async function uploadTgMessageMediaToVk(
+  vkToken: string,
+  groupId: string,
+  tgToken: string,
+  msg: TgMessage,
+): Promise<string | null> {
+  if (msg.photo && msg.photo.length > 0) {
+    return uploadTgPhotoToVk(vkToken, groupId, tgToken, largestTgPhoto(msg.photo).file_id)
+  }
+  if (isTgImageDocument(msg) && msg.document?.file_id) {
+    return uploadTgPhotoToVk(
+      vkToken,
+      groupId,
+      tgToken,
+      msg.document.file_id,
+      msg.document.file_name || 'photo.jpg',
+    )
+  }
+  const title = (msg.caption || msg.text || 'video').trim().slice(0, 128) || 'video'
+  if (msg.video?.file_id) {
+    return uploadTgVideoToVk(
+      vkToken,
+      groupId,
+      tgToken,
+      msg.video.file_id,
+      title,
+      msg.video.file_name,
+      msg.video.mime_type,
+    )
+  }
+  if (msg.animation?.file_id) {
+    const animMime = msg.animation.mime_type?.toLowerCase() ?? ''
+    if (animMime.startsWith('image/')) {
+      return uploadTgPhotoToVk(
+        vkToken,
+        groupId,
+        tgToken,
+        msg.animation.file_id,
+        msg.animation.file_name || 'animation.gif',
+      )
+    }
+    return uploadTgVideoToVk(
+      vkToken,
+      groupId,
+      tgToken,
+      msg.animation.file_id,
+      title,
+      msg.animation.file_name || 'animation.mp4',
+      msg.animation.mime_type || 'video/mp4',
+    )
+  }
+  if (isTgVideoDocument(msg) && msg.document?.file_id) {
+    return uploadTgVideoToVk(
+      vkToken,
+      groupId,
+      tgToken,
+      msg.document.file_id,
+      title,
+      msg.document.file_name || 'video.mp4',
+      msg.document.mime_type,
+    )
+  }
+  return null
 }
 
 async function buildVkAttachmentsFromTgMessages(
@@ -133,30 +264,9 @@ async function buildVkAttachmentsFromTgMessages(
   const ordered = [...messages].sort((a, b) => a.message_id - b.message_id)
   for (const msg of ordered) {
     if (out.length >= VK_WALL_ATTACHMENTS_LIMIT) break
-    if (msg.photo && msg.photo.length > 0) {
-      const largest = msg.photo[msg.photo.length - 1]!
-      const att = await uploadTgPhotoToVk(vkToken, groupId, tgToken, largest.file_id)
-      if (att) out.push(att)
-      continue
-    }
-    const doc = msg.document
-    const docMime = doc?.mime_type?.toLowerCase() ?? ''
-    if (doc?.file_id && docMime.startsWith('image/')) {
-      const att = await uploadTgPhotoToVk(
-        vkToken,
-        groupId,
-        tgToken,
-        doc.file_id,
-        doc.file_name || 'photo.jpg',
-      )
-      if (att) out.push(att)
-      continue
-    }
-    if (msg.video?.file_id) {
-      const title = (msg.caption || msg.text || 'video').trim().slice(0, 128) || 'video'
-      const att = await uploadTgVideoToVk(vkToken, groupId, tgToken, msg.video.file_id, title)
-      if (att) out.push(att)
-    }
+    if (!tgMessageHasMedia(msg)) continue
+    const att = await uploadTgMessageMediaToVk(vkToken, groupId, tgToken, msg)
+    if (att) out.push(att)
   }
   return out
 }
@@ -344,6 +454,9 @@ async function publishTelegramPostToVkChain(
         maxMid,
         groupId: chain.vk_group_id,
         tgMessages: tgMessages.length,
+        photos: tgMessages.filter((m) => Boolean(m.photo?.length)).length,
+        videos: tgMessages.filter((m) => Boolean(m.video?.file_id || m.animation?.file_id)).length,
+        docs: tgMessages.filter((m) => Boolean(m.document?.file_id)).length,
       })
     }
 
@@ -380,6 +493,8 @@ async function publishTelegramPostToVkChain(
       title: vkChainDisplayName(chain),
       maxMid,
       vkPostId,
+      attachments: attachments.length,
+      mediaDropped: sourceHadMedia && attachments.length === 0,
     })
   } catch (err: unknown) {
     await updateVkChain(chain.id, {

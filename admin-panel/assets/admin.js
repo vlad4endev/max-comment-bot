@@ -3810,7 +3810,7 @@
         html +=
           '<div class="chains-requirements"><strong>Требования</strong><ul>' +
           '<li>Активная связка <strong>Telegram → MAX</strong> на тот же канал MAX (источник постов — Telegram)</li>' +
-          '<li>Токен пользователя VK (не сообщества) с правами <code>wall</code>, <code>photos</code>, <code>groups</code></li>' +
+          '<li>Токен пользователя VK (не сообщества) с правами <code>wall</code>, <code>photos</code>, <code>video</code>, <code>groups</code></li>' +
           '<li>Для комментариев дополнительно доступ к обсуждениям сообщества</li>' +
           '</ul></div>';
         html += '<div class="forwarding-add-form forwarding-add-form--picks">';
@@ -3824,9 +3824,9 @@
         if (!vkInt) {
           html +=
             '<div class="form-group">' +
-            '<label>Токен пользователя VK <span class="label-hint">— права: wall, photos (не токен сообщества)</span></label>' +
+            '<label>Токен пользователя VK <span class="label-hint">— права: wall, photos, video (не токен сообщества)</span></label>' +
             '<input class="input mono" id="vc_token" type="password" placeholder="vk1.a.xxxxxxxx"/>' +
-            '<p class="form-hint">Токен сообщества публикует только текст: VK не даёт ему <code>photos.getWallUploadServer</code>.</p>' +
+            '<p class="form-hint">Токен сообщества публикует только текст: VK не даёт ему загрузку фото и видео на стену.</p>' +
             '</div>';
         } else {
           html += '<input type="hidden" id="vc_token" value=""/>';
@@ -4991,7 +4991,7 @@
       (platform === 'vk' ? 'Токен VK API (user, не community)' : 'Токен от @BotFather') +
       '" autocomplete="off"/><p class="muted text-sm form-hint">' +
       (platform === 'vk'
-        ? 'Нужен user-токен с правами wall + photos. Токен сообщества публикует посты без фото.'
+        ? 'Нужен user-токен с правами wall + photos + video. Токен сообщества публикует посты без фото и видео.'
         : 'Создайте бота через @BotFather. Без webhook — иначе перехват постов не работает.') +
       '</p></div>';
 

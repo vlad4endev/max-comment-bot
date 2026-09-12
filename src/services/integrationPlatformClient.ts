@@ -1541,6 +1541,23 @@ export async function uploadVkWallPhotoFromBuffer(
   }
 }
 
+function detectVkVideoMeta(
+  filenameHint?: string,
+  mimeHint?: string,
+): { filename: string; contentType: string } {
+  const mime = mimeHint?.trim().toLowerCase() ?? ''
+  const hintName = filenameHint?.trim() || ''
+  const hint = hintName.toLowerCase()
+  if (mime.startsWith('video/')) {
+    const ext =
+      hint.includes('.') ? hintName : mime === 'video/webm' ? 'video.webm' : mime === 'video/quicktime' ? 'video.mov' : 'video.mp4'
+    return { filename: hintName || ext, contentType: mime }
+  }
+  if (hint.endsWith('.webm')) return { filename: hintName, contentType: 'video/webm' }
+  if (hint.endsWith('.mov')) return { filename: hintName, contentType: 'video/quicktime' }
+  return { filename: hintName || 'video.mp4', contentType: 'video/mp4' }
+}
+
 /** Загружает видео в VK; возвращает attachment вида video{owner_id}_{id}. */
 export async function uploadVkWallVideoFromBuffer(
   token: string,
@@ -1548,9 +1565,14 @@ export async function uploadVkWallVideoFromBuffer(
   buffer: Buffer,
   filename = 'video.mp4',
   title = 'video',
+  mimeType?: string,
 ): Promise<string | null> {
   const groupIdNum = vkPositiveGroupId(groupId)
   try {
+    if (!buffer.length) {
+      logger.warn('uploadVkWallVideoFromBuffer: empty buffer', { groupId })
+      return null
+    }
     const saveResp = await vkApiCall<{
       upload_url: string
       video_id: number
@@ -1559,15 +1581,47 @@ export async function uploadVkWallVideoFromBuffer(
       group_id: groupIdNum,
       name: title.slice(0, 128) || 'video',
     })
+    if (!saveResp.upload_url) {
+      logger.warn('uploadVkWallVideoFromBuffer: empty upload_url', { groupId })
+      return null
+    }
+    const meta = detectVkVideoMeta(filename, mimeType)
     const form = new FormData()
-    form.append('video_file', buffer, { filename, contentType: 'video/mp4' })
-    await axios.post(saveResp.upload_url, form, {
+    form.append('video_file', buffer, { filename: meta.filename, contentType: meta.contentType })
+    const uploadRes = await axios.post(saveResp.upload_url, form, {
       headers: form.getHeaders(),
       timeout: 300_000,
+      maxBodyLength: Infinity,
+      maxContentLength: Infinity,
+      transformResponse: [(body) => body],
+      responseType: 'text',
     })
+    const raw = typeof uploadRes.data === 'string' ? uploadRes.data.trim() : ''
+    if (raw) {
+      try {
+        const parsed = JSON.parse(raw) as { error?: unknown; error_code?: unknown }
+        if (parsed.error != null || parsed.error_code != null) {
+          logger.warn('uploadVkWallVideoFromBuffer: upload rejected', {
+            groupId,
+            preview: raw.slice(0, 200),
+          })
+          return null
+        }
+      } catch {
+        // VK иногда отдаёт не-JSON на успешную загрузку — attachment всё равно валиден.
+      }
+    }
     return `video${saveResp.owner_id}_${saveResp.video_id}`
   } catch (err: unknown) {
-    logger.warn('uploadVkWallVideoFromBuffer failed', { groupId, err })
+    const message = err instanceof Error ? err.message : String(err)
+    logger.warn('uploadVkWallVideoFromBuffer failed', {
+      groupId,
+      err: message,
+      hint:
+        /\[27\]|\[15\]|group auth|unavailable with group|no access to call this method/i.test(message)
+          ? 'Нужен user-токен VK с правом video (токен сообщества не умеет video.save)'
+          : undefined,
+    })
     return null
   }
 }

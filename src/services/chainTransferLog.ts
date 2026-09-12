@@ -290,14 +290,22 @@ export function recordVkSuccess(input: {
   title: string
   maxMid: string
   vkPostId: number
+  attachments?: number
+  mediaDropped?: boolean
 }): void {
+  const mediaPart =
+    input.mediaDropped === true
+      ? ' без медиа'
+      : input.attachments != null && input.attachments > 0
+        ? ` · вложений ${input.attachments}`
+        : ''
   recordChainTransfer({
     kind: 'tg_vk',
-    outcome: 'success',
+    outcome: input.mediaDropped ? 'partial' : 'success',
     chainId: input.chainId,
     title: input.title,
     maxMid: input.maxMid,
-    message: `пост опубликован на стену VK (vk ${input.vkPostId})`,
+    message: `пост опубликован на стену VK (vk ${input.vkPostId})${mediaPart}`,
   })
 }
 
