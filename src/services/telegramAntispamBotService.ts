@@ -46,16 +46,28 @@ const TG_ANTISPAM_IDLE_MS = 40
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
-function resolveEnforcementToken(chain: TgChainRecord, override?: string): string {
-  const dedicated = resolveTelegramAntispamBotToken()
-  if (dedicated) {
-    return dedicated
+/**
+ * Кандидаты на deleteMessage / restrict: отдельный антиспам-бот, бот цепочки, основной CommentBot.
+ * Порядок важен — пробуем по очереди, пока удаление не сработает.
+ */
+function collectEnforcementTokens(chain: TgChainRecord, override?: string): string[] {
+  const tokens: string[] = []
+  const add = (raw?: string) => {
+    const token = raw?.trim()
+    if (token && !tokens.includes(token)) {
+      tokens.push(token)
+    }
   }
-  return override?.trim() || chain.bot_token?.trim() || resolveTelegramBotToken()
+  add(override)
+  add(resolveTelegramAntispamBotToken())
+  add(chain.bot_token)
+  add(resolveTelegramBotToken())
+  return tokens
 }
 
 /**
  * Проверка и блокировка спам-комментария в TG-обсуждении.
+ * Всегда пытается удалить сообщение в Telegram (не только остановить синк в MAX).
  * @returns true если комментарий заблокирован.
  */
 export async function tryBlockTelegramCommentByAntispam(
@@ -75,7 +87,8 @@ export async function tryBlockTelegramCommentByAntispam(
     return false
   }
 
-  const token = resolveEnforcementToken(chain, enforcementToken)
+  const tokens = collectEnforcementTokens(chain, enforcementToken)
+  const token = tokens[0]
   if (!token) {
     return false
   }
@@ -102,20 +115,24 @@ export async function tryBlockTelegramCommentByAntispam(
   }
 
   const telegramUserId = typeof message.from?.id === 'number' ? message.from.id : null
+  const chatId = discussionChatId || message.chat.id
+  let deleted = false
   try {
-    await enforceTelegramAntispamAction({
+    const enforced = await enforceTelegramAntispamAction({
       token,
-      chatId: message.chat.id,
+      fallbackTokens: tokens.slice(1),
+      chatId,
       messageId: tgCommentId,
       telegramUserId,
       channelChatId: maxChatId,
       evaluation: antispam,
     })
+    deleted = enforced.deleted
   } catch (err: unknown) {
     logger.warn('[antispam/tg] enforce action failed', {
       chainId: chain.id,
       tgCommentId,
-      chatId: message.chat.id,
+      chatId,
       action: antispam.action,
       err,
     })
@@ -130,6 +147,7 @@ export async function tryBlockTelegramCommentByAntispam(
     reason: antispam.reason,
     action: antispam.action,
     outcome: antispam.outcome,
+    deleted,
     dedicatedBot: isTelegramAntispamBotConfigured(),
   })
   return true

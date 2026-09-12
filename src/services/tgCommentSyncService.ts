@@ -33,10 +33,7 @@ import { postStore } from './postStore'
 import type { Post } from './postStore'
 import { claimAndPropagateCommentsBooking } from './commentsBookingService'
 import { ensurePostFromChannelMessage } from './channelPostActions'
-import {
-  isTelegramAntispamBotConfigured,
-  tryBlockTelegramCommentByAntispam,
-} from './telegramAntispamBotService'
+import { tryBlockTelegramCommentByAntispam } from './telegramAntispamBotService'
 import { resolveCanonicalChannelChatId } from './resolveChannelChatId'
 import { resolveTelegramBotToken } from './resolveTelegramBotToken'
 import { isCommentSynced, markCommentSynced } from '../utils/commentSyncGuard'
@@ -317,10 +314,10 @@ export async function handleTgComment(
       return 'ok'
     }
 
-    if (!isTelegramAntispamBotConfigured()) {
-      if (await tryBlockTelegramCommentByAntispam(message, chain, discussionChatId, tgCommentId)) {
-        return 'skip'
-      }
+    // Антиспам всегда здесь: отдельный TG_ANTISPAM_BOT — ускорение/параллель,
+    // а при совпадении токена с forwarder'ом это единственный путь с удалением.
+    if (await tryBlockTelegramCommentByAntispam(message, chain, discussionChatId, tgCommentId)) {
+      return 'skip'
     }
 
     const hints = collectCommentMappingHints(message)
