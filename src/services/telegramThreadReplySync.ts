@@ -20,6 +20,7 @@ import { postStore } from './postStore'
 import { resolveTelegramBotToken } from './resolveTelegramBotToken'
 import { isCommentSynced, markCommentSynced, tgMessageGuardKey } from '../utils/commentSyncGuard'
 import { withSyncLease } from './commentSyncLease'
+import { reportThreadChatMismatch, threadChatMismatch } from './commentLinkGuard'
 import { recordDeadLetter } from './commentDeadLetterStore'
 import {
   MAX_ANSWERED_IN_MAX_MARKER,
@@ -139,6 +140,13 @@ function resolvePostThreadTargetFromMapping(mapping: PostCommentMappingRow): Thr
     return null
   }
   if (!isCommentForwardEnabled(mapping.chain_id)) {
+    return null
+  }
+  // Тред должен лежать в группе обсуждения именно этой связки — иначе не отправляем.
+  const linkChain = listTgChainsSync().find((c) => c.id === mapping.chain_id)
+  const mismatch = linkChain ? threadChatMismatch(mapping, linkChain) : null
+  if (linkChain && mismatch) {
+    reportThreadChatMismatch(linkChain, mapping, mismatch)
     return null
   }
   const token = resolveTelegramBotTokenForChain(mapping.chain_id)

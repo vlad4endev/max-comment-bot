@@ -572,8 +572,27 @@ function migrateCommentSyncSchema(database: Database.Database): void {
   backfillPostCommentMappingsFromForwarded(database)
 }
 
+/**
+ * Id существующих связок из настроек (data/admin-panel-state.json) или null, если файла нет / он пуст.
+ * Нужен, чтобы backfill при каждом старте не воскрешал маппинги удалённых связок.
+ */
+function readLiveChainIds(): Set<string> | null {
+  try {
+    const raw = JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'admin-panel-state.json'), 'utf8')) as {
+      tg_chains?: Array<{ id?: unknown }>
+    }
+    const ids = (Array.isArray(raw.tg_chains) ? raw.tg_chains : [])
+      .map((c) => c.id)
+      .filter((id): id is string => typeof id === 'string' && id !== '')
+    return ids.length > 0 ? new Set(ids) : null
+  } catch {
+    return null
+  }
+}
+
 function backfillPostCommentMappingsFromForwarded(database: Database.Database): void {
-  const rows = database
+  const liveChainIds = readLiveChainIds()
+  const rows = (database
     .prepare(
       `SELECT chain_id, tg_message_id, max_message_mid, tg_payload
        FROM tg_chain_forwarded
@@ -584,7 +603,7 @@ function backfillPostCommentMappingsFromForwarded(database: Database.Database): 
     tg_message_id: number
     max_message_mid: string
     tg_payload: string | null
-  }>
+  }>).filter((r) => liveChainIds === null || liveChainIds.has(r.chain_id))
 
   const insert = database.prepare(
     `INSERT INTO post_comment_mapping (chain_id, tg_msg_id, max_mid, tg_chat_id)
