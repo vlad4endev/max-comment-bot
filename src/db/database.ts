@@ -474,6 +474,19 @@ function migrateCommentSyncSchema(database: Database.Database): void {
     database.prepare('ALTER TABLE post_comment_mapping ADD COLUMN tg_thread_msg_id INTEGER').run()
   }
 
+  // Без индекса по max_mid миграция tg_chat_id ниже (коррелированный подзапрос на каждый комментарий)
+  // сканировала всю post_comment_mapping на каждую строку — на боевой базе это минуты синхронной
+  // работы ДО открытия порта (бот и Mini App недоступны). Индексы нужны и рабочим запросам
+  // findMappingByMaxMid / подсчёту неотправленных комментариев.
+  database.prepare(
+    `CREATE INDEX IF NOT EXISTS idx_post_comment_mapping_max_mid
+     ON post_comment_mapping (max_mid)`,
+  ).run()
+  database.prepare(
+    `CREATE INDEX IF NOT EXISTS idx_posts_message_mid_only
+     ON posts (message_mid)`,
+  ).run()
+
   // Id сообщений Telegram уникальны только внутри чата, поэтому храним chat id
   // и уникальность считаем по (source, chat, id) — иначе комментарии разных
   // связок с одинаковым message_id затирают друг друга.
