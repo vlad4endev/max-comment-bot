@@ -209,7 +209,7 @@ function lookupPostCommentMapping(
   discussionChatId: number,
 ): PostCommentMappingRow | null {
   for (const threadId of hints.threadMsgIds) {
-    const byThread = findMappingByThreadMsgId(chainId, threadId)
+    const byThread = findMappingByThreadMsgId(chainId, threadId, discussionChatId)
     if (byThread?.max_mid) {
       return byThread
     }

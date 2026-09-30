@@ -535,6 +535,20 @@ function migrateCommentSyncSchema(database: Database.Database): void {
      ON comment_sync_dead_letter (chain_id, kind, resolved_at)`,
   ).run()
 
+  // Состояние thread-привязки отдельным полем (раньше это был sentinel -1 в tg_thread_msg_id).
+  if (!mappingColNames.includes('thread_status')) {
+    database.prepare('ALTER TABLE post_comment_mapping ADD COLUMN thread_status TEXT').run()
+    database.prepare('ALTER TABLE post_comment_mapping ADD COLUMN thread_status_at INTEGER').run()
+  }
+  database
+    .prepare(
+      `UPDATE post_comment_mapping
+       SET thread_status = 'stale', thread_status_at = ?,
+           tg_thread_msg_id = NULL
+       WHERE tg_thread_msg_id = -1`,
+    )
+    .run(Date.now())
+
   // Индексы для быстрого поиска
   database.prepare(
     `CREATE UNIQUE INDEX IF NOT EXISTS idx_comments_max_comment_id

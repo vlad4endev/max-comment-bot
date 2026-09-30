@@ -191,3 +191,9 @@ BOT_TOKEN=x ADMIN_CHAT_ID=1 BOT_NICKNAME=b OWNER_USER_ID=1 WEBHOOK_SECRET=abcdef
 - `POST /admin/comment-sync/dead-letters/:id/resolve` — закрыть вручную
 
 `scripts/test-comment-dead-letter.ts` запускается на копии проекта так же, как тест scope.
+
+## Состояние thread-привязки (`thread_status`)
+
+Вместо sentinel `-1` в `tg_thread_msg_id` — поля `thread_status` (`stale` | `suspect`) и `thread_status_at`.
+`stale` блокирует resolve на 24 ч, `suspect` (Telegram отверг id, refresh не удался) — на 10 мин; затем попытки
+возобновляются. Проверка: `scripts/test-thread-status.ts` (запуск на копии проекта, как остальные БД-тесты).
