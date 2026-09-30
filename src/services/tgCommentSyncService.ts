@@ -36,7 +36,7 @@ import { ensurePostFromChannelMessage } from './channelPostActions'
 import { tryBlockTelegramCommentByAntispam } from './telegramAntispamBotService'
 import { resolveCanonicalChannelChatId } from './resolveChannelChatId'
 import { resolveTelegramBotToken } from './resolveTelegramBotToken'
-import { isCommentSynced, markCommentSynced } from '../utils/commentSyncGuard'
+import { isCommentSynced, markCommentSynced, tgMessageGuardKey } from '../utils/commentSyncGuard'
 import { chainForwardQueueContainsMessage } from './tgChainForwardQueue'
 import {
   ensurePostThreadMapping,
@@ -105,14 +105,14 @@ async function handleTgReplyToMaxComment(
 ): Promise<void> {
   const text = (message.text || message.caption || '').trim()
   if (text && (isMaxAdminReplyInTelegram(text) || isMaxCommentInTelegram(text))) {
-    markCommentSynced(`tg:${tgCommentId}`)
+    markCommentSynced(tgMessageGuardKey(message.chat.id, tgCommentId))
     return
   }
 
   commentStore.markAnsweredInTelegram(parentComment.comment_id)
 
   if (!isAdmin || !text) {
-    markCommentSynced(`tg:${tgCommentId}`)
+    markCommentSynced(tgMessageGuardKey(message.chat.id, tgCommentId))
     logger.info('[tgCommentSync] marked MAX comment as answered in Telegram', {
       chainId: chain.id,
       tgCommentId,
@@ -124,7 +124,7 @@ async function handleTgReplyToMaxComment(
   }
 
   if (listExistingReplyTexts(parentComment).includes(text)) {
-    markCommentSynced(`tg:${tgCommentId}`)
+    markCommentSynced(tgMessageGuardKey(message.chat.id, tgCommentId))
     return
   }
 
@@ -140,11 +140,11 @@ async function handleTgReplyToMaxComment(
     true,
   )
   if (!updated) {
-    markCommentSynced(`tg:${tgCommentId}`)
+    markCommentSynced(tgMessageGuardKey(message.chat.id, tgCommentId))
     return
   }
 
-  markCommentSynced(`tg:${tgCommentId}`)
+  markCommentSynced(tgMessageGuardKey(message.chat.id, tgCommentId))
   markCommentSynced(`max-reply:${updated.comment_id}:${text}`)
 
   try {
@@ -306,11 +306,11 @@ export async function handleTgComment(
       return 'skip'
     }
 
-    if (isCommentSynced(`tg:${tgCommentId}`)) {
+    if (isCommentSynced(tgMessageGuardKey(message.chat.id, tgCommentId))) {
       return 'ok'
     }
 
-    if (commentStore.findCommentByTgMessageId(tgCommentId)) {
+    if (commentStore.findCommentByTgMessage(discussionChatId, tgCommentId)) {
       return 'ok'
     }
 
@@ -345,7 +345,7 @@ export async function handleTgComment(
 
     const directReplyId = message.reply_to_message?.message_id ?? threadRootMsgId
     if (!post) {
-      const parentComment = commentStore.findCommentByTgMessageId(directReplyId)
+      const parentComment = commentStore.findCommentByTgMessage(discussionChatId, directReplyId)
       if (parentComment) {
         post = postStore.getPost(parentComment.post_id)
       }
@@ -389,7 +389,7 @@ export async function handleTgComment(
     // Regular users replying in the discussion are still comments — they must
     // appear in the miniapp and bump the MAX inline button count.
     if (isAdmin && directReplyId !== threadRootMsgId) {
-      const parentComment = commentStore.findCommentByTgMessageId(directReplyId)
+      const parentComment = commentStore.findCommentByTgMessage(discussionChatId, directReplyId)
       if (parentComment) {
         await handleTgReplyToMaxComment(
           message,
@@ -443,6 +443,7 @@ export async function handleTgComment(
         text,
       },
       tgCommentId,
+      discussionChatId,
     )
 
     markCommentSynced(`max:${saved.comment_id}`)

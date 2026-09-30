@@ -7,7 +7,7 @@ import {
   TelegramGetUpdatesConflictError,
   type TgMessage,
 } from '../forwarder/telegramReader'
-import { isCommentSynced, markCommentSynced } from '../utils/commentSyncGuard'
+import { isCommentSynced, markCommentSynced, tgMessageGuardKey } from '../utils/commentSyncGuard'
 import {
   isMaxAdminReplyInTelegram,
   isMaxCommentInTelegram,
@@ -139,7 +139,7 @@ export async function tryBlockTelegramCommentByAntispam(
     return false
   }
 
-  markCommentSynced(`tg:${tgCommentId}`)
+  markCommentSynced(tgMessageGuardKey(chatId, tgCommentId))
   logger.info('[antispam/tg] blocked comment', {
     chainId: chain.id,
     tgCommentId,
@@ -266,7 +266,7 @@ export async function runTelegramAntispamBotOnce(): Promise<boolean> {
     if (!msg.reply_to_message) {
       continue
     }
-    if (isCommentSynced(`tg:${msg.message_id}`)) {
+    if (isCommentSynced(tgMessageGuardKey(msg.chat.id, msg.message_id))) {
       continue
     }
 

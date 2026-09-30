@@ -53,3 +53,8 @@ export function isCommentSynced(id: string): boolean {
   }
   return true
 }
+
+/** Ключ guard'а для сообщения Telegram: id уникален только внутри чата. */
+export function tgMessageGuardKey(chatId: number, messageId: number): string {
+  return `tg:${chatId}:${messageId}`
+}
