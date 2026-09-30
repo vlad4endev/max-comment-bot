@@ -70,6 +70,8 @@ services:
       REDIS_URL: redis://redis:6379
     volumes:
       - ./data:/app/data
+      # Фото комментариев Mini App: без тома пропадают при пересоздании контейнера (деплое)
+      - miniapp-uploads:/app/miniapp/uploads
       # Клиент Hysteria2: можно положить bin/hysteria вручную, если GitHub недоступен
       - ./bin:/app/bin
     extra_hosts:
@@ -95,6 +97,7 @@ services:
 
 volumes:
   redis-data:
+  miniapp-uploads:
 
 networks:
   default:

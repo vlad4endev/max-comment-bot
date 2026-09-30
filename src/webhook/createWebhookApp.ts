@@ -122,6 +122,13 @@ function applyMiniappAssetHeaders(res: express.Response, filePath: string): void
 export function createHttpApp(options: HttpAppOptions): express.Express {
   const app = express()
   app.disable('x-powered-by')
+  // Бот стоит за reverse-proxy (TLS :443 → контейнер): без этого req.ip — адрес прокси,
+  // и лимитеры считали бы всех клиентов одним. TRUST_PROXY=0 отключает, число — кол-во хопов.
+  const trustProxyRaw = (process.env.TRUST_PROXY ?? '1').trim().toLowerCase()
+  if (trustProxyRaw !== '0' && trustProxyRaw !== 'false') {
+    const hops = Number.parseInt(trustProxyRaw, 10)
+    app.set('trust proxy', Number.isInteger(hops) && hops > 0 ? hops : 1)
+  }
   app.use(
     compression({
       threshold: 1024,
@@ -164,11 +171,21 @@ export function createHttpApp(options: HttpAppOptions): express.Express {
     })
   })
 
-  app.get('/health/telegram', async (_req, res) => {
+  app.get('/health/telegram', async (req, res) => {
     try {
       const snapshot = await probeTelegramBotApi()
+      const status = snapshot.api_ok || !snapshot.has_token ? 200 : 503
+      if (!isAdminPanelSessionValid(req)) {
+        // Внешним мониторингам хватает статуса; превью токенов и пути прокси — только админу.
+        res.status(status).json({
+          checked_at: snapshot.checked_at,
+          has_token: snapshot.has_token,
+          api_ok: snapshot.api_ok,
+        })
+        return
+      }
       const sources = describeTelegramTokenSources()
-      res.status(snapshot.api_ok || !snapshot.has_token ? 200 : 503).json({
+      res.status(status).json({
         ...snapshot,
         token_sources: sources,
         proxy: describeActiveProxyRuntime(),

@@ -1,7 +1,8 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 
 import { logger } from '../utils/logger'
+import { atomicWriteFile } from '../utils/atomicFile'
 
 const MIN_POLL_MS = 3_000
 
@@ -64,7 +65,7 @@ export class AdminRuntimeSettingsStore {
     const dir = dirname(this.filePath)
     await mkdir(dir, { recursive: true })
     const body: FileShape = { poll_interval_ms: this.pollIntervalMs }
-    await writeFile(this.filePath, `${JSON.stringify(body, null, 2)}\n`, 'utf8')
+    await atomicWriteFile(this.filePath, `${JSON.stringify(body, null, 2)}\n`)
   }
 }
 

@@ -1,10 +1,11 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readFile } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
 import { dirname, join } from 'node:path'
 
 import { logger } from '../utils/logger'
 import { normalizeTelegramLinkedChatsForApi } from '../utils/telegramLinkedChats'
 import type { PlatformChannelInfo, TelegramChatType } from './integrationPlatformClient'
+import { atomicWriteFile } from '../utils/atomicFile'
 
 const DATA_PATH = join(process.cwd(), 'data', 'integrations.json')
 
@@ -281,7 +282,7 @@ class IntegrationsStore {
 
   private async persist(): Promise<void> {
     await mkdir(dirname(DATA_PATH), { recursive: true })
-    await writeFile(DATA_PATH, JSON.stringify(this.data, null, 2), 'utf8')
+    await atomicWriteFile(DATA_PATH, JSON.stringify(this.data, null, 2), 0o600)
   }
 
   getIntegrations(): IntegrationRecord[] {

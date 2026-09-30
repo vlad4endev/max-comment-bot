@@ -1,7 +1,8 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 
 import { logger } from '../utils/logger'
+import { atomicWriteFile } from '../utils/atomicFile'
 
 const STATE_PATH = join(process.cwd(), 'data', 'flow-state.json')
 
@@ -54,7 +55,7 @@ class FlowStateStore {
 
   private async persist(): Promise<void> {
     await mkdir(dirname(STATE_PATH), { recursive: true })
-    await writeFile(STATE_PATH, JSON.stringify(this.data, null, 2), 'utf8')
+    await atomicWriteFile(STATE_PATH, JSON.stringify(this.data, null, 2))
   }
 
   getLastMessageId(flowId: string): number {

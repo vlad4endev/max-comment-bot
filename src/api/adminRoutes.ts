@@ -8,6 +8,7 @@ import pLimit from 'p-limit'
 import { config, getTelegramToken } from '../config'
 import { getDb } from '../db/database'
 import { checkAdminAuth } from '../middleware/adminAuth'
+import { createRateLimiter } from '../middleware/rateLimit'
 import {
   normalizeCommentSyncKeywords,
   normalizeCommentSyncMatchMode,
@@ -458,7 +459,16 @@ export function createAdminRouter(deps: AdminRouterDeps): express.Router {
   const secureCookie = config.NODE_ENV === 'production'
   const sessionMaxAgeSec = 7 * 24 * 60 * 60
 
-  router.post('/panel-login', (req, res) => {
+  /** Только неудачные попытки: 10 за 15 минут с одного IP (успешный вход счётчик не расходует). */
+  const panelLoginLimiter = createRateLimiter({
+    name: 'panel-login',
+    windowMs: 15 * 60 * 1000,
+    max: 10,
+    skipSuccessful: true,
+    message: 'Слишком много неудачных попыток входа. Подождите несколько минут.',
+  })
+
+  router.post('/panel-login', panelLoginLimiter, (req, res) => {
     const body = req.body
     const username = isRecord(body) ? parseNonEmptyString(body.username) : null
     const password = isRecord(body) ? parseNonEmptyString(body.password) : null

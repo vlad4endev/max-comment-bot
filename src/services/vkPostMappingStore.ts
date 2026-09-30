@@ -7,10 +7,11 @@
  * Персистируется в data/vk-post-mapping.json.
  */
 
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 
 import { logger } from '../utils/logger'
+import { atomicWriteFile } from '../utils/atomicFile'
 
 const DATA_PATH = join(process.cwd(), 'data', 'vk-post-mapping.json')
 
@@ -60,7 +61,7 @@ class VkPostMappingStore {
 
   private async persist(): Promise<void> {
     await mkdir(dirname(DATA_PATH), { recursive: true })
-    await writeFile(DATA_PATH, JSON.stringify(this.data, null, 2), 'utf8')
+    await atomicWriteFile(DATA_PATH, JSON.stringify(this.data, null, 2))
   }
 
   async upsert(entry: Omit<VkPostMappingEntry, 'createdAt'>): Promise<void> {
