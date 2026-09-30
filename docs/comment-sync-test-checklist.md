@@ -171,3 +171,11 @@ cd /tmp/cs && BOT_TOKEN=x ADMIN_CHAT_ID=1 BOT_NICKNAME=b OWNER_USER_ID=1 WEBHOOK
 
 Проверяет: миграцию легаси-БД, одинаковый `message_id` в разных чатах, идемпотентность
 сохранения, изоляцию TG/VK и эксклюзивность аренды `comment_sync_lease`.
+
+`scripts/test-telegram-lanes.ts` (БД не трогает) проверяет независимость полос rate limiter
+по токенам и TTL-кэш:
+
+```bash
+BOT_TOKEN=x ADMIN_CHAT_ID=1 BOT_NICKNAME=b OWNER_USER_ID=1 WEBHOOK_SECRET=abcdef \
+  npx ts-node scripts/test-telegram-lanes.ts
+```

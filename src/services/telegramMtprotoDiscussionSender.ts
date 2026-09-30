@@ -14,7 +14,7 @@ import {
 } from '../utils/telegramSyncErrors'
 import { withTelegramFloodWaitBackoff } from '../utils/telegramRateLimiter'
 import {
-  connectTelegramUserClient,
+  withSharedMtprotoClient,
   resolveTelegramChannelEntity,
   telegramUserArchiveConfigured,
 } from './telegramUserArchive'
@@ -67,41 +67,42 @@ export async function sendDiscussionMessageAsPeer(
     return null
   }
 
-  const client = await connectTelegramUserClient()
   try {
-    const discussionPeer = await client.getInputEntity(discussionChatId)
-    let sendAsPeer = discussionPeer
-    if (mode === 'channel') {
-      if (!channelKey) {
-        return null
+    return await withSharedMtprotoClient(async (client) => {
+      const discussionPeer = await client.getInputEntity(discussionChatId)
+      let sendAsPeer = discussionPeer
+      if (mode === 'channel') {
+        if (!channelKey) {
+          return null
+        }
+        const channelEntity = await resolveTelegramChannelEntity(client, channelKey)
+        sendAsPeer = await client.getInputEntity(channelEntity)
       }
-      const channelEntity = await resolveTelegramChannelEntity(client, channelKey)
-      sendAsPeer = await client.getInputEntity(channelEntity)
-    }
 
-    const updates = await withTelegramFloodWaitBackoff('messages.SendMessage', () =>
-      client.invoke(
-        new Api.messages.SendMessage({
-          peer: discussionPeer,
-          message: trimmed,
-          replyTo: new Api.InputReplyToMessage({ replyToMsgId: replyToMessageId }),
-          randomId: generateRandomLong(),
-          sendAs: sendAsPeer,
-        }),
-      ),
-    )
+      const updates = await withTelegramFloodWaitBackoff('messages.SendMessage', () =>
+        client.invoke(
+          new Api.messages.SendMessage({
+            peer: discussionPeer,
+            message: trimmed,
+            replyTo: new Api.InputReplyToMessage({ replyToMsgId: replyToMessageId }),
+            randomId: generateRandomLong(),
+            sendAs: sendAsPeer,
+          }),
+        ),
+      )
 
-    const messageId = extractMessageIdFromUpdates(updates)
-    if (messageId != null) {
-      logger.info('[telegramMtprotoDiscussionSender] sent with sendAs', {
-        mode,
-        discussionChatId,
-        channelKey,
-        replyToMessageId,
-        messageId,
-      })
-    }
-    return messageId
+      const messageId = extractMessageIdFromUpdates(updates)
+      if (messageId != null) {
+        logger.info('[telegramMtprotoDiscussionSender] sent with sendAs', {
+          mode,
+          discussionChatId,
+          channelKey,
+          replyToMessageId,
+          messageId,
+        })
+      }
+      return messageId
+    })
   } catch (err: unknown) {
     const errText = extractTelegramErrorText(err)
     logger.warn('[telegramMtprotoDiscussionSender] sendAs failed', {
@@ -114,8 +115,6 @@ export async function sendDiscussionMessageAsPeer(
       suggestion: suggestActionForTelegramSyncError(errText),
     })
     return null
-  } finally {
-    await client.disconnect()
   }
 }
 

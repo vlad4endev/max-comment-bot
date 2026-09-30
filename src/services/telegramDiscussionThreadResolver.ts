@@ -6,6 +6,7 @@
 import { Api } from 'telegram'
 import { listTgChainsSync, type TgChainRecord } from '../api/adminPanelState'
 import { logger } from '../utils/logger'
+import { TtlCache } from '../utils/ttlCache'
 import { isInvalidTelegramMessageIdError } from '../utils/telegramSyncErrors'
 import {
   findMappingByMaxMid,
@@ -19,11 +20,7 @@ import {
 } from './postCommentMappingStore'
 import { resolveTelegramBotToken } from './resolveTelegramBotToken'
 import { isMtprotoSessionReady, resolveMtprotoCredentials } from './mtprotoConfigStore'
-import {
-  connectTelegramUserClient,
-  disconnectTelegramUserClient,
-  resolveTelegramChannelEntity,
-} from './telegramUserArchive'
+import { resolveTelegramChannelEntity, withSharedMtprotoClient } from './telegramUserArchive'
 
 function resolveBotTokenForChain(chain: TgChainRecord): string {
   const fromChain = chain.bot_token?.trim()
@@ -99,8 +96,7 @@ async function resolveThreadViaMtproto(
 
   const tgChannelMsgId = mapping.tg_msg_id
 
-  const client = await connectTelegramUserClient()
-  try {
+  return withSharedMtprotoClient(async (client) => {
     let lastInvalidMsgId = false
     for (const channelKey of channelKeys) {
       try {
@@ -172,12 +168,13 @@ async function resolveThreadViaMtproto(
       })
     }
     return null
-  } finally {
-    await disconnectTelegramUserClient(client)
-  }
+  })
 }
 
-const discussionRootChannelCache = new Map<string, number | null>()
+/** Найденная связка «корень треда → пост канала» неизменна; неудачи повторяем через 10 минут. */
+const DISCUSSION_ROOT_MISS_TTL_MS = 10 * 60_000
+const DISCUSSION_ROOT_HIT_TTL_MS = 24 * 60 * 60_000
+const discussionRootChannelCache = new TtlCache<string, number | null>()
 
 /**
  * Достаёт id поста канала из авто-репоста в группе обсуждения (fwd_from.channel_post).
@@ -188,43 +185,43 @@ export async function resolveChannelMsgIdFromDiscussionRoot(
   threadMsgId: number,
 ): Promise<number | null> {
   const cacheKey = `${discussionChatId}:${threadMsgId}`
-  if (discussionRootChannelCache.has(cacheKey)) {
-    return discussionRootChannelCache.get(cacheKey) ?? null
+  const cachedRoot = discussionRootChannelCache.get(cacheKey)
+  if (cachedRoot !== undefined) {
+    return cachedRoot
   }
   if (!isMtprotoSessionReady()) {
     return null
   }
-  const client = await connectTelegramUserClient()
   try {
-    const peer = await resolveTelegramChannelEntity(client, String(discussionChatId))
-    const messages = await client.getMessages(peer, { ids: threadMsgId })
-    const raw = messages[0]
-    if (!(raw instanceof Api.Message) || !(raw.fwdFrom instanceof Api.MessageFwdHeader)) {
-      discussionRootChannelCache.set(cacheKey, null)
-      return null
-    }
-    const channelPost = raw.fwdFrom.channelPost
-    if (typeof channelPost !== 'number' || channelPost <= 0) {
-      discussionRootChannelCache.set(cacheKey, null)
-      return null
-    }
-    discussionRootChannelCache.set(cacheKey, channelPost)
-    logger.info('[discussionThreadResolver] recovered channel msg from discussion root', {
-      discussionChatId,
-      threadMsgId,
-      channelPost,
+    return await withSharedMtprotoClient(async (client) => {
+      const peer = await resolveTelegramChannelEntity(client, String(discussionChatId))
+      const messages = await client.getMessages(peer, { ids: threadMsgId })
+      const raw = messages[0]
+      if (!(raw instanceof Api.Message) || !(raw.fwdFrom instanceof Api.MessageFwdHeader)) {
+        discussionRootChannelCache.set(cacheKey, null, DISCUSSION_ROOT_MISS_TTL_MS)
+        return null
+      }
+      const channelPost = raw.fwdFrom.channelPost
+      if (typeof channelPost !== 'number' || channelPost <= 0) {
+        discussionRootChannelCache.set(cacheKey, null, DISCUSSION_ROOT_MISS_TTL_MS)
+        return null
+      }
+      discussionRootChannelCache.set(cacheKey, channelPost, DISCUSSION_ROOT_HIT_TTL_MS)
+      logger.info('[discussionThreadResolver] recovered channel msg from discussion root', {
+        discussionChatId,
+        threadMsgId,
+        channelPost,
+      })
+      return channelPost
     })
-    return channelPost
   } catch (err: unknown) {
     logger.warn('[discussionThreadResolver] get discussion root failed', {
       discussionChatId,
       threadMsgId,
       err,
     })
-    discussionRootChannelCache.set(cacheKey, null)
+    discussionRootChannelCache.set(cacheKey, null, DISCUSSION_ROOT_MISS_TTL_MS)
     return null
-  } finally {
-    await disconnectTelegramUserClient(client)
   }
 }
 

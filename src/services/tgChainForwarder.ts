@@ -1799,6 +1799,20 @@ async function dispatchUpdatesForChain(
   }
   const discussionChatId = batch.discussionChatId
   if (discussionChatId == null) {
+    // Комментарии из группы не к чему привязать — раньше они терялись молча.
+    logger.warn('[tgChain] discussion chat unknown — TG comments in this batch are not processed', {
+      chainId: chain.id,
+      title: chain.max_title,
+      dropped: batch.discussionMessages.length,
+    })
+    void sendAdminAlert(
+      `discussion_chat_missing:${chain.id}`,
+      `У связки «${chainTitle(chain)}» не определена группа обсуждений — комментарии из Telegram не переносятся`,
+      {
+        chainId: chain.id,
+        hint: 'привяжите группу обсуждений к каналу или задайте tg_discussion_chat_id в связке',
+      },
+    )
     return
   }
   for (const msg of batch.discussionMessages) {
