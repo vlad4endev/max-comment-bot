@@ -108,6 +108,8 @@ export interface TgMessage {
   date?: number
   text?: string
   caption?: string
+  entities?: Array<Record<string, unknown>>
+  caption_entities?: Array<Record<string, unknown>>
   /** Альбом из нескольких фото/видео — отдельные channel_post с одним media_group_id */
   media_group_id?: string
   photo?: { file_id: string; file_size?: number; width?: number; height?: number }[]

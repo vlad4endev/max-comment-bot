@@ -467,7 +467,7 @@ export async function handleTgComment(
       discussionChatId,
     )
 
-    const saved = commentStore.saveTelegramThreadComment(
+    const { comment: saved, created } = commentStore.saveTelegramThreadCommentIfNew(
       {
         post_id: post.post_id,
         user_id: userId,
@@ -479,6 +479,18 @@ export async function handleTgComment(
     )
 
     markCommentSynced(`max:${saved.comment_id}`)
+    markCommentSynced(tgMessageGuardKey(message.chat.id, tgCommentId))
+
+    if (!created) {
+      // Параллельный обработчик (polling + webhook) уже сохранил этот комментарий —
+      // счётчик и уведомления не дублируем.
+      logger.debug('[tgCommentSync] duplicate TG comment ignored', {
+        chainId: chain.id,
+        tgCommentId,
+        commentId: saved.comment_id,
+      })
+      return 'ok'
+    }
 
     const newCount = postStore.incrementCommentCount(post.post_id)
     const claimed = await claimAndPropagateCommentsBooking(post.post_id, 'telegram', bot)
