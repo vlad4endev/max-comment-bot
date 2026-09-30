@@ -10,6 +10,7 @@ import { logger } from '../utils/logger'
 import { apiCallWithRetry } from '../utils/maxApiRetry'
 import { getPersistentMtprotoClient } from './telegramUserArchive'
 import { isMtprotoSessionReady } from './mtprotoConfigStore'
+import { handleTgCommentsDeleted } from './commentEditDeleteSync'
 
 const recentlyDeletedPosts = new Set<string>()
 
@@ -110,6 +111,24 @@ async function handleTelegramUpdate(update: Api.TypeUpdate): Promise<void> {
   const deletedMsgIds = normalizeDeletedMessageIds(update.messages)
 
   if (!tgChannelId || deletedMsgIds.length === 0) {
+    return
+  }
+
+  // Удаление в группе обсуждения — это удаление комментария, а не поста канала.
+  const discussionChatId = Number(tgChannelId)
+  const isDiscussionChat = getDb()
+    .prepare('SELECT 1 FROM post_comment_mapping WHERE tg_thread_chat_id = ? LIMIT 1')
+    .get(discussionChatId)
+  if (isDiscussionChat) {
+    try {
+      await handleTgCommentsDeleted(discussionChatId, deletedMsgIds, botRef)
+    } catch (err: unknown) {
+      logger.warn('[tgDeletionWatcher] comment deletion sync failed', {
+        discussionChatId,
+        deletedMsgIds,
+        err,
+      })
+    }
     return
   }
 

@@ -549,6 +549,12 @@ function migrateCommentSyncSchema(database: Database.Database): void {
     )
     .run(Date.now())
 
+  // Удаление комментариев в группе обсуждения находит связку по чату треда.
+  database.prepare(
+    `CREATE INDEX IF NOT EXISTS idx_post_comment_mapping_thread_chat
+     ON post_comment_mapping (tg_thread_chat_id)`,
+  ).run()
+
   // Индексы для быстрого поиска
   database.prepare(
     `CREATE UNIQUE INDEX IF NOT EXISTS idx_comments_max_comment_id

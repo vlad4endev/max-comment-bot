@@ -100,6 +100,7 @@ async function main(): Promise<void> {
   assert.equal(queue.commentMappingRetryDelayMs(70), queue.COMMENT_MAPPING_VERY_SLOW_RETRY_MS)
 
   console.log('OK: comment dead-letter')
+  process.exit(0)
 }
 
 main().catch((err) => {

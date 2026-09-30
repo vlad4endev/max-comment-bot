@@ -321,9 +321,8 @@ export class PostStore {
       return null
     }
     const actual = this.countCommentsInDb(postId)
-    const next: Post = { ...post, comment_count: actual }
-    this.savePost(next)
-    return next.comment_count
+    this.writeCommentCount(postId, actual)
+    return actual
   }
 
   decrementCommentCount(postId: string): number | null {
@@ -332,9 +331,8 @@ export class PostStore {
       return null
     }
     const actual = this.countCommentsInDb(postId)
-    const next: Post = { ...post, comment_count: actual }
-    this.savePost(next)
-    return next.comment_count
+    this.writeCommentCount(postId, actual)
+    return actual
   }
 
   /**
@@ -353,9 +351,23 @@ export class PostStore {
         was: post.comment_count,
         now: actual,
       })
-      this.savePost({ ...post, comment_count: actual })
+      this.writeCommentCount(postId, actual)
     }
     return actual
+  }
+
+  /**
+   * Пишет счётчик напрямую. Через {@link savePost} нельзя: он берёт max(старый, новый),
+   * поэтому после удаления комментария счётчик никогда бы не уменьшался.
+   */
+  private writeCommentCount(postId: string, count: number): void {
+    getDb()
+      .prepare(
+        `UPDATE posts
+         SET comment_count = ?, data = json_set(data, '$.comment_count', ?)
+         WHERE post_id = ?`,
+      )
+      .run(count, count, postId)
   }
 
   private countCommentsInDb(postId: string): number {

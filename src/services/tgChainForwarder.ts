@@ -26,6 +26,7 @@ import { resolveCanonicalChannelChatId } from './resolveChannelChatId'
 import { telegramMessageMatchesTgChain } from '../utils/tgChannelMatch'
 import { logger } from '../utils/logger'
 import { recordDeadLetter } from './commentDeadLetterStore'
+import { handleTgCommentEdited } from './commentEditDeleteSync'
 import { sendAdminAlert } from '../utils/alertService'
 import { apiCallWithRetry } from '../utils/maxApiRetry'
 import {
@@ -1694,7 +1695,7 @@ async function dispatchChannelUpdatesToChains(tgToken: string, batch: TgChannelU
   }
 
   const discussionChatByChain = new Map<string, number | null>()
-  if (discussionMessages.length > 0) {
+  if (discussionMessages.length > 0 || editedMessages.length > 0) {
     const commentChains = group.filter((c) => c.forward_comments)
     const resolved = await Promise.allSettled(
       commentChains.map(async (chain) => {
@@ -1802,10 +1803,15 @@ async function dispatchUpdatesForChain(
     enqueueChainWork(chain.id, () => processEditedChainMessage(chain, edited, tgToken))
   }
 
-  if (!chain.forward_comments || batch.discussionMessages.length === 0) {
+  const hasDiscussionWork =
+    batch.discussionMessages.length > 0 || batch.editedMessages.length > 0
+  if (!chain.forward_comments || !hasDiscussionWork) {
     return
   }
   const discussionChatId = batch.discussionChatId
+  if (discussionChatId == null && batch.discussionMessages.length === 0) {
+    return
+  }
   if (discussionChatId == null) {
     // Комментарии из группы не к чему привязать — раньше они терялись молча.
     logger.warn('[tgChain] discussion chat unknown — TG comments in this batch are not processed', {
@@ -1822,6 +1828,24 @@ async function dispatchUpdatesForChain(
       },
     )
     return
+  }
+  // Правки комментариев в группе обсуждения — в той же очереди, что и вставка комментариев,
+  // чтобы правка не обогнала сам комментарий.
+  for (const edited of batch.editedMessages) {
+    if (edited.chat.id !== discussionChatId) {
+      continue
+    }
+    enqueueCommentWork(`${chain.id}:${discussionChatId}`, chain.id, async () => {
+      try {
+        await handleTgCommentEdited(edited, chain, discussionChatId)
+      } catch (err: unknown) {
+        logger.warn('[tgChain] edited comment sync failed', {
+          chainId: chain.id,
+          tgMessageId: edited.message_id,
+          err,
+        })
+      }
+    })
   }
   for (const msg of batch.discussionMessages) {
     if (msg.chat.id !== discussionChatId) {
