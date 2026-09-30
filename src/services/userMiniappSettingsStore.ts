@@ -1,7 +1,8 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 
 import { logger } from '../utils/logger'
+import { atomicWriteFile } from '../utils/atomicFile'
 
 export const MINIAPP_FEATURE_KEYS = [
   'comments',
@@ -143,7 +144,7 @@ export class UserMiniappSettingsStore {
       users[String(uid)] = { ...row }
     }
     const body: SettingsFileShape = { users }
-    await writeFile(this.filePath, `${JSON.stringify(body, null, 2)}\n`, 'utf8')
+    await atomicWriteFile(this.filePath, `${JSON.stringify(body, null, 2)}\n`)
   }
 }
 

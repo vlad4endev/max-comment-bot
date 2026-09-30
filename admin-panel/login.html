@@ -59,6 +59,7 @@
         }),
       })
         .then(function (r) {
+          if (r.status === 429) throw new Error('Слишком много попыток. Подождите несколько минут.');
           if (!r.ok) throw new Error('Неверный логин или пароль');
           window.location.href = '/admin#dashboard';
         })

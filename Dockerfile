@@ -63,7 +63,7 @@ COPY admin-panel ./admin-panel
 
 LABEL org.opencontainers.image.revision="${GIT_COMMIT}"
 
-RUN mkdir -p /app/data && chown -R node:node /app
+RUN mkdir -p /app/data /app/miniapp/uploads && chown -R node:node /app
 
 USER node
 

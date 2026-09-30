@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 
@@ -23,6 +23,7 @@ import {
   purgeAntispamChannelData,
   countAntispamBlocksTodayFromStore,
 } from '../services/antispamStore'
+import { atomicWriteFile } from '../utils/atomicFile'
 
 const STATE_PATH = join(process.cwd(), 'data', 'admin-panel-state.json')
 
@@ -314,7 +315,7 @@ async function persist(): Promise<void> {
     return
   }
   await mkdir(dirname(STATE_PATH), { recursive: true })
-  await writeFile(STATE_PATH, JSON.stringify(cache, null, 2), 'utf8')
+  await atomicWriteFile(STATE_PATH, JSON.stringify(cache, null, 2), 0o600)
 }
 
 export async function getAdminPanelState(): Promise<StateFile> {

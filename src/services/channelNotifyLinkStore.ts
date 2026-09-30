@@ -1,8 +1,9 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 
 import { resolveCanonicalChannelChatId } from './resolveChannelChatId'
 import { logger } from '../utils/logger'
+import { atomicWriteFile } from '../utils/atomicFile'
 
 /** User opted in via Mini App invite to receive comment notifications for this channel. */
 export interface ChannelNotifyLink {
@@ -189,7 +190,7 @@ export class ChannelNotifyLinkStore {
     const dir = dirname(this.filePath)
     await mkdir(dir, { recursive: true })
     const body: FileShape = { links: [...this.links] }
-    await writeFile(this.filePath, `${JSON.stringify(body, null, 2)}\n`, 'utf8')
+    await atomicWriteFile(this.filePath, `${JSON.stringify(body, null, 2)}\n`)
   }
 }
 

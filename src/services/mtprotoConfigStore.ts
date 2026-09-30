@@ -1,5 +1,7 @@
-import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, unlinkSync } from 'node:fs'
 import { dirname, join } from 'node:path'
+
+import { atomicWriteFileSync } from '../utils/atomicFile'
 
 const CONFIG_PATH = join(process.cwd(), 'data', 'mtproto-config.json')
 
@@ -77,7 +79,7 @@ export function writeMtprotoConfigFile(patch: Partial<MtprotoConfigFile>): Mtpro
     userDisplay: patch.userDisplay !== undefined ? patch.userDisplay : prev?.userDisplay,
     updatedAt: new Date().toISOString(),
   }
-  writeFileSync(CONFIG_PATH, JSON.stringify(next, null, 2), 'utf8')
+  atomicWriteFileSync(CONFIG_PATH, JSON.stringify(next, null, 2), 0o600)
   return next
 }
 

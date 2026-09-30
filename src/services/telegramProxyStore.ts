@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 
 import { logger } from '../utils/logger'
@@ -12,6 +12,7 @@ import {
   type ParsedProxyInput,
   type ProxyKind,
 } from '../utils/vlessUri'
+import { atomicWriteFile } from '../utils/atomicFile'
 
 const CONFIG_PATH = join(process.cwd(), 'data', 'telegram-proxies.json')
 const MAX_PROXIES = 40
@@ -497,7 +498,7 @@ class TelegramProxyStore {
     this.state.updatedAt = new Date().toISOString()
     const dir = dirname(CONFIG_PATH)
     await mkdir(dir, { recursive: true })
-    await writeFile(CONFIG_PATH, `${JSON.stringify(this.state, null, 2)}\n`, 'utf8')
+    await atomicWriteFile(CONFIG_PATH, `${JSON.stringify(this.state, null, 2)}\n`, 0o600)
   }
 }
 

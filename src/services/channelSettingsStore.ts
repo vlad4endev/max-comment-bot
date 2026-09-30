@@ -1,7 +1,8 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 
 import { logger } from '../utils/logger'
+import { atomicWriteFile } from '../utils/atomicFile'
 
 export interface ChannelSettings {
   manager_url: string | null
@@ -143,7 +144,7 @@ export class ChannelSettingsStore {
       channels[String(chatId)] = { ...row }
     }
     const body: SettingsFileShape = { channels }
-    await writeFile(this.filePath, `${JSON.stringify(body, null, 2)}\n`, 'utf8')
+    await atomicWriteFile(this.filePath, `${JSON.stringify(body, null, 2)}\n`)
   }
 }
 

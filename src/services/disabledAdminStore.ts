@@ -1,7 +1,8 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 
 import { logger } from '../utils/logger'
+import { atomicWriteFile } from '../utils/atomicFile'
 
 interface DisabledAdminsFileShape {
   disabled_user_ids: number[]
@@ -101,7 +102,7 @@ export class DisabledAdminStore {
     const body: DisabledAdminsFileShape = {
       disabled_user_ids: [...this.disabledUserIds].sort((a, b) => a - b),
     }
-    await writeFile(this.filePath, `${JSON.stringify(body, null, 2)}\n`, 'utf8')
+    await atomicWriteFile(this.filePath, `${JSON.stringify(body, null, 2)}\n`)
   }
 }
 
