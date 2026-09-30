@@ -15,7 +15,17 @@ export interface PostCommentMappingRow {
   tg_chat_id: number | null
   tg_thread_chat_id: number | null
   tg_thread_msg_id: number | null
+  /** 'stale' — GetDiscussionMessage безнадёжен; 'suspect' — привязка отвергнута Telegram, refresh не удался. */
+  thread_status?: 'stale' | 'suspect' | null
+  thread_status_at?: number | null
 }
+
+const MAPPING_COLUMNS =
+  'chain_id, tg_msg_id, max_mid, tg_chat_id, tg_thread_chat_id, tg_thread_msg_id, thread_status, thread_status_at'
+
+/** Как долго не повторять resolve после соответствующей отметки. */
+const THREAD_STALE_TTL_MS = 24 * 60 * 60_000
+const THREAD_SUSPECT_TTL_MS = 10 * 60_000
 
 /** Найденный linked chat меняется редко; «нет группы» кэшируем ненадолго — её могли привязать позже. */
 const DISCUSSION_CHAT_FOUND_TTL_MS = 30 * 60_000
@@ -53,7 +63,7 @@ function applyPendingThreadLink(chainId: string, channelMsgId: number): void {
   const result = getDb()
     .prepare(
       `UPDATE post_comment_mapping
-       SET tg_thread_chat_id = ?, tg_thread_msg_id = ?
+       SET tg_thread_chat_id = ?, tg_thread_msg_id = ?, thread_status = NULL, thread_status_at = NULL
        WHERE chain_id = ? AND tg_msg_id = ?`,
     )
     .run(pending.threadChatId, pending.threadMsgId, chainId, channelMsgId)
@@ -62,21 +72,67 @@ function applyPendingThreadLink(chainId: string, channelMsgId: number): void {
   }
 }
 
-/** Маркер в tg_thread_msg_id: GetDiscussionMessage безнадёжен, repair пропускает. */
-export const STALE_THREAD_MSG_ID = -1
-
-export function isMappingThreadResolveStale(mapping: PostCommentMappingRow): boolean {
-  return mapping.tg_thread_msg_id === STALE_THREAD_MSG_ID
+/** SQL-условие «resolve для этой строки сейчас не заблокирован статусом» (alias — псевдоним таблицы). */
+function threadResolveAllowedSql(alias: string): string {
+  const now = Date.now()
+  return `(${alias}.thread_status IS NULL OR ${alias}.thread_status_at IS NULL OR
+    ${alias}.thread_status_at <= ${now} - CASE ${alias}.thread_status
+      WHEN 'stale' THEN ${THREAD_STALE_TTL_MS} ELSE ${THREAD_SUSPECT_TTL_MS} END)`
 }
 
-export function markMappingThreadResolveStale(chainId: string, tgMsgId: number): void {
+function threadStatusTtlMs(status: PostCommentMappingRow['thread_status']): number {
+  return status === 'stale' ? THREAD_STALE_TTL_MS : THREAD_SUSPECT_TTL_MS
+}
+
+/**
+ * Resolve треда временно заблокирован: недавно признан безнадёжным (stale) или отвергнут
+ * Telegram без успешного refresh (suspect). По истечении TTL попытки возобновляются.
+ */
+export function isMappingThreadResolveStale(mapping: PostCommentMappingRow): boolean {
+  const status = mapping.thread_status
+  if (!status) {
+    return false
+  }
+  const at = mapping.thread_status_at ?? 0
+  return Date.now() - at < threadStatusTtlMs(status)
+}
+
+/** Привязка к треду валидна и её можно использовать для отправки. */
+export function hasUsableThread(
+  mapping: PostCommentMappingRow | null | undefined,
+): mapping is PostCommentMappingRow & { tg_thread_chat_id: number; tg_thread_msg_id: number } {
+  return Boolean(
+    mapping &&
+      typeof mapping.tg_thread_chat_id === 'number' &&
+      mapping.tg_thread_chat_id !== 0 &&
+      typeof mapping.tg_thread_msg_id === 'number' &&
+      mapping.tg_thread_msg_id > 0 &&
+      !isMappingThreadResolveStale(mapping),
+  )
+}
+
+function setThreadStatus(
+  chainId: string,
+  tgMsgId: number,
+  status: 'stale' | 'suspect',
+): void {
   getDb()
     .prepare(
       `UPDATE post_comment_mapping
-       SET tg_thread_msg_id = ?
+       SET thread_status = ?, thread_status_at = ?
        WHERE chain_id = ? AND tg_msg_id = ?`,
     )
-    .run(STALE_THREAD_MSG_ID, chainId, tgMsgId)
+    .run(status, Date.now(), chainId, tgMsgId)
+}
+
+/** GetDiscussionMessage безнадёжен (MSG_ID_INVALID для всех ключей канала). */
+export function markMappingThreadResolveStale(chainId: string, tgMsgId: number): void {
+  setThreadStatus(chainId, tgMsgId, 'stale')
+}
+
+/** Telegram отверг сохранённый thread id, а refresh не помог: id не трогаем, но пока не используем. */
+export function markMappingThreadSuspect(chainId: string, tgMsgId: number): void {
+  setThreadStatus(chainId, tgMsgId, 'suspect')
 }
 
 export function transferPostCommentMappingsChainId(oldChainId: string, newChainId: string): number {
@@ -258,7 +314,7 @@ export function linkThreadMessageToChannelPost(
   const result = getDb()
     .prepare(
       `UPDATE post_comment_mapping
-       SET tg_thread_chat_id = ?, tg_thread_msg_id = ?
+       SET tg_thread_chat_id = ?, tg_thread_msg_id = ?, thread_status = NULL, thread_status_at = NULL
        WHERE chain_id = ? AND tg_msg_id = ?`,
     )
     .run(threadChatId, threadMsgId, chainId, channelMsgId)
@@ -270,17 +326,6 @@ export function linkThreadMessageToChannelPost(
   if (ensureMappingFromForwarded(chainId, channelMsgId)) {
     applyPendingThreadLink(chainId, channelMsgId)
   }
-}
-
-/** Сбрасывает устаревший thread id — для повторного resolve через GetDiscussionMessage. */
-export function clearPostThreadMapping(chainId: string, tgMsgId: number): void {
-  getDb()
-    .prepare(
-      `UPDATE post_comment_mapping
-       SET tg_thread_chat_id = NULL, tg_thread_msg_id = NULL
-       WHERE chain_id = ? AND tg_msg_id = ?`,
-    )
-    .run(chainId, tgMsgId)
 }
 
 /** Удаляет битый маппинг (MSG_ID_INVALID / удалённый пост в TG). */
@@ -368,12 +413,14 @@ export function listMappingsMissingThread(
     : ''
   return getDb()
     .prepare(
-      `SELECT m.chain_id, m.tg_msg_id, m.max_mid, m.tg_chat_id, m.tg_thread_chat_id, m.tg_thread_msg_id
+      `SELECT m.chain_id, m.tg_msg_id, m.max_mid, m.tg_chat_id, m.tg_thread_chat_id, m.tg_thread_msg_id,
+              m.thread_status, m.thread_status_at
        FROM post_comment_mapping m
        LEFT JOIN posts p ON p.message_mid = m.max_mid
        WHERE m.chain_id = ?
          AND (m.tg_thread_msg_id IS NULL OR m.tg_thread_msg_id = 0)
          AND m.tg_msg_id IS NOT NULL AND m.tg_msg_id > 0
+         AND ${threadResolveAllowedSql('m')}
          ${pendingFilter}
        ORDER BY
          (SELECT COUNT(*) FROM comments c
@@ -387,17 +434,22 @@ export function listMappingsMissingThread(
     .all(chainId, safeLimit) as PostCommentMappingRow[]
 }
 
+/** Id сообщений уникальны только внутри чата — при известном `threadChatId` сверяем и его. */
 export function findMappingByThreadMsgId(
   chainId: string,
   threadMsgId: number,
+  threadChatId?: number,
 ): PostCommentMappingRow | null {
   const row = getDb()
     .prepare(
-      `SELECT chain_id, tg_msg_id, max_mid, tg_chat_id, tg_thread_chat_id, tg_thread_msg_id
+      `SELECT ${MAPPING_COLUMNS}
        FROM post_comment_mapping
-       WHERE chain_id = ? AND tg_thread_msg_id = ?`,
+       WHERE chain_id = ? AND tg_thread_msg_id = ?
+         AND (? IS NULL OR tg_thread_chat_id IS NULL OR tg_thread_chat_id = ?)`,
     )
-    .get(chainId, threadMsgId) as PostCommentMappingRow | undefined
+    .get(chainId, threadMsgId, threadChatId ?? null, threadChatId ?? null) as
+    | PostCommentMappingRow
+    | undefined
   return row ?? null
 }
 
@@ -407,7 +459,7 @@ export function findMappingByTgMsgId(
 ): PostCommentMappingRow | null {
   const row = getDb()
     .prepare(
-      `SELECT chain_id, tg_msg_id, max_mid, tg_chat_id, tg_thread_chat_id, tg_thread_msg_id
+      `SELECT ${MAPPING_COLUMNS}
        FROM post_comment_mapping
        WHERE chain_id = ? AND tg_msg_id = ?
        ORDER BY id DESC
@@ -426,7 +478,7 @@ export function findMappingByMaxMid(maxMid: string): PostCommentMappingRow | nul
   // Предпочитаем строку с заполненным thread id — иначе sync ломается на «битой» последней записи.
   const row = getDb()
     .prepare(
-      `SELECT chain_id, tg_msg_id, max_mid, tg_chat_id, tg_thread_chat_id, tg_thread_msg_id
+      `SELECT ${MAPPING_COLUMNS}
        FROM post_comment_mapping
        WHERE max_mid = ?
        ORDER BY
@@ -557,6 +609,7 @@ export function listRecentUnmappedForwarded(
          AND TRIM(f.max_message_mid) != ''
          AND f.max_message_mid != ?
          AND (m.tg_thread_msg_id IS NULL OR m.tg_thread_msg_id = 0)
+         AND (m.chain_id IS NULL OR ${threadResolveAllowedSql('m')})
        ORDER BY f.tg_message_id DESC
        LIMIT ?`,
     )

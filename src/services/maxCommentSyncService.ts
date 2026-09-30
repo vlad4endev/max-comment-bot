@@ -24,7 +24,7 @@ import {
   syncMaxCommentToTelegramThread,
 } from './telegramThreadReplySync'
 import { ensurePostThreadMapping } from './telegramDiscussionThreadResolver'
-import { findMappingByMaxMid } from './postCommentMappingStore'
+import { findMappingByMaxMid, hasUsableThread } from './postCommentMappingStore'
 import { resolveTelegramBotToken } from './resolveTelegramBotToken'
 import { logger } from '../utils/logger'
 import { sendAdminAlert } from '../utils/alertService'
@@ -73,7 +73,7 @@ async function repairThreadMappings(
       continue
     }
     const mapping = findMappingByMaxMid(messageMid)
-    if (mapping?.tg_thread_chat_id && mapping.tg_thread_msg_id) {
+    if (hasUsableThread(mapping)) {
       continue
     }
     try {
@@ -253,7 +253,7 @@ export function startMaxCommentSync(bot: Bot, options: SyncOptions = {}): () => 
         break
       }
       const mapping = findMappingByMaxMid(messageMid)
-      if (mapping?.tg_thread_chat_id && mapping.tg_thread_msg_id) {
+      if (hasUsableThread(mapping)) {
         continue
       }
       try {

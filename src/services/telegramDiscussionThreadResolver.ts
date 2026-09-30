@@ -11,9 +11,10 @@ import { isInvalidTelegramMessageIdError } from '../utils/telegramSyncErrors'
 import {
   findMappingByMaxMid,
   linkThreadMessageToChannelPost,
-  clearPostThreadMapping,
+  hasUsableThread,
   isMappingThreadResolveStale,
   markMappingThreadResolveStale,
+  markMappingThreadSuspect,
   resolveDiscussionChatId,
   listTelegramChannelKeyCandidatesForMapping,
   type PostCommentMappingRow,
@@ -65,6 +66,7 @@ function extractThreadFromDiscussionMessage(
 async function resolveThreadViaMtproto(
   chain: TgChainRecord,
   mapping: PostCommentMappingRow,
+  options: { ignoreStale?: boolean } = {},
 ): Promise<{ threadChatId: number; threadMsgId: number } | null> {
   const mtproto = resolveMtprotoCredentials()
   if (!isMtprotoSessionReady()) {
@@ -78,7 +80,7 @@ async function resolveThreadViaMtproto(
   if (typeof mapping.tg_msg_id !== 'number' || mapping.tg_msg_id <= 0) {
     return null
   }
-  if (isMappingThreadResolveStale(mapping)) {
+  if (!options.ignoreStale && isMappingThreadResolveStale(mapping)) {
     logger.debug('[discussionThreadResolver] skip stale mapping', {
       chainId: chain.id,
       maxMid: mapping.max_mid,
@@ -258,13 +260,9 @@ async function ensurePostThreadMappingInternal(
     return null
   }
 
-  if (forceRefresh && typeof mapping.tg_msg_id === 'number' && mapping.tg_msg_id > 0) {
-    clearPostThreadMapping(mapping.chain_id, mapping.tg_msg_id)
-    mapping = findMappingByMaxMid(normalized)
-    if (!mapping) {
-      return null
-    }
-  } else if (mapping.tg_thread_chat_id && mapping.tg_thread_msg_id) {
+  // Рабочую привязку не стираем заранее: новая перезапишет её при успехе, а при неудаче
+  // старая не пропадёт (раньше refresh сначала обнулял ссылку).
+  if (!forceRefresh && hasUsableThread(mapping)) {
     return mapping
   }
 
@@ -274,15 +272,20 @@ async function ensurePostThreadMappingInternal(
   }
 
   const token = resolveBotTokenForChain(chain)
-  let threadChatId = mapping.tg_thread_chat_id
-  let threadMsgId = mapping.tg_thread_msg_id
+  // При refresh (и когда Telegram отверг сохранённый id) резолвим заново, а не берём старые значения.
+  const resolveFresh = forceRefresh || mapping.thread_status === 'suspect'
+  let threadChatId = resolveFresh ? null : mapping.tg_thread_chat_id
+  let threadMsgId = resolveFresh ? null : mapping.tg_thread_msg_id
+  if (threadMsgId != null && threadMsgId <= 0) {
+    threadMsgId = null
+  }
 
   if (threadChatId == null) {
     threadChatId = await resolveDiscussionChatId(token, chain)
   }
 
   if (threadMsgId == null) {
-    const resolved = await resolveThreadViaMtproto(chain, mapping)
+    const resolved = await resolveThreadViaMtproto(chain, mapping, { ignoreStale: forceRefresh })
     if (resolved) {
       threadChatId = resolved.threadChatId
       threadMsgId = resolved.threadMsgId
@@ -304,6 +307,16 @@ async function ensurePostThreadMappingInternal(
       threadMsgId,
     })
     return mapping
+  }
+
+  if (
+    forceRefresh &&
+    typeof mapping.tg_msg_id === 'number' &&
+    mapping.tg_msg_id > 0 &&
+    !isMappingThreadResolveStale(mapping)
+  ) {
+    // Telegram отверг старую привязку, новую получить не удалось — не долбим её несколько минут.
+    markMappingThreadSuspect(mapping.chain_id, mapping.tg_msg_id)
   }
 
   logger.warn('[discussionThreadResolver] could not ensure thread mapping', {

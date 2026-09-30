@@ -9,7 +9,11 @@ import type { Bot } from '@maxhub/max-bot-api'
 import { listTgChainsSync } from '../api/adminPanelState'
 import type { Comment } from './commentStore'
 import { commentStore } from './commentStore'
-import { findMappingByMaxMid, resolveTelegramChannelKeyForMapping } from './postCommentMappingStore'
+import {
+  findMappingByMaxMid,
+  hasUsableThread,
+  resolveTelegramChannelKeyForMapping,
+} from './postCommentMappingStore'
 import { ensurePostThreadMapping, refreshPostThreadMapping } from './telegramDiscussionThreadResolver'
 import type { Post } from './postStore'
 import { postStore } from './postStore'
@@ -130,7 +134,7 @@ function resolveChannelKeyForMapping(mapping: PostCommentMappingRow): string | n
 }
 
 function resolvePostThreadTargetFromMapping(mapping: PostCommentMappingRow): ThreadTarget | null {
-  if (!mapping.tg_thread_chat_id || !mapping.tg_thread_msg_id) {
+  if (!hasUsableThread(mapping)) {
     return null
   }
   if (!isCommentForwardEnabled(mapping.chain_id)) {
