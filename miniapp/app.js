@@ -58,6 +58,116 @@
       })
     }
 
+    /** Signed WebApp initData (MAX or Telegram bridge), ASCII-only; '' when unavailable. */
+    function readSignedInitData() {
+      try {
+        var maxRaw =
+          window.WebApp && typeof window.WebApp.initData === 'string' ? window.WebApp.initData.trim() : ''
+        var tgRaw =
+          window.Telegram && window.Telegram.WebApp && typeof window.Telegram.WebApp.initData === 'string'
+            ? window.Telegram.WebApp.initData.trim()
+            : ''
+        // The server verifies against the bot token of the platform header, so pick the matching bridge.
+        var isTg = isMiniappTelegramRuntime() || isLikelyTelegramWebView()
+        var raw = isTg ? tgRaw || maxRaw : maxRaw || tgRaw
+        return String(raw).replace(/[^\x20-\x7E]/g, '')
+      } catch (e) {
+        return ''
+      }
+    }
+
+    var MAX_INIT_DATA_HEADER_LEN = 3500
+
+    /**
+     * Identity headers for every API call. Caller-supplied headers always win, so existing
+     * per-screen headers (platform, start param, user id) keep working unchanged.
+     */
+    function withMiniappAuthHeaders(headers) {
+      var out = Object.assign({}, headers || {})
+      var has = {}
+      Object.keys(out).forEach(function (k) {
+        has[k.toLowerCase()] = true
+      })
+      if (!has['x-miniapp-platform'] && (isMiniappTelegramRuntime() || isLikelyTelegramWebView())) {
+        out['X-Miniapp-Platform'] = 'telegram'
+      }
+      if (!has['x-miniapp-init-data']) {
+        var init = readSignedInitData()
+        if (init && init.length <= MAX_INIT_DATA_HEADER_LEN) {
+          out['X-Miniapp-Init-Data'] = init
+        }
+      }
+      try {
+        var sp = new URLSearchParams(location.search)
+        var tgUid = sp.get('tg_uid')
+        var tgExp = sp.get('tg_exp')
+        var tgSig = sp.get('tg_sig')
+        if (!has['x-miniapp-tg-uid'] && tgUid && /^\d+$/.test(tgUid)) out['X-Miniapp-Tg-Uid'] = tgUid
+        if (!has['x-miniapp-tg-exp'] && tgExp && /^\d+$/.test(tgExp)) out['X-Miniapp-Tg-Exp'] = tgExp
+        if (!has['x-miniapp-tg-sig'] && tgSig && /^[a-f0-9]{64}$/i.test(tgSig)) {
+          out['X-Miniapp-Tg-Sig'] = tgSig.toLowerCase()
+        }
+      } catch (e) {}
+      return out
+    }
+
+    /**
+     * initData too long for a header (proxies drop big headers) travels in the JSON body instead;
+     * the server reads `init_data` from the body as a fallback.
+     */
+    function withInitDataInBody(body, headers) {
+      if (typeof body !== 'string' || body.charAt(0) !== '{') return body
+      if (headers['X-Miniapp-Init-Data']) return body
+      var init = readSignedInitData()
+      if (!init) return body
+      try {
+        var obj = JSON.parse(body)
+        if (obj && typeof obj === 'object' && !Array.isArray(obj) && obj.init_data == null) {
+          obj.init_data = init
+          return JSON.stringify(obj)
+        }
+      } catch (e) {}
+      return body
+    }
+
+    var API_DEFAULT_TIMEOUT_MS = 20000
+    var API_UPLOAD_TIMEOUT_MS = 60000
+
+    /**
+     * apiFetch() for /api: adds identity headers and a timeout so a flaky mobile network can never
+     * leave the UI stuck forever. Timeouts reject with Error('timeout') (mapped to a Russian message).
+     */
+    function apiFetch(url, options, timeoutMs) {
+      var opts = Object.assign({}, options || {})
+      opts.headers = withMiniappAuthHeaders(opts.headers)
+      var method = String(opts.method || 'GET').toUpperCase()
+      if (method !== 'GET' && method !== 'HEAD') {
+        opts.body = withInitDataInBody(opts.body, opts.headers)
+      }
+      var isUpload = typeof FormData !== 'undefined' && opts.body instanceof FormData
+      var ms = timeoutMs || (isUpload ? API_UPLOAD_TIMEOUT_MS : API_DEFAULT_TIMEOUT_MS)
+      if (typeof AbortController === 'undefined' || opts.signal) {
+        return fetch(url, opts)
+      }
+      var ctl = new AbortController()
+      var timedOut = false
+      var timer = window.setTimeout(function () {
+        timedOut = true
+        ctl.abort()
+      }, ms)
+      opts.signal = ctl.signal
+      return fetch(url, opts).then(
+        function (r) {
+          window.clearTimeout(timer)
+          return r
+        },
+        function (e) {
+          window.clearTimeout(timer)
+          throw timedOut ? new Error('timeout') : e
+        }
+      )
+    }
+
     function apiUrl(path) {
       var p = path.charAt(0) === '/' ? path : '/' + path
       return (window.__apiBase || '') + p
@@ -654,7 +764,7 @@
       var uid = homeSettingsUid
       if (uid == null) return
 
-      fetch(
+      apiFetch(
         '/api/channel-settings?chat_id=' +
           encodeURIComponent(String(chatId)) +
           '&user_id=' +
@@ -795,7 +905,7 @@
         status.style.color = 'var(--teal)'
       }
 
-      fetch('/api/channel-settings', {
+      apiFetch('/api/channel-settings', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -928,7 +1038,7 @@
       var channelNameEl = document.getElementById('joinChannelName');
       if (channelNameEl) channelNameEl.textContent = 'Канал';
 
-      fetch(
+      apiFetch(
         '/api/channel-info?chat_id=' +
           encodeURIComponent(cid) +
           (inTelegram ? '&platform=telegram' : '')
@@ -943,7 +1053,7 @@
         })
         .catch(function () {});
 
-      fetch('/api/config')
+      apiFetch('/api/config')
         .then(function (r) {
           return r.json();
         })
@@ -1150,7 +1260,7 @@
         var panel = block.querySelector('.channel-admins-panel')
         if (!panel) return Promise.resolve()
         panel.innerHTML = '<div class="channel-admins-loading">Загрузка администраторов…</div>'
-        return fetch(
+        return apiFetch(
           '/api/channel-admins?chat_id=' +
             encodeURIComponent(String(channelChatId)) +
             '&user_id=' +
@@ -1186,7 +1296,7 @@
       function refreshChannelAdminsCard(channelChatId, apiUid) {
         if (apiUid == null) return Promise.resolve()
         var ch = channelsById[String(channelChatId)] || { chat_id: channelChatId, title: null }
-        return fetch(
+        return apiFetch(
           '/api/channel-admins?chat_id=' +
             encodeURIComponent(String(channelChatId)) +
             '&user_id=' +
@@ -1277,7 +1387,7 @@
             var next = !sw.classList.contains('on');
             sw.classList.toggle('on', next);
             sw.setAttribute('aria-checked', next ? 'true' : 'false');
-            fetch('/api/settings' + (useTelegramPlatform ? '?platform=telegram' : ''), {
+            apiFetch('/api/settings' + (useTelegramPlatform ? '?platform=telegram' : ''), {
               method: 'POST',
               headers: homeApiHeaders(true),
               body: JSON.stringify({ user_id: apiUid, feature: feature, enabled: next }),
@@ -1417,7 +1527,7 @@
           disableBtn.disabled = true
           var prevText = disableBtn.textContent
           disableBtn.textContent = 'Отключение...'
-          fetch('/api/channel-admins/disable' + (inTelegram ? '?platform=telegram' : ''), {
+          apiFetch('/api/channel-admins/disable' + (inTelegram ? '?platform=telegram' : ''), {
             method: 'POST',
             headers: homeApiHeaders(true),
             body: JSON.stringify({
@@ -1470,7 +1580,7 @@
 
       function enrichChannelsLive(apiUid) {
         if (apiUid == null) return
-        fetch(
+        apiFetch(
           '/api/channels?user_id=' +
             encodeURIComponent(String(apiUid)) +
             platformQs +
@@ -1556,7 +1666,7 @@
 
       function reloadHomeChannels(apiUid) {
         if (apiUid == null) return Promise.resolve()
-        return fetch(
+        return apiFetch(
           '/api/channels?user_id=' + encodeURIComponent(String(apiUid)) + platformQs,
           { headers: homeApiHeaders(false) }
         )
@@ -1582,7 +1692,7 @@
           showToast('Введите @username канала')
           return Promise.resolve()
         }
-        return fetch('/api/telegram/channels/register', {
+        return apiFetch('/api/telegram/channels/register', {
           method: 'POST',
           headers: homeApiHeaders(true),
           body: JSON.stringify({ user_id: apiUid, channel: raw }),
@@ -1640,7 +1750,7 @@
         }
       }
 
-      fetch('/api/settings?user_id=' + encodeURIComponent(String(uid)) + platformQs, {
+      apiFetch('/api/settings?user_id=' + encodeURIComponent(String(uid)) + platformQs, {
         headers: homeApiHeaders(false),
       })
         .then(function (r) {
@@ -1656,7 +1766,7 @@
         })
         .catch(function () {});
 
-      fetch('/api/stats?user_id=' + encodeURIComponent(String(uid)) + platformQs, {
+      apiFetch('/api/stats?user_id=' + encodeURIComponent(String(uid)) + platformQs, {
         headers: homeApiHeaders(false),
       })
         .then(function (r) {
@@ -1715,7 +1825,7 @@
         var open = !panel.classList.contains('open');
         panel.classList.toggle('open', open);
         if (!open) return;
-        fetch('/api/channels?user_id=' + encodeURIComponent(String(uid)) + platformQs, {
+        apiFetch('/api/channels?user_id=' + encodeURIComponent(String(uid)) + platformQs, {
           headers: homeApiHeaders(false),
         })
           .then(function (r) {
@@ -1780,7 +1890,7 @@
       function loadChannelLinks(apiUid) {
         var host = document.getElementById('homeChannelLinksList')
         if (!host || apiUid == null) return
-        fetch('/api/channel-links?user_id=' + encodeURIComponent(String(apiUid)) + platformQs, {
+        apiFetch('/api/channel-links?user_id=' + encodeURIComponent(String(apiUid)) + platformQs, {
           headers: homeApiHeaders(false),
         })
           .then(function (r) {
@@ -1988,7 +2098,7 @@
 
       function loadAccountPairingStatus(apiUid) {
         if (apiUid == null) return
-        fetch(
+        apiFetch(
           '/api/account-pairing/status?user_id=' + encodeURIComponent(String(apiUid)) + platformQs,
           { headers: homeApiHeaders(false) }
         )
@@ -2025,7 +2135,7 @@
           btnTg.dataset.bound = '1'
           btnTg.addEventListener('click', function () {
             btnTg.disabled = true
-            fetch('/api/account-pairing/invite-telegram', {
+            apiFetch('/api/account-pairing/invite-telegram', {
               method: 'POST',
               headers: homeApiHeaders(true),
               body: JSON.stringify(ownerProfilePayload(apiUid)),
@@ -2052,7 +2162,7 @@
           btnMax.dataset.bound = '1'
           btnMax.addEventListener('click', function () {
             btnMax.disabled = true
-            fetch('/api/account-pairing/invite-max', {
+            apiFetch('/api/account-pairing/invite-max', {
               method: 'POST',
               headers: homeApiHeaders(true),
               body: JSON.stringify(ownerProfilePayload(apiUid)),
@@ -2079,7 +2189,7 @@
 
       if (uid != null) {
         window.setTimeout(function () {
-          fetch('/api/owner-profile/sync', {
+          apiFetch('/api/owner-profile/sync', {
             method: 'POST',
             headers: homeApiHeaders(true),
             body: JSON.stringify(ownerProfilePayload(uid)),
@@ -2131,7 +2241,7 @@
             return
           }
           linkMaxBtn.disabled = true
-          fetch('/api/channel-link-drafts', {
+          apiFetch('/api/channel-link-drafts', {
             method: 'POST',
             headers: homeApiHeaders(true),
             body: JSON.stringify(
@@ -2206,7 +2316,7 @@
             return
           }
           linkTgBtn.disabled = true
-          fetch(
+          apiFetch(
             '/api/channel-link-drafts/' + encodeURIComponent(codeVal) + '/confirm',
             {
               method: 'POST',
@@ -2257,7 +2367,7 @@
             if (preview) preview.textContent = ''
             return
           }
-          fetch('/api/channel-link-drafts/' + encodeURIComponent(v), {
+          apiFetch('/api/channel-link-drafts/' + encodeURIComponent(v), {
             headers: homeApiHeaders(false),
           })
             .then(function (r) {
@@ -2328,7 +2438,7 @@
 
       if (chatId && gateChannelEl) {
         var channelInfoQs = inTelegram ? '?platform=telegram&' : '?';
-        fetch(
+        apiFetch(
           '/api/channel-info' +
             channelInfoQs +
             'chat_id=' +
@@ -2343,7 +2453,7 @@
           .catch(function () {});
       }
 
-      fetch('/api/config')
+      apiFetch('/api/config')
         .then(function (r) {
           return r.json();
         })
@@ -2453,7 +2563,7 @@
       }
 
       var statusHeaders = inTelegram ? { 'X-Miniapp-Platform': 'telegram' } : {};
-      fetch('/api/user-status' + statusQs, { headers: statusHeaders })
+      apiFetch('/api/user-status' + statusQs, { headers: statusHeaders })
         .then(function (r) {
           return r.json();
         })
@@ -2475,7 +2585,7 @@
         parseInt(mergedParams.get('user_id') || '', 10) ||
         null;
       if (uid && chatIdForReg) {
-        fetch('/api/register-subscriber', {
+        apiFetch('/api/register-subscriber', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -2689,7 +2799,7 @@
       function fetchChannelPostUrl() {
         var ids = resolveLookupIds();
         if (!ids.postId) return Promise.resolve(null);
-        return fetch(
+        return apiFetch(
           '/api/post/' + encodeURIComponent(ids.postId) + '/channel-url' + postApiQuery(),
           { headers: miniappLookupHeaders() },
         )
@@ -2866,7 +2976,7 @@
           postPreviewTextEl.textContent = 'Ищу пост в канале…';
         }
 
-        return fetch('/api/post/' + encodeURIComponent(ids.postId) + '/refresh' + postApiQuery(), {
+        return apiFetch('/api/post/' + encodeURIComponent(ids.postId) + '/refresh' + postApiQuery(), {
           method: 'POST',
           headers: Object.assign({ 'Content-Type': 'application/json' }, miniappLookupHeaders()),
         })
@@ -3022,13 +3132,32 @@
         return esc(initials(fallbackName));
       }
 
+      /**
+       * Comment photos are only ever our own uploads. Anything else (external host) is not rendered:
+       * an <img> to a foreign URL would leak every viewer's IP / User-Agent to its owner.
+       */
+      function isTrustedPhotoUrl(u) {
+        if (/^\/miniapp\/uploads\/[A-Za-z0-9._%-]+$/.test(u)) return true;
+        try {
+          var parsed = new URL(u, location.origin);
+          return (
+            parsed.origin === location.origin &&
+            /^\/miniapp\/uploads\/[A-Za-z0-9._%-]+$/.test(parsed.pathname) &&
+            !parsed.search &&
+            !parsed.hash
+          );
+        } catch (e) {
+          return false;
+        }
+      }
+
       function normalizePhotoUrls(value) {
         if (!Array.isArray(value)) return [];
         var out = [];
         value.forEach(function (v) {
           if (typeof v !== 'string') return;
           var t = v.trim();
-          if (!t) return;
+          if (!t || !isTrustedPhotoUrl(t)) return;
           out.push(t);
         });
         return out.slice(0, 10);
@@ -3821,7 +3950,7 @@
       function runAdminDeleteRequest(url, cid, block, btn, onSuccess) {
         btn.disabled = true;
         setErr('');
-        fetch(url, {
+        apiFetch(url, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(adminApiBase(cid)),
@@ -3928,7 +4057,7 @@
                     admin_name: adminNameForReply,
                   })
                 : Object.assign(adminApiBase(cid), { text: text });
-            fetch(url, {
+            apiFetch(url, {
               method: 'PATCH',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify(body),
@@ -4301,7 +4430,7 @@
 
       function fetchPostPayload() {
         var ids = resolveLookupIds();
-        return fetch('/api/post/' + encodeURIComponent(ids.postId) + postApiQuery(), {
+        return apiFetch('/api/post/' + encodeURIComponent(ids.postId) + postApiQuery(), {
           headers: miniappLookupHeaders(),
         }).then(function (r) {
           return parseApiJsonResponse(r).then(function (p) {
@@ -4404,7 +4533,7 @@
           (inTelegram ? '&platform=telegram' : '') +
           '&chat_id=' +
           encodeURIComponent(String(chatId));
-        return fetch(url)
+        return apiFetch(url)
           .then(function (r) {
             if (!r.ok) return null;
             return r.json();
@@ -4425,11 +4554,23 @@
           });
       }
 
-      function loadComments(initial) {
+      /** True when the feed is scrolled to (near) the bottom, so background updates may follow it. */
+      function isFeedNearBottom() {
+        if (!feedEl) return true;
+        return feedEl.scrollHeight - feedEl.scrollTop - feedEl.clientHeight < 120;
+      }
+
+      /**
+       * Resolves true on success, false on failure, undefined when skipped.
+       * `options.silent` (background polling): no error banner, no forced scroll unless the user is at the bottom.
+       */
+      function loadComments(initial, options) {
+        var silent = !!(options && options.silent);
         if (postRecoveryUiVisible || postArchivedUiVisible) return Promise.resolve();
         var ids = resolveLookupIds();
         if (!ids.postId) return Promise.resolve();
-        return fetch('/api/comments/' + encodeURIComponent(ids.postId) + postApiQuery(), {
+        var followBottom = !silent || isFeedNearBottom();
+        return apiFetch('/api/comments/' + encodeURIComponent(ids.postId) + postApiQuery(), {
           headers: miniappLookupHeaders(),
         })
           .then(function (r) {
@@ -4457,14 +4598,20 @@
             if (postCommentCount == null) {
               updateBadgeFromCount(arr.length);
             }
-            scrollToBottom();
+            if (followBottom) scrollToBottom();
+            return true;
           })
           .catch(function (e) {
             if (e && e.code === 'post_not_found') {
               showPostRecoveryCard();
-              return;
+              return false;
             }
-            setErr(e, 'Не удалось отправить комментарий');
+            if (silent) {
+              logMiniappError('background comments refresh', e);
+              return false;
+            }
+            setErr(e, 'Не удалось загрузить комментарии');
+            return false;
           });
       }
 
@@ -4485,7 +4632,7 @@
         pendingPhotoFiles.forEach(function (item) {
           fd.append('photos', item.file);
         });
-        return fetch('/api/upload-photos', {
+        return apiFetch('/api/upload-photos', {
           method: 'POST',
           headers: miniappLookupHeaders(),
           body: fd,
@@ -4543,7 +4690,7 @@
                 setErr('Дождитесь отправки комментария');
                 return Promise.reject(new Error('pending'));
               }
-              return fetch('/api/reply', {
+              return apiFetch('/api/reply', {
                 method: 'POST',
                 headers: Object.assign(
                   { 'Content-Type': 'application/json' },
@@ -4607,7 +4754,7 @@
             scrollToBottom();
 
             var commentIds = resolveLookupIds();
-            return fetch('/api/comment', {
+            return apiFetch('/api/comment', {
               method: 'POST',
               headers: Object.assign(
                 { 'Content-Type': 'application/json' },
@@ -4795,7 +4942,7 @@
         .catch(function () {})
         .then(function () {
         if (chatId && userId) {
-          fetch(
+          apiFetch(
             '/api/channel-settings?chat_id=' +
               encodeURIComponent(chatId) +
               '&user_id=' +
@@ -4815,10 +4962,53 @@
         }
         });
 
-      setInterval(function () {
-        if (postRecoveryUiVisible || postArchivedUiVisible) return;
-        loadComments(false);
-      }, 15000);
+      // Background refresh: pauses while the WebView is hidden, backs off on failures, never nags the user.
+      var COMMENTS_POLL_BASE_MS = 15000;
+      var COMMENTS_POLL_MAX_MS = 120000;
+      var commentsPollDelay = COMMENTS_POLL_BASE_MS;
+      var commentsPollTimer = null;
+      var commentsPollBusy = false;
+      function scheduleCommentsPoll(delay) {
+        if (commentsPollTimer) window.clearTimeout(commentsPollTimer);
+        commentsPollTimer = window.setTimeout(runCommentsPoll, delay);
+      }
+      function runCommentsPoll() {
+        commentsPollTimer = null;
+        if (document.hidden || commentsPollBusy) {
+          scheduleCommentsPoll(commentsPollDelay);
+          return;
+        }
+        commentsPollBusy = true;
+        loadComments(false, { silent: true })
+          .then(function (ok) {
+            if (ok === false) {
+              commentsPollDelay = Math.min(commentsPollDelay * 2, COMMENTS_POLL_MAX_MS);
+            } else if (ok === true) {
+              commentsPollDelay = COMMENTS_POLL_BASE_MS;
+            }
+          })
+          .catch(function () {})
+          .then(function () {
+            commentsPollBusy = false;
+            scheduleCommentsPoll(commentsPollDelay);
+          });
+      }
+      function onCommentsPollVisibility() {
+        if (!document.hidden) {
+          // Coming back to the app: refresh right away instead of waiting out the interval.
+          commentsPollDelay = COMMENTS_POLL_BASE_MS;
+          scheduleCommentsPoll(300);
+        }
+      }
+      // bootComments() can run again (late user/start-param detection): keep a single poller.
+      if (typeof window.__miniappCommentsPollStop === 'function') window.__miniappCommentsPollStop();
+      window.__miniappCommentsPollStop = function () {
+        if (commentsPollTimer) window.clearTimeout(commentsPollTimer);
+        commentsPollTimer = null;
+        document.removeEventListener('visibilitychange', onCommentsPollVisibility);
+      };
+      document.addEventListener('visibilitychange', onCommentsPollVisibility);
+      scheduleCommentsPoll(COMMENTS_POLL_BASE_MS);
     }
 
     showJoinPage();

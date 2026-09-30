@@ -148,6 +148,35 @@ function normalizeUserFacingText(value: string): string {
   }
 }
 
+const OWN_UPLOAD_PATH_RE = /^\/miniapp\/uploads\/[A-Za-z0-9._%-]+$/
+
+/**
+ * Comment photos may only point to files uploaded through /api/upload-photos.
+ * Any other URL would be rendered as <img> for every viewer (IP / User-Agent leak to a foreign host)
+ * and forwarded to Telegram/MAX as-is.
+ */
+function isOwnUploadUrl(value: string): boolean {
+  if (OWN_UPLOAD_PATH_RE.test(value)) {
+    return true
+  }
+  const base = config.miniAppUrl?.trim()
+  if (!base) {
+    return false
+  }
+  try {
+    const ours = new URL(base)
+    const candidate = new URL(value)
+    return (
+      candidate.origin === ours.origin &&
+      OWN_UPLOAD_PATH_RE.test(candidate.pathname) &&
+      candidate.search === '' &&
+      candidate.hash === ''
+    )
+  } catch {
+    return false
+  }
+}
+
 function normalizePhotoUrl(value: unknown): string | null {
   if (typeof value !== 'string') {
     return null
@@ -157,6 +186,9 @@ function normalizePhotoUrl(value: unknown): string | null {
     return null
   }
   if (trimmed.length > 2048) {
+    return null
+  }
+  if (!isOwnUploadUrl(trimmed)) {
     return null
   }
   return trimmed
