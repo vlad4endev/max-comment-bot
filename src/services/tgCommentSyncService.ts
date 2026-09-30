@@ -33,6 +33,7 @@ import { postStore } from './postStore'
 import type { Post } from './postStore'
 import { claimAndPropagateCommentsBooking, isCommentSyncBlockedByBooking } from './commentsBookingService'
 import { recordDeadLetter } from './commentDeadLetterStore'
+import { sameMaxChat, warnOnce } from './commentLinkGuard'
 import { ensurePostFromChannelMessage } from './channelPostActions'
 import { tryBlockTelegramCommentByAntispam } from './telegramAntispamBotService'
 import { resolveCanonicalChannelChatId } from './resolveChannelChatId'
@@ -279,11 +280,20 @@ function resolvePostFromMapping(maxChatId: number, mapping: PostCommentMappingRo
   if (!maxMid) {
     return null
   }
-  return (
+  const post =
     postStore.findPostByChannelMessage(maxChatId, maxMid) ??
     postStore.findPost(maxMid, maxChatId) ??
     postStore.findByMessageMid(maxMid)
-  )
+  // Пост обязан быть из MAX-канала этой связки: поиск по одному mid мог вернуть пост другого канала.
+  if (post && !sameMaxChat(post.chat_id, maxChatId)) {
+    warnOnce(
+      `tg-post-chat-mismatch:${maxMid}:${maxChatId}`,
+      '[tgCommentSync] mapped MAX post belongs to another channel than the chain — ignored',
+      { maxMid, chainMaxChatId: maxChatId, postChatId: post.chat_id },
+    )
+    return null
+  }
+  return post
 }
 
 /**

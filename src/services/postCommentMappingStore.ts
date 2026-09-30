@@ -5,6 +5,7 @@ import { getDb } from '../db/database'
 import { logger } from '../utils/logger'
 import { telegramChannelMatchesTarget } from '../utils/tgChannelMatch'
 import { TtlCache } from '../utils/ttlCache'
+import { pickLinkedMapping, sameMaxChat, warnOnce } from './commentLinkGuard'
 
 const TG_API = 'https://api.telegram.org'
 
@@ -342,17 +343,25 @@ export function backfillPostCommentMappingForMaxMid(maxMid: string): boolean {
   if (!normalized) {
     return false
   }
-  const row = getDb()
+  const candidates = getDb()
     .prepare(
       `SELECT chain_id, tg_message_id, tg_payload
        FROM tg_chain_forwarded
        WHERE max_message_mid = ?
-       ORDER BY forwarded_at DESC
-       LIMIT 1`,
+       ORDER BY forwarded_at DESC`,
     )
-    .get(normalized) as
-    | { chain_id: string; tg_message_id: number; tg_payload: string | null }
-    | undefined
+    .all(normalized) as Array<{ chain_id: string; tg_message_id: number; tg_payload: string | null }>
+  // Только связка, которая сейчас существует и ведёт в MAX-канал этого поста —
+  // не «последняя по времени пересылки», иначе можно привязать пост к чужой связке.
+  const chains = listTgChainsSync()
+  const postChatId = lookupPostMaxChatId(normalized)
+  const row =
+    chains.length === 0
+      ? candidates[0]
+      : candidates.find((c) => {
+          const chain = chains.find((x) => x.id === c.chain_id)
+          return chain !== undefined && (postChatId == null || sameMaxChat(chain.max_chat_id, postChatId))
+        })
   if (!row) {
     return false
   }
@@ -469,25 +478,54 @@ export function findMappingByTgMsgId(
   return row ?? null
 }
 
-export function findMappingByMaxMid(maxMid: string): PostCommentMappingRow | null {
+/** Все строки маппинга поста — без учёта связок (для диагностики и починки). Порядок: рабочий тред, затем новые. */
+export function listMappingsByMaxMidRaw(maxMid: string): PostCommentMappingRow[] {
   const normalized = maxMid.trim()
   if (!normalized) {
-    return null
+    return []
   }
-  // Один max_mid может иметь несколько tg_msg_id (редактирование/альбом).
-  // Предпочитаем строку с заполненным thread id — иначе sync ломается на «битой» последней записи.
-  const row = getDb()
+  return getDb()
     .prepare(
       `SELECT ${MAPPING_COLUMNS}
        FROM post_comment_mapping
        WHERE max_mid = ?
        ORDER BY
          (CASE WHEN tg_thread_msg_id IS NOT NULL AND tg_thread_msg_id > 0 THEN 1 ELSE 0 END) DESC,
-         id DESC
-       LIMIT 1`,
+         id DESC`,
     )
-    .get(normalized) as PostCommentMappingRow | undefined
-  return row ?? null
+    .all(normalized) as PostCommentMappingRow[]
+}
+
+function lookupPostMaxChatId(maxMid: string): number | null {
+  const row = getDb()
+    .prepare('SELECT chat_id FROM posts WHERE message_mid = ? LIMIT 1')
+    .get(maxMid) as { chat_id: number } | undefined
+  return typeof row?.chat_id === 'number' ? row.chat_id : null
+}
+
+/**
+ * Привязка поста MAX к посту/треду Telegram — только через связку этого MAX-канала.
+ *
+ * Один max_mid может иметь несколько строк (альбом, пересоздание связки, строки удалённых связок).
+ * Берём строку живой связки, чей max_chat_id совпадает с каналом поста; строки удалённых или
+ * чужих связок игнорируем, иначе комментарий мог уйти в группу обсуждения не той связки.
+ * Если подходящей строки нет — null (комментарий не отправляется, см. commentLinkGuard).
+ */
+export function findMappingByMaxMid(maxMid: string): PostCommentMappingRow | null {
+  const normalized = maxMid.trim()
+  const rows = listMappingsByMaxMidRaw(normalized)
+  if (rows.length === 0) {
+    return null
+  }
+  const { mapping, rejected } = pickLinkedMapping(rows, listTgChainsSync(), lookupPostMaxChatId(normalized))
+  if (!mapping) {
+    warnOnce(
+      `no-linked-mapping:${normalized}`,
+      '[postCommentMapping] post has mappings only in deleted or foreign chains — ignored',
+      { maxMid: normalized, rejected },
+    )
+  }
+  return mapping
 }
 
 /**
@@ -496,7 +534,10 @@ export function findMappingByMaxMid(maxMid: string): PostCommentMappingRow | nul
  */
 export function backfillPostCommentMappingsFromForwarded(): number {
   const db = getDb()
-  const rows = db
+  // Только для существующих связок: иначе после удаления/пересоздания связки её строки
+  // tg_chain_forwarded при каждом старте воскрешали «осиротевшие» маппинги.
+  const liveChainIds = new Set(listTgChainsSync().map((c) => c.id))
+  const rows = (db
     .prepare(
       `SELECT chain_id, tg_message_id, max_message_mid, tg_payload
        FROM tg_chain_forwarded
@@ -507,7 +548,7 @@ export function backfillPostCommentMappingsFromForwarded(): number {
     tg_message_id: number
     max_message_mid: string
     tg_payload: string | null
-  }>
+  }>).filter((r) => liveChainIds.size === 0 || liveChainIds.has(r.chain_id))
 
   const insert = db.prepare(
     `INSERT INTO post_comment_mapping (chain_id, tg_msg_id, max_mid, tg_chat_id)

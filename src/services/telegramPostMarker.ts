@@ -6,6 +6,7 @@ import { telegramAxios as axios } from '../utils/telegramAxios'
 
 import { listTgChainsSync } from '../api/adminPanelState'
 import { appendBookingMarker } from '../utils/commentSyncFilter'
+import { reportThreadChatMismatch, threadChatMismatch } from './commentLinkGuard'
 import { logger } from '../utils/logger'
 import { findMappingByMaxMid, hasUsableThread, type PostCommentMappingRow } from './postCommentMappingStore'
 import type { Post } from './postStore'
@@ -43,6 +44,12 @@ function isCommentForwardEnabled(chainId: string): boolean {
 function resolvePostThreadTargetFromMapping(mapping: PostCommentMappingRow): ThreadTarget | null {
   if (!hasUsableThread(mapping)) return null
   if (!isCommentForwardEnabled(mapping.chain_id)) return null
+  const linkChain = listTgChainsSync().find((c) => c.id === mapping.chain_id)
+  const mismatch = linkChain ? threadChatMismatch(mapping, linkChain) : null
+  if (linkChain && mismatch) {
+    reportThreadChatMismatch(linkChain, mapping, mismatch)
+    return null
+  }
   const token = resolveTelegramBotTokenForChain(mapping.chain_id)
   if (!token) return null
   return {
