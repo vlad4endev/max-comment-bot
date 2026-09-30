@@ -179,3 +179,15 @@ cd /tmp/cs && BOT_TOKEN=x ADMIN_CHAT_ID=1 BOT_NICKNAME=b OWNER_USER_ID=1 WEBHOOK
 BOT_TOKEN=x ADMIN_CHAT_ID=1 BOT_NICKNAME=b OWNER_USER_ID=1 WEBHOOK_SECRET=abcdef \
   npx ts-node scripts/test-telegram-lanes.ts
 ```
+
+## Журнал dead-letter
+
+Комментарии, которые не удалось перенести (`dead`) или пропущены осознанно (`skipped`: бронь другой
+платформы, вложение без текста), пишутся в `comment_sync_dead_letter`. Админка:
+
+- `GET  /admin/comment-sync/dead-letters?chain_id=&kind=dead|skipped&include_resolved=1`
+- `POST /admin/comment-sync/dead-letters/:id/retry` — вернуть в очередь
+- `POST /admin/comment-sync/dead-letters/retry-all` `{ "chain_id": "…" }`
+- `POST /admin/comment-sync/dead-letters/:id/resolve` — закрыть вручную
+
+`scripts/test-comment-dead-letter.ts` запускается на копии проекта так же, как тест scope.

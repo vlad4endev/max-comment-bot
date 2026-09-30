@@ -44,10 +44,32 @@ const MAX_RETRY_DELAY_MS = 30_000
 export const COMMENT_MAPPING_RETRY_MS = 500
 export const COMMENT_MAPPING_SLOW_RETRY_MS = 5_000
 export const COMMENT_MAPPING_SLOW_AFTER_ATTEMPTS = 20
-export const COMMENT_MAPPING_GIVE_UP_ATTEMPTS = 80
+/** После ~5 минут быстрых повторов пост в MAX мог просто задержаться (очередь, 429) — ждём дольше. */
+export const COMMENT_MAPPING_VERY_SLOW_RETRY_MS = 5 * 60_000
+export const COMMENT_MAPPING_VERY_SLOW_AFTER_ATTEMPTS = 60
+/** ~4 часа редких повторов, затем комментарий уходит в журнал dead-letter (не удаляется). */
+export const COMMENT_MAPPING_GIVE_UP_ATTEMPTS = 108
+
+export function commentMappingRetryDelayMs(nextAttempts: number): number {
+  if (nextAttempts >= COMMENT_MAPPING_VERY_SLOW_AFTER_ATTEMPTS) {
+    return COMMENT_MAPPING_VERY_SLOW_RETRY_MS
+  }
+  if (nextAttempts >= COMMENT_MAPPING_SLOW_AFTER_ATTEMPTS) {
+    return COMMENT_MAPPING_SLOW_RETRY_MS
+  }
+  return COMMENT_MAPPING_RETRY_MS
+}
 
 export function shouldLogCommentMappingRetry(attempts: number): boolean {
-  return attempts === 3 || attempts === 10 || attempts === 25 || attempts === 50 || attempts === 80
+  return (
+    attempts === 3 ||
+    attempts === 10 ||
+    attempts === 25 ||
+    attempts === 50 ||
+    attempts === 60 ||
+    attempts === 80 ||
+    attempts === COMMENT_MAPPING_GIVE_UP_ATTEMPTS
+  )
 }
 
 export function retryDelayMs(attempts: number): number {

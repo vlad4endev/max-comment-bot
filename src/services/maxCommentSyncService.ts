@@ -12,6 +12,7 @@ import pLimit from 'p-limit'
 import { listTgChainsSync, type TgChainRecord } from '../api/adminPanelState'
 import { getDb } from '../db/database'
 import { commentStore } from './commentStore'
+import { purgeOldDeadLetters } from './commentDeadLetterStore'
 import { postStore } from './postStore'
 import {
   purgeStaleUndeliverableComments,
@@ -189,6 +190,11 @@ function purgeStaleUndeliverableOnStartup(): void {
 }
 
 function purgeStaleUndeliverableDaily(): void {
+  try {
+    purgeOldDeadLetters()
+  } catch (err: unknown) {
+    logger.warn('[maxCommentSync] dead-letter retention purge failed', { err })
+  }
   for (const chain of listTgChainsSync()) {
     if (chain.forward_comments !== true) {
       continue

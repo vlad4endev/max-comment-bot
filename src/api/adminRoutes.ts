@@ -37,6 +37,12 @@ import {
   diagnoseCommentSync,
   repairMissingThreadMappings,
 } from '../services/commentSyncDiagnostics'
+import {
+  countOpenDeadLetters,
+  listDeadLetters,
+  resolveDeadLetter,
+  retryDeadLetter,
+} from '../services/commentDeadLetterStore'
 import { postStore } from '../services/postStore'
 import { stateManager } from '../services/stateManager'
 import { subscriberStore } from '../services/subscriberStore'
@@ -2149,6 +2155,71 @@ export function createAdminRouter(deps: AdminRouterDeps): express.Router {
       res.json({ ok: true, ...report })
     } catch (err: unknown) {
       logger.error('admin comment-sync/diagnostics', err)
+      res.status(500).json({ error: 'failed' })
+    }
+  })
+
+  secured.get('/comment-sync/dead-letters', (req, res) => {
+    try {
+      const kindRaw = parseNonEmptyString(req.query.kind)
+      const rows = listDeadLetters({
+        chainId: parseNonEmptyString(req.query.chain_id) ?? undefined,
+        kind: kindRaw === 'dead' || kindRaw === 'skipped' ? kindRaw : undefined,
+        includeResolved: parseBoolean(req.query.include_resolved) === true,
+        limit: parsePositiveInt(req.query.limit) ?? undefined,
+      })
+      res.json({ ok: true, open_counts: countOpenDeadLetters(), items: rows })
+    } catch (err: unknown) {
+      logger.error('admin comment-sync/dead-letters', err)
+      res.status(500).json({ error: 'failed' })
+    }
+  })
+
+  secured.post('/comment-sync/dead-letters/retry-all', (req, res) => {
+    const chainId = isRecord(req.body) ? parseNonEmptyString(req.body.chain_id) : null
+    if (!chainId) {
+      res.status(400).json({ error: 'chain_id required' })
+      return
+    }
+    try {
+      const rows = listDeadLetters({ chainId, kind: 'dead', limit: 500 })
+      let requeued = 0
+      for (const row of rows) {
+        if (retryDeadLetter(row.id)) {
+          requeued += 1
+        }
+      }
+      res.json({ ok: true, requeued, total: rows.length })
+    } catch (err: unknown) {
+      logger.error('admin comment-sync/dead-letters/retry-all', err)
+      res.status(500).json({ error: 'failed' })
+    }
+  })
+
+  secured.post('/comment-sync/dead-letters/:id/retry', (req, res) => {
+    const id = parsePositiveInt(req.params.id)
+    if (!id) {
+      res.status(400).json({ error: 'invalid id' })
+      return
+    }
+    try {
+      res.json({ ok: true, requeued: retryDeadLetter(id) })
+    } catch (err: unknown) {
+      logger.error('admin comment-sync/dead-letters/retry', err)
+      res.status(500).json({ error: 'failed' })
+    }
+  })
+
+  secured.post('/comment-sync/dead-letters/:id/resolve', (req, res) => {
+    const id = parsePositiveInt(req.params.id)
+    if (!id) {
+      res.status(400).json({ error: 'invalid id' })
+      return
+    }
+    try {
+      res.json({ ok: true, resolved: resolveDeadLetter(id) })
+    } catch (err: unknown) {
+      logger.error('admin comment-sync/dead-letters/resolve', err)
       res.status(500).json({ error: 'failed' })
     }
   })

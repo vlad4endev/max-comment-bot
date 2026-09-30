@@ -31,7 +31,8 @@ import {
 } from './postCommentMappingStore'
 import { postStore } from './postStore'
 import type { Post } from './postStore'
-import { claimAndPropagateCommentsBooking } from './commentsBookingService'
+import { claimAndPropagateCommentsBooking, isCommentSyncBlockedByBooking } from './commentsBookingService'
+import { recordDeadLetter } from './commentDeadLetterStore'
 import { ensurePostFromChannelMessage } from './channelPostActions'
 import { tryBlockTelegramCommentByAntispam } from './telegramAntispamBotService'
 import { resolveCanonicalChannelChatId } from './resolveChannelChatId'
@@ -410,6 +411,34 @@ export async function handleTgComment(
 
     const text = (message.text || message.caption || '').trim()
     if (!text) {
+      const hasMedia = Boolean(
+        message.photo?.length || message.video || message.animation || message.document,
+      )
+      if (hasMedia) {
+        // Вложение без подписи в MAX пока не переносится — фиксируем, а не теряем молча.
+        recordDeadLetter({
+          direction: 'tg_to_max',
+          kind: 'skipped',
+          chainId: chain.id,
+          refKey: `${discussionChatId}:${tgCommentId}`,
+          discussionChatId,
+          tgMessageId: tgCommentId,
+          reason: 'комментарий-вложение без текста не переносится в MAX',
+        })
+      }
+      return 'skip'
+    }
+
+    if (isCommentSyncBlockedByBooking(post, 'telegram')) {
+      recordDeadLetter({
+        direction: 'tg_to_max',
+        kind: 'skipped',
+        chainId: chain.id,
+        refKey: `${discussionChatId}:${tgCommentId}`,
+        discussionChatId,
+        tgMessageId: tgCommentId,
+        reason: `обсуждение забронировано на другой платформе (${post.comments_booked_by})`,
+      })
       return 'skip'
     }
 

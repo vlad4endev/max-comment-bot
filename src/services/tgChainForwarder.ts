@@ -25,6 +25,7 @@ import { postStore } from './postStore'
 import { resolveCanonicalChannelChatId } from './resolveChannelChatId'
 import { telegramMessageMatchesTgChain } from '../utils/tgChannelMatch'
 import { logger } from '../utils/logger'
+import { recordDeadLetter } from './commentDeadLetterStore'
 import { sendAdminAlert } from '../utils/alertService'
 import { apiCallWithRetry } from '../utils/maxApiRetry'
 import {
@@ -48,9 +49,7 @@ import {
   bumpCommentInboundRetry,
   bumpForwardQueueRetry,
   COMMENT_MAPPING_GIVE_UP_ATTEMPTS,
-  COMMENT_MAPPING_RETRY_MS,
-  COMMENT_MAPPING_SLOW_AFTER_ATTEMPTS,
-  COMMENT_MAPPING_SLOW_RETRY_MS,
+  commentMappingRetryDelayMs,
   shouldLogCommentMappingRetry,
   deleteCommentInboundJob,
   deleteForwardQueueJob,
@@ -373,10 +372,7 @@ function scheduleInboundComment(
         const attempts = bumpCommentInboundRetry(
           jobKey,
           'waiting for post mapping',
-          (nextAttempts) =>
-            nextAttempts >= COMMENT_MAPPING_SLOW_AFTER_ATTEMPTS
-              ? COMMENT_MAPPING_SLOW_RETRY_MS
-              : COMMENT_MAPPING_RETRY_MS,
+          commentMappingRetryDelayMs,
         )
         if (shouldLogCommentMappingRetry(attempts)) {
           recordCommentRetry({
@@ -388,6 +384,18 @@ function scheduleInboundComment(
           })
         }
         if (attempts >= COMMENT_MAPPING_GIVE_UP_ATTEMPTS) {
+          // Не теряем комментарий молча: в журнал с исходным сообщением, чтобы повторить из админки.
+          recordDeadLetter({
+            direction: 'tg_to_max',
+            kind: 'dead',
+            chainId: chain.id,
+            refKey: `${discussionChatId}:${message.message_id}`,
+            discussionChatId,
+            tgMessageId: message.message_id,
+            reason: 'пост в MAX так и не появился (нет маппинга поста)',
+            attempts,
+            payload: JSON.stringify(message),
+          })
           deleteCommentInboundJob(jobKey)
           recordCommentSkip({
             chainId: chain.id,
