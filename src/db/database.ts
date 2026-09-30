@@ -509,6 +509,32 @@ function migrateCommentSyncSchema(database: Database.Database): void {
      )`,
   ).run()
 
+  // Журнал комментариев, которые не удалось перенести (dead) или которые пропущены
+  // осознанно (skipped) — чтобы ничего не терялось молча и можно было повторить.
+  database.prepare(
+    `CREATE TABLE IF NOT EXISTS comment_sync_dead_letter (
+       id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+       direction          TEXT    NOT NULL,
+       kind               TEXT    NOT NULL,
+       chain_id           TEXT    NOT NULL,
+       ref_key            TEXT    NOT NULL,
+       discussion_chat_id INTEGER,
+       tg_message_id      INTEGER,
+       comment_id         TEXT,
+       reason             TEXT    NOT NULL,
+       last_error         TEXT,
+       attempts           INTEGER NOT NULL DEFAULT 0,
+       payload            TEXT,
+       created_at         INTEGER NOT NULL,
+       resolved_at        INTEGER,
+       UNIQUE (direction, chain_id, ref_key)
+     )`,
+  ).run()
+  database.prepare(
+    `CREATE INDEX IF NOT EXISTS idx_comment_dead_letter_open
+     ON comment_sync_dead_letter (chain_id, kind, resolved_at)`,
+  ).run()
+
   // Индексы для быстрого поиска
   database.prepare(
     `CREATE UNIQUE INDEX IF NOT EXISTS idx_comments_max_comment_id

@@ -6,6 +6,7 @@ import { telegramAxios as axios } from '../utils/telegramAxios'
 
 import { listTgChainsSync, type TgChainRecord } from '../api/adminPanelState'
 import { getDb } from '../db/database'
+import { recordDeadLetter, UNDELIVERABLE_TG_COMMENT_ID_BASE } from './commentDeadLetterStore'
 import { parseAdminLogLine, type AdminLogEntry } from '../utils/adminLogFormat'
 import { getAdminLogTail, logger } from '../utils/logger'
 import {
@@ -69,40 +70,62 @@ export function countFreshBlockedComments(chainId: string, staleCutoff?: string)
     .get(chainId, cutoff) as { n: number }
   return Number(row.n) || 0
 }
-/**
- * Маркер «не доставлено»: отрицательный и уникальный.
- * База 2e15, чтобы не пересекаться с -1/-999 и с прежними маркерами вида -(unix_ms + random).
- */
-export const UNDELIVERABLE_TG_COMMENT_ID_BASE = 2_000_000_000_000_000
+export { UNDELIVERABLE_TG_COMMENT_ID_BASE }
 
 /** Размер батча: один большой UPDATE блокирует event loop better-sqlite3. */
 export const STALE_UNDELIVERABLE_PURGE_BATCH = 100
 
-/** Списывает до `limit` комментариев к постам старше STALE_UNDELIVERABLE_DAYS без треда. */
+/**
+ * Списывает до `limit` комментариев MAX→TG к постам старше STALE_UNDELIVERABLE_DAYS без треда.
+ * Перед списанием каждый комментарий попадает в журнал dead-letter — его можно вернуть в очередь.
+ * Учитываются только комментарии каналов этой связки (раньше затрагивались все чаты).
+ */
 export function purgeStaleUndeliverableComments(
   chainId: string,
   limit: number = STALE_UNDELIVERABLE_PURGE_BATCH,
 ): number {
+  const chain = listTgChainsSync().find((c) => c.id === chainId)
+  if (!chain) {
+    return 0
+  }
+  const db = getDb()
   const staleCutoff = staleUndeliverableCutoffIso()
   const batchLimit = Math.max(1, Math.min(Math.floor(limit), 500))
-  const result = getDb()
-    .prepare(
-      `UPDATE comments
-       SET tg_comment_id = -(? + rowid)
-       WHERE rowid IN (
-         SELECT c.rowid FROM comments c
+
+  const run = db.transaction((): number => {
+    const rows = db
+      .prepare(
+        `SELECT c.rowid AS rid, c.comment_id AS commentId
+         FROM comments c
          JOIN posts p ON p.post_id = c.post_id
          LEFT JOIN post_comment_mapping m
            ON m.max_mid = p.message_mid AND m.chain_id = ?
-         WHERE (c.tg_comment_id IS NULL OR c.tg_comment_id = 0)
+         WHERE p.chat_id = ?
+           AND (c.tg_comment_id IS NULL OR c.tg_comment_id = 0)
            AND (c.source IS NULL OR c.source = 'max')
            AND (m.tg_thread_msg_id IS NULL OR m.tg_thread_msg_id = 0)
            AND p.timestamp < ?
-         LIMIT ?
-       )`,
-    )
-    .run(UNDELIVERABLE_TG_COMMENT_ID_BASE, chainId, staleCutoff, batchLimit)
-  return Number(result.changes) || 0
+         LIMIT ?`,
+      )
+      .all(chainId, chain.max_chat_id, staleCutoff, batchLimit) as Array<{
+      rid: number
+      commentId: string
+    }>
+    const mark = db.prepare('UPDATE comments SET tg_comment_id = -(? + rowid) WHERE rowid = ?')
+    for (const row of rows) {
+      recordDeadLetter({
+        direction: 'max_to_tg',
+        kind: 'dead',
+        chainId,
+        refKey: row.commentId,
+        commentId: row.commentId,
+        reason: `не доставлен в Telegram за ${STALE_UNDELIVERABLE_DAYS} дн. (нет треда обсуждения)`,
+      })
+      mark.run(UNDELIVERABLE_TG_COMMENT_ID_BASE, row.rid)
+    }
+    return rows.length
+  })
+  return run()
 }
 
 export type CommentSyncIssueSeverity = 'critical' | 'warning' | 'info'
