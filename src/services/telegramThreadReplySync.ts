@@ -46,6 +46,11 @@ import {
 } from './telegramMtprotoDiscussionSender'
 import type { PostCommentMappingRow } from './postCommentMappingStore'
 import { callTelegramBotApi } from '../utils/telegramRateLimiter'
+import {
+  clearSendFailure,
+  commentSendRetryKey,
+  recordSendFailure,
+} from './commentSyncBackoff'
 
 type TgMessageTarget = {
   token: string
@@ -79,15 +84,51 @@ function chainTitle(chainId: string): string {
   return listTgChainsSync().find((c) => c.id === chainId)?.max_title ?? chainId
 }
 
+/**
+ * После успешной отправки в TG запись в БД обязана дойти: иначе следующий цикл
+ * отправит тот же комментарий второй раз. Повторяем при SQLITE_BUSY и т.п.
+ */
+async function persistDelivery(what: string, commentId: string, write: () => unknown): Promise<void> {
+  let lastErr: unknown
+  for (let attempt = 1; attempt <= 4; attempt += 1) {
+    try {
+      write()
+      return
+    } catch (err: unknown) {
+      lastErr = err
+      await new Promise((resolve) => setTimeout(resolve, 100 * attempt))
+    }
+  }
+  logger.error(`[telegramThreadReplySync] delivered to TG but ${what} not persisted — duplicate risk`, {
+    commentId,
+    err: lastErr,
+  })
+}
+
 async function handleDiscussionSendForbidden(
   target: ThreadTarget,
   commentId: string,
   err: unknown,
+  retryKey: string,
 ): Promise<void> {
   const errText = extractTelegramErrorText(err)
   const suggestion = suggestActionForTelegramSyncError(errText)
-  if (isBotNotMemberError(errText) || isTelegramForbiddenError(errText)) {
+  const attempts = recordSendFailure(retryKey)
+  const forbidden = isBotNotMemberError(errText) || isTelegramForbiddenError(errText)
+  if (forbidden) {
     blockDiscussionChat(target.threadChatId)
+  }
+  if (!forbidden) {
+    // Временный сбой (сеть, 5xx, 429): без ложного алерта «бот не может писать» —
+    // комментарий повторится по бэкоффу.
+    logger.warn('[telegramThreadReplySync] send to TG thread failed, will retry with backoff', {
+      commentId,
+      chainId: target.chainId,
+      threadChatId: target.threadChatId,
+      attempts,
+      error: errText,
+    })
+    return
   }
   logger.warn('[telegramThreadReplySync] send to TG thread failed', {
     commentId,
@@ -661,7 +702,10 @@ async function syncMaxCommentToTelegramThreadLocked(
 
     markCommentSynced(tgMessageGuardKey(delivered.chatId, tgMsgId))
     markCommentSynced(guardKey)
-    commentStore.setTgCommentId(freshComment.comment_id, delivered.chatId, tgMsgId, body)
+    await persistDelivery('tg_comment_id', freshComment.comment_id, () =>
+      commentStore.setTgCommentId(freshComment.comment_id, delivered.chatId, tgMsgId, body),
+    )
+    clearSendFailure(commentSendRetryKey('comment', freshComment.comment_id))
 
     await claimAndPropagateCommentsBooking(freshPost.post_id, 'max', _bot)
 
@@ -672,7 +716,12 @@ async function syncMaxCommentToTelegramThreadLocked(
       username: freshComment.username,
     })
   } catch (err: unknown) {
-    await handleDiscussionSendForbidden(target, freshComment.comment_id, err)
+    await handleDiscussionSendForbidden(
+      target,
+      freshComment.comment_id,
+      err,
+      commentSendRetryKey('comment', freshComment.comment_id),
+    )
   }
 }
 
@@ -803,6 +852,7 @@ async function syncAdminReplyToTelegramThreadLocked(
         threadChatId,
       })
     } else {
+      recordSendFailure(commentSendRetryKey('reply', freshComment.comment_id))
       logger.warn('[telegramThreadReplySync] could not mark MAX comment in TG thread', {
         commentId: freshComment.comment_id,
         tgCommentId: commentForMark.tg_comment_id,
@@ -831,7 +881,10 @@ async function syncAdminReplyToTelegramThreadLocked(
 
     markCommentSynced(tgMessageGuardKey(delivered.chatId, tgMsgId))
     markCommentSynced(guardKey)
-    commentStore.setTgThreadReplyId(freshComment.comment_id, tgMsgId)
+    await persistDelivery('tg_thread_reply_id', freshComment.comment_id, () =>
+      commentStore.setTgThreadReplyId(freshComment.comment_id, tgMsgId),
+    )
+    clearSendFailure(commentSendRetryKey('reply', freshComment.comment_id))
 
     logger.info('[telegramThreadReplySync] delivered admin reply to TG thread (fallback)', {
       commentId: freshComment.comment_id,
@@ -840,6 +893,11 @@ async function syncAdminReplyToTelegramThreadLocked(
       replyToId,
     })
   } catch (err: unknown) {
-    await handleDiscussionSendForbidden(target, freshComment.comment_id, err)
+    await handleDiscussionSendForbidden(
+      target,
+      freshComment.comment_id,
+      err,
+      commentSendRetryKey('reply', freshComment.comment_id),
+    )
   }
 }

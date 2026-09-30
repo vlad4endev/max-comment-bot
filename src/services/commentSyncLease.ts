@@ -22,6 +22,14 @@ export function acquireSyncLease(key: string, ttlMs: number = DEFAULT_SYNC_LEASE
   return Number(result.changes) > 0
 }
 
+/** Продлевает свою аренду; false — аренду уже перехватили (или сняли). */
+export function renewSyncLease(key: string, ttlMs: number = DEFAULT_SYNC_LEASE_MS): boolean {
+  const result = getDb()
+    .prepare('UPDATE comment_sync_lease SET expires_at = ? WHERE lease_key = ?')
+    .run(Date.now() + ttlMs, key)
+  return Number(result.changes) > 0
+}
+
 export function releaseSyncLease(key: string): void {
   getDb().prepare('DELETE FROM comment_sync_lease WHERE lease_key = ?').run(key)
 }
@@ -35,9 +43,20 @@ export async function withSyncLease<T>(
   if (!acquireSyncLease(key, ttlMs)) {
     return undefined
   }
+  // Долгая отправка (FLOOD_WAIT, ретраи) не должна дать перехватить аренду
+  // и отправить тот же комментарий второй раз: продлеваем, пока работаем.
+  const heartbeat = setInterval(() => {
+    try {
+      renewSyncLease(key, ttlMs)
+    } catch {
+      /* БД временно занята — следующий тик продлит */
+    }
+  }, Math.max(1_000, Math.floor(ttlMs / 3)))
+  heartbeat.unref?.()
   try {
     return await work()
   } finally {
+    clearInterval(heartbeat)
     releaseSyncLease(key)
   }
 }

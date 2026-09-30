@@ -961,8 +961,18 @@ export class CommentStore {
     source: 'telegram' | 'vk',
     scopeId: number | null,
   ): Comment {
+    return this.saveExternalThreadCommentIfNew(input, externalCommentId, source, scopeId).comment
+  }
+
+  /** Как saveExternalThreadComment, но сообщает, создан ли комментарий сейчас (false — дубль). */
+  saveExternalThreadCommentIfNew(
+    input: Omit<Comment, 'comment_id' | 'timestamp' | 'source' | 'synced'>,
+    externalCommentId: number,
+    source: 'telegram' | 'vk',
+    scopeId: number | null,
+  ): { comment: Comment; created: boolean } {
     const db = getDb()
-    const run = db.transaction((): Comment => {
+    const run = db.transaction((): { comment: Comment; created: boolean } => {
       const existingRow = this.getStatements().findByExternalScoped.get(
         source,
         scopeId ?? 0,
@@ -970,7 +980,7 @@ export class CommentStore {
       ) as CommentStorageRow | undefined
       const existing = existingRow ? commentFromStorageRow(existingRow) : null
       if (existing) {
-        return existing
+        return { comment: existing, created: false }
       }
       const comment = this.saveComment(input)
       comment.tg_comment_id = externalCommentId
@@ -981,7 +991,7 @@ export class CommentStore {
       comment.source = source
       comment.synced = true
       this.saveRow(comment)
-      return comment
+      return { comment, created: true }
     })
     return run()
   }
@@ -995,6 +1005,14 @@ export class CommentStore {
     tgChatId: number,
   ): Comment {
     return this.saveExternalThreadComment(input, tgCommentId, 'telegram', tgChatId)
+  }
+
+  saveTelegramThreadCommentIfNew(
+    input: Omit<Comment, 'comment_id' | 'timestamp' | 'source' | 'synced'>,
+    tgCommentId: number,
+    tgChatId: number,
+  ): { comment: Comment; created: boolean } {
+    return this.saveExternalThreadCommentIfNew(input, tgCommentId, 'telegram', tgChatId)
   }
 
   /** Сохраняет комментарий из VK в miniapp. */
@@ -1098,6 +1116,7 @@ export class CommentStore {
   listCommentsPendingMaxToTelegramForChat(chatId: number, limit = 10): Comment[] {
     const rows = this.getStatements().listPendingMaxToTelegramForChat.all(
       chatId,
+      Date.now(),
       limit,
     ) as CommentStorageRow[]
     const out: Comment[] = []
@@ -1142,6 +1161,7 @@ export class CommentStore {
   listCommentsPendingTelegramThreadReplyForChat(chatId: number, limit = 8): Comment[] {
     const rows = this.getStatements().listPendingThreadReplyForChat.all(
       chatId,
+      Date.now(),
       limit,
     ) as CommentStorageRow[]
     const out: Comment[] = []
@@ -1285,18 +1305,28 @@ export class CommentStore {
          WHERE p.chat_id = ?
            AND c.reply IS NOT NULL AND TRIM(c.reply) != ''
            AND (c.tg_thread_reply_id IS NULL OR c.tg_thread_reply_id = 0)
+           AND NOT EXISTS (
+             SELECT 1 FROM comment_sync_backoff b
+             WHERE b.retry_key = 'max-reply:' || c.comment_id AND b.next_attempt_at > ?
+           )
          ORDER BY c.timestamp DESC
          LIMIT ?`,
       ),
       listPendingMaxToTelegramForChat: db.prepare(
         `SELECT ${storageFieldsAliased} FROM comments c
          INNER JOIN posts p ON p.post_id = c.post_id
-         LEFT JOIN post_comment_mapping m ON m.max_mid = p.message_mid
          WHERE p.chat_id = ?
            AND (c.source IS NULL OR c.source = 'max')
            AND (c.tg_comment_id IS NULL OR c.tg_comment_id = 0)
+           AND NOT EXISTS (
+             SELECT 1 FROM comment_sync_backoff b
+             WHERE b.retry_key = 'max-comment:' || c.comment_id AND b.next_attempt_at > ?
+           )
          ORDER BY
-           CASE WHEN m.tg_thread_msg_id IS NOT NULL AND m.tg_thread_msg_id > 0 THEN 0 ELSE 1 END,
+           CASE WHEN EXISTS (
+             SELECT 1 FROM post_comment_mapping m
+             WHERE m.max_mid = p.message_mid AND m.tg_thread_msg_id > 0
+           ) THEN 0 ELSE 1 END,
            c.timestamp ASC
          LIMIT ?`,
       ),

@@ -509,6 +509,15 @@ function migrateCommentSyncSchema(database: Database.Database): void {
      )`,
   ).run()
 
+  // Экспоненциальный бэкофф неудачных отправок: «битый» комментарий не блокирует очередь.
+  database.prepare(
+    `CREATE TABLE IF NOT EXISTS comment_sync_backoff (
+       retry_key       TEXT PRIMARY KEY,
+       attempts        INTEGER NOT NULL DEFAULT 0,
+       next_attempt_at INTEGER NOT NULL
+     )`,
+  ).run()
+
   // Журнал комментариев, которые не удалось перенести (dead) или которые пропущены
   // осознанно (skipped) — чтобы ничего не терялось молча и можно было повторить.
   database.prepare(

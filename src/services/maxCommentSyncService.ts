@@ -13,6 +13,8 @@ import { listTgChainsSync, type TgChainRecord } from '../api/adminPanelState'
 import { getDb } from '../db/database'
 import { commentStore } from './commentStore'
 import { purgeOldDeadLetters } from './commentDeadLetterStore'
+import { purgeStaleBackoff } from './commentSyncBackoff'
+import { purgeExpiredSyncLeases } from './commentSyncLease'
 import { postStore } from './postStore'
 import {
   purgeStaleUndeliverableComments,
@@ -192,6 +194,8 @@ function purgeStaleUndeliverableOnStartup(): void {
 function purgeStaleUndeliverableDaily(): void {
   try {
     purgeOldDeadLetters()
+    purgeStaleBackoff()
+    purgeExpiredSyncLeases()
   } catch (err: unknown) {
     logger.warn('[maxCommentSync] dead-letter retention purge failed', { err })
   }
@@ -350,7 +354,24 @@ export function startMaxCommentSync(bot: Bot, options: SyncOptions = {}): () => 
     }
   }
 
+  let cycleRunning = false
+
   async function syncOnce(): Promise<void> {
+    // Под нагрузкой цикл может идти дольше интервала — тики не накладываются друг на друга.
+    if (cycleRunning) {
+      return
+    }
+    cycleRunning = true
+    try {
+      await runCycle()
+    } catch (err: unknown) {
+      logger.error('[maxCommentSync] cycle failed', { err })
+    } finally {
+      cycleRunning = false
+    }
+  }
+
+  async function runCycle(): Promise<void> {
     const chains = listTgChainsSync().filter((c) => c.active && c.forward_comments)
     const perChain = Math.max(3, Math.ceil(batchSize / Math.max(chains.length, 1)))
 
