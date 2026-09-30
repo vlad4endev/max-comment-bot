@@ -474,11 +474,42 @@ function migrateCommentSyncSchema(database: Database.Database): void {
     database.prepare('ALTER TABLE post_comment_mapping ADD COLUMN tg_thread_msg_id INTEGER').run()
   }
 
-  // Индексы для быстрого поиска
+  // Id сообщений Telegram уникальны только внутри чата, поэтому храним chat id
+  // и уникальность считаем по (source, chat, id) — иначе комментарии разных
+  // связок с одинаковым message_id затирают друг друга.
+  if (!colNames.includes('tg_chat_id')) {
+    database.prepare('ALTER TABLE comments ADD COLUMN tg_chat_id INTEGER').run()
+    database
+      .prepare(
+        `UPDATE comments
+         SET tg_chat_id = (
+           SELECT m.tg_thread_chat_id
+           FROM posts p
+           JOIN post_comment_mapping m ON m.max_mid = p.message_mid
+           WHERE p.post_id = comments.post_id AND m.tg_thread_chat_id IS NOT NULL AND m.tg_thread_chat_id != 0
+           ORDER BY m.id DESC
+           LIMIT 1
+         )
+         WHERE tg_comment_id > 0 AND (source IS NULL OR source IN ('max', 'telegram'))`,
+      )
+      .run()
+  }
+  database.prepare('DROP INDEX IF EXISTS idx_comments_tg_comment_id').run()
   database.prepare(
-    `CREATE UNIQUE INDEX IF NOT EXISTS idx_comments_tg_comment_id
-     ON comments (tg_comment_id) WHERE tg_comment_id IS NOT NULL`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_comments_external_scoped
+     ON comments (COALESCE(source, 'max'), COALESCE(tg_chat_id, 0), tg_comment_id)
+     WHERE tg_comment_id > 0`,
   ).run()
+
+  // Аренда на отправку: не даёт двум воркерам одновременно слать один комментарий.
+  database.prepare(
+    `CREATE TABLE IF NOT EXISTS comment_sync_lease (
+       lease_key   TEXT PRIMARY KEY,
+       expires_at  INTEGER NOT NULL
+     )`,
+  ).run()
+
+  // Индексы для быстрого поиска
   database.prepare(
     `CREATE UNIQUE INDEX IF NOT EXISTS idx_comments_max_comment_id
      ON comments (max_comment_id) WHERE max_comment_id IS NOT NULL`,

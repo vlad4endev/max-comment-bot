@@ -155,3 +155,19 @@ ORDER BY created_at DESC LIMIT 5;
 | Дубли | Guard не сработал | Проверить `commentSyncGuard` / префикс `👤 Администратор:` |
 | Ответ админа не в TG | Нет `tg_thread_msg_id` | Дождаться авто-репоста или новый пост после миграции |
 | Пост не в miniapp | Нет кнопки комментариев | `add_comments_button: true` на chain |
+
+---
+
+## Автотест: chat-scoped id и аренда отправки
+
+Скрипт `scripts/test-comment-sync-scope.ts` создаёт изолированную БД в `data/` рядом с собой,
+поэтому запускайте его **на копии проекта**, не на боевом каталоге:
+
+```bash
+cp -r src scripts tsconfig.json package.json /tmp/cs && ln -s "$PWD/node_modules" /tmp/cs/node_modules
+cd /tmp/cs && BOT_TOKEN=x ADMIN_CHAT_ID=1 BOT_NICKNAME=b OWNER_USER_ID=1 WEBHOOK_SECRET=abcdef \
+  npx ts-node scripts/test-comment-sync-scope.ts
+```
+
+Проверяет: миграцию легаси-БД, одинаковый `message_id` в разных чатах, идемпотентность
+сохранения, изоляцию TG/VK и эксклюзивность аренды `comment_sync_lease`.

@@ -14,7 +14,8 @@ import { ensurePostThreadMapping, refreshPostThreadMapping } from './telegramDis
 import type { Post } from './postStore'
 import { postStore } from './postStore'
 import { resolveTelegramBotToken } from './resolveTelegramBotToken'
-import { isCommentSynced, markCommentSynced } from '../utils/commentSyncGuard'
+import { isCommentSynced, markCommentSynced, tgMessageGuardKey } from '../utils/commentSyncGuard'
+import { withSyncLease } from './commentSyncLease'
 import {
   MAX_ANSWERED_IN_MAX_MARKER,
   MAX_REPLY_TG_PREFIX,
@@ -314,6 +315,8 @@ async function sendTelegramThreadMessage(
   return typeof messageId === 'number' ? messageId : null
 }
 
+type DeliveredThreadMessage = { messageId: number; chatId: number }
+
 async function deliverTelegramThreadMessageWithRetry(
   messageMid: string,
   target: ThreadTarget,
@@ -321,9 +324,16 @@ async function deliverTelegramThreadMessageWithRetry(
   replyToId: number,
   useMtprotoSendAs: boolean,
   botFallbackText?: string,
-): Promise<number | null> {
+): Promise<DeliveredThreadMessage | null> {
   try {
-    return await deliverTelegramThreadMessage(target, text, replyToId, useMtprotoSendAs, botFallbackText)
+    const messageId = await deliverTelegramThreadMessage(
+      target,
+      text,
+      replyToId,
+      useMtprotoSendAs,
+      botFallbackText,
+    )
+    return messageId == null ? null : { messageId, chatId: target.threadChatId }
   } catch (err: unknown) {
     const errText = extractTelegramErrorText(err)
     const canRefreshMapping =
@@ -350,13 +360,14 @@ async function deliverTelegramThreadMessageWithRetry(
       throw err
     }
 
-    return deliverTelegramThreadMessage(
+    const messageId = await deliverTelegramThreadMessage(
       refreshedTarget,
       text,
       isInvalidTelegramMessageIdError(errText) ? refreshedTarget.threadMsgId : replyToId,
       useMtprotoSendAs,
       botFallbackText,
     )
+    return messageId == null ? null : { messageId, chatId: refreshedTarget.threadChatId }
   }
 }
 
@@ -555,6 +566,23 @@ export async function markTelegramCommentAnsweredInMax(
  * Отправляет пользовательский комментарий из MAX miniapp в TG-тред.
  */
 export async function syncMaxCommentToTelegramThread(
+  bot: Bot,
+  comment: Comment,
+  post: Post,
+): Promise<void> {
+  // Роут «создать комментарий» и фоновый цикл могут прийти одновременно —
+  // аренда в БД не даёт отправить один комментарий в Telegram дважды.
+  const ran = await withSyncLease(`max-comment:${comment.comment_id}`, () =>
+    syncMaxCommentToTelegramThreadLocked(bot, comment, post),
+  )
+  if (ran === undefined) {
+    logger.debug('[telegramThreadReplySync] MAX→TG comment already being sent elsewhere', {
+      commentId: comment.comment_id,
+    })
+  }
+}
+
+async function syncMaxCommentToTelegramThreadLocked(
   _bot: Bot,
   comment: Comment,
   post: Post,
@@ -615,20 +643,21 @@ export async function syncMaxCommentToTelegramThread(
   }
 
   try {
-    const tgMsgId = await deliverTelegramThreadMessageWithRetry(
+    const delivered = await deliverTelegramThreadMessageWithRetry(
       post.message_mid,
       target,
       body,
       target.threadMsgId,
       false,
     )
-    if (tgMsgId == null) {
+    if (delivered == null) {
       return
     }
+    const tgMsgId = delivered.messageId
 
-    markCommentSynced(`tg:${tgMsgId}`)
+    markCommentSynced(tgMessageGuardKey(delivered.chatId, tgMsgId))
     markCommentSynced(guardKey)
-    commentStore.setTgCommentId(freshComment.comment_id, tgMsgId, body)
+    commentStore.setTgCommentId(freshComment.comment_id, delivered.chatId, tgMsgId, body)
 
     await claimAndPropagateCommentsBooking(freshPost.post_id, 'max', _bot)
 
@@ -648,6 +677,21 @@ export async function syncMaxCommentToTelegramThread(
  * не привязан к TG (fallback). Для MAX→TG комментариев — только правка маркера.
  */
 export async function syncAdminReplyToTelegramThread(
+  bot: Bot,
+  comment: Comment,
+  post: Post,
+): Promise<void> {
+  const ran = await withSyncLease(`max-reply:${comment.comment_id}`, () =>
+    syncAdminReplyToTelegramThreadLocked(bot, comment, post),
+  )
+  if (ran === undefined) {
+    logger.debug('[telegramThreadReplySync] MAX→TG admin reply already being sent elsewhere', {
+      commentId: comment.comment_id,
+    })
+  }
+}
+
+async function syncAdminReplyToTelegramThreadLocked(
   _bot: Bot,
   comment: Comment,
   post: Post,
@@ -738,7 +782,7 @@ export async function syncAdminReplyToTelegramThread(
     const tgMessageText = buildMaxCommentTelegramText(commentForMark)
     const marked = await markTelegramCommentAnsweredInMax(
       token,
-      threadChatId,
+      commentForMark.tg_chat_id ?? threadChatId,
       commentForMark.tg_comment_id,
       tgMessageText,
       {
@@ -768,7 +812,7 @@ export async function syncAdminReplyToTelegramThread(
   let replyToId = mappingThreadMsgId
 
   try {
-    const tgMsgId = await deliverTelegramThreadMessageWithRetry(
+    const delivered = await deliverTelegramThreadMessageWithRetry(
       post.message_mid,
       target,
       replyText,
@@ -776,11 +820,12 @@ export async function syncAdminReplyToTelegramThread(
       true,
       `${MAX_REPLY_TG_PREFIX} ${replyText}`,
     )
-    if (tgMsgId == null) {
+    if (delivered == null) {
       return
     }
+    const tgMsgId = delivered.messageId
 
-    markCommentSynced(`tg:${tgMsgId}`)
+    markCommentSynced(tgMessageGuardKey(delivered.chatId, tgMsgId))
     markCommentSynced(guardKey)
     commentStore.setTgThreadReplyId(freshComment.comment_id, tgMsgId)
 

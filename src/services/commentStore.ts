@@ -68,6 +68,8 @@ export interface Comment {
   posted_as_channel?: boolean
   /** ID сообщения-комментария в TG discussion group. */
   tg_comment_id?: number
+  /** Чат, в котором живёт tg_comment_id (id в Telegram уникален только внутри чата). */
+  tg_chat_id?: number
   /** Дублирует comment_id для индекса max_comment_id в SQLite. */
   max_comment_id?: string
   /** Источник комментария: miniapp/max, telegram thread или VK. */
@@ -317,6 +319,7 @@ function normalizeCommentFromDisk(raw: unknown): Comment | null {
 interface CommentStorageRow {
   data: string
   tg_comment_id?: number | null
+  tg_chat_id?: number | null
   source?: string | null
   synced?: number | null
   tg_thread_reply_id?: number | null
@@ -332,6 +335,9 @@ function mergeCommentSyncMeta(comment: Comment, row: CommentStorageRow): Comment
   }
   if (typeof row.max_comment_id === 'string' && row.max_comment_id.trim()) {
     comment.max_comment_id = row.max_comment_id.trim()
+  }
+  if (typeof row.tg_chat_id === 'number' && row.tg_chat_id !== 0) {
+    comment.tg_chat_id = row.tg_chat_id
   }
   if (row.synced === 1) {
     comment.synced = true
@@ -420,7 +426,8 @@ export class CommentStore {
     listByUserIdNewest: Database.Statement
     upsert: Database.Statement
     getSyncMeta: Database.Statement
-    findByTgCommentId: Database.Statement
+    findByTgChatMessage: Database.Statement
+    findByExternalScoped: Database.Statement
     listPendingThreadReply: Database.Statement
     listPendingMaxToTelegram: Database.Statement
     listPendingThreadReplyForChat: Database.Statement
@@ -899,6 +906,7 @@ export class CommentStore {
     const prev = this.getStatements().getSyncMeta.get(comment.comment_id) as
       | {
           tg_comment_id: number | null
+          tg_chat_id: number | null
           max_comment_id: string | null
           source: string | null
           synced: number | null
@@ -907,6 +915,7 @@ export class CommentStore {
       | undefined
 
     const tgCommentId = comment.tg_comment_id ?? prev?.tg_comment_id ?? null
+    const tgChatId = comment.tg_chat_id ?? prev?.tg_chat_id ?? null
     const maxCommentId = comment.max_comment_id ?? prev?.max_comment_id ?? comment.comment_id
     const source = comment.source ?? prev?.source ?? 'max'
     const synced =
@@ -929,32 +938,52 @@ export class CommentStore {
       source,
       synced,
       tgThreadReplyId,
+      tgChatId,
     )
   }
 
-  findCommentByTgMessageId(tgCommentId: number): Comment | null {
-    const row = this.getStatements().findByTgCommentId.get(tgCommentId) as CommentStorageRow | undefined
-    if (!row) {
-      return null
-    }
-    return commentFromStorageRow(row)
+  /** Комментарий по сообщению Telegram: id уникален только внутри чата, chat id обязателен. */
+  findCommentByTgMessage(chatId: number, tgCommentId: number): Comment | null {
+    const row = this.getStatements().findByTgChatMessage.get(chatId, tgCommentId) as
+      | CommentStorageRow
+      | undefined
+    return row ? commentFromStorageRow(row) : null
   }
 
   /**
    * Сохраняет комментарий из внешней платформы (TG/VK) в miniapp с метаданными синхронизации.
+   * Идемпотентно: повторный вызов для того же (source, scope, id) вернёт уже сохранённый.
+   * `scopeId` — чат Telegram / группа VK, внутри которого уникален `externalCommentId`.
    */
   saveExternalThreadComment(
     input: Omit<Comment, 'comment_id' | 'timestamp' | 'source' | 'synced'>,
     externalCommentId: number,
     source: 'telegram' | 'vk',
+    scopeId: number | null,
   ): Comment {
-    const comment = this.saveComment(input)
-    comment.tg_comment_id = externalCommentId
-    comment.max_comment_id = comment.comment_id
-    comment.source = source
-    comment.synced = true
-    this.saveRow(comment)
-    return comment
+    const db = getDb()
+    const run = db.transaction((): Comment => {
+      const existingRow = this.getStatements().findByExternalScoped.get(
+        source,
+        scopeId ?? 0,
+        externalCommentId,
+      ) as CommentStorageRow | undefined
+      const existing = existingRow ? commentFromStorageRow(existingRow) : null
+      if (existing) {
+        return existing
+      }
+      const comment = this.saveComment(input)
+      comment.tg_comment_id = externalCommentId
+      if (scopeId != null) {
+        comment.tg_chat_id = scopeId
+      }
+      comment.max_comment_id = comment.comment_id
+      comment.source = source
+      comment.synced = true
+      this.saveRow(comment)
+      return comment
+    })
+    return run()
   }
 
   /**
@@ -963,16 +992,18 @@ export class CommentStore {
   saveTelegramThreadComment(
     input: Omit<Comment, 'comment_id' | 'timestamp' | 'source' | 'synced'>,
     tgCommentId: number,
+    tgChatId: number,
   ): Comment {
-    return this.saveExternalThreadComment(input, tgCommentId, 'telegram')
+    return this.saveExternalThreadComment(input, tgCommentId, 'telegram', tgChatId)
   }
 
   /** Сохраняет комментарий из VK в miniapp. */
   saveVkThreadComment(
     input: Omit<Comment, 'comment_id' | 'timestamp' | 'source' | 'synced'>,
     vkCommentId: number,
+    vkScopeId: number | null,
   ): Comment {
-    return this.saveExternalThreadComment(input, vkCommentId, 'vk')
+    return this.saveExternalThreadComment(input, vkCommentId, 'vk', vkScopeId)
   }
 
   setTgThreadReplyId(commentId: string, tgMessageId: number): Comment | null {
@@ -986,12 +1017,18 @@ export class CommentStore {
     return c
   }
 
-  setTgCommentId(commentId: string, tgMessageId: number, tgMessageText?: string): Comment | null {
+  setTgCommentId(
+    commentId: string,
+    tgChatId: number,
+    tgMessageId: number,
+    tgMessageText?: string,
+  ): Comment | null {
     const c = this.getComment(commentId)
     if (!c) {
       return null
     }
     c.tg_comment_id = tgMessageId
+    c.tg_chat_id = tgChatId
     const trimmedText = tgMessageText?.trim()
     if (trimmedText) {
       c.tg_message_text = trimmedText
@@ -1122,9 +1159,9 @@ export class CommentStore {
       return this.statements
     }
     const db = getDb()
-    const storageFields = 'data, tg_comment_id, source, synced, tg_thread_reply_id, max_comment_id'
+    const storageFields = 'data, tg_comment_id, tg_chat_id, source, synced, tg_thread_reply_id, max_comment_id'
     const storageFieldsAliased =
-      'c.data, c.tg_comment_id, c.source, c.synced, c.tg_thread_reply_id, c.max_comment_id'
+      'c.data, c.tg_comment_id, c.tg_chat_id, c.source, c.synced, c.tg_thread_reply_id, c.max_comment_id'
     this.statements = {
       getById: db.prepare(`SELECT ${storageFields} FROM comments WHERE comment_id = ?`),
       listByPost: db.prepare(
@@ -1209,14 +1246,21 @@ export class CommentStore {
       upsert: db.prepare(
         `INSERT OR REPLACE INTO comments (
           comment_id, post_id, user_id, username, text, timestamp, reply, notification_text, notification_mids, data,
-          tg_comment_id, max_comment_id, source, synced, tg_thread_reply_id
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          tg_comment_id, max_comment_id, source, synced, tg_thread_reply_id, tg_chat_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       ),
       getSyncMeta: db.prepare(
-        `SELECT tg_comment_id, max_comment_id, source, synced, tg_thread_reply_id
+        `SELECT tg_comment_id, tg_chat_id, max_comment_id, source, synced, tg_thread_reply_id
          FROM comments WHERE comment_id = ?`,
       ),
-      findByTgCommentId: db.prepare(`SELECT ${storageFields} FROM comments WHERE tg_comment_id = ?`),
+      findByTgChatMessage: db.prepare(
+        `SELECT ${storageFields} FROM comments
+         WHERE tg_chat_id = ? AND tg_comment_id = ? AND COALESCE(source, 'max') != 'vk'`,
+      ),
+      findByExternalScoped: db.prepare(
+        `SELECT ${storageFields} FROM comments
+         WHERE source = ? AND COALESCE(tg_chat_id, 0) = ? AND tg_comment_id = ?`,
+      ),
       listPendingThreadReply: db.prepare(
         `SELECT ${storageFields} FROM comments
          WHERE reply IS NOT NULL AND TRIM(reply) != ''

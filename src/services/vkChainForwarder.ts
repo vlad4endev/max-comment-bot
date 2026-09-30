@@ -70,6 +70,12 @@ export function exactTelegramPostText(messages: TgMessage[]): string {
   return ''
 }
 
+/** Id комментария VK уникален внутри группы — используем её как scope в БД. */
+function vkGroupScopeId(groupId: string | number | undefined): number | null {
+  const n = Math.abs(Number(groupId))
+  return Number.isFinite(n) && n > 0 ? n : null
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
@@ -591,6 +597,7 @@ async function syncVkCommentsForChain(chain: VkChainRecord): Promise<void> {
           text: vkComment.text,
         },
         vkComment.id,
+        vkGroupScopeId(chain.vk_group_id),
       )
 
       markCommentSynced(guardKey)
