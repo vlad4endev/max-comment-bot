@@ -33,7 +33,9 @@ import { notifyUserAboutMiniappReply, syncAdminCommentNotification } from '../se
 import { notifyAdminsAboutNewComment } from '../services/commentAdminNotify'
 import { syncTelegramAdminCommentNotification } from '../services/telegramAdminNotificationService'
 import {
+  deleteMaxCommentInTelegram,
   syncAdminReplyToTelegramThread,
+  syncEditedMaxCommentToTelegram,
   syncMaxCommentToTelegramThread,
 } from '../services/telegramThreadReplySync'
 import { canManageMaxCommentViaTelegram } from '../services/telegramCommentModerationService'
@@ -2286,6 +2288,10 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
       return
     }
     res.json(toWireComment(updated))
+    // Копия комментария в Telegram-треде — в фоне, чтобы не задерживать ответ админу.
+    void syncEditedMaxCommentToTelegram(updated, access.post).catch((err: unknown) => {
+      logger.warn('admin edit comment: TG copy sync failed', { commentId, err })
+    })
   })
 
   const adminDeleteComment = async (
@@ -2308,6 +2314,10 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
       res.status(404).json({ error: 'comment not found' })
       return
     }
+
+    void deleteMaxCommentInTelegram(removed, access.post).catch((err: unknown) => {
+      logger.warn('adminDeleteComment: TG copy delete failed', { commentId: input.commentId, err })
+    })
 
     try {
       await syncTelegramAdminCommentNotification({

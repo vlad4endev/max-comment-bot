@@ -323,6 +323,14 @@ export function upsertCommentInboundJob(input: {
   return jobKey
 }
 
+/** Обновляет сообщение в ещё не обработанной задаче (правка комментария до переноса). */
+export function updateCommentInboundJobPayload(jobKey: string, message: TgMessage): boolean {
+  const result = getDb()
+    .prepare('UPDATE tg_comment_inbound_queue SET payload = ? WHERE job_key = ?')
+    .run(JSON.stringify(message), jobKey)
+  return Number(result.changes) > 0
+}
+
 export function bumpCommentInboundRetry(
   jobKey: string,
   err: unknown,

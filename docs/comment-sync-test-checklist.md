@@ -197,3 +197,15 @@ BOT_TOKEN=x ADMIN_CHAT_ID=1 BOT_NICKNAME=b OWNER_USER_ID=1 WEBHOOK_SECRET=abcdef
 Вместо sentinel `-1` в `tg_thread_msg_id` — поля `thread_status` (`stale` | `suspect`) и `thread_status_at`.
 `stale` блокирует resolve на 24 ч, `suspect` (Telegram отверг id, refresh не удался) — на 10 мин; затем попытки
 возобновляются. Проверка: `scripts/test-thread-status.ts` (запуск на копии проекта, как остальные БД-тесты).
+
+## Правки и удаления комментариев
+
+| Направление | Событие | Результат |
+|-------------|---------|-----------|
+| TG → MAX | правка комментария в группе обсуждения | текст комментария в miniapp обновляется (только для комментариев из Telegram); если комментарий ещё в очереди переноса — обновляется сообщение в очереди |
+| TG → MAX | удаление в группе обсуждения (нужен MTProto-watcher) | копия из Telegram удаляется в miniapp, счётчик и кнопка обновляются; копии из MAX остаются |
+| MAX → TG | админ правит комментарий в miniapp | `editMessageText` у TG-копии (маркер «забронирован в MAX» сохраняется) |
+| MAX → TG | админ удаляет комментарий в miniapp | `deleteMessage` у TG-копии; при ошибке (нет прав) — запись `skipped` в журнале dead-letter |
+
+Тест без сети: `scripts/test-comment-edit-delete.ts` (на копии проекта). Быстрее запускать с
+`TS_NODE_TRANSPILE_ONLY=1`; скрипты завершаются через `process.exit(0)`.

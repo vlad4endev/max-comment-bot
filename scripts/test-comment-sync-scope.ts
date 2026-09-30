@@ -95,6 +95,7 @@ async function main(): Promise<void> {
   assert.equal(results.filter((r) => r === 'done').length, 1)
 
   console.log('OK: comment sync scope + lease')
+  process.exit(0)
 }
 
 main().catch((err) => {

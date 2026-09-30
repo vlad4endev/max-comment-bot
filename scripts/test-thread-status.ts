@@ -64,6 +64,7 @@ async function main(): Promise<void> {
   assert.equal(store.findMappingByThreadMsgId('c', 900)?.max_mid, 'm3')
 
   console.log('OK: thread status')
+  process.exit(0)
 }
 
 main().catch((err) => {

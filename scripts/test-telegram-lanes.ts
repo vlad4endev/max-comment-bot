@@ -53,6 +53,7 @@ async function main(): Promise<void> {
   assert.equal(c.get('z'), 3)
 
   console.log('OK: telegram lanes + ttl cache')
+  process.exit(0)
 }
 
 main().catch((err) => {

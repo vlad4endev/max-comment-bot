@@ -20,6 +20,7 @@ import { postStore } from './postStore'
 import { resolveTelegramBotToken } from './resolveTelegramBotToken'
 import { isCommentSynced, markCommentSynced, tgMessageGuardKey } from '../utils/commentSyncGuard'
 import { withSyncLease } from './commentSyncLease'
+import { recordDeadLetter } from './commentDeadLetterStore'
 import {
   MAX_ANSWERED_IN_MAX_MARKER,
   MAX_REPLY_TG_PREFIX,
@@ -842,4 +843,128 @@ async function syncAdminReplyToTelegramThreadLocked(
   } catch (err: unknown) {
     await handleDiscussionSendForbidden(target, freshComment.comment_id, err)
   }
+}
+
+/** Токен бота и чат, где лежит TG-копия комментария из MAX. */
+function resolveMirrorTarget(
+  comment: Comment,
+  post: Post,
+): { token: string; chatId: number; messageId: number } | null {
+  if (comment.source === 'telegram' || comment.source === 'vk') {
+    return null
+  }
+  const messageId = comment.tg_comment_id
+  if (typeof messageId !== 'number' || messageId <= 0) {
+    return null
+  }
+  const mapping = findMappingByMaxMid(post.message_mid)
+  if (!mapping) {
+    return null
+  }
+  const token = resolveTelegramBotTokenForChain(mapping.chain_id)
+  const chatId = comment.tg_chat_id ?? mapping.tg_thread_chat_id
+  if (!token || typeof chatId !== 'number' || chatId === 0) {
+    return null
+  }
+  return { token, chatId, messageId }
+}
+
+/** Текст TG-копии после правки в MAX (с сохранением маркера «забронирован в MAX»). */
+export function buildEditedMaxCommentTelegramText(comment: Comment, newText: string): string {
+  const base = formatMaxCommentForTelegram(comment.username, newText)
+  return comment.booked_in_max_tg ? `${base}\n\n${MAX_ANSWERED_IN_MAX_MARKER}` : base
+}
+
+/**
+ * Комментарий из MAX отредактирован в miniapp → правим его копию в TG-треде.
+ * @returns true — копия обновлена (или уже актуальна) либо править нечего.
+ */
+export async function syncEditedMaxCommentToTelegram(comment: Comment, post: Post): Promise<boolean> {
+  const done = await withSyncLease(`max-edit:${comment.comment_id}`, async () => {
+    const fresh = commentStore.getComment(comment.comment_id) ?? comment
+    const target = resolveMirrorTarget(fresh, post)
+    if (!target) {
+      return true
+    }
+    const newText = fresh.text.trim()
+    if (!newText) {
+      return true
+    }
+    const body = buildEditedMaxCommentTelegramText(fresh, newText)
+    if (fresh.tg_message_text?.trim() === body) {
+      return true
+    }
+
+    const data = await callTelegramBot<{ ok: boolean; description?: string }>(
+      target.token,
+      'editMessageText',
+      tgPayload(
+        { token: target.token, chatId: target.chatId, messageId: target.messageId },
+        { text: body },
+      ),
+      { chatId: target.chatId, messageId: target.messageId, commentId: fresh.comment_id },
+    )
+    const notModified = /message is not modified/i.test(data.description ?? '')
+    if (!data.ok && !notModified) {
+      logger.warn('[telegramThreadReplySync] could not edit TG copy of edited MAX comment', {
+        commentId: fresh.comment_id,
+        chatId: target.chatId,
+        description: data.description ?? null,
+      })
+      return false
+    }
+    commentStore.setTgCommentId(fresh.comment_id, target.chatId, target.messageId, body)
+    logger.info('[telegramThreadReplySync] edited TG copy of MAX comment', {
+      commentId: fresh.comment_id,
+      chatId: target.chatId,
+      tgMessageId: target.messageId,
+    })
+    return true
+  })
+  return done ?? false
+}
+
+/**
+ * Комментарий из MAX удалён в miniapp → удаляем его копию в TG-треде.
+ * Комментарии Telegram-происхождения в Telegram не трогаем.
+ * @returns true — копии больше нет (или её не было).
+ */
+export async function deleteMaxCommentInTelegram(comment: Comment, post: Post): Promise<boolean> {
+  const target = resolveMirrorTarget(comment, post)
+  if (!target) {
+    return true
+  }
+  const data = await callTelegramBot<{ ok: boolean; description?: string }>(
+    target.token,
+    'deleteMessage',
+    { chat_id: target.chatId, message_id: target.messageId },
+    { chatId: target.chatId, messageId: target.messageId, commentId: comment.comment_id },
+  )
+  if (data.ok || /message to delete not found/i.test(data.description ?? '')) {
+    logger.info('[telegramThreadReplySync] deleted TG copy of removed MAX comment', {
+      commentId: comment.comment_id,
+      chatId: target.chatId,
+      tgMessageId: target.messageId,
+    })
+    return true
+  }
+  logger.warn('[telegramThreadReplySync] could not delete TG copy of removed MAX comment', {
+    commentId: comment.comment_id,
+    chatId: target.chatId,
+    description: data.description ?? null,
+  })
+  const mapping = findMappingByMaxMid(post.message_mid)
+  if (mapping) {
+    recordDeadLetter({
+      direction: 'max_to_tg',
+      kind: 'skipped',
+      chainId: mapping.chain_id,
+      refKey: `delete:${comment.comment_id}`,
+      commentId: comment.comment_id,
+      tgMessageId: target.messageId,
+      discussionChatId: target.chatId,
+      reason: `копия удалённого комментария осталась в Telegram: ${data.description ?? 'нет прав на удаление'}`,
+    })
+  }
+  return false
 }
