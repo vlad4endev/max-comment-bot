@@ -79,53 +79,86 @@ export function parseFloodWaitSeconds(text: string, parameters?: { retry_after?:
   return null
 }
 
-let chain: Promise<void> = Promise.resolve()
-let lastCallAt = 0
-let globalPauseUntil = 0
+/**
+ * Каждый токен бота (и MTProto) — своя «полоса»: своя очередь, свой минимальный интервал
+ * и своя пауза FLOOD_WAIT. Раньше всё было общим, и 429 у одной связки замораживал остальные.
+ */
+export const MTPROTO_LANE = 'mtproto'
 
-export function isTelegramApiPaused(): boolean {
-  return Date.now() < globalPauseUntil
+type Lane = { tail: Promise<void>; lastCallAt: number; pauseUntil: number }
+
+const lanes = new Map<string, Lane>()
+
+function laneFor(scope: string): Lane {
+  let lane = lanes.get(scope)
+  if (!lane) {
+    lane = { tail: Promise.resolve(), lastCallAt: 0, pauseUntil: 0 }
+    lanes.set(scope, lane)
+  }
+  return lane
 }
 
-export function getTelegramApiPauseRemainingMs(): number {
-  return Math.max(0, globalPauseUntil - Date.now())
+function laneLabel(scope: string): string {
+  return scope === MTPROTO_LANE ? MTPROTO_LANE : `bot…${scope.slice(-6)}`
 }
 
-function extendGlobalPause(seconds: number): void {
+/** Пауза именно этой полосы (токена). Без scope — есть ли пауза хоть у одной. */
+export function isTelegramApiPaused(scope?: string): boolean {
+  const now = Date.now()
+  if (scope !== undefined) {
+    return now < (lanes.get(scope)?.pauseUntil ?? 0)
+  }
+  for (const lane of lanes.values()) {
+    if (now < lane.pauseUntil) {
+      return true
+    }
+  }
+  return false
+}
+
+export function getTelegramApiPauseRemainingMs(scope: string): number {
+  return Math.max(0, (lanes.get(scope)?.pauseUntil ?? 0) - Date.now())
+}
+
+export function pauseTelegramLane(scope: string, seconds: number): void {
+  const lane = laneFor(scope)
   const until = Date.now() + (seconds + 1) * 1_000
-  if (until > globalPauseUntil) {
-    globalPauseUntil = until
-    logger.warn('[telegramRateLimiter] global pause extended', {
+  if (until > lane.pauseUntil) {
+    lane.pauseUntil = until
+    logger.warn('[telegramRateLimiter] pause extended', {
+      lane: laneLabel(scope),
       waitSeconds: seconds,
-      pauseUntil: new Date(globalPauseUntil).toISOString(),
+      pauseUntil: new Date(lane.pauseUntil).toISOString(),
     })
   }
 }
 
-async function waitForSlot(): Promise<void> {
+async function waitForSlot(scope: string): Promise<void> {
+  const lane = laneFor(scope)
   const minInterval = getTelegramApiMinIntervalMs()
-  const now = Date.now()
-  const pauseWait = globalPauseUntil - now
+  const pauseWait = lane.pauseUntil - Date.now()
   if (pauseWait > 0) {
     await sleep(pauseWait)
   }
-  const intervalWait = lastCallAt + minInterval - Date.now()
+  const intervalWait = lane.lastCallAt + minInterval - Date.now()
   if (intervalWait > 0) {
     await sleep(intervalWait)
   }
-  lastCallAt = Date.now()
+  lane.lastCallAt = Date.now()
 }
 
 /**
- * Сериализует вызовы Telegram Bot API с минимальным интервалом и учётом FLOOD_WAIT.
+ * Сериализует вызовы в рамках одной полосы с минимальным интервалом и учётом FLOOD_WAIT.
+ * Разные полосы (токены) идут независимо.
  */
-export function enqueueTelegramApiCall<T>(fn: () => Promise<T>): Promise<T> {
+export function enqueueTelegramApiCall<T>(scope: string, fn: () => Promise<T>): Promise<T> {
+  const lane = laneFor(scope)
   const run = async (): Promise<T> => {
-    await waitForSlot()
+    await waitForSlot(scope)
     return fn()
   }
-  const result = chain.then(run, run)
-  chain = result.then(
+  const result = lane.tail.then(run, run)
+  lane.tail = result.then(
     () => undefined,
     () => undefined,
   )
@@ -156,7 +189,7 @@ export async function callTelegramBotApi<T extends TelegramBotApiResponse>(
   for (let attempt = 0; attempt <= maxFloodRetries; attempt += 1) {
     let data: T
     try {
-      data = await enqueueTelegramApiCall(async () => {
+      data = await enqueueTelegramApiCall(token, async () => {
         const { data: response } = await telegramAxios.post<T>(url, payload, { timeout: 20_000 })
         return response
       })
@@ -194,7 +227,7 @@ export async function callTelegramBotApi<T extends TelegramBotApiResponse>(
     }
     const floodSeconds = parseFloodWaitSeconds(description, data.parameters)
     if (floodSeconds != null && attempt < maxFloodRetries) {
-      extendGlobalPause(floodSeconds)
+      pauseTelegramLane(token, floodSeconds)
       const { reportTelegramFloodWait } = await import('../services/telegramSyncAlertService')
       void reportTelegramFloodWait({
         method,
@@ -224,23 +257,23 @@ export async function callTelegramBotApi<T extends TelegramBotApiResponse>(
 }
 
 /**
- * Оборачивает MTProto/другие вызовы с FLOOD_WAIT в ту же глобальную паузу.
+ * Оборачивает MTProto/другие вызовы с FLOOD_WAIT в паузу своей полосы (по умолчанию MTProto).
  */
 export async function withTelegramFloodWaitBackoff<T>(
   label: string,
   run: () => Promise<T>,
   maxRetries = 3,
+  scope: string = MTPROTO_LANE,
 ): Promise<T> {
   for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
-    await waitForSlot()
+    await waitForSlot(scope)
     try {
-      lastCallAt = Date.now()
       return await run()
     } catch (err: unknown) {
       const errText = extractTelegramErrorText(err)
       const floodSeconds = parseFloodWaitSeconds(errText)
       if (floodSeconds != null && attempt < maxRetries) {
-        extendGlobalPause(floodSeconds)
+        pauseTelegramLane(scope, floodSeconds)
         const { reportTelegramFloodWait } = await import('../services/telegramSyncAlertService')
         void reportTelegramFloodWait({
           method: label,

@@ -24,6 +24,7 @@ import {
 } from './telegramThreadReplySync'
 import { ensurePostThreadMapping } from './telegramDiscussionThreadResolver'
 import { findMappingByMaxMid } from './postCommentMappingStore'
+import { resolveTelegramBotToken } from './resolveTelegramBotToken'
 import { logger } from '../utils/logger'
 import { sendAdminAlert } from '../utils/alertService'
 import {
@@ -269,6 +270,14 @@ export function startMaxCommentSync(bot: Bot, options: SyncOptions = {}): () => 
     if (chainSyncing.has(chain.id)) {
       return
     }
+    // Пауза FLOOD_WAIT действует только на токен этой связки — остальные работают.
+    const lane = chain.bot_token?.trim() || resolveTelegramBotToken()
+    if (lane && isTelegramApiPaused(lane)) {
+      logger.debug('[maxCommentSync] chain skipped: Telegram API pause for its bot', {
+        chainId: chain.id,
+      })
+      return
+    }
     chainSyncing.add(chain.id)
     try {
       const pendingComments = commentStore.listCommentsPendingMaxToTelegramForChat(
@@ -291,7 +300,7 @@ export function startMaxCommentSync(bot: Bot, options: SyncOptions = {}): () => 
       }
 
       for (const comment of pendingComments) {
-        if (isTelegramApiPaused()) {
+        if (lane && isTelegramApiPaused(lane)) {
           break
         }
         const post = postStore.getPost(comment.post_id)
@@ -302,7 +311,7 @@ export function startMaxCommentSync(bot: Bot, options: SyncOptions = {}): () => 
       }
 
       for (const comment of pendingReplies) {
-        if (isTelegramApiPaused()) {
+        if (lane && isTelegramApiPaused(lane)) {
           break
         }
         const post = postStore.getPost(comment.post_id)
@@ -336,11 +345,6 @@ export function startMaxCommentSync(bot: Bot, options: SyncOptions = {}): () => 
   }
 
   async function syncOnce(): Promise<void> {
-    if (isTelegramApiPaused()) {
-      logger.debug('[maxCommentSync] skipped: Telegram API pause active')
-      return
-    }
-
     const chains = listTgChainsSync().filter((c) => c.active && c.forward_comments)
     const perChain = Math.max(3, Math.ceil(batchSize / Math.max(chains.length, 1)))
 

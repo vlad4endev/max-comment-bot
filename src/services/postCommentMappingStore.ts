@@ -4,6 +4,7 @@ import { listTgChainsSync, type TgChainRecord } from '../api/adminPanelState'
 import { getDb } from '../db/database'
 import { logger } from '../utils/logger'
 import { telegramChannelMatchesTarget } from '../utils/tgChannelMatch'
+import { TtlCache } from '../utils/ttlCache'
 
 const TG_API = 'https://api.telegram.org'
 
@@ -16,7 +17,10 @@ export interface PostCommentMappingRow {
   tg_thread_msg_id: number | null
 }
 
-const discussionChatCache = new Map<string, number | null>()
+/** Найденный linked chat меняется редко; «нет группы» кэшируем ненадолго — её могли привязать позже. */
+const DISCUSSION_CHAT_FOUND_TTL_MS = 30 * 60_000
+const DISCUSSION_CHAT_MISSING_TTL_MS = 60_000
+const discussionChatCache = new TtlCache<string, number | null>()
 const SKIPPED_MAX_MID = '__skipped__'
 const pendingThreadLinks = new Map<string, { threadChatId: number; threadMsgId: number }>()
 
@@ -499,13 +503,14 @@ export async function resolveDiscussionChatId(
   }
 
   const cacheKey = `${chain.id}:${tgToken}`
-  if (discussionChatCache.has(cacheKey)) {
-    return discussionChatCache.get(cacheKey) ?? null
+  const cached = discussionChatCache.get(cacheKey)
+  if (cached !== undefined) {
+    return cached
   }
 
   const channelKey = chain.tg_channel_id?.trim() || chain.tg_username?.trim().replace(/^@/, '')
   if (!channelKey) {
-    discussionChatCache.set(cacheKey, null)
+    discussionChatCache.set(cacheKey, null, DISCUSSION_CHAT_MISSING_TTL_MS)
     return null
   }
 
@@ -525,7 +530,11 @@ export async function resolveDiscussionChatId(
       data.ok && typeof data.result?.linked_chat_id === 'number'
         ? data.result.linked_chat_id
         : null
-    discussionChatCache.set(cacheKey, linked)
+    discussionChatCache.set(
+      cacheKey,
+      linked,
+      linked == null ? DISCUSSION_CHAT_MISSING_TTL_MS : DISCUSSION_CHAT_FOUND_TTL_MS,
+    )
     return linked
   } catch (err: unknown) {
     logger.warn('postCommentMapping: getChat linked_chat_id failed', { chainId: chain.id, err })

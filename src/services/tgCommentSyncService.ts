@@ -52,6 +52,7 @@ import {
   shouldSyncTgCommentToMax,
 } from '../utils/commentSyncFilter'
 import { logger } from '../utils/logger'
+import { TtlCache } from '../utils/ttlCache'
 
 export function isDiscussionAutoForward(message: TgMessage): boolean {
   return Boolean(
@@ -196,8 +197,10 @@ async function handleTgReplyToMaxComment(
 
 export type TgCommentHandleResult = 'ok' | 'retry' | 'skip'
 
-const inboundThreadRepairTried = new Set<string>()
-const ensurePostTried = new Set<string>()
+/** Неудачные попытки восстановления не блокируют повтор навсегда — только на паузу. */
+const RECOVERY_RETRY_PAUSE_MS = 5 * 60_000
+const inboundThreadRepairTried = new TtlCache<string, true>()
+const ensurePostTried = new TtlCache<string, true>()
 
 function lookupPostCommentMapping(
   chainId: string,
@@ -253,7 +256,7 @@ async function recoverPostCommentMapping(
 
   const repairKey = `${chain.id}:${hints.threadMsgIds.join(',')}`
   if (!inboundThreadRepairTried.has(repairKey)) {
-    inboundThreadRepairTried.add(repairKey)
+    inboundThreadRepairTried.set(repairKey, true, RECOVERY_RETRY_PAUSE_MS)
     for (const row of listRecentUnmappedForwarded(chain.id, 8)) {
       try {
         await ensurePostThreadMapping(row.maxMid)
@@ -351,7 +354,7 @@ export async function handleTgComment(
       }
     }
     if (!post && mapping?.max_mid && !ensurePostTried.has(mapping.max_mid)) {
-      ensurePostTried.add(mapping.max_mid)
+      ensurePostTried.set(mapping.max_mid, true, RECOVERY_RETRY_PAUSE_MS)
       post = await ensurePostFromChannelMessage(bot, maxChatId, mapping.max_mid)
       if (post) {
         logger.info('[tgCommentSync] recovered MAX post for inbound comment', {

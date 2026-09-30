@@ -130,20 +130,71 @@ export async function resolveTelegramChannelEntity(
 let persistentClient: TelegramClient | null = null
 let persistentClientReady = false
 
+let persistentClientPending: Promise<TelegramClient | null> | null = null
+
 export async function getPersistentMtprotoClient(): Promise<TelegramClient | null> {
   if (persistentClient && persistentClientReady) {
-    return persistentClient
+    if (persistentClient.disconnected) {
+      try {
+        await persistentClient.connect()
+      } catch (err: unknown) {
+        logger.warn('[mtproto] persistent client reconnect failed, recreating', { err })
+        invalidatePersistentMtprotoClient()
+      }
+    }
+    if (persistentClient && persistentClientReady) {
+      return persistentClient
+    }
   }
 
+  // Параллельные вызовы делят одно подключение: несколько клиентов с одним auth key
+  // приводят к AUTH_KEY_DUPLICATED и слёту сессии.
+  if (persistentClientPending) {
+    return persistentClientPending
+  }
+  persistentClientPending = (async () => {
+    try {
+      const client = await createUserClient()
+      persistentClient = client
+      persistentClientReady = true
+      logger.info('[mtproto] persistent client connected')
+      return client
+    } catch (err: unknown) {
+      logger.warn('[mtproto] persistent client unavailable', { err })
+      return null
+    } finally {
+      persistentClientPending = null
+    }
+  })()
+  return persistentClientPending
+}
+
+const MTPROTO_SESSION_DEAD_RE =
+  /AUTH_KEY_(UNREGISTERED|DUPLICATED|INVALID)|SESSION_(REVOKED|EXPIRED)|USER_DEACTIVATED/i
+
+/**
+ * Выполняет MTProto-вызов на общем клиенте (без connect/disconnect на каждый вызов).
+ * Клиент не закрывать. При мёртвой сессии клиент сбрасывается и пересоздаётся при следующем вызове.
+ */
+export async function withSharedMtprotoClient<T>(
+  run: (client: TelegramClient) => Promise<T>,
+): Promise<T> {
+  const client = await getPersistentMtprotoClient()
+  if (!client) {
+    throw new Error('MTProto-клиент недоступен: проверьте user-сессию в админке')
+  }
   try {
-    const client = await createUserClient()
-    persistentClient = client
-    persistentClientReady = true
-    logger.info('[mtproto] persistent client connected')
-    return client
+    return await run(client)
   } catch (err: unknown) {
-    logger.warn('[mtproto] persistent client unavailable', { err })
-    return null
+    const text = err instanceof Error ? err.message : String(err)
+    const rpc =
+      typeof err === 'object' && err !== null && 'errorMessage' in err
+        ? String((err as { errorMessage?: string }).errorMessage ?? '')
+        : ''
+    if (MTPROTO_SESSION_DEAD_RE.test(`${text} ${rpc}`)) {
+      invalidatePersistentMtprotoClient()
+    }
+    throw err
   }
 }
 
