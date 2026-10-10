@@ -114,6 +114,11 @@ export function matchesCommentSyncKeyword(
 const adminUserCache = new Map<string, { userIds: Set<number>; expiresAt: number }>()
 const ADMIN_CACHE_TTL_MS = 5 * 60_000
 
+/** GroupAnonymousBot — анонимные админы группы пишут от этого user id. */
+const TELEGRAM_GROUP_ANONYMOUS_BOT_ID = 1087968824
+/** Channel Bot — сообщения «от имени канала». */
+const TELEGRAM_CHANNEL_BOT_ID = 136817688
+
 async function getTelegramAdminUserIds(token: string, chatId: string): Promise<Set<number>> {
   const key = `${chatId}:${token.slice(-8)}`
   const cached = adminUserCache.get(key)
@@ -122,8 +127,23 @@ async function getTelegramAdminUserIds(token: string, chatId: string): Promise<S
   }
   const admins = await listTelegramChatAdministrators(token, chatId)
   const userIds = new Set(admins.map((a) => a.userId))
-  adminUserCache.set(key, { userIds, expiresAt: Date.now() + ADMIN_CACHE_TTL_MS })
+  // Пустой ответ почти всегда = ошибка API / нет прав у бота.
+  // Не кэшируем — иначе на 5 минут все админы считаются обычными пользователями.
+  if (userIds.size > 0) {
+    adminUserCache.set(key, { userIds, expiresAt: Date.now() + ADMIN_CACHE_TTL_MS })
+  }
   return userIds
+}
+
+function uniqueAdminCheckTokens(primary: string, extraTokens?: string[]): string[] {
+  const out: string[] = []
+  for (const raw of [primary, ...(extraTokens ?? [])]) {
+    const token = raw?.trim()
+    if (token && !out.includes(token)) {
+      out.push(token)
+    }
+  }
+  return out
 }
 
 function channelChatNumericId(chain: TgChainRecord): number | null {
@@ -142,30 +162,71 @@ function isChannelSignedComment(message: TgMessage, chain: TgChainRecord): boole
   return message.sender_chat?.id === channelId
 }
 
+/** Сообщение от имени канала / анонимного админа группы обсуждения. */
+function isPrivilegedSenderChat(
+  message: TgMessage,
+  chain: TgChainRecord,
+  discussionChatId: number,
+): boolean {
+  if (isChannelSignedComment(message, chain)) {
+    return true
+  }
+  const senderId = message.sender_chat?.id
+  if (typeof senderId !== 'number') {
+    return false
+  }
+  // Анонимный админ в discussion group пишет с sender_chat = сама группа.
+  if (senderId === discussionChatId) {
+    return true
+  }
+  return false
+}
+
+/**
+ * Админ канала / группы обсуждения / владелец цепочки.
+ * Сообщения админов антиспам не трогает.
+ * @param extraTokens запасные токены (chain bot / main bot), если у primary нет прав на getChatAdministrators
+ */
 export async function isTgCommentFromAdmin(
   message: TgMessage,
   token: string,
   chain: TgChainRecord,
   discussionChatId: number,
+  extraTokens?: string[],
 ): Promise<boolean> {
-  if (isChannelSignedComment(message, chain)) {
+  if (isPrivilegedSenderChat(message, chain, discussionChatId)) {
     return true
   }
+
   const userId = message.from?.id
   if (typeof userId !== 'number' || userId <= 0) {
     return false
   }
-  const discussionAdmins = await getTelegramAdminUserIds(token, String(discussionChatId))
-  if (discussionAdmins.has(userId)) {
+
+  if (userId === TELEGRAM_GROUP_ANONYMOUS_BOT_ID || userId === TELEGRAM_CHANNEL_BOT_ID) {
     return true
   }
+
+  if (typeof chain.tg_user_id === 'number' && chain.tg_user_id > 0 && chain.tg_user_id === userId) {
+    return true
+  }
+
+  const tokens = uniqueAdminCheckTokens(token, extraTokens)
   const channelKey = chain.tg_channel_id?.trim()
-  if (channelKey) {
-    const channelAdmins = await getTelegramAdminUserIds(token, channelKey)
-    if (channelAdmins.has(userId)) {
-      return true
+  const chatIdsToCheck = [String(discussionChatId)]
+  if (channelKey && !chatIdsToCheck.includes(channelKey)) {
+    chatIdsToCheck.push(channelKey)
+  }
+
+  for (const checkToken of tokens) {
+    for (const chatId of chatIdsToCheck) {
+      const admins = await getTelegramAdminUserIds(checkToken, chatId)
+      if (admins.has(userId)) {
+        return true
+      }
     }
   }
+
   return false
 }
 

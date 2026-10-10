@@ -2263,7 +2263,9 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
       return
     }
 
-    const postAsChannel = await isUserChannelAdmin(deps.bot, chatId, userId)
+    // Snapshot + live API: админов антиспам не трогает даже если getChatMembers временно падает.
+    const isChannelAdmin = await isUserAdminOfChannel(deps.bot, chatId, userId)
+    const postAsChannel = isChannelAdmin
     let saveUsername = username
     let avatarUrl = avatarFromClient
     let postedAsChannel = false
@@ -2284,7 +2286,7 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
         username: saveUsername,
         channelChatId: chatId,
         source: 'max',
-        isChannelAdmin: postAsChannel,
+        isChannelAdmin,
       })
       if (!antispam.allowed) {
         res.status(403).json({

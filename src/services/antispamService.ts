@@ -102,11 +102,8 @@ function mapActionToOutcome(
     case 'leave':
       return { outcome: 'allow', allowed: true }
     case 'captcha':
-      return {
-        outcome: 'block',
-        allowed: false,
-        userMessage: 'Сообщение выглядит подозрительно. Переформулируйте без ссылок и рекламы.',
-      }
+      // Нет UI капчи — только лог, без удаления/блокировки (иначе «удаляет всё подряд»).
+      return { outcome: 'soft_log', allowed: true }
     case 'delete':
       return {
         outcome: 'block',

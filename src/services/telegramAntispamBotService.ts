@@ -94,7 +94,19 @@ export async function tryBlockTelegramCommentByAntispam(
   }
 
   const maxChatId = resolveCanonicalChannelChatId(chain.max_chat_id) ?? chain.max_chat_id
-  const isAdmin = await isTgCommentFromAdmin(message, token, chain, discussionChatId)
+  // Проверяем админа всеми доступными токенами: у antispam-бота часто нет прав
+  // на getChatAdministrators, из‑за чего админы ошибочно считались обычными юзерами.
+  const isAdmin = await isTgCommentFromAdmin(
+    message,
+    token,
+    chain,
+    discussionChatId,
+    tokens.slice(1),
+  )
+  if (isAdmin) {
+    return false
+  }
+
   const { userId, username: authorName } = resolveTgCommentAuthor(
     message,
     chain,
@@ -107,10 +119,15 @@ export async function tryBlockTelegramCommentByAntispam(
     username: authorName,
     channelChatId: maxChatId,
     source: 'telegram',
-    isChannelAdmin: isAdmin,
+    isChannelAdmin: false,
   })
 
   if (antispam.allowed) {
+    return false
+  }
+
+  // Пояс: whitelist / channel_admin никогда не удаляем.
+  if (antispam.action === 'whitelist' || antispam.reason === 'channel_admin') {
     return false
   }
 

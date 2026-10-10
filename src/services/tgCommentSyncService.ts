@@ -37,6 +37,7 @@ import { ensurePostFromChannelMessage } from './channelPostActions'
 import { tryBlockTelegramCommentByAntispam } from './telegramAntispamBotService'
 import { resolveCanonicalChannelChatId } from './resolveChannelChatId'
 import { resolveTelegramBotToken } from './resolveTelegramBotToken'
+import { resolveTelegramAntispamBotToken } from './resolveTelegramAntispamBotToken'
 import { isCommentSynced, markCommentSynced, tgMessageGuardKey } from '../utils/commentSyncGuard'
 import { chainForwardQueueContainsMessage } from './tgChainForwardQueue'
 import {
@@ -387,7 +388,10 @@ export async function handleTgComment(
       return 'retry'
     }
 
-    const isAdmin = await isTgCommentFromAdmin(message, tgToken, chain, discussionChatId)
+    const isAdmin = await isTgCommentFromAdmin(message, tgToken, chain, discussionChatId, [
+      resolveTelegramAntispamBotToken(),
+      resolveTelegramBotToken(),
+    ].filter((t) => Boolean(t.trim())))
 
     // Only admin replies to a known MAX/TG comment stay as thread replies.
     // Regular users replying in the discussion are still comments — they must

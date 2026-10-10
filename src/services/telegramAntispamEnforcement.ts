@@ -51,13 +51,24 @@ function uniqueTokens(primary: string, fallbacks: string[] = []): string[] {
 }
 
 function shouldDeleteMessage(evaluation: AntispamEvaluation): boolean {
+  // Админов / whitelist / soft_log / captcha не удаляем.
+  if (
+    evaluation.allowed ||
+    evaluation.outcome === 'allow' ||
+    evaluation.outcome === 'soft_log' ||
+    evaluation.action === 'whitelist' ||
+    evaluation.action === 'leave' ||
+    evaluation.action === 'captcha' ||
+    evaluation.reason === 'channel_admin'
+  ) {
+    return false
+  }
   if (evaluation.outcome === 'block' || evaluation.outcome === 'ban') {
     return true
   }
   const action = evaluation.action
   return (
     action === 'delete' ||
-    action === 'captcha' ||
     action === 'delete_and_ban' ||
     action === 'blacklist' ||
     action === 'restricted'
@@ -68,12 +79,22 @@ function shouldRestrictUser(evaluation: AntispamEvaluation, autoMute: boolean): 
   if (!autoMute) {
     return false
   }
+  if (
+    evaluation.allowed ||
+    evaluation.outcome === 'allow' ||
+    evaluation.outcome === 'soft_log' ||
+    evaluation.action === 'whitelist' ||
+    evaluation.action === 'leave' ||
+    evaluation.action === 'captcha' ||
+    evaluation.reason === 'channel_admin'
+  ) {
+    return false
+  }
   if (evaluation.outcome === 'ban' || evaluation.outcome === 'block') {
     return true
   }
   return (
     evaluation.action === 'delete' ||
-    evaluation.action === 'captcha' ||
     evaluation.action === 'delete_and_ban' ||
     evaluation.action === 'blacklist' ||
     evaluation.action === 'restricted'
