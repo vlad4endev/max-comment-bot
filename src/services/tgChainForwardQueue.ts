@@ -77,6 +77,23 @@ export function retryDelayMs(attempts: number): number {
   return Math.min(1_000 * 2 ** (exp - 1), MAX_RETRY_DELAY_MS)
 }
 
+/** Потолок паузы для «зависшего» поста: раз в 30 минут, а не раз в 16 секунд. */
+export const FORWARD_RETRY_CAP_MS = 30 * 60_000
+
+/**
+ * Пауза между повторами переноса TG→MAX. Первые 5 попыток — как раньше (1…16 с), дальше
+ * 30 с, 1, 2, 4, 8, 16 мин и потолок 30 мин. Раньше пост, который не публикуется (например, не
+ * загружается видео), повторялся каждые 16 с бесконечно (62 341 попытка), и каждая попытка на
+ * 45 с помечала MAX-канал «занятым» — поллер не подключал кнопки комментариев к постам канала.
+ */
+export function forwardRetryDelayMs(attempts: number): number {
+  if (attempts <= 5) {
+    return retryDelayMs(attempts)
+  }
+  const step = Math.min(attempts - 6, 20)
+  return Math.min(30_000 * 2 ** step, FORWARD_RETRY_CAP_MS)
+}
+
 export function mergeForwardQueueMessages(
   existing: TgMessage[],
   incoming: TgMessage[],
@@ -146,7 +163,7 @@ export function bumpForwardQueueRetry(jobKey: string, err: unknown): number {
        SET attempts = ?, next_retry_at = ?, last_error = ?
        WHERE job_key = ?`,
     )
-    .run(attempts, Date.now() + retryDelayMs(attempts), lastError, jobKey)
+    .run(attempts, Date.now() + forwardRetryDelayMs(attempts), lastError, jobKey)
   return attempts
 }
 
