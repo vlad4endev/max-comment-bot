@@ -95,6 +95,7 @@ export class UserMiniappSettingsStore {
     } catch (e) {
       const err = e as NodeJS.ErrnoException
       if (err.code === 'ENOENT') {
+        this.byUserId.clear()
         logger.debug('userMiniappSettingsStore: settings.json missing, empty store')
         return
       }

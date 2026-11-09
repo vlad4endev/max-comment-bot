@@ -52,6 +52,10 @@ export class TelegramBotUserStore {
     return new Set(rows.map((row) => row.user_id))
   }
 
+  discardPreparedStatements(): void {
+    this.statements = null
+  }
+
   private getStatements(): NonNullable<TelegramBotUserStore['statements']> {
     if (this.statements) {
       return this.statements

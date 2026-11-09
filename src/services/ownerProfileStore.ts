@@ -130,6 +130,10 @@ export class OwnerProfileStore {
     )
   }
 
+  discardPreparedStatements(): void {
+    this.statements = null
+  }
+
   private getStatements(): NonNullable<OwnerProfileStore['statements']> {
     if (this.statements) {
       return this.statements

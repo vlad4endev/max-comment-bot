@@ -59,6 +59,12 @@ class VkPostMappingStore {
     this.loaded = true
   }
 
+  async reloadFromDisk(): Promise<void> {
+    this.data = { entries: [] }
+    this.loaded = false
+    await this.load()
+  }
+
   private async persist(): Promise<void> {
     await mkdir(dirname(DATA_PATH), { recursive: true })
     await atomicWriteFile(DATA_PATH, JSON.stringify(this.data, null, 2))

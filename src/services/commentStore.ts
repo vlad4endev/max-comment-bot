@@ -1174,6 +1174,10 @@ export class CommentStore {
     return out
   }
 
+  discardPreparedStatements(): void {
+    this.statements = null
+  }
+
   private getStatements(): NonNullable<CommentStore['statements']> {
     if (this.statements) {
       return this.statements

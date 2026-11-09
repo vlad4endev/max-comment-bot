@@ -185,6 +185,10 @@ export class ChannelRegistry {
     }
   }
 
+  discardPreparedStatements(): void {
+    this.statements = null
+  }
+
   private getStatements(): NonNullable<ChannelRegistry['statements']> {
     if (this.statements) {
       return this.statements

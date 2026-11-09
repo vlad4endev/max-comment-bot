@@ -50,6 +50,7 @@ export class DisabledAdminStore {
     } catch (e) {
       const err = e as NodeJS.ErrnoException
       if (err.code === 'ENOENT') {
+        this.disabledUserIds.clear()
         logger.debug('disabledAdminStore: file missing, empty store')
         return
       }

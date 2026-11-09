@@ -605,6 +605,10 @@ export class PostStore {
     }
   }
 
+  discardPreparedStatements(): void {
+    this.statements = null
+  }
+
   private getStatements(): NonNullable<PostStore['statements']> {
     if (this.statements) {
       return this.statements

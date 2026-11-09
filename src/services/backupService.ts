@@ -1,12 +1,14 @@
+import { randomUUID } from 'node:crypto'
 import { existsSync } from 'node:fs'
-import { copyFile, mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { copyFile, lstat, mkdir, open, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { dirname, join, relative, resolve, sep } from 'node:path'
 
 import { getAntispamDb } from '../db/antispamDatabase'
 import { getDb } from '../db/database'
 import { getPostsDb } from '../db/postsDatabase'
 import { channelNotifyLinkStore } from './channelNotifyLinkStore'
-import { packDirectoryToTarGz } from '../utils/tarGz'
+import { closeDatabasesForRestore, reloadRuntimeAfterRestore } from './backupRestoreRuntime'
+import { extractTarGz, packDirectoryToTarGz, TarExtractError } from '../utils/tarGz'
 import { logger } from '../utils/logger'
 
 const DATA_DIR = join(process.cwd(), 'data')
@@ -105,11 +107,33 @@ export interface BackupSourceOverview {
 export interface BackupListPayload {
   items: BackupRecord[]
   creating: boolean
+  restoring: boolean
   total_size_bytes: number
   source: BackupSourceOverview
 }
 
-let creatingLock: Promise<BackupRecord> | null = null
+export interface BackupRestoreTarget {
+  dataDir: string
+  uploadsDir: string
+  rootEnvPath: string
+  configEnvPath: string
+}
+
+export interface BackupRestoreResult {
+  ok: true
+  restored_id: string
+  safety_backup_id: string
+  databases: BackupManifest['databases']
+  restored_env: boolean
+  restored_uploads: boolean
+  removed_files: number
+  restart_recommended: boolean
+  message: string
+}
+
+type BusyKind = 'create' | 'restore'
+
+let busy: { kind: BusyKind } | null = null
 
 function isBackupId(id: string): boolean {
   return BACKUP_ID_RE.test(id)
@@ -267,11 +291,16 @@ function restoreReadme(): string {
     'Архив содержит базы SQLite, JSON-настройки, токены и медиа.',
     'Храните файл в безопасном месте: внутри секреты (токены ботов, пароль админки, сессия Telegram).',
     '',
+    'Из админки: раздел «Резервная копия» → «Восстановить» у нужной копии',
+    'или загрузите скачанный архив .tar.gz. Перед заменой бот сам сохранит',
+    'страховочную копию текущего состояния.',
+    '',
+    'Вручную, если админка недоступна:',
     '1. Остановите бота (docker compose stop / systemctl stop / Ctrl+C).',
     '2. Распакуйте архив:',
     '     tar -xzf max-comment-bot-backup-….tar.gz',
     '3. Скопируйте папку data/ в каталог проекта, заменив текущую',
-    '   (в Docker это том ./data → /app/data).',
+    '   (в Docker это том ./data → /app/data). Каталог data/backups/ не затирайте.',
     '4. Восстановите переменные окружения:',
     '     — если есть env/dotenv, скопируйте его в .env в корне проекта;',
     '     — иначе перенесите значения из env/settings.env в .env.',
@@ -359,7 +388,29 @@ async function readSidecar(id: string): Promise<BackupRecord | null> {
 }
 
 export function isBackupCreateInProgress(): boolean {
-  return creatingLock !== null
+  return busy?.kind === 'create'
+}
+
+export function isBackupRestoreInProgress(): boolean {
+  return busy?.kind === 'restore'
+}
+
+function assertBackupIdle(): void {
+  if (!busy) return
+  if (busy.kind === 'restore') {
+    throw new BackupBusyError('Идёт восстановление из резервной копии')
+  }
+  throw new BackupBusyError('Резервная копия уже создаётся')
+}
+
+async function withBackupLock<T>(kind: BusyKind, fn: () => Promise<T>): Promise<T> {
+  assertBackupIdle()
+  busy = { kind }
+  try {
+    return await fn()
+  } finally {
+    busy = null
+  }
 }
 
 export async function getBackupSourceOverview(): Promise<BackupSourceOverview> {
@@ -418,6 +469,7 @@ export async function getBackupListPayload(): Promise<BackupListPayload> {
   return {
     items,
     creating: isBackupCreateInProgress(),
+    restoring: isBackupRestoreInProgress(),
     total_size_bytes: items.reduce((sum, it) => sum + it.size_bytes, 0),
     source: await getBackupSourceOverview(),
   }
@@ -443,6 +495,7 @@ export async function getBackupFile(id: string): Promise<{
 }
 
 export async function deleteBackup(id: string): Promise<boolean> {
+  assertBackupIdle()
   if (!isBackupId(id)) return false
   const file = await getBackupFile(id)
   if (!file) return false
@@ -549,21 +602,356 @@ async function createBackupInternal(): Promise<BackupRecord> {
 }
 
 export async function createBackup(): Promise<BackupRecord> {
-  if (creatingLock) {
-    throw new BackupBusyError()
-  }
-  const job = createBackupInternal()
-  creatingLock = job
-  try {
-    return await job
-  } finally {
-    creatingLock = null
-  }
+  return withBackupLock('create', () => createBackupInternal())
 }
 
 export class BackupBusyError extends Error {
-  constructor() {
-    super('Резервная копия уже создаётся')
+  constructor(message = 'Операция с резервной копией уже выполняется') {
+    super(message)
     this.name = 'BackupBusyError'
   }
+}
+
+export class BackupNotFoundError extends Error {
+  constructor() {
+    super('Резервная копия не найдена')
+    this.name = 'BackupNotFoundError'
+  }
+}
+
+export class BackupArchiveError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'BackupArchiveError'
+  }
+}
+
+const SQLITE_HEADER = 'SQLite format 3'
+
+async function assertSqliteSnapshot(filePath: string, label: string): Promise<void> {
+  const fh = await open(filePath, 'r')
+  try {
+    const buf = Buffer.alloc(16)
+    const { bytesRead } = await fh.read(buf, 0, 16, 0)
+    if (bytesRead < 16 || buf.toString('utf8', 0, 15) !== SQLITE_HEADER) {
+      throw new BackupArchiveError(`${label} в архиве не является базой SQLite`)
+    }
+  } finally {
+    await fh.close()
+  }
+}
+
+export async function readExtractedBackupManifest(stagingDir: string): Promise<BackupManifest> {
+  const manifestPath = join(stagingDir, 'manifest.json')
+  if (!(await pathExists(manifestPath))) {
+    throw new BackupArchiveError('В архиве нет manifest.json. Это не резервная копия CommentBot.')
+  }
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(await readFile(manifestPath, 'utf8')) as unknown
+  } catch {
+    throw new BackupArchiveError('manifest.json повреждён')
+  }
+  if (typeof parsed !== 'object' || parsed === null) {
+    throw new BackupArchiveError('manifest.json повреждён')
+  }
+  const manifest = parsed as Partial<BackupManifest>
+  if (manifest.version !== 1 || manifest.app !== 'max-comment-bot') {
+    throw new BackupArchiveError('Архив не похож на резервную копию CommentBot')
+  }
+  if (!manifest.databases || typeof manifest.databases !== 'object') {
+    throw new BackupArchiveError('В манифесте нет списка баз данных')
+  }
+  for (const name of ['bot.db', 'posts.db', 'antispam.db'] as const) {
+    const dbPath = join(stagingDir, 'data', name)
+    if (!(await pathExists(dbPath))) {
+      throw new BackupArchiveError(`В архиве нет data/${name}`)
+    }
+    await assertSqliteSnapshot(dbPath, name)
+  }
+  return manifest as BackupManifest
+}
+
+function defaultRestoreTarget(): BackupRestoreTarget {
+  return {
+    dataDir: DATA_DIR,
+    uploadsDir: MINIAPP_UPLOADS_DIR,
+    rootEnvPath: ROOT_ENV_PATH,
+    configEnvPath: CONFIG_ENV_PATH,
+  }
+}
+
+async function copyDataTree(srcDir: string, destDir: string): Promise<Set<string>> {
+  const copied = new Set<string>()
+  if (!(await pathExists(srcDir))) {
+    throw new BackupArchiveError('В архиве нет каталога data')
+  }
+
+  async function walk(relPosix: string): Promise<void> {
+    const abs = relPosix ? join(srcDir, relPosix) : srcDir
+    const names = await readdir(abs)
+    for (const name of names) {
+      if (!relPosix && name === 'backups') continue
+      if (isTmpName(name) || isLogFile(name)) continue
+      const childRel = relPosix ? `${relPosix}/${name}` : name
+      const childAbs = join(abs, name)
+      const st = await lstat(childAbs)
+      if (st.isSymbolicLink()) {
+        throw new BackupArchiveError('В архиве есть символическая ссылка')
+      }
+      if (st.isDirectory()) {
+        await mkdir(join(destDir, childRel), { recursive: true })
+        copied.add(`${childRel}/`)
+        await walk(childRel)
+      } else if (st.isFile()) {
+        const dest = join(destDir, childRel)
+        await mkdir(dirname(dest), { recursive: true })
+        await copyFile(childAbs, dest)
+        copied.add(childRel)
+      }
+    }
+  }
+
+  await walk('')
+  return copied
+}
+
+async function pruneDataDir(destDir: string, keep: Set<string>): Promise<number> {
+  let removed = 0
+
+  async function walk(relPosix: string): Promise<void> {
+    const abs = relPosix ? join(destDir, relPosix) : destDir
+    let names: string[]
+    try {
+      names = await readdir(abs)
+    } catch {
+      return
+    }
+    for (const name of names) {
+      if (!relPosix && (name === 'backups' || name.startsWith('.upload-') || name.startsWith('.tmp-'))) {
+        continue
+      }
+      if (isTmpName(name) || isLogFile(name)) continue
+      const childRel = relPosix ? `${relPosix}/${name}` : name
+      const childAbs = join(abs, name)
+      const st = await lstat(childAbs)
+      if (st.isSymbolicLink()) {
+        await rm(childAbs, { force: true })
+        removed += 1
+        continue
+      }
+      if (st.isDirectory()) {
+        await walk(childRel)
+        const left = await readdir(childAbs).catch(() => ['x'])
+        if (left.length === 0 && !keep.has(`${childRel}/`)) {
+          await rm(childAbs, { force: true })
+        }
+      } else if (st.isFile() && !keep.has(childRel)) {
+        await rm(childAbs, { force: true })
+        removed += 1
+      }
+    }
+  }
+
+  await walk('')
+  return removed
+}
+
+async function syncUploads(stagingDir: string, uploadsDir: string): Promise<boolean> {
+  const src = join(stagingDir, 'miniapp', 'uploads')
+  if (!(await pathExists(src))) return false
+  await rm(uploadsDir, { recursive: true, force: true })
+  await copyTree(src, uploadsDir, (name) => isTmpName(name))
+  return true
+}
+
+async function restoreEnvFiles(
+  stagingDir: string,
+  target: BackupRestoreTarget,
+  restoreEnv: boolean,
+): Promise<boolean> {
+  if (!restoreEnv) return false
+  let restored = false
+  const dotenvSrc = join(stagingDir, 'env', 'dotenv')
+  const settingsSrc = join(stagingDir, 'env', 'settings.env')
+  const configSrc = join(stagingDir, 'env', 'config.env')
+  if (await pathExists(dotenvSrc)) {
+    await mkdir(dirname(target.rootEnvPath), { recursive: true })
+    await copyFile(dotenvSrc, target.rootEnvPath)
+    restored = true
+  } else if (await pathExists(settingsSrc)) {
+    await mkdir(dirname(target.rootEnvPath), { recursive: true })
+    await copyFile(settingsSrc, target.rootEnvPath)
+    restored = true
+  }
+  if (await pathExists(configSrc)) {
+    await mkdir(dirname(target.configEnvPath), { recursive: true })
+    await copyFile(configSrc, target.configEnvPath)
+    restored = true
+  }
+  return restored
+}
+
+export async function applyExtractedBackup(
+  stagingDir: string,
+  target: BackupRestoreTarget = defaultRestoreTarget(),
+  options: { restoreEnv: boolean; swapLiveDatabases?: boolean } = { restoreEnv: true },
+): Promise<{
+  manifest: BackupManifest
+  restored_env: boolean
+  restored_uploads: boolean
+  removed_files: number
+}> {
+  const manifest = await readExtractedBackupManifest(stagingDir)
+  const swapLive = options.swapLiveDatabases === true
+  if (swapLive) {
+    closeDatabasesForRestore()
+  }
+  let applyError: unknown = null
+  try {
+    for (const name of ['bot.db', 'posts.db', 'antispam.db']) {
+      await rm(join(target.dataDir, `${name}-wal`), { force: true })
+      await rm(join(target.dataDir, `${name}-shm`), { force: true })
+    }
+    await mkdir(target.dataDir, { recursive: true })
+    const copied = await copyDataTree(join(stagingDir, 'data'), target.dataDir)
+    const removed = await pruneDataDir(target.dataDir, copied)
+    const restoredUploads = await syncUploads(stagingDir, target.uploadsDir)
+    const restoredEnv = await restoreEnvFiles(stagingDir, target, options.restoreEnv)
+    return {
+      manifest,
+      restored_env: restoredEnv,
+      restored_uploads: restoredUploads,
+      removed_files: removed,
+    }
+  } catch (err) {
+    applyError = err
+    throw err
+  } finally {
+    if (swapLive) {
+      try {
+        await reloadRuntimeAfterRestore()
+      } catch (reloadErr) {
+        logger.error('backup: reload after restore failed', { err: reloadErr })
+        if (!applyError) throw reloadErr
+      }
+    }
+  }
+}
+
+async function extractArchiveToStaging(archiveAbs: string): Promise<string> {
+  const staging = join(BACKUPS_DIR, `.tmp-restore-${randomUUID()}`)
+  await rm(staging, { recursive: true, force: true })
+  await ensureDir(staging)
+  try {
+    await extractTarGz(archiveAbs, staging)
+    await readExtractedBackupManifest(staging)
+    return staging
+  } catch (err) {
+    await rm(staging, { recursive: true, force: true })
+    if (err instanceof BackupArchiveError) throw err
+    if (err instanceof TarExtractError) {
+      throw new BackupArchiveError(err.message || 'Не удалось распаковать архив')
+    }
+    throw new BackupArchiveError('Не удалось прочитать архив резервной копии')
+  }
+}
+
+function restoreMessage(safetyId: string, restoredEnv: boolean): string {
+  const parts = [
+    'Данные восстановлены из копии.',
+    `Перед заменой сохранена страховочная копия ${safetyId}.`,
+  ]
+  if (restoredEnv) {
+    parts.push('Файл .env записан. Токены и пароль админки из архива применятся после перезапуска бота.')
+  } else {
+    parts.push('Переменные окружения не менялись. Перезапустите бота, если фоновые задачи ещё держат старое состояние.')
+  }
+  return parts.join(' ')
+}
+
+async function restoreFromStaging(
+  staging: string,
+  restoredId: string,
+  restoreEnv: boolean,
+): Promise<BackupRestoreResult> {
+  const safety = await createBackupInternal()
+  let applied: Awaited<ReturnType<typeof applyExtractedBackup>>
+  try {
+    applied = await applyExtractedBackup(staging, defaultRestoreTarget(), {
+      restoreEnv,
+      swapLiveDatabases: true,
+    })
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : 'ошибка'
+    throw new BackupArchiveError(
+      `Не удалось восстановить данные (${reason}). Страховочная копия: ${safety.id}.`,
+    )
+  }
+  logger.info('backup: restored', {
+    id: restoredId,
+    safetyBackupId: safety.id,
+    restoredEnv: applied.restored_env,
+    restoredUploads: applied.restored_uploads,
+    removedFiles: applied.removed_files,
+  })
+  return {
+    ok: true,
+    restored_id: restoredId,
+    safety_backup_id: safety.id,
+    databases: applied.manifest.databases,
+    restored_env: applied.restored_env,
+    restored_uploads: applied.restored_uploads,
+    removed_files: applied.removed_files,
+    restart_recommended: true,
+    message: restoreMessage(safety.id, applied.restored_env),
+  }
+}
+
+export async function restoreBackup(id: string, options: { restoreEnv: boolean }): Promise<BackupRestoreResult> {
+  return withBackupLock('restore', async () => {
+    if (!isBackupId(id)) throw new BackupNotFoundError()
+    const file = await getBackupFile(id)
+    if (!file) throw new BackupNotFoundError()
+    const staging = await extractArchiveToStaging(file.absPath)
+    try {
+      return await restoreFromStaging(staging, id, options.restoreEnv)
+    } finally {
+      await rm(staging, { recursive: true, force: true })
+    }
+  })
+}
+
+async function storeValidatedArchive(staging: string, sourceTar: string): Promise<BackupRecord> {
+  const manifest = await readExtractedBackupManifest(staging)
+  const id = await uniqueBackupId(new Date())
+  const dest = archivePath(id)
+  await copyFile(sourceTar, dest)
+  const record = recordFromManifest(id, await fileSizeOrZero(dest), manifest)
+  await writeFile(sidecarPath(id), `${JSON.stringify(record, null, 2)}\n`, 'utf8')
+  logger.info('backup: imported', { id, sizeBytes: record.size_bytes })
+  return record
+}
+
+export async function importUploadedBackup(
+  tempPath: string,
+  options: { restore: boolean; restoreEnv: boolean },
+): Promise<{ imported: BackupRecord; restored: BackupRestoreResult | null }> {
+  return withBackupLock('restore', async () => {
+    try {
+      const staging = await extractArchiveToStaging(tempPath)
+      try {
+        const imported = await storeValidatedArchive(staging, tempPath)
+        if (!options.restore) {
+          return { imported, restored: null }
+        }
+        const restored = await restoreFromStaging(staging, imported.id, options.restoreEnv)
+        return { imported, restored }
+      } finally {
+        await rm(staging, { recursive: true, force: true })
+      }
+    } finally {
+      await rm(tempPath, { force: true })
+    }
+  })
 }

@@ -5764,7 +5764,31 @@ tbody tr:hover td {
   display: flex;
   gap: 0.4rem;
   justify-content: flex-end;
+  flex-wrap: wrap;
   white-space: nowrap;
+}
+
+.backup-upload-row {
+  display: flex;
+  gap: 0.6rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.backup-upload-row .input {
+  flex: 1;
+  min-width: 220px;
+}
+
+.backup-restore-env {
+  display: flex;
+  gap: 0.45rem;
+  align-items: flex-start;
+  margin: 0 0 0.4rem;
+}
+
+.backup-restore-notice {
+  margin-bottom: 0.8rem;
 }
 
 .backup-table td {

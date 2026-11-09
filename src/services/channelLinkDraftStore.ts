@@ -154,6 +154,10 @@ export class ChannelLinkDraftStore {
     this.getStatements().expireStale.run()
   }
 
+  discardPreparedStatements(): void {
+    this.statements = null
+  }
+
   private getStatements(): NonNullable<ChannelLinkDraftStore['statements']> {
     if (this.statements) {
       return this.statements

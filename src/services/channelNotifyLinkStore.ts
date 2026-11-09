@@ -71,6 +71,7 @@ export class ChannelNotifyLinkStore {
     } catch (e) {
       const err = e as NodeJS.ErrnoException
       if (err.code === 'ENOENT') {
+        this.links.length = 0
         logger.debug('channelNotifyLinkStore: file missing, empty store')
         return
       }

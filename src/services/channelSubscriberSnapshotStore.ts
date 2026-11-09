@@ -225,6 +225,10 @@ export class ChannelSubscriberSnapshotStore {
     return rows
   }
 
+  discardPreparedStatements(): void {
+    this.statements = null
+  }
+
   private getStatements(): NonNullable<ChannelSubscriberSnapshotStore['statements']> {
     if (this.statements) {
       return this.statements
