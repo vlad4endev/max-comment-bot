@@ -608,7 +608,7 @@
   function postJson(path, body) {
     var timeoutMs = 20000;
     if (path === '/refresh-buttons') timeoutMs = 60000;
-    if (path === '/backup') timeoutMs = 300000;
+    if (path === '/backup' || /\/backup\/[^/]+\/restore$/.test(path)) timeoutMs = 300000;
     if (path === '/logs/analyze') timeoutMs = 120000;
     if (path === '/logs/ai-test') timeoutMs = 60000;
     if (path.indexOf('/telegram-proxy') === 0 && path.indexOf('probe') !== -1) timeoutMs = 120000;
@@ -627,14 +627,19 @@
     });
   }
 
-  function postForm(path, formData) {
-    return authFetch(apiPath(path), { method: 'POST', body: formData }).then(function (r) {
-      if (!r.ok) {
-        return r.json().then(function (j) {
-          throw new Error(j.error || j.message || 'Ошибка');
-        });
-      }
-      return r.json();
+  function postForm(path, formData, timeoutMs) {
+    return authFetch(apiPath(path), {
+      method: 'POST',
+      body: formData,
+      timeoutMs: typeof timeoutMs === 'number' ? timeoutMs : 300000,
+      ignoreRouteAbort: true,
+    }).then(function (r) {
+      return parseApiJsonResponse(r).then(function (j) {
+        if (!r.ok) throw new Error((j && j.error) || (j && j.message) || 'Ошибка');
+        return j;
+      });
+    }).catch(function (err) {
+      throw mapFetchError(err);
     });
   }
 
@@ -8381,6 +8386,8 @@
     refreshIcons();
   }
 
+  var backupRestoreNotice = '';
+
   function renderBackup() {
     var main = qs('#mainContent');
     if (!main) return;
@@ -8399,6 +8406,8 @@
     var source = data.source || {};
     var items = Array.isArray(data.items) ? data.items : [];
     var creating = !!data.creating;
+    var restoring = !!data.restoring;
+    var busy = creating || restoring;
     var dbs = Array.isArray(source.databases) ? source.databases : [];
     var html = '';
 
@@ -8441,7 +8450,7 @@
       '<p class="muted text-sm backup-skip-note">Журналы runtime.log не входят в архив — для восстановления бота они не нужны.</p>';
     html +=
       '<button type="button" class="btn btn-primary" id="backupCreateBtn"' +
-      (creating ? ' disabled' : '') +
+      (busy ? ' disabled' : '') +
       '><i data-lucide="download"></i> ' +
       (creating ? 'Создаём архив…' : 'Создать резервную копию') +
       '</button>';
@@ -8449,10 +8458,37 @@
 
     html += '<div class="panel">';
     html += sectionHead(
-      'Скачать копии',
+      'Восстановить из файла',
+      'Загрузите ранее скачанный архив .tar.gz. Текущие базы, настройки и медиа будут заменены.',
+    );
+    if (backupRestoreNotice) {
+      html +=
+        '<div class="as-hint-box backup-restore-notice"><i data-lucide="info"></i><div><strong>Последнее восстановление</strong><p>' +
+        esc(backupRestoreNotice) +
+        '</p></div></div>';
+    }
+    html +=
+      '<label class="checkbox-label backup-restore-env"><input type="checkbox" id="backupRestoreEnv" checked/> Записать токены и пароль из архива в .env</label>';
+    html += '<p class="muted text-sm backup-skip-note">Пароль админки и токены бота из .env начнут работать после перезапуска процесса. Данные каналов, постов и связок применятся сразу. Перед заменой на сервере сохранится страховочная копия.</p>';
+    html += '<div class="backup-upload-row">';
+    html +=
+      '<input class="input" type="file" id="backupUploadFile" accept=".tar.gz,.tgz,application/gzip"' +
+      (busy ? ' disabled' : '') +
+      ' />';
+    html +=
+      '<button type="button" class="btn btn-danger" id="backupUploadBtn"' +
+      (busy ? ' disabled' : '') +
+      '><i data-lucide="undo-2"></i> ' +
+      (restoring ? 'Восстанавливаем…' : 'Загрузить и восстановить') +
+      '</button>';
+    html += '</div></div>';
+
+    html += '<div class="panel">';
+    html += sectionHead(
+      'Копии на сервере',
       items.length
-        ? 'Хранится на сервере: ' + items.length + ', всего ' + formatBytes(data.total_size_bytes || 0)
-        : 'Пока нет ни одной копии — создайте первую.',
+        ? 'Хранится на сервере: ' + items.length + ', всего ' + formatBytes(data.total_size_bytes || 0) + '. Можно скачать или восстановить.'
+        : 'Пока нет ни одной копии — создайте первую или загрузите архив.',
     );
     if (!items.length) {
       html += emptyState(
@@ -8479,6 +8515,12 @@
         html += '<td class="muted text-sm">' + esc(bits.join(' · ') || 'архив') + '</td>';
         html += '<td class="backup-row-actions">';
         html +=
+          '<button type="button" class="btn btn-danger btn-sm backup-restore-btn" data-id="' +
+          esc(it.id) +
+          '"' +
+          (busy ? ' disabled' : '') +
+          '><i data-lucide="undo-2"></i> Восстановить</button>';
+        html +=
           '<a class="btn btn-primary btn-sm" href="' +
           esc(apiPath('/backup/download/' + it.id)) +
           '" download="' +
@@ -8487,7 +8529,9 @@
         html +=
           '<button type="button" class="btn btn-ghost btn-sm backup-delete-btn" data-id="' +
           esc(it.id) +
-          '"><i data-lucide="trash-2"></i></button>';
+          '"' +
+          (busy ? ' disabled' : '') +
+          '><i data-lucide="trash-2"></i></button>';
         html += '</td></tr>';
       });
       html += '</tbody></table></div>';
@@ -8523,6 +8567,71 @@
           });
       });
     }
+
+    function envFlag() {
+      var box = qs('#backupRestoreEnv', main);
+      return !box || !!box.checked;
+    }
+
+    var uploadBtn = qs('#backupUploadBtn', main);
+    if (uploadBtn) {
+      uploadBtn.addEventListener('click', function () {
+        var input = qs('#backupUploadFile', main);
+        var file = input && input.files && input.files[0];
+        if (!file) {
+          showToast('Выберите архив .tar.gz', 'error');
+          return;
+        }
+        showConfirm(
+          'Восстановить из файла?',
+          'Текущие базы и настройки будут заменены содержимым архива. Загрузки Mini App заменяются, только если они есть в архиве. Сначала на сервере сохранится страховочная копия.',
+          function () {
+            var fd = new FormData();
+            fd.append('archive', file);
+            fd.append('restore', '1');
+            fd.append('restore_env', envFlag() ? '1' : '0');
+            uploadBtn.disabled = true;
+            postForm('/backup/upload', fd, 300000)
+              .then(function (result) {
+                var msg =
+                  (result && result.restored && result.restored.message) ||
+                  'Данные восстановлены из загруженного архива';
+                backupRestoreNotice = msg;
+                showToast('Восстановление завершено', 'success');
+                renderBackup();
+              })
+              .catch(function (e) {
+                showToast(e.message || 'Не удалось восстановить', 'error');
+                renderBackup();
+              });
+          },
+        );
+      });
+    }
+
+    qsa('.backup-restore-btn', main).forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var id = btn.getAttribute('data-id') || '';
+        if (!id) return;
+        showConfirm(
+          'Восстановить эту копию?',
+          'Текущие базы и настройки будут заменены. Загрузки Mini App заменяются, только если они есть в архиве. Сначала на сервере сохранится страховочная копия, её тоже можно будет восстановить.',
+          function () {
+            btn.disabled = true;
+            postJson('/backup/' + encodeURIComponent(id) + '/restore', { restore_env: envFlag() })
+              .then(function (result) {
+                backupRestoreNotice = (result && result.message) || 'Данные восстановлены';
+                showToast('Восстановление завершено', 'success');
+                renderBackup();
+              })
+              .catch(function (e) {
+                showToast(e.message || 'Не удалось восстановить', 'error');
+                renderBackup();
+              });
+          },
+        );
+      });
+    });
 
     qsa('.backup-delete-btn', main).forEach(function (btn) {
       btn.addEventListener('click', function () {

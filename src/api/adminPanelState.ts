@@ -521,6 +521,13 @@ export async function ensureAdminPanelStateLoaded(): Promise<void> {
   await loadState()
 }
 
+/** Сбросить кэш и заново прочитать data/admin-panel-state.json. */
+export async function reloadAdminPanelStateFromDisk(): Promise<void> {
+  cache = null
+  loadPromise = null
+  await loadState()
+}
+
 export async function createTgChain(input: Omit<TgChainRecord, 'id' | 'created_at' | 'forwarded_today' | 'errors_today'>): Promise<TgChainRecord> {
   const s = await loadState()
   const nowIso = new Date().toISOString()

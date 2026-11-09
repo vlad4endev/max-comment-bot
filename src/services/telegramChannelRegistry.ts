@@ -91,6 +91,10 @@ export class TelegramChannelRegistry {
     }))
   }
 
+  discardPreparedStatements(): void {
+    this.statements = null
+  }
+
   private getStatements(): NonNullable<TelegramChannelRegistry['statements']> {
     if (this.statements) {
       return this.statements

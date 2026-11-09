@@ -68,6 +68,10 @@ export class TelegramChannelNotifyLinkStore {
     this.getStatements().removeAllForChannel.run(chatId)
   }
 
+  discardPreparedStatements(): void {
+    this.statements = null
+  }
+
   private getStatements(): NonNullable<TelegramChannelNotifyLinkStore['statements']> {
     if (this.statements) {
       return this.statements

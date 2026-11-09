@@ -68,6 +68,10 @@ export class SubscriberStore {
       }
     | null = null
 
+  discardPreparedStatements(): void {
+    this.statements = null
+  }
+
   private getStatements(): NonNullable<SubscriberStore['statements']> {
     if (this.statements) {
       return this.statements

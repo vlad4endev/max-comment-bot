@@ -53,6 +53,12 @@ class FlowStateStore {
     this.loaded = true
   }
 
+  async reloadFromDisk(): Promise<void> {
+    this.data = defaultState()
+    this.loaded = false
+    await this.load()
+  }
+
   private async persist(): Promise<void> {
     await mkdir(dirname(STATE_PATH), { recursive: true })
     await atomicWriteFile(STATE_PATH, JSON.stringify(this.data, null, 2))

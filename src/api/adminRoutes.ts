@@ -1,8 +1,11 @@
-import { createReadStream } from 'node:fs'
+import { randomUUID } from 'node:crypto'
+import { createReadStream, mkdirSync } from 'node:fs'
+import { join } from 'node:path'
 
 import type { Bot } from '@maxhub/max-bot-api'
 import type { ChatMember } from '@maxhub/max-bot-api/types'
 import express from 'express'
+import multer from 'multer'
 import pLimit from 'p-limit'
 
 import { config, getTelegramToken } from '../config'
@@ -104,11 +107,15 @@ import {
 import { getChainTransferHealthSnapshot } from '../services/chainTransferHealth'
 import { getAdminLogTail, logger, readRuntimeLogTailLines } from '../utils/logger'
 import {
+  BackupArchiveError,
   BackupBusyError,
+  BackupNotFoundError,
   createBackup,
   deleteBackup,
   getBackupFile,
   getBackupListPayload,
+  importUploadedBackup,
+  restoreBackup,
 } from '../services/backupService'
 import { extractMemberAvatarUrl } from '../utils/memberAvatar'
 import {
@@ -123,6 +130,15 @@ export interface AdminRouterDeps {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function sendBackupError(res: express.Response, err: unknown): boolean {
+  if (err instanceof BackupBusyError || err instanceof BackupNotFoundError || err instanceof BackupArchiveError) {
+    const status = err instanceof BackupBusyError ? 409 : err instanceof BackupNotFoundError ? 404 : 400
+    res.status(status).json({ error: err.message })
+    return true
+  }
+  return false
 }
 
 function parsePositiveInt(value: unknown): number | null {
@@ -566,12 +582,76 @@ export function createAdminRouter(deps: AdminRouterDeps): express.Router {
 
   secured.delete('/backup/:id', async (req, res) => {
     const id = typeof req.params.id === 'string' ? req.params.id.trim() : ''
-    const removed = await deleteBackup(id)
-    if (!removed) {
-      res.status(404).json({ error: 'Резервная копия не найдена' })
-      return
+    try {
+      const removed = await deleteBackup(id)
+      if (!removed) {
+        res.status(404).json({ error: 'Резервная копия не найдена' })
+        return
+      }
+      res.json({ ok: true })
+    } catch (err) {
+      if (sendBackupError(res, err)) return
+      logger.warn('admin DELETE /backup failed', { id, err })
+      res.status(500).json({ error: 'Не удалось удалить резервную копию' })
     }
-    res.json({ ok: true })
+  })
+
+  const backupUpload = multer({
+    storage: multer.diskStorage({
+      destination(_req, _file, cb) {
+        const dir = join(process.cwd(), 'data', 'backups')
+        mkdirSync(dir, { recursive: true })
+        cb(null, dir)
+      },
+      filename(_req, _file, cb) {
+        cb(null, `.upload-${randomUUID()}.tar.gz`)
+      },
+    }),
+    limits: { fileSize: 1024 * 1024 * 1024, files: 1 },
+  })
+
+  secured.post('/backup/upload', (req, res) => {
+    backupUpload.single('archive')(req, res, (err: unknown) => {
+      if (err) {
+        const code =
+          typeof err === 'object' && err !== null && 'code' in err ? String((err as { code?: string }).code) : ''
+        if (code === 'LIMIT_FILE_SIZE') {
+          res.status(400).json({ error: 'Архив больше 1 ГБ' })
+          return
+        }
+        res.status(400).json({ error: err instanceof Error ? err.message : 'Не удалось загрузить архив' })
+        return
+      }
+      void (async () => {
+        const file = req.file
+        if (!file) {
+          res.status(400).json({ error: 'Выберите файл резервной копии .tar.gz' })
+          return
+        }
+        const restore = req.body?.restore !== '0' && req.body?.restore !== 'false'
+        const restoreEnv = req.body?.restore_env !== '0' && req.body?.restore_env !== 'false'
+        try {
+          const result = await importUploadedBackup(file.path, { restore, restoreEnv })
+          res.status(result.restored ? 200 : 201).json(result)
+        } catch (uploadErr) {
+          if (sendBackupError(res, uploadErr)) return
+          logger.error('admin POST /backup/upload failed', { err: uploadErr })
+          res.status(500).json({ error: 'Не удалось восстановить загруженный архив' })
+        }
+      })()
+    })
+  })
+
+  secured.post('/backup/:id/restore', async (req, res) => {
+    const id = typeof req.params.id === 'string' ? req.params.id.trim() : ''
+    const restoreEnv = !(isRecord(req.body) && req.body.restore_env === false)
+    try {
+      res.json(await restoreBackup(id, { restoreEnv }))
+    } catch (err) {
+      if (sendBackupError(res, err)) return
+      logger.error('admin POST /backup/restore failed', { id, err })
+      res.status(500).json({ error: 'Не удалось восстановить из резервной копии' })
+    }
   })
 
   secured.get('/stats', (_req, res) => {

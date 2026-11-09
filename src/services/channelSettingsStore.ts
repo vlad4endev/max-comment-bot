@@ -81,6 +81,7 @@ export class ChannelSettingsStore {
     } catch (e) {
       const err = e as NodeJS.ErrnoException
       if (err.code === 'ENOENT') {
+        this.byChatId.clear()
         logger.debug('channelSettingsStore: file missing, empty store')
         return
       }

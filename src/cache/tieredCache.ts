@@ -125,6 +125,25 @@ export async function cacheTryAcquireLock(lockKey: string, ttlSec: number): Prom
   return true
 }
 
+/** Сбрасывает кэш API после восстановления из резервной копии. */
+export async function cacheClearAll(): Promise<void> {
+  memory.clear()
+  const redis = getRedisClient()
+  if (!redis) return
+  try {
+    let cursor = '0'
+    do {
+      const [next, keys] = await redis.scan(cursor, 'MATCH', 'mc:*', 'COUNT', 200)
+      cursor = next
+      if (keys.length > 0) {
+        await redis.del(...keys)
+      }
+    } while (cursor !== '0')
+  } catch (err: unknown) {
+    logger.warn('tieredCache: redis flush failed', { err: String(err) })
+  }
+}
+
 export async function cacheDelete(key: string): Promise<void> {
   const fullKey = prefixKey(key)
   memory.delete(fullKey)

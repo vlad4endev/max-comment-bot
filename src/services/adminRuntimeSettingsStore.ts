@@ -48,6 +48,7 @@ export class AdminRuntimeSettingsStore {
     } catch (e) {
       const err = e as NodeJS.ErrnoException
       if (err.code === 'ENOENT') {
+        this.pollIntervalMs = Math.max(MIN_POLL_MS, pollMsFromEnv())
         logger.debug('adminRuntimeSettings: no file, using env/default')
         return
       }
