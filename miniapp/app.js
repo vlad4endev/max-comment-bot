@@ -2650,6 +2650,7 @@
       var postPreviewReady = false;
       var replyBannerEl = document.getElementById('replyBanner');
       var replyBannerNameEl = document.getElementById('replyBannerName');
+      var replyBannerSnippetEl = document.getElementById('replyBannerSnippet');
       var replyBannerCloseEl = document.getElementById('replyBannerClose');
       var feedEl = document.getElementById('feed');
       var errEl = document.getElementById('err');
@@ -3130,6 +3131,25 @@
           return '<img src="' + esc(url) + '" alt="" />';
         }
         return esc(initials(fallbackName));
+      }
+
+      function avatarHue(name) {
+        var s = String(name || '');
+        var h = 0;
+        for (var i = 0; i < s.length; i++) h = (h * 33 + s.charCodeAt(i)) >>> 0;
+        return h % 360;
+      }
+
+      function avatarFillAttr(name) {
+        var hue = avatarHue(name);
+        var next = (hue + 28) % 360;
+        return (
+          ' style="background:linear-gradient(135deg,hsl(' +
+          hue +
+          ',58%,48%),hsl(' +
+          next +
+          ',50%,38%))"'
+        );
       }
 
       /**
@@ -3641,6 +3661,7 @@
           return buildChannelOnlyCommentGroup(c);
         }
         var av = avatarBlockHtml(resolveCommentAvatarUrl(c), c.username);
+        var avFill = resolveCommentAvatarUrl(c) ? '' : avatarFillAttr(c.username);
         var commentMedia = buildMediaGridHtml(c.photo_urls);
         var replies = listCommentReplies(c);
         var replyHtml = '';
@@ -3708,7 +3729,9 @@
           '<div class="' +
           userMsgCls +
           '">' +
-          '<div class="av av-u">' +
+          '<div class="av av-u"' +
+          avFill +
+          '>' +
           av +
           '</div>' +
           '<div class="tg-bubble bubble-u">' +
@@ -3799,7 +3822,11 @@
                     var unameSwipe = unameEl
                       ? String(unameEl.textContent || '').trim()
                       : 'пользователю';
-                    activateReplyContext(cidSwipe, unameSwipe || 'пользователю');
+                    activateReplyContext(
+                      cidSwipe,
+                      unameSwipe || 'пользователю',
+                      replySnippetFromNode(node)
+                    );
                   }
                 }
                 swipe.active = false;
@@ -3869,7 +3896,7 @@
               var rid = replyQuick.getAttribute('data-reply-comment');
               var unameEl = node.querySelector('.tg-name, .uname');
               var nm = unameEl ? String(unameEl.textContent || '').trim() : '';
-              activateReplyContext(rid, nm || 'пользователю');
+              activateReplyContext(rid, nm || 'пользователю', replySnippetFromNode(node));
             });
           }
           if (!commentActionsTouchBound) {
@@ -4137,20 +4164,33 @@
         updateSendEnabled();
       }
 
-      function showReplyBanner(name) {
+      function replySnippetFromNode(node) {
+        if (!node) return '';
+        var textEl = node.querySelector('.msg-user .tg-text, .bubble-u .tg-text');
+        var raw = textEl ? String(textEl.textContent || '').replace(/\s+/g, ' ').trim() : '';
+        if (!raw) {
+          if (node.querySelector('.msg-user .media-grid, .bubble-u .media-grid')) return 'Фото';
+          return '';
+        }
+        if (raw.length > 90) raw = raw.slice(0, 87) + '…';
+        return raw;
+      }
+
+      function showReplyBanner(name, snippet) {
         if (!replyBannerEl || !replyBannerNameEl) return;
         replyBannerNameEl.textContent = name || 'пользователю';
+        if (replyBannerSnippetEl) replyBannerSnippetEl.textContent = snippet || '';
         replyBannerEl.style.display = 'block';
       }
 
-      function activateReplyContext(commentId, targetName) {
+      function activateReplyContext(commentId, targetName, snippet) {
         if (!commentId || commentsClosed) return;
         replyContext = {
           comment_id: commentId,
           username: targetName || 'пользователю',
           post_id: currentPostId,
         };
-        showReplyBanner(replyContext.username);
+        showReplyBanner(replyContext.username, snippet || '');
         inputEl.focus();
         updateSendEnabled();
       }
