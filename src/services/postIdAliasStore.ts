@@ -52,3 +52,16 @@ export function findPostByAlias(aliasPostId: string): Post | null {
   }
   return postStore.getPost(row.post_id)
 }
+
+/**
+ * Old comment-button links keep the original `post_id` after the row is recovered
+ * under a new id. Writes (comment, reply, moderation) must hit the canonical row:
+ * the page lists comments by that id, and MAX→TG sync joins `comments.post_id` to `posts`.
+ */
+export function resolvePostByIdOrAlias(postId: string): Post | null {
+  const direct = postStore.getPost(postId)
+  if (direct) {
+    return direct
+  }
+  return findPostByAlias(postId)
+}
