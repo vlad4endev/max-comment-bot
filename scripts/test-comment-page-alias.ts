@@ -7,7 +7,7 @@
  *
  *   rm -rf data/ && TS_NODE_TRANSPILE_ONLY=1 npx ts-node scripts/test-comment-page-alias.ts
  */
-import { commentStore } from '../src/services/commentStore'
+import { CommentPostMissingError, commentStore } from '../src/services/commentStore'
 import { postStore } from '../src/services/postStore'
 import { rememberPostIdAlias, resolvePostByIdOrAlias } from '../src/services/postIdAliasStore'
 
@@ -61,5 +61,31 @@ assert(
   `MAX→TG catch-up must see the comment, got ${pending.length}`,
 )
 
+const paired = commentStore.saveCommentWithPostCount({
+  post_id: canonicalId,
+  user_id: 43,
+  username: 'reader',
+  text: 'второй комментарий',
+})
+assert(paired.commentCount === 2, `counter after commit is ${paired.commentCount}`)
+assert(postStore.getPost(canonicalId)?.comment_count === 2, 'posts.comment_count matches the insert')
+assert(commentStore.getComments(canonicalId).length === 2, 'both comments stay on the canonical post')
+
+let missingRolledBack = false
+try {
+  commentStore.saveCommentWithPostCount({
+    post_id: 'no-such-post',
+    user_id: 44,
+    username: 'reader',
+    text: 'не должен сохраниться',
+  })
+} catch (err: unknown) {
+  missingRolledBack = err instanceof CommentPostMissingError
+}
+assert(missingRolledBack, 'missing post must abort the insert')
+assert(commentStore.getComments('no-such-post').length === 0, 'rolled-back comment is not readable')
+assert(commentStore.totalCount === 2, 'failed insert must not leave a row')
+
 console.log('OK: comment page alias uses canonical post id and enters MAX→TG sync')
+console.log('OK: comment and counter commit together, missing post rolls back')
 process.exit(0)

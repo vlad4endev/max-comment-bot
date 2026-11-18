@@ -357,17 +357,33 @@ export class PostStore {
   }
 
   /**
+   * Same recount as {@link incrementCommentCount}, but a missing row or a missed
+   * UPDATE returns null so the caller can roll back the comment insert.
+   */
+  refreshCommentCountStrict(postId: string): number | null {
+    const post = this.getPost(postId)
+    if (!post) {
+      return null
+    }
+    const actual = this.countCommentsInDb(postId)
+    if (this.writeCommentCount(postId, actual) !== 1) {
+      return null
+    }
+    return actual
+  }
+
+  /**
    * Пишет счётчик напрямую. Через {@link savePost} нельзя: он берёт max(старый, новый),
    * поэтому после удаления комментария счётчик никогда бы не уменьшался.
    */
-  private writeCommentCount(postId: string, count: number): void {
-    getDb()
+  private writeCommentCount(postId: string, count: number): number {
+    return getDb()
       .prepare(
         `UPDATE posts
          SET comment_count = ?, data = json_set(data, '$.comment_count', ?)
          WHERE post_id = ?`,
       )
-      .run(count, count, postId)
+      .run(count, count, postId).changes
   }
 
   private countCommentsInDb(postId: string): number {

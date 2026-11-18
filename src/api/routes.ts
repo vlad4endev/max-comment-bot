@@ -28,7 +28,7 @@ import {
 import { ensurePostFromChannelMessage, isUserChannelAdmin } from '../services/channelPostActions'
 import { evaluateComment } from '../services/antispamService'
 import type { Comment } from '../services/commentStore'
-import { commentStore } from '../services/commentStore'
+import { CommentPostMissingError, commentStore } from '../services/commentStore'
 import { subscriberStore } from '../services/subscriberStore'
 import { notifyUserAboutMiniappReply, syncAdminCommentNotification } from '../services/notificationService'
 import { notifyAdminsAboutNewComment } from '../services/commentAdminNotify'
@@ -2298,20 +2298,23 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
       }
     }
 
-    const saved = commentStore.saveComment({
-      post_id: post.post_id,
-      user_id: userId,
-      username: saveUsername,
-      text,
-      ...(photoUrls.length > 0 ? { photo_urls: photoUrls } : {}),
-      ...(avatarUrl ? { avatar_url: avatarUrl } : {}),
-      ...(postedAsChannel ? { posted_as_channel: true } : {}),
-    })
-
-    const newCount = postStore.incrementCommentCount(post.post_id)
-    if (newCount === null) {
-      res.status(500).json({ error: 'post update failed' })
-      return
+    let saved: Comment
+    try {
+      saved = commentStore.saveCommentWithPostCount({
+        post_id: post.post_id,
+        user_id: userId,
+        username: saveUsername,
+        text,
+        ...(photoUrls.length > 0 ? { photo_urls: photoUrls } : {}),
+        ...(avatarUrl ? { avatar_url: avatarUrl } : {}),
+        ...(postedAsChannel ? { posted_as_channel: true } : {}),
+      }).comment
+    } catch (err: unknown) {
+      if (err instanceof CommentPostMissingError) {
+        res.status(500).json({ error: 'post update failed' })
+        return
+      }
+      throw err
     }
     const updatedPost = postStore.getPost(post.post_id)
     if (updatedPost) {
