@@ -7,6 +7,14 @@ import { logger } from '../utils/logger'
 import { postStore } from './postStore'
 import { pushAdminActivity } from './adminActivityStore'
 
+/** Post row is gone, so the comment insert must not stay without a counter. */
+export class CommentPostMissingError extends Error {
+  constructor() {
+    super('post update failed')
+    this.name = 'CommentPostMissingError'
+  }
+}
+
 export interface CommentReply {
   reply_id?: string
   text: string
@@ -457,6 +465,38 @@ export class CommentStore {
       ...(post ? { chat_id: post.chat_id } : {}),
     })
     return comment
+  }
+
+  /**
+   * Mini App comment and `posts.comment_count` land together.
+   * A missing post rolls the insert back, so a client retry does not add a second row
+   * on top of a comment the page never showed.
+   */
+  saveCommentWithPostCount(
+    input: Omit<Comment, 'comment_id' | 'timestamp'>,
+  ): { comment: Comment; commentCount: number } {
+    const comment: Comment = {
+      ...input,
+      comment_id: uuidv4(),
+      timestamp: new Date().toISOString(),
+    }
+    const commentCount = getDb().transaction((): number => {
+      this.saveRow(comment)
+      const count = postStore.refreshCommentCountStrict(comment.post_id)
+      if (count === null) {
+        throw new CommentPostMissingError()
+      }
+      return count
+    })()
+    logger.info(`commentStore: saved ${comment.comment_id}`)
+    const post = postStore.getPost(comment.post_id)
+    pushAdminActivity('new_comment', {
+      comment_id: comment.comment_id,
+      post_id: comment.post_id,
+      user_id: comment.user_id,
+      ...(post ? { chat_id: post.chat_id } : {}),
+    })
+    return { comment, commentCount }
   }
 
   getComments(postId: string): Comment[] {
