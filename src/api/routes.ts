@@ -55,7 +55,7 @@ import { telegramChannelNotifyLinkStore } from '../services/telegramChannelNotif
 import type { Post } from '../services/postStore'
 import { isPostCommentsClosedInMax, postStore, resolveChannelPostUrl } from '../services/postStore'
 import { commentsClosedInMaxMessage, commentsClosedUntilIso } from '../services/commentsBookingService'
-import { rememberPostIdAlias } from '../services/postIdAliasStore'
+import { rememberPostIdAlias, resolvePostByIdOrAlias } from '../services/postIdAliasStore'
 import { resolveMiniappPostOpen } from '../services/miniappPostRecovery'
 import { parseStartappPayload } from '../utils/startappPayload'
 import { stateManager } from '../services/stateManager'
@@ -714,7 +714,7 @@ async function resolveAdminCommentAccess(
   bot: Bot,
   input: { commentId: string; postId: string; chatId: number; userId: number },
 ): Promise<AdminCommentAccess> {
-  const post = postStore.getPost(input.postId)
+  const post = resolvePostByIdOrAlias(input.postId)
   if (!post || post.chat_id !== input.chatId) {
     return { ok: false, status: 404, error: 'post not found' }
   }
@@ -722,7 +722,7 @@ async function resolveAdminCommentAccess(
     return { ok: false, status: 403, error: 'Только администраторы могут изменять комментарии' }
   }
   const comment = commentStore.getComment(input.commentId)
-  if (!comment || comment.post_id !== input.postId) {
+  if (!comment || (comment.post_id !== post.post_id && comment.post_id !== input.postId)) {
     return { ok: false, status: 404, error: 'comment not found' }
   }
   return { ok: true, comment, post }
@@ -2299,7 +2299,7 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
     }
 
     const saved = commentStore.saveComment({
-      post_id: postId,
+      post_id: post.post_id,
       user_id: userId,
       username: saveUsername,
       text,
@@ -2308,12 +2308,12 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
       ...(postedAsChannel ? { posted_as_channel: true } : {}),
     })
 
-    const newCount = postStore.incrementCommentCount(postId)
+    const newCount = postStore.incrementCommentCount(post.post_id)
     if (newCount === null) {
       res.status(500).json({ error: 'post update failed' })
       return
     }
-    const updatedPost = postStore.getPost(postId)
+    const updatedPost = postStore.getPost(post.post_id)
     if (updatedPost) {
       await postStore.updateButtonCaption(deps.bot, updatedPost)
     }
@@ -2334,7 +2334,7 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
         username: saveUsername,
         commentText: text,
         commentPhotoUrls: photoUrls,
-        postId,
+        postId: post.post_id,
         messageMid: post.message_mid,
       })
     } catch (err: unknown) {
@@ -2374,7 +2374,7 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
     if (gateMiniappActor(req, res, { route: 'POST /reply', claimedUserId: replierUserId, chatId }) === null) {
       return
     }
-    const post = postStore.getPost(postId)
+    const post = resolvePostByIdOrAlias(postId)
     if (!post || post.chat_id !== chatId) {
       res.status(404).json({ error: 'post not found' })
       return
@@ -2571,10 +2571,11 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
       })
     }
 
-    const newCount = postStore.decrementCommentCount(input.postId)
+    const countPostId = postStore.getPost(removed.post_id)?.post_id ?? access.post.post_id
+    const newCount = postStore.decrementCommentCount(countPostId)
     res.json({ ok: true, comment_count: newCount })
     if (newCount !== null) {
-      const updatedPost = postStore.getPost(input.postId)
+      const updatedPost = postStore.getPost(countPostId)
       if (updatedPost) {
         void postStore.updateButtonCaption(deps.bot, updatedPost).catch((err: unknown) => {
           logger.warn('adminDeleteComment: updateButtonCaption failed after response', {

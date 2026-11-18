@@ -4761,7 +4761,7 @@
                 miniappLookupHeaders(),
               ),
               body: JSON.stringify({
-                post_id: commentIds.postId || postId,
+                post_id: currentPostId || commentIds.postId || postId,
                 chat_id: Number(commentIds.chatId || chatId),
                 message_mid: commentIds.messageMid || undefined,
                 user_id: Number(userId),

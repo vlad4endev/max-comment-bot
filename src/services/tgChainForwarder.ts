@@ -24,6 +24,7 @@ import { markChannelForwardBusy } from './channelForwardBusy'
 import { postStore } from './postStore'
 import { resolveCanonicalChannelChatId } from './resolveChannelChatId'
 import { telegramMessageMatchesTgChain } from '../utils/tgChannelMatch'
+import { groupChannelPostsForForward } from './tgForwardGroups'
 import { logger } from '../utils/logger'
 import { recordDeadLetter } from './commentDeadLetterStore'
 import { handleTgCommentEdited } from './commentEditDeleteSync'
@@ -984,31 +985,6 @@ function chunkAlbumMessages(messages: TgMessage[]): TgMessage[][] {
     chunks.push(messages.slice(i, i + TG_ALBUM_MAX_MEDIA_PER_POST))
   }
   return chunks
-}
-
-/** Разбивает апдейты: одиночные посты и альбомы (несколько channel_post с media_group_id). */
-function groupChannelPostsForForward(posts: TgMessage[]): TgMessage[][] {
-  const singles: TgMessage[] = []
-  const albums = new Map<string, TgMessage[]>()
-
-  for (const msg of posts) {
-    const gid = msg.media_group_id?.trim()
-    if (gid) {
-      const key = `${msg.chat.id}:${gid}`
-      const list = albums.get(key) ?? []
-      list.push(msg)
-      albums.set(key, list)
-    } else {
-      singles.push(msg)
-    }
-  }
-
-  const out: TgMessage[][] = singles.map((m) => [m])
-  for (const list of albums.values()) {
-    list.sort((a, b) => a.message_id - b.message_id)
-    out.push(list)
-  }
-  return out
 }
 
 /** Публикует одно TG-сообщение в MAX; caption — явная подпись (для альбома только у первого кадра). */
