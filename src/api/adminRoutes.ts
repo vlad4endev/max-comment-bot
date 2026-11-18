@@ -473,8 +473,23 @@ export function createAdminRouter(deps: AdminRouterDeps): express.Router {
     skipSuccessful: true,
     message: 'Слишком много неудачных попыток входа. Подождите несколько минут.',
   })
+  /**
+   * Отдельный счётчик по логину: подмена X-Forwarded-For не даёт бесконечный перебор,
+   * даже если TRUST_PROXY доверяет клиентскому заголовку.
+   */
+  const panelLoginUserLimiter = createRateLimiter({
+    name: 'panel-login-user',
+    windowMs: 15 * 60 * 1000,
+    max: 30,
+    skipSuccessful: true,
+    key: (req) => {
+      const username = isRecord(req.body) ? parseNonEmptyString(req.body.username) : null
+      return (username ?? 'empty').toLowerCase().slice(0, 128)
+    },
+    message: 'Слишком много неудачных попыток входа для этого логина. Подождите несколько минут.',
+  })
 
-  router.post('/panel-login', panelLoginLimiter, (req, res) => {
+  router.post('/panel-login', panelLoginLimiter, panelLoginUserLimiter, (req, res) => {
     const body = req.body
     const username = isRecord(body) ? parseNonEmptyString(body.username) : null
     const password = isRecord(body) ? parseNonEmptyString(body.password) : null

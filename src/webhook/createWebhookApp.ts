@@ -1,3 +1,4 @@
+import { createHash, timingSafeEqual } from 'node:crypto'
 import { join } from 'node:path'
 import { monitorEventLoopDelay } from 'node:perf_hooks'
 
@@ -54,6 +55,22 @@ export interface WebhookAppOptions {
   bot: Bot
   webhookPath: string
   webhookSecret?: string
+}
+
+/** Сравнение секрета webhook без утечки длины и без раннего выхода по `!==`. */
+function webhookSecretsMatch(received: string | undefined, expected: string): boolean {
+  const ha = createHash('sha256').update(received ?? '', 'utf8').digest()
+  const hb = createHash('sha256').update(expected, 'utf8').digest()
+  return timingSafeEqual(ha, hb)
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -122,6 +139,15 @@ function applyMiniappAssetHeaders(res: express.Response, filePath: string): void
 export function createHttpApp(options: HttpAppOptions): express.Express {
   const app = express()
   app.disable('x-powered-by')
+  app.use((_req, res, next) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff')
+    next()
+  })
+  app.use(['/admin', '/api/admin'], (_req, res, next) => {
+    res.setHeader('X-Frame-Options', 'DENY')
+    res.setHeader('Content-Security-Policy', "frame-ancestors 'none'")
+    next()
+  })
   // Бот стоит за reverse-proxy (TLS :443 → контейнер): без этого req.ip — адрес прокси,
   // и лимитеры считали бы всех клиентов одним. TRUST_PROXY=0 отключает, число — кол-во хопов.
   const trustProxyRaw = (process.env.TRUST_PROXY ?? '1').trim().toLowerCase()
@@ -327,8 +353,7 @@ export function createHttpApp(options: HttpAppOptions): express.Express {
       express.json({ limit: '512kb' }),
       async (req, res) => {
         if (webhookSecret) {
-          const got = req.get(MAX_SECRET_HEADER)
-          if (got !== webhookSecret) {
+          if (!webhookSecretsMatch(req.get(MAX_SECRET_HEADER), webhookSecret)) {
             logger.warn('Webhook: отклонён запрос с неверным или пустым секретом')
             res.status(403).end()
             return
@@ -361,7 +386,7 @@ export function createHttpApp(options: HttpAppOptions): express.Express {
         .type('html')
         .send(
           `<!doctype html><meta charset="utf-8"><title>404</title>` +
-            `<p>Нет страницы <code>${path.replace(/</g, '')}</code></p>` +
+            `<p>Нет страницы <code>${escapeHtml(path.slice(0, 200))}</code></p>` +
             `<p><a href="/admin">Админка</a> · <a href="/miniapp">Mini App</a> · <a href="/health">Health</a></p>`,
         )
       return

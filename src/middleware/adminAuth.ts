@@ -16,7 +16,11 @@ export function parseCookieHeader(header: string | undefined, name: string): str
     if (k !== name) {
       continue
     }
-    return decodeURIComponent(part.slice(idx + 1).trim())
+    try {
+      return decodeURIComponent(part.slice(idx + 1).trim())
+    } catch {
+      return null
+    }
   }
   return null
 }

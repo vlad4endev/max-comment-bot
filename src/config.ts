@@ -100,10 +100,13 @@ function getConfig(): Config {
     throw new Error('BOT_TOKEN не установлен')
   }
 
-  const adminPanelUserFromEnv = (process.env.ADMIN_PANEL_USER ?? '').trim()
-  const adminPanelPasswordFromEnv = (process.env.ADMIN_PANEL_PASSWORD ?? '').trim()
-  const adminPanelUser = (adminPanelUserFromEnv || 'vladislav4endev').trim()
-  const adminPanelPassword = (adminPanelPasswordFromEnv || 'v902l733a00d94%').trim()
+  const adminPanelUser = (process.env.ADMIN_PANEL_USER ?? '').trim()
+  const adminPanelPassword = (process.env.ADMIN_PANEL_PASSWORD ?? '').trim()
+  if (!adminPanelUser || !adminPanelPassword) {
+    throw new Error(
+      'Задайте ADMIN_PANEL_USER и ADMIN_PANEL_PASSWORD в окружении. Встроенный пароль панели больше не используется.',
+    )
+  }
   const adminPanelSessionSecretRaw = (process.env.ADMIN_PANEL_SESSION_SECRET ?? '').trim()
   const adminPanelSessionSecret =
     adminPanelSessionSecretRaw !== ''
@@ -112,17 +115,10 @@ function getConfig(): Config {
 
   const NODE_ENV_EARLY: Config['NODE_ENV'] =
     process.env.NODE_ENV === 'production' ? 'production' : 'development'
-  if (NODE_ENV_EARLY === 'production') {
-    if (!adminPanelUserFromEnv || !adminPanelPasswordFromEnv) {
-      logger.error(
-        'ADMIN_PANEL_USER / ADMIN_PANEL_PASSWORD не заданы в env — используются встроенные значения по умолчанию. Задайте их явно в .env (логин не сломается, если скопируете те же значения).',
-      )
-    }
-    if (!adminPanelSessionSecretRaw) {
-      logger.warn(
-        'ADMIN_PANEL_SESSION_SECRET не задан — cookie сессии выводится из BOT_TOKEN. Рекомендуется отдельный секрет.',
-      )
-    }
+  if (NODE_ENV_EARLY === 'production' && !adminPanelSessionSecretRaw) {
+    logger.warn(
+      'ADMIN_PANEL_SESSION_SECRET не задан — cookie сессии выводится из BOT_TOKEN. Рекомендуется отдельный секрет.',
+    )
   }
 
   const ownerUserIdRaw = (process.env.OWNER_USER_ID ?? '122099994').trim()

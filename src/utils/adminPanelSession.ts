@@ -19,7 +19,9 @@ export function adminPanelCredentialsMatch(
   expectedUser: string,
   expectedPass: string,
 ): boolean {
-  return secretEqual(username, expectedUser) && secretEqual(password, expectedPass)
+  const userOk = secretEqual(username, expectedUser)
+  const passOk = secretEqual(password, expectedPass)
+  return userOk && passOk
 }
 
 export function signAdminPanelSessionValue(secret: string): string {
