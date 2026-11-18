@@ -142,6 +142,46 @@ function parseOptionalString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : ''
 }
 
+/** Telegram message cap is 4096; leave room for the «MAX · name:» prefix. */
+const MAX_MINIAPP_TEXT_CHARS = 4000
+const MAX_MINIAPP_USERNAME_CHARS = 80
+
+function miniappTextTooLong(value: string): boolean {
+  return value.length > MAX_MINIAPP_TEXT_CHARS
+}
+
+function clampMiniappUsername(value: string): string {
+  const trimmed = value.trim()
+  if (trimmed.length <= MAX_MINIAPP_USERNAME_CHARS) {
+    return trimmed
+  }
+  return trimmed.slice(0, MAX_MINIAPP_USERNAME_CHARS)
+}
+
+/**
+ * Avatar from the client is rendered as an image URL for every viewer.
+ * Accept only http(s) without embedded credentials; drop javascript:/data: and other schemes.
+ */
+function sanitizeClientAvatarUrl(value: unknown): string | null {
+  const raw = parseNonEmptyString(value)
+  if (!raw || raw.length > 2048) {
+    return null
+  }
+  let url: URL
+  try {
+    url = new URL(raw)
+  } catch {
+    return null
+  }
+  if (url.protocol !== 'https:' && url.protocol !== 'http:') {
+    return null
+  }
+  if (url.username !== '' || url.password !== '') {
+    return null
+  }
+  return url.toString()
+}
+
 /** NFKC: compatibility superscripts etc. → plain ASCII digits/letters for consistent rendering. */
 function normalizeUserFacingText(value: string): string {
   try {
@@ -328,6 +368,18 @@ function gateMiniappActor(
     { route: input.route, claimed: input.claimedUserId },
   )
   return input.claimedUserId
+}
+
+/** HTML/SVG stored under an image extension would be sniffed by some clients. */
+function uploadBytesLookActive(buf: Buffer): boolean {
+  const head = buf.subarray(0, 128).toString('utf8').trimStart().toLowerCase()
+  return (
+    head.startsWith('<') ||
+    head.startsWith('<?') ||
+    head.includes('<svg') ||
+    head.includes('<html') ||
+    head.includes('<script')
+  )
 }
 
 /** Upload / mutating miniapp routes require a client identity hint. */
@@ -838,12 +890,21 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
   })
 
   router.get('/user-status', async (req, res) => {
-    const userId = parsePositiveInt(req.query.user_id)
+    let userId = parsePositiveInt(req.query.user_id)
     if (!userId) {
       res.status(400).json({ error: 'missing or invalid user_id' })
       return
     }
     const chatId = parseNonZeroInt(req.query.chat_id)
+    const actorId = gateMiniappActor(req, res, {
+      route: 'GET /user-status',
+      claimedUserId: userId,
+      chatId,
+    })
+    if (actorId === null) {
+      return
+    }
+    userId = actorId
     const isTelegram = isTelegramMiniappPlatform(req)
     const gateUserIds = collectGateUserIds(userId, isTelegram)
     const hasPriorActivity = userHasPriorMiniappActivity(gateUserIds, chatId)
@@ -926,12 +987,21 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
       res.status(400).json({ error: 'invalid body' })
       return
     }
-    const userId = parsePositiveInt(body.user_id)
+    let userId = parsePositiveInt(body.user_id)
     if (!userId) {
       res.status(400).json({ error: 'missing or invalid user_id' })
       return
     }
     const chatId = parseNonZeroInt(body.chat_id)
+    const actorId = gateMiniappActor(req, res, {
+      route: 'POST /register-subscriber',
+      claimedUserId: userId,
+      chatId,
+    })
+    if (actorId === null) {
+      return
+    }
+    userId = actorId
     const source = parseNonEmptyString(body.source)
     const wasAlreadySubscribed = subscriberStore.hasSubscriber(userId)
 
@@ -951,11 +1021,19 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
   })
 
   router.get('/stats', async (req, res) => {
-    const userId = parsePositiveInt(req.query.user_id)
+    let userId = parsePositiveInt(req.query.user_id)
     if (!userId) {
       res.status(400).json({ error: 'missing or invalid user_id' })
       return
     }
+    const actorId = gateMiniappActor(req, res, {
+      route: 'GET /stats',
+      claimedUserId: userId,
+    })
+    if (actorId === null) {
+      return
+    }
+    userId = actorId
     if (isTelegramMiniappPlatform(req)) {
       try {
         const stats = await getTelegramMiniappStats(userId)
@@ -987,11 +1065,19 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
   })
 
   router.get('/channels', async (req, res) => {
-    const userId = parsePositiveInt(req.query.user_id)
+    let userId = parsePositiveInt(req.query.user_id)
     if (!userId) {
       res.status(400).json({ error: 'missing or invalid user_id' })
       return
     }
+    const actorId = gateMiniappActor(req, res, {
+      route: 'GET /channels',
+      claimedUserId: userId,
+    })
+    if (actorId === null) {
+      return
+    }
+    userId = actorId
     if (isTelegramMiniappPlatform(req)) {
       try {
         const payload = await listTelegramMiniappChannelsForUser(userId)
@@ -1099,11 +1185,20 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
   })
 
   router.get('/channel-admins', async (req, res) => {
-    const userId = parsePositiveInt(req.query.user_id)
+    let userId = parsePositiveInt(req.query.user_id)
     if (!userId) {
       res.status(400).json({ error: 'missing or invalid user_id or chat_id' })
       return
     }
+    const actorId = gateMiniappActor(req, res, {
+      route: 'GET /channel-admins',
+      claimedUserId: userId,
+      chatId: parseNonZeroInt(req.query.chat_id),
+    })
+    if (actorId === null) {
+      return
+    }
+    userId = actorId
     if (isTelegramMiniappPlatform(req)) {
       const chatId = parseTelegramChatIdQuery(req.query.chat_id)
       if (!chatId) {
@@ -1339,11 +1434,19 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
   })
 
   router.get('/settings', (req, res) => {
-    const userId = parsePositiveInt(req.query.user_id)
+    let userId = parsePositiveInt(req.query.user_id)
     if (!userId) {
       res.status(400).json({ error: 'missing or invalid user_id' })
       return
     }
+    const actorId = gateMiniappActor(req, res, {
+      route: 'GET /settings',
+      claimedUserId: userId,
+    })
+    if (actorId === null) {
+      return
+    }
+    userId = actorId
     res.json(userMiniappSettingsStore.getMerged(userId))
   })
 
@@ -1380,11 +1483,22 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
       return
     }
     const fields = parseNonEmptyString(req.query.fields)
-    const userId = parsePositiveInt(req.query.user_id)
+    let userId = parsePositiveInt(req.query.user_id)
+    if (userId !== null) {
+      const actorId = gateMiniappActor(req, res, {
+        route: 'GET /channel-settings',
+        claimedUserId: userId,
+        chatId,
+      })
+      if (actorId === null) {
+        return
+      }
+      userId = actorId
+    }
     const managerOnly =
       fields === 'manager_url' || userId === null
 
-    if (managerOnly) {
+    if (managerOnly || userId === null) {
       res.json({ manager_url: channelSettingsStore.getManagerUrl(chatId) })
       return
     }
@@ -1470,12 +1584,20 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
   }
 
   router.get('/channel-invite', async (req, res) => {
-    const userId = parsePositiveInt(req.query.user_id)
+    let userId = parsePositiveInt(req.query.user_id)
     const joinChannelIdRaw = parseNonEmptyString(req.query.join_channel_id)
     if (!userId || !joinChannelIdRaw) {
       res.status(400).json({ error: 'missing user_id or join_channel_id' })
       return
     }
+    const actorId = gateMiniappActor(req, res, {
+      route: 'GET /channel-invite',
+      claimedUserId: userId,
+    })
+    if (actorId === null) {
+      return
+    }
+    userId = actorId
     if (isTelegramMiniappPlatform(req)) {
       try {
         const access = await resolveTelegramChannelInviteAccess(userId, joinChannelIdRaw)
@@ -1517,12 +1639,20 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
       res.status(400).json({ error: 'invalid body' })
       return
     }
-    const userId = parsePositiveInt(body.user_id)
+    let userId = parsePositiveInt(body.user_id)
     const joinChannelIdRaw = parseNonEmptyString(body.join_channel_id)
     if (!userId || !joinChannelIdRaw) {
       res.status(400).json({ error: 'missing user_id or join_channel_id' })
       return
     }
+    const actorId = gateMiniappActor(req, res, {
+      route: 'POST /channel-invite',
+      claimedUserId: userId,
+    })
+    if (actorId === null) {
+      return
+    }
+    userId = actorId
     if (isTelegramMiniappPlatform(req)) {
       try {
         const result = await registerTelegramChannelNotifyLink(userId, joinChannelIdRaw)
@@ -1613,11 +1743,19 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
       res.status(400).json({ error: 'invalid body' })
       return
     }
-    const userId = parsePositiveInt(body.user_id)
+    let userId = parsePositiveInt(body.user_id)
     if (!userId) {
       res.status(400).json({ error: 'missing or invalid user_id' })
       return
     }
+    const actorId = gateMiniappActor(req, res, {
+      route: 'POST /owner-profile/sync',
+      claimedUserId: userId,
+    })
+    if (actorId === null) {
+      return
+    }
+    userId = actorId
     const platform = isTelegramMiniappPlatform(req) ? 'telegram' : 'max'
     try {
       const result = await syncOwnerProfileFromMiniapp(
@@ -1643,11 +1781,19 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
   }
 
   router.get('/account-pairing/status', async (req, res) => {
-    const userId = parsePositiveInt(req.query.user_id)
+    let userId = parsePositiveInt(req.query.user_id)
     if (!userId) {
       res.status(400).json({ error: 'missing or invalid user_id' })
       return
     }
+    const actorId = gateMiniappActor(req, res, {
+      route: 'GET /account-pairing/status',
+      claimedUserId: userId,
+    })
+    if (actorId === null) {
+      return
+    }
+    userId = actorId
     const platform = isTelegramMiniappPlatform(req) ? 'telegram' : 'max'
     res.json(getAccountPairingStatus(platform, userId))
   })
@@ -1662,11 +1808,19 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
       res.status(400).json({ error: 'invalid body' })
       return
     }
-    const userId = parsePositiveInt(body.user_id)
+    let userId = parsePositiveInt(body.user_id)
     if (!userId) {
       res.status(400).json({ error: 'missing or invalid user_id' })
       return
     }
+    const actorId = gateMiniappActor(req, res, {
+      route: 'POST /account-pairing/invite-telegram',
+      claimedUserId: userId,
+    })
+    if (actorId === null) {
+      return
+    }
+    userId = actorId
     try {
       const invite = createTelegramPairingInvite(parseOwnerAccountFromBody(body, 'max', userId))
       res.json({ ok: true, ...invite })
@@ -1689,11 +1843,19 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
       res.status(400).json({ error: 'invalid body' })
       return
     }
-    const userId = parsePositiveInt(body.user_id)
+    let userId = parsePositiveInt(body.user_id)
     if (!userId) {
       res.status(400).json({ error: 'missing or invalid user_id' })
       return
     }
+    const actorId = gateMiniappActor(req, res, {
+      route: 'POST /account-pairing/invite-max',
+      claimedUserId: userId,
+    })
+    if (actorId === null) {
+      return
+    }
+    userId = actorId
     try {
       const invite = createMaxPairingInvite(parseOwnerAccountFromBody(body, 'telegram', userId))
       res.json({ ok: true, ...invite })
@@ -1707,11 +1869,19 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
   })
 
   router.get('/owner-profile', async (req, res) => {
-    const userId = parsePositiveInt(req.query.user_id)
+    let userId = parsePositiveInt(req.query.user_id)
     if (!userId) {
       res.status(400).json({ error: 'missing or invalid user_id' })
       return
     }
+    const actorId = gateMiniappActor(req, res, {
+      route: 'GET /owner-profile',
+      claimedUserId: userId,
+    })
+    if (actorId === null) {
+      return
+    }
+    userId = actorId
     const platform = isTelegramMiniappPlatform(req) ? 'telegram' : 'max'
     const profileId = ownerProfileStore.getProfileId(platform, userId)
     if (!profileId) {
@@ -1791,11 +1961,19 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
   })
 
   router.get('/channel-links', async (req, res) => {
-    const userId = parsePositiveInt(req.query.user_id)
+    let userId = parsePositiveInt(req.query.user_id)
     if (!userId) {
       res.status(400).json({ error: 'missing or invalid user_id' })
       return
     }
+    const actorId = gateMiniappActor(req, res, {
+      route: 'GET /channel-links',
+      claimedUserId: userId,
+    })
+    if (actorId === null) {
+      return
+    }
+    userId = actorId
     try {
       if (isTelegramMiniappPlatform(req)) {
         await integrationsStore.load()
@@ -2199,7 +2377,17 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
   })
 
   router.post('/upload-photos', uploadLimiter, (req, res) => {
-    if (!hasMiniappClientIdentity(req)) {
+    const initHeader = parseHeaderString(req.headers['x-miniapp-init-data'])
+    const verified = resolveVerifiedMiniappUserId(req)
+    if (initHeader && verified === null) {
+      res.status(401).json({ error: 'Не удалось подтвердить личность. Откройте Mini App заново.' })
+      return
+    }
+    if (verified === null && miniappAuthMode() === 'enforce') {
+      res.status(401).json({ error: 'Не удалось подтвердить личность. Откройте Mini App заново.' })
+      return
+    }
+    if (verified === null && !hasMiniappClientIdentity(req)) {
       res.status(401).json({ error: 'miniapp identity required' })
       return
     }
@@ -2209,7 +2397,31 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
         return
       }
       const files = Array.isArray(req.files) ? req.files : []
-      const urls = files
+      const kept: Express.Multer.File[] = []
+      for (const file of files) {
+        let head: Buffer
+        try {
+          const fd = fs.openSync(file.path, 'r')
+          try {
+            head = Buffer.alloc(128)
+            fs.readSync(fd, head, 0, head.length, 0)
+          } finally {
+            fs.closeSync(fd)
+          }
+        } catch {
+          head = Buffer.alloc(0)
+        }
+        if (uploadBytesLookActive(head)) {
+          fs.rmSync(file.path, { force: true })
+          continue
+        }
+        kept.push(file)
+      }
+      if (files.length > 0 && kept.length === 0) {
+        res.status(400).json({ error: 'Можно загружать только изображения' })
+        return
+      }
+      const urls = kept
         .map((f) => {
           const name = path.basename(f.filename)
           return `${MINIAPP_UPLOADS_PUBLIC_PREFIX}/${encodeURIComponent(name)}`
@@ -2231,13 +2443,16 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
     const startParamHeader = parseNonEmptyString(req.headers['x-miniapp-start-param'])
     const verifiedUserId = resolveVerifiedMiniappUserId(req)
     const userId = verifiedUserId ?? parsePositiveInt(body.user_id)
-    const username = parseNonEmptyString(body.username)
+    const username = clampMiniappUsername(parseNonEmptyString(body.username) ?? '')
     const text = normalizeUserFacingText(parseOptionalString(body.text))
     const photoUrls = parsePhotoUrls(body.photo_urls)
-    const avatarFromClient =
-      parseNonEmptyString(body.avatar_url) ?? parseNonEmptyString(body.photo_url)
+    const avatarFromClient = sanitizeClientAvatarUrl(body.avatar_url) ?? sanitizeClientAvatarUrl(body.photo_url)
     if (!postId || !chatId || !userId || !username || (text === '' && photoUrls.length === 0)) {
       res.status(400).json({ error: 'missing or invalid fields' })
+      return
+    }
+    if (miniappTextTooLong(text)) {
+      res.status(400).json({ error: 'text is too long' })
       return
     }
     if (gateMiniappActor(req, res, { route: 'POST /comment', claimedUserId: userId, chatId }) === null) {
@@ -2371,6 +2586,10 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
       res.status(400).json({ error: 'missing or invalid fields' })
       return
     }
+    if (miniappTextTooLong(adminText)) {
+      res.status(400).json({ error: 'text is too long' })
+      return
+    }
     if (gateMiniappActor(req, res, { route: 'POST /reply', claimedUserId: replierUserId, chatId }) === null) {
       return
     }
@@ -2488,6 +2707,10 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
     const text = rawText != null ? normalizeUserFacingText(rawText) : null
     if (!commentId || !postId || !chatId || !editorUserId || !text) {
       res.status(400).json({ error: 'missing or invalid fields' })
+      return
+    }
+    if (miniappTextTooLong(text)) {
+      res.status(400).json({ error: 'text is too long' })
       return
     }
     const actorUserId = gateMiniappActor(req, res, {
@@ -2617,6 +2840,10 @@ export function createCommentApiRouter(deps: CommentApiRouterDeps): express.Rout
     const adminText = normalizeUserFacingText(parseOptionalString(body.admin_text))
     const photoUrlsInBody = 'photo_urls' in body
     const replyPhotoUrls = photoUrlsInBody ? parsePhotoUrls(body.photo_urls) : undefined
+    if (miniappTextTooLong(adminText)) {
+      res.status(400).json({ error: 'text is too long' })
+      return
+    }
     if (
       !commentId ||
       !postId ||

@@ -48,8 +48,9 @@ export function createRateLimiter(options: RateLimitOptions): express.RequestHan
     let bucket = buckets.get(key)
     if (!bucket || bucket.resetAt <= now) {
       if (!bucket && buckets.size >= MAX_TRACKED_KEYS) {
-        // Защита памяти при флуде с множества адресов: пропускаем, а не роняем сервис.
-        next()
+        // Карта ключей переполнена (часто — подмена X-Forwarded-For). Не пропускаем запрос.
+        res.setHeader('Retry-After', String(Math.max(1, Math.ceil(options.windowMs / 1000))))
+        res.status(429).json({ error: message })
         return
       }
       bucket = { count: 0, resetAt: now + options.windowMs }
